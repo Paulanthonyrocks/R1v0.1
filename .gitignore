@@ -1,0 +1,16 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Node modules
+node_modules/
+
+# Log files
+*.log
+
+# Secrets (NEVER commit secrets!)
+secrets.txt
+.env
+
+# Large data files (consider Git LFS if necessary)
+*.dat

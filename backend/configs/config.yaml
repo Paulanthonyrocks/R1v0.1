@@ -1,0 +1,135 @@
+# backend/configs/config.yaml
+# Example Configuration for Route One Hub Backend
+
+# --- General Settings ---
+fps: 30 # Target processing FPS (workers might adjust dynamically)
+speed_limit: 60 # Speed limit in km/h for 'speeding' classification
+
+# --- Logging Configuration ---
+logging:
+  level: INFO # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  log_path: ./logs/backend_app.log # Path for file logging (ensure directory exists)
+  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" # Optional format string
+
+# --- Database Configuration ---
+database:
+  db_path: ./data/vehicle_data.db # Path to SQLite database file (ensure directory exists)
+  chunk_size: 100 # Batch size for DB writer
+  cache_size: 128 # LRU cache size for DB read methods
+  schema: # Define the structure of the 'vehicles' table
+    vehicle_id: TEXT PRIMARY KEY # Unique ID (includes feed prefix)
+    timestamp: REAL # UNIX timestamp (float)
+    frame_index: INTEGER # Frame number from the source feed
+    license_plate: TEXT # Detected license plate (or "Unknown")
+    vehicle_type: TEXT # e.g., 'car', 'truck', 'bus', 'motorcycle', 'unknown'
+    first_seen: REAL # Timestamp when first detected
+    last_seen: REAL # Timestamp when last updated
+    x1: REAL # Bounding box top-left x
+    y1: REAL # Bounding box top-left y
+    x2: REAL # Bounding box bottom-right x
+    y2: REAL # Bounding box bottom-right y
+    speed: REAL # Estimated speed in km/h
+    lane: INTEGER # Estimated lane number (1-based) or -1 if unknown
+    confidence: REAL # Detection confidence (if available)
+    car_model: TEXT # Placeholder for future feature
+    car_color: TEXT # Placeholder for future feature
+    # Add other fields as needed
+
+# --- Feed Manager Configuration ---
+feed_manager:
+  max_concurrent_feeds: 10 # Limit the number of feeds running simultaneously
+  db_write_interval: 0.5 # Seconds between batch writes to DB from queue
+  error_check_interval: 5.0 # Seconds between checking worker error queues
+
+# --- Video Input / Worker Configuration ---
+video_input:
+  sample_video: ./data/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
+  webcam_index: 0 # Default index if source is "webcam" or "webcam:N" is invalid
+  webcam_buffer_size: 1 # Camera buffer size (increase might help with frame drops on some systems)
+  max_queue_size: 100 # Max size for the frame queue between worker and manager
+
+# --- Vehicle Detection (YOLO & Tracking) ---
+vehicle_detection:
+  model_path: ./models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
+  frame_resolution: [640, 480] # Target resolution for processing [width, height]
+  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
+  confidence_threshold: 0.4 # Minimum detection confidence
+  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
+  track_timeout: 10 # Seconds before a track is considered stale and removed
+  max_active_tracks: 75 # Maximum number of vehicles to track simultaneously per feed
+  yolo_imgsz: 640 # Image size for YOLO model inference
+  skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+
+# --- Kalman Filter Parameters ---
+kalman_filter_params:
+  # Initial state uncertainties (stddev)
+  kf_sigma_px: 2.0  # Position x uncertainty (pixels)
+  kf_sigma_py: 2.0  # Position y uncertainty (pixels)
+  kf_sigma_pvx: 5.0 # Velocity x uncertainty (pixels/dt) - higher allows faster initial velocity adaptation
+  kf_sigma_pvy: 5.0 # Velocity y uncertainty (pixels/dt)
+  # Measurement uncertainties (stddev)
+  kf_sigma_mx: 0.5  # Measurement x uncertainty (pixels) - lower means trust detection more
+  kf_sigma_my: 0.5  # Measurement y uncertainty (pixels)
+  # Process noise (stddev of acceleration) - how much velocity can change unexpectedly between steps
+  kf_sigma_ax: 0.5  # Acceleration x noise (pixels/dt^2)
+  kf_sigma_ay: 0.5  # Acceleration y noise (pixels/dt^2)
+
+# --- Lane Detection & Speed Estimation ---
+lane_detection:
+  num_lanes: 4 # Number of lanes expected in the primary view
+  lane_width: 120 # Approximate width of a lane in pixels (used for lane assignment) - ADJUST BASED ON RESOLUTION/VIEW
+  lane_change_buffer: 10 # Pixel buffer to prevent rapid lane switching near lines
+
+pixels_per_meter: 30 # Estimated pixels per meter AT A REFERENCE POINT IN THE IMAGE - CRUCIAL for speed estimation, needs calibration
+stopped_speed_threshold_kmh: 5 # Speed below which a vehicle is considered 'stopped'
+accel_threshold_mps2: 0.5 # Acceleration threshold (m/s^2) for 'accelerating'/'decelerating' classification
+
+# --- OCR Engine (Gemini / Tesseract) ---
+ocr_engine:
+  # --- Gemini API (Optional) ---
+  # Set environment variable GEMINI_API_KEY or replace placeholder below
+  gemini_api_key: ${GEMINI_API_KEY} # Read from environment variable or paste key here directly (less secure)
+  use_gpu_ocr: false # Whether to attempt GPU acceleration for preprocessing (requires OpenCV CUDA build)
+  min_roi_size: 600 # Minimum pixel area of the vehicle ROI before attempting OCR
+  sharpen_kernel: [[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]] # Kernel for sharpening
+  morph_kernel: [[1, 1, 1], [1, 1, 1], [1, 1, 1]] # Kernel for morphological opening
+  min_aspect_ratio: 2.0 # Min width/height ratio for rotated plate detection
+  max_aspect_ratio: 5.5 # Max width/height ratio
+  ocr_interval: 10 # Minimum seconds between Gemini OCR attempts *per vehicle*
+  gemini_max_retries: 3 # Max retries for Gemini API calls
+  gemini_retry_delay: 1.0 # Initial delay (seconds) before retrying Gemini
+  # --- ROI Adjustment for OCR ---
+  # Factors applied to vehicle bounding box to isolate potential plate region
+  # Values are proportions (0.0 to 1.0)
+  roi_top_margin_factor: 0.5    # Start ROI lower down (e.g., 0.5 = start halfway down the bbox)
+  roi_bottom_margin_factor: 0.1 # End ROI slightly higher (e.g., 0.1 = cut 10% from bottom)
+  roi_left_margin_factor: 0.15  # Crop from left side (e.g., 0.15 = cut 15% from left)
+  roi_right_margin_factor: 0.15 # Crop from right side
+
+# --- Incident Detection (Example thresholds) ---
+incident_detection:
+  density_threshold: 10 # Vehicles per lane considered 'high density'
+  congestion_speed_threshold: 20 # Average speed (km/h) below which general congestion might be indicated
+
+# --- Perspective Calibration (Optional) ---
+perspective_calibration:
+  matrix_path: ./configs/perspective_matrix.npy # Path to saved NumPy perspective matrix file (if used by OCR)
+
+# --- Performance & Resource Limits ---
+performance:
+  gpu_acceleration: true # Enable GPU for YOLO detection/tracking if available
+  memory_limit_percent: 85 # Max virtual memory % before blocking new feeds
+  cpu_limit_percent: 90 # Optional: Max CPU % before potentially reducing worker FPS
+
+# --- Visualization ---
+# Default set of visualization options enabled for new feeds
+vis_options_default:
+  - Tracked Vehicles
+  - Vehicle Data
+  - Lane Dividers
+  # - Lane Density Overlay # Can be performance intensive
+  # - Grid Overlay
+
+# --- Interface / Worker Communication ---
+interface:
+  camera_warmup_time: 0.5 # Seconds to wait after initializing camera source
