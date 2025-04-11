@@ -37,10 +37,10 @@ const CongestionNode = React.memo(({ id, name, value }: CongestionNodeProps) => 
       {/* Progress Bar: Animate height on group hover, smooth value transitions */}
       <Progress
         value={value}
-        className="h-1.5 group-hover:h-2 transition-all duration-200 ease-in-out" // Height transition
-        indicatorClassName={cn(
+        className={cn(
+          "h-1.5 group-hover:h-2 transition-all duration-200 ease-in-out", // Height transition
           progressColor,
-          'transition-[width] duration-500 ease-out' // Smooth width change (value change)
+          'transition-[width] duration-500 ease-out' // Smooth width change (value change) 
         )}
         aria-label={`Congestion level for ${name}: ${value}%`}
       />

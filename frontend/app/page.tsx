@@ -25,7 +25,7 @@ import {
 } from '@/lib/types'; // Adjust path if needed
 
 // Import the WebSocket hook
-import { useRealtimeUpdates } from '@/lib/hook.ts'; // Adjust path if needed
+import { useRealtimeUpdates } from '@/lib/hook'; // Adjust path if needed
 
 // Import mock data only for fallbacks/placeholders
 import { mockStatCards, mockCongestionNodes } from '@/data/mockData'; // Adjust path if needed

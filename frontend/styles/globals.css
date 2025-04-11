@@ -1,29 +1,209 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* styles/globals.css */
+/* Optional: Import a custom font like Share Tech Mono */
+/* @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap'); */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-}
+/* --- Tailwind Directives (Keep at the top) --- */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: 0 0% 100%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --muted:	210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 215 20.2% 65.1%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 47.4% 11.2%;
+    --foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --popover: 222.2 47.4% 11.2%;
+    --popover-foreground: 210 40% 98%;
+
+    --card: 222.2 47.4% 11.2%;
+    --card-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+
+/* --- Base Layer: Global styles and CSS Variable Definitions --- */
+@layer base {
+  /* --- CSS Variable Definitions --- */
+  :root {
+    /* --- Theme Variables (Matrix Theme Example) --- */
+    --matrix: 137 100% 50%;        /* Primary Green HSL Value */
+    --matrix-light: 137 100% 65%;   /* Lighter Green */
+    --matrix-dark: 137 100% 15%;    /* Darker Green */
+    --matrix-bg: 0 0% 4%;           /* Very Dark Background HSL Value */
+    --matrix-panel: 0 0% 7%;        /* Slightly Lighter Panel Background */
+    --matrix-text: var(--matrix);  /* Default text is primary green */
+    --matrix-border-color: 137 100% 40%; /* Border color HSL Value */
+    --matrix-muted-text: 137 40% 45%; /* Muted text HSL Value (adjusted contrast) */
+
+    /* --- Font Definitions --- */
+    /* --font-matrix: "Share Tech Mono", monospace; */ /* Use if imported */
+    --font-matrix: "Courier New", monospace;    /* Fallback Matrix font */
+    /* --font-sans: "Inter", sans-serif; */     /* Define if using Inter or another sans-serif */
+
+    /* --- Layout & Radius --- */
+    --radius: 0.625rem;             /* Base border radius (approx 10px) */
+
+    /* --- Shadcn Variable Mapping --- */
+    /* Map standard Shadcn variable names to your theme variables */
+    --background: var(--matrix-bg);                /* App background */
+    --foreground: var(--matrix-text);              /* Default text color */
+    --card: var(--matrix-panel);                   /* Card background */
+    --card-foreground: var(--matrix-text);         /* Card text color */
+    --popover: var(--matrix-panel);                /* Popover background */
+    --popover-foreground: var(--matrix-text);      /* Popover text color */
+    --primary: var(--matrix);                      /* Primary interactive color */
+    --primary-foreground: var(--matrix-bg);        /* Text on primary bg (dark) */
+    --secondary: var(--matrix-dark);               /* Secondary interactive color */
+    --secondary-foreground: var(--matrix-light);   /* Text on secondary bg (light) */
+    --muted: var(--matrix-dark);                   /* Muted background elements */
+    --muted-foreground: var(--matrix-muted-text);  /* Muted text color */
+    --accent: var(--matrix-dark);                  /* Accent elements (can be same as secondary) */
+    --accent-foreground: var(--matrix-light);      /* Text on accent elements */
+    --destructive: 0 84% 60%;                      /* Destructive actions (Standard Red HSL) */
+    --destructive-foreground: 0 0% 98%;            /* Text on destructive bg (Light) */
+    --border: var(--matrix-border-color);          /* Element borders */
+    --input: var(--matrix-border-color);           /* Input borders */
+    --ring: var(--matrix-light);                   /* Focus rings */
+    --radius: var(--radius);                       /* Use base radius variable */
+  }
+
+  /* Optional: Dark Mode Override (Define if implementing toggle) */
+  /* .dark { */
+  /*   --background: 0 0% 98%; */
+  /*   --foreground: 0 0% 9%; */
+  /*   --card: 0 0% 96%; */
+  /*   --primary: ...; */
+  /*   ... etc ... */
+  /* } */
+
+  /* --- Base Body Styles --- */
+  body {
+    /* Apply theme variables DIRECTLY, not using @apply for these */
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-matrix); /* Apply default matrix font */
+
+    /* Standard Tailwind utilities that don't depend on custom theme vars are OK */
+    -webkit-font-smoothing: antialiased; /* Apply font smoothing */
+
+    /* Other base styles */
+    min-height: 100vh;
+    overflow-x: hidden; /* Prevent horizontal scroll */
+  }
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 216 12.2% 83.9%;
+  }
+}
+@layer base { 
+    
+  /* --- Base styles definitions here, if needed in the future--- */
+}
+
+  /* --- Custom Scrollbars (Themed) --- */
+  /* Webkit (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--matrix-bg)); /* Match background */
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--matrix-dark)); /* Use dark matrix color */
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--matrix-light)); /* Lighter on hover */
+  }
+  /* Firefox */
+  html { /* Apply to html or body */
+      scrollbar-width: thin; /* Or 'auto' or 'none' */
+      /* scrollbar-color: thumb track */
+      scrollbar-color: hsl(var(--matrix-dark)) hsl(var(--matrix-bg));
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* --- Components Layer: Custom reusable component classes --- */
+@layer components {
+  /* Custom Card Style with Glow Effect */
+    .matrix-glow-card {
+      border: 1px solid hsl(var(--border));    
+      overflow: hidden; 
+      background-color: hsl(var(--card));
+      border-radius: var(--radius);
+      box-shadow:
+        0 0 2px 1px hsla(var(--matrix-light), 0.6), 
+        0 0 6px 1px hsla(var(--matrix), 0.5);      
+      transition: box-shadow 0.3s ease;
+  }
+  .matrix-glow-card:hover {
+      /* Enhance glow on hover */
+      box-shadow:
+        0 0 4px 2px hsla(var(--matrix-light), 0.7),
+        0 0 12px 3px hsla(var(--matrix), 0.6);
+  }
+
+  /* Custom Text Glow Effect */
+  .matrix-text-glow {
+      text-shadow: 0 0 6px hsla(var(--matrix), 0.7); /* Use primary matrix color */
+  }
+
+  /* Custom Map Grid Background */
+  .map-grid {
+      /* Create grid lines using linear gradients */
+      background-image:
+          linear-gradient(hsla(var(--matrix), 0.08) 1px, transparent 1px), /* Horizontal lines */
+          linear-gradient(90deg, hsla(var(--matrix), 0.08) 1px, transparent 1px); /* Vertical lines */
+      /* Grid size (adjust performance if needed: 50px 50px) */
+      background-size: 25px 25px;
+      /* Apply base border utility */
+      border: 1px solid hsl(var(--border));
+      /* Apply theme border color and radius directly */
+      border-color: hsl(var(--border));
+      border-radius: var(--radius);
+  }
 }
