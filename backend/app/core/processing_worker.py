@@ -10,7 +10,7 @@ from pathlib import Path
 
 try:
     # Import necessary components from utils.py
-    from utils import FrameTimer, TrafficMonitor, visualize_data, FrameReader, ConfigError
+    from ..utils.utils import FrameTimer, TrafficMonitor, visualize_data, FrameReader, ConfigError
     # LOG_PATH is defined in app.py, get it via config if needed or handle logging differently
     # For simplicity, we might re-fetch the path from config inside the function if needed
 except ImportError as e:
