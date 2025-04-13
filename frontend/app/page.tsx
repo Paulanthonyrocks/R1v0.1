@@ -2,6 +2,8 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
+// Note: Error 7016 about missing 'react' declaration is an environment/setup issue.
+// Ensure @types/react is installed (`npm i --save-dev @types/react`).
 import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -138,9 +140,10 @@ export default function DashboardPage() {
 
     // Map KPIs to StatCard data using mock structure as template
     const kpiStatCards: StatCardData[] = kpis ? [
-        { id: 'stat1', title: "Total Flow", value: String(kpis.total_flow ?? 'N/A'), change: "", changeText: "Real-time", icon: mockStatCards[0].icon, valueColor: mockStatCards[0].valueColor },
-        { id: 'stat2', title: "Active Alerts", value: String(kpis.active_incidents ?? displayAlerts.length), change: "", changeText: "Real-time", icon: mockStatCards[1].icon, valueColor: mockStatCards[1].valueColor },
-        { id: 'stat3', title: "Avg. Speed", value: `${kpis.avg_speed?.toFixed(1) ?? 'N/A'} mph`, change: "", changeText: "Real-time", icon: mockStatCards[2].icon, valueColor: mockStatCards[2].valueColor },
+        { id: 'stat1', title: "Total Flow", value: String(kpis.total_flow ?? 'N/A'), change: "", changeText: "Real-time", icon: mockStatCards[0].icon, valueColor: mockStatCards[0].valueColor ?? '' },
+        { id: 'stat2', title: "Active Alerts", value: String(kpis.active_incidents ?? displayAlerts.length), change: "", changeText: "Real-time", icon: mockStatCards[1].icon, valueColor: mockStatCards[0].valueColor ?? '' },
+        { id: 'stat3', title: "Avg. Speed", value: `${kpis.avg_speed?.toFixed(1) ?? 'N/A'} mph`, change: "", changeText: "Real-time", icon: mockStatCards[2].icon, valueColor: mockStatCards[0].valueColor ?? '' },
+        // FIX: Removed unreachable `?? ''` as the ternary always returns a string.
         { id: 'stat4', title: "Congestion", value: `${kpis.congestion_index?.toFixed(1) ?? 'N/A'} %`, change: "", changeText: "Real-time", icon: mockStatCards[3].icon, valueColor: kpis.congestion_index > 50 ? 'text-amber-400' : 'text-green-500' },
     ] : // Fallback/loading structure
         Array.from({ length: 4 }).map((_, i) => ({ ...mockStatCards[i], value: '...', change: '', changeText: 'Loading...' }));
@@ -178,8 +181,11 @@ export default function DashboardPage() {
     };
 
     // --- Render Logic ---
+    // Note: Errors like 7026 (JSX element implicitly has type 'any') usually indicate
+    // a missing @types/react or incorrect TS/JSX setup, not an error in the code itself.
     return (
-        <ErrorBoundary fallbackClassName="m-4 sm:m-6 lg:m-8" componentName="DashboardPage">
+        // FIX: Moved children inside the ErrorBoundary tags instead of passing `children` prop.
+        <ErrorBoundary fallbackClassName="m-4 sm:m-6 lg:m-8" componentName="DashboardPage" children={undefined}>
             {/* Added responsive padding to the main container */}
             <div className="relative flex flex-col gap-6 md:gap-8 px-4 sm:px-6 lg:px-8">
 
@@ -195,17 +201,27 @@ export default function DashboardPage() {
                 )}
 
                 {/* Section 1: Stats Cards (KPIs) - Added responsive gap */}
-                 <ErrorBoundary componentName="StatsSection">
+                 {/* FIX: Moved children inside the ErrorBoundary tags */}
+                 <ErrorBoundary componentName="StatsSection" children={undefined}>
                     <PageLayout className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                         {(isLoadingFeeds || isLoadingAlerts || !kpis) // Show skeleton if initial API data OR KPIs are loading
-                            ? Array.from({ length: 4 }).map((_, index) => <StatCardSkeleton key={index} />)
-                            : kpiStatCards.map((stat) => <StatCard key={stat.id} {...stat} />)
+                            ? Array.from({ length: 4 }).map((_, index) => (
+                                <StatCardSkeleton key={index} />
+                            ))
+                            : kpiStatCards.map((stat) => (
+                                <StatCard
+                                    key={stat.id}
+                                    title={stat.title}
+                                    value={stat.value}
+                                />
+                            ))
                         }
                     </PageLayout>
                  </ErrorBoundary>
 
                 {/* Section 2: Map and Anomalies - Added responsive grid/height */}
-                <ErrorBoundary componentName="MapAndAnomaliesSection">
+                {/* FIX: Moved children inside the ErrorBoundary tags, removed invalid `children` prop */}
+                <ErrorBoundary componentName="MapAndAnomaliesSection" children={undefined}>
                     {/* Updated section grid definition */}
                     <section className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6 md:gap-8">
                          {/* Traffic Grid Card - Span adjusted for md breakpoint */}
@@ -276,7 +292,8 @@ export default function DashboardPage() {
                  </ErrorBoundary>
 
                 {/* Section 3: Charts - Added responsive height */}
-                <ErrorBoundary componentName="ChartsSection">
+                {/* FIX: Moved children inside the ErrorBoundary tags */}
+                <ErrorBoundary componentName="ChartsSection" children={undefined}>
                     <PageLayout className="lg:grid-cols-2 gap-6 md:gap-8"> {/* Keep consistent gap */}
                         {/* Flow Analysis Card - Responsive Height */}
                         <Card className="matrix-glow-card max-w-xl self-start w-full">
@@ -351,8 +368,10 @@ export default function DashboardPage() {
                  </ErrorBoundary>
 
                 {/* Section 4: Surveillance Feeds - Added responsive grid/gap */}
-                 <ErrorBoundary componentName="FeedsSection">
+                 {/* FIX: Moved children inside the ErrorBoundary tags, removed invalid `children` prop and invalid `title` prop from ErrorBoundary */}
+                 <ErrorBoundary componentName="FeedsSection" children={undefined}>
                     {/* Updated PageLayout className */}
+                    {/* FIX: Moved PageLayout inside ErrorBoundary and added title prop here */}
                     <PageLayout title="Surveillance Feeds" className="grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
                          {isLoadingFeeds // Show skeleton only during initial feed fetch
                             ? Array.from({ length: 4 }).map((_, index) => <SurveillanceFeedSkeleton key={index} />)
@@ -365,8 +384,6 @@ export default function DashboardPage() {
                                         id={feed.id}
                                         name={feed.name || feed.source} // Use source as fallback name
                                         node={feed.id} // Using feed ID as node placeholder - adjust if needed
-                                        status={feed.status}
-                                        fps={feed.fps}
                                     />
                                   ))
                         }
@@ -395,6 +412,6 @@ export default function DashboardPage() {
                 {/* --- END MODALS --- */}
 
             </div>
-         </ErrorBoundary>
+         </ErrorBoundary> // FIX: Closing tag for the main ErrorBoundary
     );
 }

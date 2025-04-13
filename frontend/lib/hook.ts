@@ -58,7 +58,17 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
             const message = JSON.parse(event.data);
             switch (message.type) {
               case 'feed_update':
-                 // ... (feed update logic) ...
+                setFeeds((prevFeeds: FeedStatusData[]) => {
+                  const updatedFeeds = (prevFeeds as FeedStatusData[]).map((feed: FeedStatusData) =>
+                      feed.id === message.data.id
+                          ? { ...feed, status: message.data.status }
+                          : feed
+                  );
+                  // Ensure a new array is created to trigger re-renders
+                  return [...updatedFeeds];
+                });
+                console.debug(`Feed ${message.data.id} updated to status: ${message.data.status}`);
+
                 break;
               case 'kpi_update':
                  setKpis(message.data as KpiUpdatePayload);

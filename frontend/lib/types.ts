@@ -73,6 +73,7 @@ export interface CongestionNodeProps {
 
 export interface SurveillanceFeedProps extends Omit<FeedStatusData, 'source' | 'error_message'> {
   name: string;
+  node: string;
 }
 export interface LegendItemProps { color: string; text: string; }
 export interface PageLayoutProps { title?: string; children: React.ReactNode; className?: string; }

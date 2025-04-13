@@ -1,4 +1,4 @@
-// filepath: c:\Users\HP\Desktop\R1v0.1\frontend\postcss.config.mjs
+// postcss.config.js
 /** @type {import('postcss-load-config').Config} */
 const config = {
   plugins: {
@@ -6,4 +6,5 @@ const config = {
     autoprefixer: {},
   }
 };
-export default config;
+
+module.exports = config; // Use module.exports
