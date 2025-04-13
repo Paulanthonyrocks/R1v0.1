@@ -19,6 +19,7 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         """Accepts a new WebSocket connection and adds it to the active set."""
         await websocket.accept()
+        # Use a lock to safely update the set
         async with self._lock:
             self.active_connections.add(websocket)
         client_host = websocket.client.host if websocket.client else "Unknown"
@@ -28,14 +29,17 @@ class ConnectionManager:
     async def disconnect(self, websocket: WebSocket):
         """Removes a WebSocket connection from the active set."""
         async with self._lock:
-            # Remove the websocket if it's present
-            self.active_connections.discard(websocket)
-        client_host = websocket.client.host if websocket.client else "Unknown"
-        client_port = websocket.client.port if websocket.client else "Unknown"
-        logger.info(f"WebSocket connection closed for {client_host}:{client_port} ({len(self.active_connections)} remaining)")
-        # Note: We don't explicitly close the websocket here,
-        # as this method is usually called *after* a disconnect occurs.
+             try:
+                 self.active_connections.discard(websocket)
+             finally:
+                 # Log client info even if set modification fails
+                 client_host = websocket.client.host if websocket.client else "Unknown"
+                 client_port = websocket.client.port if websocket.client else "Unknown"
+                 logger.info(f"WebSocket connection closed for {client_host}:{client_port} ({len(self.active_connections)} remaining)")
+                 # Note: We don't explicitly close the websocket here,
+                 # as this method is usually called *after* a disconnect occurs.
 
+    # Helper to safely check if a connection is active
     async def send_personal_message(self, message: Dict[str, Any], websocket: WebSocket):
         """Sends a JSON message to a specific WebSocket connection."""
         # Check if the connection is still considered active before sending
@@ -88,30 +92,63 @@ class ConnectionManager:
     async def _safe_send_json(self, websocket: WebSocket, message: Dict[str, Any]):
         """Internal helper to send JSON and handle immediate errors."""
         try:
-            await websocket.send_json(message)
+             await websocket.send_json(message)
         except (WebSocketDisconnect, RuntimeError) as e:
             # Raise specific exception to be caught by gather
             raise ConnectionError(f"Send failed, client disconnected: {e}") from e
         except Exception as e:
-            raise ConnectionError(f"Unexpected send error: {e}") from e
+             raise ConnectionError(f"Unexpected send error: {e}") from e
 
+
+    async def send_ping(self, websocket: WebSocket):
+        """Sends a ping message and waits for a pong response."""
+        try:
+             await websocket.send_text("ping")
+             # Set a timeout for the pong response (e.g., 5 seconds)
+             await asyncio.wait_for(self.receive_pong(websocket), timeout=5)
+        except asyncio.TimeoutError:
+             # No pong received, connection likely broken
+             logger.warning(f"Ping timeout for {websocket.client}. Disconnecting.")
+             await self.disconnect(websocket)
+             # In a real app, you might also want to close the socket: await websocket.close()
+        except Exception as e:
+             logger.error(f"Error during ping/pong with {websocket.client}: {e}. Disconnecting.", exc_info=True)
+             await self.disconnect(websocket)
+
+    async def receive_pong(self, websocket: WebSocket):
+        """Receives and validates a pong response."""
+        message = await websocket.receive_text()
+        if message == "pong":
+             return  # Pong received
+        else:
+             raise Exception(f"Invalid pong response: '{message}'")
+
+    async def check_connections(self):
+        """Periodically checks for broken connections using ping/pong."""
+        while True:
+             async with self._lock:
+                 # Create a copy of active connections to avoid modification during iteration
+                 connections_to_check = list(self.active_connections)
+             for websocket in connections_to_check:
+                 await self.send_ping(websocket)
+             await asyncio.sleep(30)  # Check every 30 seconds
 
     async def disconnect_all(self):
         """Closes all active WebSocket connections gracefully."""
         logger.info(f"Disconnecting all ({len(self.active_connections)}) WebSocket connections...")
         async with self._lock:
-            connections_to_close = list(self.active_connections)
-            self.active_connections.clear() # Clear the active set
+             connections_to_close = list(self.active_connections)
+             self.active_connections.clear()  # Clear the active set
 
         # Attempt to close connections concurrently
         results = await asyncio.gather(
-            *(websocket.close(code=1000, reason="Server shutting down") for websocket in connections_to_close),
-            return_exceptions=True
+             *(websocket.close(code=1000, reason="Server shutting down") for websocket in connections_to_close),
+             return_exceptions=True
         )
 
         # Log any errors during closure
         for i, result in enumerate(results):
-             if isinstance(result, Exception):
-                  ws = connections_to_close[i]
-                  logger.warning(f"Error closing WebSocket for {ws.client} during shutdown: {result}")
+             if isinstance(result, Exception): # Use isinstance for proper exception check
+                 ws = connections_to_close[i]
+                 logger.warning(f"Error closing WebSocket for {ws.client} during shutdown: {result}")
         logger.info("Finished disconnecting all WebSocket connections.")

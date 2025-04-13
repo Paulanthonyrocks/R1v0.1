@@ -18,6 +18,10 @@ def initialize_services(config: dict):
          except Exception as e:
                logger.error(f"Failed to initialize ConnectionManager in app.services: {e}")
                connection_manager_instance = None # Ensure it's None on failure
+               logger.info(f"WebSocket ConnectionManager initialization: Failed. Reason: {e}")
+         else:
+              logger.info("WebSocket ConnectionManager initialization: Successful.")
+
 
     if feed_manager_instance is None:
         try:
@@ -28,30 +32,45 @@ def initialize_services(config: dict):
             logger.info("FeedManager initialized via app.services.")
         except Exception as e:
             logger.error(f"Failed to initialize FeedManager in app.services: {e}", exc_info=True)
-            feed_manager_instance = None
-    # Return instances if needed elsewhere, or just rely on getters
-    return feed_manager_instance, connection_manager_instance
+            feed_manager_instance = None  
+            logger.info(f"FeedManager initialization: Failed. Reason: {e}")
+        else:
+             logger.info("FeedManager initialization: Successful.")
+   
 
 def get_feed_manager() -> FMClass:
     if feed_manager_instance is None: raise RuntimeError("FeedManager not initialized.")
     return feed_manager_instance
 
 def get_connection_manager() -> ConnectionManager:
-     if connection_manager_instance is None: raise RuntimeError("ConnectionManager not initialized.")
+     if connection_manager_instance is None:
+          raise RuntimeError("WebSocket ConnectionManager not initialized.")
      return connection_manager_instance
 
 async def shutdown_services(): # Make async for feed manager shutdown
-     global feed_manager_instance
-     # Stop Feed Workers first
-     if feed_manager_instance:
-          try:
-               logger.info("Requesting FeedManager shutdown from app.services...")
-               await feed_manager_instance.shutdown()
-          except Exception as e: logger.error(f"Error during FeedManager shutdown: {e}")
-     else: logger.info("FeedManager not initialized, skipping shutdown.")
+    global feed_manager_instance, connection_manager_instance
 
-     # Disconnect WebSockets (can happen after feed shutdown)
-     if connection_manager_instance:
-          try: await connection_manager_instance.disconnect_all()
-          except Exception as e: logger.error(f"Error disconnecting websockets: {e}")
-     else: logger.info("ConnectionManager not initialized, skipping disconnect.")
+    # 1. Disconnect WebSockets
+    if connection_manager_instance:
+        try:
+            logger.info("Disconnecting all WebSocket connections...")
+            await connection_manager_instance.disconnect_all()
+            logger.info("Successfully disconnected all WebSocket connections.")
+        except Exception as e:
+            logger.error(f"Failed to disconnect all websockets: {e}")
+    else:
+        logger.info("WebSocket ConnectionManager not initialized, skipping disconnect.")
+
+    # 2. Shut down FeedManager
+    if feed_manager_instance:
+        try:
+            logger.info("Requesting FeedManager shutdown from app.services...")
+            await feed_manager_instance.shutdown()
+            logger.info("FeedManager shutdown completed successfully.")
+        except Exception as e:
+            logger.error(f"Error during FeedManager shutdown: {e}")
+    else:
+        logger.info("FeedManager not initialized, skipping shutdown.")
+
+def health_check() -> bool:
+     return True # Simple health check

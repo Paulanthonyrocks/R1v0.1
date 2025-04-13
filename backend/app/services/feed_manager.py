@@ -207,6 +207,20 @@ class FeedManager:
         await self._broadcast("kpi_update", kpi_data)
         logger.debug(f"Broadcasted KPI update: {kpi_data}")
 
+    async def handle_start_feed(self, feed_id: str):
+        """Handles a request to start a feed."""
+        try:
+            await self.start_feed(feed_id)
+            logger.info(f"Started feed via WS request: {feed_id}")
+        except FeedNotFoundError as e:
+            logger.error(f"Feed not found: {feed_id}")
+        except FeedOperationError as e:
+            logger.error(f"Could not start feed {feed_id}: {e}")
+
+    async def handle_stop_feed(self, feed_id: str):
+        """Handles a request to stop a feed."""
+        await self.stop_feed(feed_id)
+        logger.info(f"Stopped feed via WS request: {feed_id}")
 
     async def _read_result_queues(self):
         """Background task to read from worker result queues."""
