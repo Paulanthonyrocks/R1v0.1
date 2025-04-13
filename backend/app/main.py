@@ -16,7 +16,7 @@ from app.routers import feeds, config as config_router, analysis, alerts
 from app.config import initialize_config, get_current_config  # Import config init/getter
 from app.database import initialize_database, close_database, get_database_manager
 from app.services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager
-
+from app.services import health_check as services_health_check
 # --- Logging setup (Basic initial setup) ---
 # Logging will be reconfigured by initialize_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -102,7 +102,10 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1011, reason="ConnectionManager not initialized")
         return
 
+    client_host = websocket.client.host if websocket.client else "Unknown"
+    client_port = websocket.client.port if websocket.client else "Unknown"
     await manager.connect(websocket)  # Proceed to connect if manager is valid
+    logger.info(f"WebSocket connected from {client_host}:{client_port}")
 
     try:
         while True:
@@ -147,29 +150,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 # await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {websocket.client}")
-        manager.disconnect(websocket)
+        logger.info(f"WebSocket disconnected from {client_host}:{client_port}")
+        await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"WebSocket Error: {e}", exc_info=True)
-        manager.disconnect(websocket)
+        logger.error(f"Error with WebSocket connection from {client_host}:{client_port}: {e}")
+        await manager.disconnect(websocket)
         try:
             await websocket.close(code=1011)
         except RuntimeError:
             pass
-
-# --- Root / Health Endpoints ---
-@app.get("/", tags=["Root"])
-async def read_root():
-    db_status = "OK" if get_database_manager() else "Not Initialized"
-    fm_status = "OK" if get_feed_manager() else "Not Initialized"
-    return {"message": "Route One Hub Backend API is running.", "db_status": db_status, "feed_manager_status": fm_status}
-
-@app.get("/health", tags=["Health"])
-async def health_check():
-    try:
-        get_database_manager()  # Basic check
-        get_feed_manager()     # Basic check
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(status_code=503, detail=f"Service Unavailable: {e}")
