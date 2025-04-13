@@ -97,11 +97,13 @@ except Exception as e:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     manager = get_connection_manager()  # Get via getter
-    if not manager:
-        logger.error("WebSocket connection rejected: ConnectionManager not available.")
-        await websocket.close(code=1011)
+    if manager is None:  # Check if manager is None
+        logger.error("WebSocket connection rejected: ConnectionManager not initialized.")
+        await websocket.close(code=1011, reason="ConnectionManager not initialized")
         return
-    await manager.connect(websocket)
+
+    await manager.connect(websocket)  # Proceed to connect if manager is valid
+
     try:
         while True:
             try:
