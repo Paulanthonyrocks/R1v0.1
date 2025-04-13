@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+import numpy as np
 import psutil
 import re
 from multiprocessing import Process, Queue as MPQueue, Event as MPEvent, Lock, Value, set_start_method, get_start_method
