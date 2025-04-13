@@ -104,7 +104,7 @@ export default function DashboardPage() {
          }
          const endTimeStr = now.toISOString();
          const startTimeStr = startTime.toISOString();
-         return `${API_BASE_URL}/analysis/trends?start_time=${encodeURIComponent(startTimeStr)}&end_time=${encodeURIComponent(endTimeStr)}`;
+         return `${API_BASE_URL}/analysis/trends?start_time=${startTimeStr}&end_time=${endTimeStr}`;
     }, [timeRange]);
 
     // Fetch trends data using the dynamic key
@@ -184,9 +184,11 @@ export default function DashboardPage() {
     // Note: Errors like 7026 (JSX element implicitly has type 'any') usually indicate
     // a missing @types/react or incorrect TS/JSX setup, not an error in the code itself.
     return (
-        // FIX: Moved children inside the ErrorBoundary tags instead of passing `children` prop.
-        <ErrorBoundary fallbackClassName="m-4 sm:m-6 lg:m-8" componentName="DashboardPage" children={undefined}>
+
+        <ErrorBoundary fallbackClassName="m-4 sm:m-6 lg:m-8" componentName="DashboardPage">
             {/* Added responsive padding to the main container */}
+
+
             <div className="relative flex flex-col gap-6 md:gap-8 px-4 sm:px-6 lg:px-8">
 
                 {/* Connection / Fetch Error Banner */}
@@ -200,100 +202,104 @@ export default function DashboardPage() {
                     </div>
                 )}
 
-                {/* Section 1: Stats Cards (KPIs) - Added responsive gap */}
-                 {/* FIX: Moved children inside the ErrorBoundary tags */}
-                 <ErrorBoundary componentName="StatsSection" children={undefined}>
+        {/* Section 1: Stats Cards (KPIs) - Added responsive gap */}
+                <ErrorBoundary componentName="StatsSection">
                     <PageLayout className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                        {(isLoadingFeeds || isLoadingAlerts || !kpis) // Show skeleton if initial API data OR KPIs are loading
-                            ? Array.from({ length: 4 }).map((_, index) => (
-                                <StatCardSkeleton key={index} />
-                            ))
-                            : kpiStatCards.map((stat) => (
-                                <StatCard
-                                    key={stat.id}
-                                    title={stat.title}
-                                    value={stat.value}
-                                />
-                            ))
+                        {(isLoadingFeeds || isLoadingAlerts || !kpis)
+                            ? Array.from({ length: 4 }).map((_, index) => <StatCardSkeleton key={index} />)
+                            : (kpiStatCards.map((stat, index) => {
+                                    // Ensure all required props are present, fallback to mock data if necessary
+                                    const mockStat = mockStatCards[index];
+                                    return (
+                                        <StatCard
+                                            key={stat.id}
+                                            id={stat.id}
+                                            title={stat.title}
+                                            value={stat.value}
+                                            change={stat.change ?? mockStat.change}
+                                            changeText={stat.changeText ?? mockStat.changeText}
+                                            icon={stat.icon ?? mockStat.icon}
+                                        />
+                                    );
+                                }))
                         }
                     </PageLayout>
-                 </ErrorBoundary>
+                </ErrorBoundary>
 
-                {/* Section 2: Map and Anomalies - Added responsive grid/height */}
-                {/* FIX: Moved children inside the ErrorBoundary tags, removed invalid `children` prop */}
-                <ErrorBoundary componentName="MapAndAnomaliesSection" children={undefined}>
+        {/* Section 2: Map and Anomalies - Added responsive grid/height */}
+                <ErrorBoundary componentName="MapAndAnomaliesSection">
                     {/* Updated section grid definition */}
                     <section className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6 md:gap-8">
-                         {/* Traffic Grid Card - Span adjusted for md breakpoint */}
-                         <Card className="md:col-span-2 lg:col-span-2 matrix-glow-card">
-                             <CardHeader className="border-b border-border p-4">
-                                 <CardTitle className="matrix-text-glow uppercase text-base font-semibold tracking-wider">
+                        {/* Traffic Grid Card - Span adjusted for md breakpoint */}
+                        <Card className="md:col-span-2 lg:col-span-2 matrix-glow-card">
+                            <CardHeader className="border-b border-border p-4">
+                                <CardTitle className="matrix-text-glow uppercase text-base font-semibold tracking-wider">
                                     Traffic <span className="text-muted-foreground font-medium">Grid</span>
-                                 </CardTitle>
-                             </CardHeader>
-                              <CardContent className="p-0">
-                                 {/* Map Grid - Responsive Height */}
-                                 <div className="map-grid h-64 sm:h-80 md:h-96 relative">
-                                     {isLoadingFeeds ? ( // Show map loading only during initial feed fetch
-                                         <div className="absolute inset-0 flex items-center justify-center bg-muted/20 animate-pulse">
-                                             <MapPin className="w-8 h-8 text-muted-foreground/50 mr-2" />
-                                             <span className="text-muted-foreground/80">Loading Map Data...</span>
-                                         </div>
-                                     ) : (
-                                         <div className="absolute inset-0 flex items-center justify-center">
-                                             <p className="text-sm text-muted-foreground opacity-75">[Map Component Placeholder]</p>
-                                         </div>
-                                     )}
-                                 </div>
-                                  {/* Map Footer with Report Button */}
-                                  <div className="p-4 border-t border-border flex flex-wrap justify-between items-center gap-4">
-                                     <div className="flex flex-wrap gap-x-4 gap-y-2">
-                                         <LegendItem color="bg-green-500" text="Normal" />
-                                         <LegendItem color="bg-amber-400" text="Slow" />
-                                         <LegendItem color="bg-red-500" text="Congested" />
-                                         <LegendItem color="bg-purple-500" text="Anomaly" />
-                                     </div>
-                                     <Button
-                                         size="sm"
-                                         className="bg-primary text-primary-foreground hover:bg-matrix-light text-xs px-3 h-8"
-                                         onClick={() => setIsReportModalOpen(true)} // Opens the Report Anomaly modal
-                                     >
-                                         <Plus className="mr-1.5 h-4 w-4" /> Report Anomaly
-                                     </Button>
-                                 </div>
-                             </CardContent>
-                         </Card>
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-0">
+                                {/* Map Grid - Responsive Height */}
+                                <div className="map-grid h-64 sm:h-80 md:h-96 relative">
+                                    {isLoadingFeeds ? ( // Show map loading only during initial feed fetch
+                                        <div className="absolute inset-0 flex items-center justify-center bg-muted/20 animate-pulse">
+                                            <MapPin className="w-8 h-8 text-muted-foreground/50 mr-2" />
+                                            <span className="text-muted-foreground/80">Loading Map Data...</span>
+                                        </div>
+                                    ) : (
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <p className="text-sm text-muted-foreground opacity-75">[Map Component Placeholder]</p>
+                                        </div>
+                                    )}
+                                </div>
+                                {/* Map Footer with Report Button */}
+                                <div className="p-4 border-t border-border flex flex-wrap justify-between items-center gap-4">
+                                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                        <LegendItem color="bg-green-500" text="Normal" />
+                                        <LegendItem color="bg-amber-400" text="Slow" />
+                                        <LegendItem color="bg-red-500" text="Congested" />
+                                        <LegendItem color="bg-purple-500" text="Anomaly" />
+                                    </div>
+                                    <Button
+                                        size="sm"
+                                        className="bg-primary text-primary-foreground hover:bg-matrix-light text-xs px-3 h-8"
+                                        onClick={() => setIsReportModalOpen(true)} // Opens the Report Anomaly modal
+                                    >
+                                        <Plus className="mr-1.5 h-4 w-4" /> Report Anomaly
+                                    </Button>
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                         {/* Active Anomalies Card - Responsive Height */}
-                         <Card className="matrix-glow-card max-w-md self-start">
-                             <CardHeader className="border-b border-border p-4">
-                                 <CardTitle className="matrix-text-glow uppercase text-base font-semibold tracking-wider">
-                                     Active <span className="text-muted-foreground font-medium">Anomalies</span>
-                                 </CardTitle>
-                             </CardHeader>
-                             {/* Anomalies Content - Adjusted max-h */}
-                             <CardContent className="p-0 divide-y divide-secondary max-h-[50vh] sm:max-h-[480px] overflow-y-auto">
-                                 {isLoadingAlerts // Show skeleton only while fetching initial alerts
-                                     ? <div className="p-6 text-center text-muted-foreground animate-pulse">Loading Anomalies...</div>
-                                     : displayAlerts.length === 0
-                                         ? <div className="p-6 text-center text-muted-foreground">No active anomalies reported.</div>
-                                         // Render AnomalyItems, passing the handler
-                                         : displayAlerts.map((alert) => (
-                                             <AnomalyItem
-                                                 key={alert.id || alert.timestamp} // Use unique ID or timestamp as key
-                                                 {...alert}
-                                                 onSelect={handleAnomalySelect} // Pass the handler
-                                             />
-                                          ))
-                                 }
-                             </CardContent>
-                         </Card>
+                        {/* Active Anomalies Card - Responsive Height */}
+                        <Card className="matrix-glow-card max-w-md self-start">
+                            <CardHeader className="border-b border-border p-4">
+                                <CardTitle className="matrix-text-glow uppercase text-base font-semibold tracking-wider">
+                                    Active <span className="text-muted-foreground font-medium">Anomalies</span>
+                                </CardTitle>
+                            </CardHeader>
+                            {/* Anomalies Content - Adjusted max-h */}
+                            <CardContent className="p-0 divide-y divide-secondary max-h-[50vh] sm:max-h-[480px] overflow-y-auto">
+                                {isLoadingAlerts // Show skeleton only while fetching initial alerts
+                                    ? <div className="p-6 text-center text-muted-foreground animate-pulse">Loading Anomalies...</div>
+                                    : displayAlerts.length === 0
+                                        ? <div className="p-6 text-center text-muted-foreground">No active anomalies reported.</div>
+                                        // Render AnomalyItems, passing the handler
+                                        : displayAlerts.map((alert) => (
+                                            <AnomalyItem
+                                                key={alert.id || (alert.timestamp instanceof Date ? alert.timestamp.toISOString() : String(alert.timestamp))}
+                                                {...alert} // Pass all alert properties as props
+                                                onSelect={handleAnomalySelect} // Pass the handler
+                                            />
+                                        ))
+                                }
+                            </CardContent>
+                        </Card>
                     </section>
-                 </ErrorBoundary>
+                </ErrorBoundary>
 
                 {/* Section 3: Charts - Added responsive height */}
                 {/* FIX: Moved children inside the ErrorBoundary tags */}
-                <ErrorBoundary componentName="ChartsSection" children={undefined}>
+                <ErrorBoundary componentName="ChartsSection">
                     <PageLayout className="lg:grid-cols-2 gap-6 md:gap-8"> {/* Keep consistent gap */}
                         {/* Flow Analysis Card - Responsive Height */}
                         <Card className="matrix-glow-card max-w-xl self-start w-full">
@@ -365,44 +371,50 @@ export default function DashboardPage() {
                              </CardContent>
                         </Card>
                     </PageLayout>
-                 </ErrorBoundary>
+                </ErrorBoundary>
 
                 {/* Section 4: Surveillance Feeds - Added responsive grid/gap */}
-                 {/* FIX: Moved children inside the ErrorBoundary tags, removed invalid `children` prop and invalid `title` prop from ErrorBoundary */}
-                 <ErrorBoundary componentName="FeedsSection" children={undefined}>
-                    {/* Updated PageLayout className */}
-                    {/* FIX: Moved PageLayout inside ErrorBoundary and added title prop here */}
+                <ErrorBoundary componentName="FeedsSection">
                     <PageLayout title="Surveillance Feeds" className="grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-                         {isLoadingFeeds // Show skeleton only during initial feed fetch
+                        {isLoadingFeeds
                             ? Array.from({ length: 4 }).map((_, index) => <SurveillanceFeedSkeleton key={index} />)
                             : displayFeeds.length === 0
                                 ? <div className="col-span-full text-center text-muted-foreground p-4">No active feeds found.</div>
-                                // Pass required props, deriving name from source if needed
-                                : displayFeeds.map((feed) => (
-                                    <SurveillanceFeed
-                                        key={feed.id}
-                                        id={feed.id}
-                                        name={feed.name || feed.source} // Use source as fallback name
-                                        node={feed.id} // Using feed ID as node placeholder - adjust if needed
-                                    />
-                                  ))
+                                : displayFeeds.map((feed) => {
+                                    // Ensure feed.status is provided, even if it's a placeholder
+                                    const feedStatus = feed.status;
+                                    if (feedStatus === undefined) {
+                                        console.warn(`Feed ${feed.id} is missing 'status'.`);
+                                    }
+                                    return (
+                                        <SurveillanceFeed
+                                            key={feed.id}
+                                            id={feed.id}
+                                            name={feed.name || feed.source}
+                                            node={feed.id}
+                                            status={feedStatus || 'unknown'} // Provide a default or handle appropriately
+                                        />
+                                    );
+                                })
                         }
                     </PageLayout>
-                 </ErrorBoundary>
+                </ErrorBoundary>
 
                 {/* --- Render Modals --- */}
                 {/* Anomaly Details Modal */}
-                <AnomalyDetailsModal
-                    anomaly={selectedAnomaly}
-                    open={selectedAnomaly !== null} // Control open state based on selectedAnomaly
-                    onOpenChange={(isOpen) => {
-                        // If the dialog signals it wants to close (e.g., overlay click, Esc key)
-                        if (!isOpen) {
-                            setSelectedAnomaly(null); // Clear the selected anomaly to hide the modal
-                        }
-                    }}
-                    onAcknowledge={handleAcknowledge} // Pass acknowledge handler
-                />
+                {selectedAnomaly && (
+                    <AnomalyDetailsModal
+                        anomaly={selectedAnomaly}
+                        open={selectedAnomaly !== null}
+                        onOpenChange={(isOpen) => {
+                            if (!isOpen) {
+                                setSelectedAnomaly(null);
+                            }
+                        }}
+                        onAcknowledge={handleAcknowledge}
+                    />
+                )}
+
                 {/* Report Anomaly Modal */}
                 <ReportAnomalyModal
                     open={isReportModalOpen}
@@ -412,6 +424,6 @@ export default function DashboardPage() {
                 {/* --- END MODALS --- */}
 
             </div>
-         </ErrorBoundary> // FIX: Closing tag for the main ErrorBoundary
+        </ErrorBoundary>
     );
 }
