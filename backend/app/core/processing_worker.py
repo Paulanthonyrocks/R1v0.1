@@ -39,7 +39,7 @@ except ImportError as e:
 
 
 try:
-    from backend.app.core.core_module import CoreModule
+    from ..core.core_module import CoreModule
 except ImportError as e:
     print(f"Error importing CoreModule in processing_worker: {e}. Ensure core_module.py is present.")
     CoreModule = None
