@@ -18,7 +18,7 @@ from app.config import initialize_config, get_current_config  # Import config in
 from app.database import initialize_database, close_database, get_database_manager
 from app.services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager
 from app.services import health_check as services_health_check
-# --- Logging setup (Basic initial setup) ---
+from app.services.services import health_check as services_health_check  # Import directly
 # Logging will be reconfigured by initialize_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
