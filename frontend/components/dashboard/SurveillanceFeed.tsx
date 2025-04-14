@@ -9,16 +9,13 @@ import { ws } from '@/lib/websocket'; // Import WebSocket client
 import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
 
 const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
-    const { feeds } = useRealtimeUpdates();
-    const feed = feeds.find(f => f.id === id);
-    const initialStatus = feed ? feed.status : 'stopped'; // Default to stopped if not found
-    const [isRunning, setIsRunning] = useState(initialStatus === 'running' || initialStatus === 'starting');
+    const { feeds } = useRealtimeUpdates();    
+    const feed = feeds.find(f => f.id === id);    
+    const [isRunning, setIsRunning] = useState(feed?.status === 'running' || feed?.status === 'starting');
 
     // Update isRunning when feed status changes
     useEffect(() => {
-        if (feed) {
-            setIsRunning(feed.status === 'running' || feed.status === 'starting');
-        }
+        setIsRunning(feed?.status === 'running' || feed?.status === 'starting');
     }, [feed]);
 
     const toggleFeed = () => {

@@ -3,6 +3,7 @@
 import logging
 import logging.config
 from pathlib import Path
+import time
 from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -107,6 +108,8 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)  # Proceed to connect if manager is valid
     logger.info(f"WebSocket connected from {client_host}:{client_port}")
 
+    last_pong = time.time()
+    ping_interval = 30  # Send a ping every 30 seconds
     try:
         while True:
             try:
@@ -114,6 +117,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 message = json.loads(json_data)
                 logger.debug(f"Received WS message: {message}")
 
+                start_time = time.time()
                 message_type = message.get("type")
                 data = message.get("data")
                 feed_manager = get_feed_manager()
@@ -137,17 +141,34 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Optionally send an error back to the client
                 else:
                     logger.warning(f"Unknown message type: {message_type}")
-                    # Optionally send an error back to the client
-                    # await websocket.send_text(json.dumps({"type": "error", "data": {"message": f"Unknown message type: {message_type}"}}))
+                    # Send an error back to the client
+                    await websocket.send_text(json.dumps({"type": "error", "data": {"message": f"Unknown message type: {message_type}"}}))
 
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON format: {e}")
-                # Optionally send an error back to the client
-                # await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Invalid JSON format"}}))
+                end_time = time.time()
+                processing_time = end_time - start_time
+                extra = {"message_type": message_type, "feed_id": data.get("feed_id") if data else None, "processing_time": processing_time}
+                logger.info(f"Processed WebSocket message", extra=extra)
+
             except Exception as e:
                 logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
-                # Optionally send an error back to the client
-                # await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
+                # Send an error back to the client
+                await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
+
+            current_time = time.time()
+            if current_time - last_pong > ping_interval:
+                logger.debug("Sending ping to client")
+                await websocket.send_text(json.dumps({"type": "ping"}))
+                last_pong = current_time
+
+            # Check for pong response
+            if current_time - last_pong > ping_interval + 10:  # Allow 10 seconds for pong
+                logger.warning("No pong response from client, closing connection.")
+                await websocket.close(code=1001, reason="No pong response")
+                break
+
+            if message_type == "pong":
+                logger.debug("Received pong from client")
+                last_pong = time.time()
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected from {client_host}:{client_port}")

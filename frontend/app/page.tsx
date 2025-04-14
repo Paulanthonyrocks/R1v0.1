@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, MapPin, AlertTriangle } from 'lucide-react';
 import { cn } from "@/lib/utils";
+import { List } from 'react-virtualized'; // Import List
 
 // Import dashboard components (assuming index export or direct paths)
 import {
@@ -61,7 +62,7 @@ export default function DashboardPage() {
     // Real-time data state from WebSocket hook
     const {
         isConnected, feeds: wsFeeds, kpis, alerts: wsAlerts,
-        error: wsError, setInitialFeeds, setInitialAlerts,
+        error: wsError, setInitialFeeds, setInitialAlerts, startWebSocket,
     } = useRealtimeUpdates();
 
     // State for Chart Time Range Selection
@@ -77,12 +78,16 @@ export default function DashboardPage() {
         `${API_BASE_URL}/feeds`, fetcher, { revalidateOnFocus: false }
     );
 
+    // State for current page of alerts
+    const [currentPage, setCurrentPage] = useState(1);
+
     // Fetch initial page of alerts
-    const { data: alertsResponse, error: alertsError, isLoading: isLoadingAlerts } = useSWR<AlertsResponse>(
-        `${API_BASE_URL}/alerts?limit=50&page=1`, // Explicit page 1
-        fetcher,
-        { revalidateOnFocus: false }
-    );
+    const {
+        data: alertsResponse,
+        error: alertsError,
+        isLoading: isLoadingAlerts,
+        mutate: mutateAlerts,
+    } = useSWR<AlertsResponse>(`${API_BASE_URL}/alerts?limit=50&page=${currentPage}`, fetcher, { revalidateOnFocus: false });
 
     // SWR key calculation for Trends Data based on timeRange state
     const trendsSWRKey = useMemo(() => {
@@ -128,6 +133,13 @@ export default function DashboardPage() {
         }
     }, [alertsResponse, setInitialAlerts]);
 
+    // --- Start WebSocket after initial data is loaded ---
+    useEffect(() => {
+        if (!isInitialLoading) {
+            startWebSocket();
+        }
+    }, [alertsResponse, setInitialAlerts]);
+
     // --- Loading & Error State Calculation ---
     const isInitialLoading = isLoadingFeeds || isLoadingAlerts || isLoadingTrends;
     const fetchError = feedsError || alertsError || trendsError;
@@ -137,7 +149,7 @@ export default function DashboardPage() {
     // Prioritize WebSocket data, fall back to SWR data, then empty array
     const displayFeeds = wsFeeds.length > 0 ? wsFeeds : feedsData || [];
     const displayAlerts = wsAlerts.length > 0 ? wsAlerts : alertsResponse?.alerts || [];
-
+    
     // Map KPIs to StatCard data using mock structure as template
     const kpiStatCards: StatCardData[] = kpis ? [
         { id: 'stat1', title: "Total Flow", value: String(kpis.total_flow ?? 'N/A'), change: "", changeText: "Real-time", icon: mockStatCards[0].icon, valueColor: mockStatCards[0].valueColor ?? '' },
@@ -179,6 +191,22 @@ export default function DashboardPage() {
         // Example optimistic update (remove alert locally immediately)
         // setInitialAlerts(prev => prev.filter(a => a.id !== alert.id && a.timestamp !== alert.timestamp));
     };
+
+    // Event handlers for pagination
+    const handleNextPage = () => {
+        if (alertsResponse?.total_pages && currentPage < alertsResponse.total_pages) {
+            setCurrentPage(currentPage + 1);
+            mutateAlerts(); // Trigger re-fetch
+        }
+    };
+
+    const handlePreviousPage = () => {
+        if (currentPage > 1) {
+            setCurrentPage(currentPage - 1);
+            mutateAlerts(); // Trigger re-fetch
+        }
+    };
+
 
     // --- Render Logic ---
     // Note: Errors like 7026 (JSX element implicitly has type 'any') usually indicate
@@ -279,19 +307,49 @@ export default function DashboardPage() {
                             </CardHeader>
                             {/* Anomalies Content - Adjusted max-h */}
                             <CardContent className="p-0 divide-y divide-secondary max-h-[50vh] sm:max-h-[480px] overflow-y-auto">
-                                {isLoadingAlerts // Show skeleton only while fetching initial alerts
-                                    ? <div className="p-6 text-center text-muted-foreground animate-pulse">Loading Anomalies...</div>
-                                    : displayAlerts.length === 0
-                                        ? <div className="p-6 text-center text-muted-foreground">No active anomalies reported.</div>
-                                        // Render AnomalyItems, passing the handler
-                                        : displayAlerts.map((alert) => (
-                                            <AnomalyItem
-                                                key={alert.id || (alert.timestamp instanceof Date ? alert.timestamp.toISOString() : String(alert.timestamp))}
-                                                {...alert} // Pass all alert properties as props
-                                                onSelect={handleAnomalySelect} // Pass the handler
-                                            />
-                                        ))
-                                }
+                                {isLoadingAlerts ? (
+                                    <div className="p-6 text-center text-muted-foreground animate-pulse">Loading Anomalies...</div>
+                                ) : displayAlerts.length === 0 ? (
+                                    <div className="p-6 text-center text-muted-foreground">No active anomalies reported.</div>
+                                ) : (
+                                    <div>
+                                        <List
+                                            rowCount={displayAlerts.length}
+                                            rowHeight={80}
+                                            width={350}
+                                            height={300}
+                                            rowRenderer={({ key, index, style }) => {
+                                                const alert = displayAlerts[index];
+                                                return (
+                                                    <div key={key} style={style}>
+                                                        <AnomalyItem
+                                                            {...alert}
+                                                            onSelect={handleAnomalySelect}
+                                                        />
+                                                    </div>
+                                                );
+                                            }}
+                                        />
+                                        <div className="flex justify-between mt-4">
+                                            <Button
+                                                onClick={handlePreviousPage}
+                                                disabled={currentPage === 1}
+                                                variant="outline"
+                                                size="sm"
+                                            >
+                                                Previous Page
+                                            </Button>
+                                            <Button
+                                                onClick={handleNextPage}
+                                                disabled={!alertsResponse?.total_pages || currentPage === alertsResponse.total_pages}
+                                                variant="outline"
+                                                size="sm"
+                                            >
+                                                Next Page
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
                     </section>

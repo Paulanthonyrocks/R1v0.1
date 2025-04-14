@@ -55,6 +55,7 @@ export interface AlertsResponse {
   total_count: number;
   page: number;
   limit: number;
+  total_pages: number;
 }
 
 // --- Component Prop Types ---
@@ -114,4 +115,4 @@ export interface RealtimeDataActions {
   setInitialAlerts: (alerts: AlertData[]) => void;
 }
 
-export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions;
+export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { startWebSocket: () => void; };

@@ -15,6 +15,7 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0); // Track attempts
+  const lastPingRef = useRef<number>(0);
 
   const [isConnected, setIsConnected] = useState(false);
   const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
@@ -22,7 +23,7 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
   const [alerts, setAlerts] = useState<AlertData[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Memoized connection function
+  // Memoized connection function - now private
   const connectWebSocket = useCallback(() => {
     // Clear any pending reconnect timeout
     if (reconnectTimeoutRef.current) {
@@ -50,6 +51,7 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
       setIsConnected(true);
       setError(null); // Clear error on successful connection
       reconnectAttempts.current = 0; // Reset attempts on successful connection
+      lastPingRef.current = Date.now();
     };
 
     ws.onmessage = (event) => {
@@ -57,6 +59,7 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
         try {
             const message = JSON.parse(event.data);
             switch (message.type) {
+
               case 'feed_update':
                 setFeeds((prevFeeds: FeedStatusData[]) => {
                   const updatedFeeds = (prevFeeds as FeedStatusData[]).map((feed: FeedStatusData) =>
@@ -73,12 +76,30 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
               case 'kpi_update':
                  setKpis(message.data as KpiUpdatePayload);
                 break;
-              case 'new_alert':
-                 // ... (alert update logic) ...
+
+              case 'new_alert': {
+                const newAlert: AlertData = message.data;
+                setAlerts((prevAlerts) => [newAlert, ...prevAlerts]);
+                console.debug('Received new alert:', newAlert);
+                }
                 break;
+
+              case 'error':
+                  // Handle error messages from the backend
+                  console.error('Received error from backend:', message.message);
+                  setError(message.message);
+                  break;
+
+              case 'ping':
+                  console.debug('Received ping, sending pong...');
+                  ws.send(JSON.stringify({ type: 'pong' }));
+                  lastPingRef.current = Date.now();
+                  break;
+
               default:
                 console.warn('Received unknown WebSocket message type:', message.type);
             }
+
         } catch (e) {
             console.error('Failed to parse WebSocket message or update state:', e);
             setError('Error processing real-time updates.'); // Set a generic error
@@ -122,10 +143,28 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
       }
     };
   }, []); // Dependency array is empty, connectWebSocket is stable
-
-  // Effect to initiate connection and cleanup
+  
+  // Heartbeat monitoring effect
   useEffect(() => {
-    connectWebSocket(); // Initial connection
+    if (isConnected) {
+      const heartbeatInterval = setInterval(() => {
+        const now = Date.now();
+        if (now - lastPingRef.current > 40000) {
+          console.warn('No ping received from backend in 40 seconds. Assuming connection lost.');
+          setIsConnected(false);
+          wsRef.current?.close(1000, 'Heartbeat timeout'); // Clean close for reconnection
+        }
+      }, 10000); // Check every 10 seconds
+
+      return () => clearInterval(heartbeatInterval); // Clear interval on disconnect
+    }
+  }, [isConnected]);
+
+
+  // Cleanup Effect
+  useEffect(() => {
+    console.log('useWebSocket hook mounted.  Waiting for startWebSocket() call...');
+    // Initial connection is now triggered by startWebSocket
 
     return () => {
       // Cleanup: clear timeouts and close WebSocket connection
@@ -133,14 +172,14 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
-        console.log("Closing WebSocket connection on component unmount.");
+        console.log('Closing WebSocket connection on component unmount.');
         // Prevent automatic reconnect attempts when explicitly unmounting
         reconnectAttempts.current = MAX_RECONNECT_ATTEMPTS + 1; // Set above limit
         wsRef.current.close(1000, "Component unmounted");
         wsRef.current = null;
       }
     };
-  }, [connectWebSocket]); // Depend on the memoized function
+  }, []); // Only run on mount/unmount
 
   // Functions to set initial data from SWR (unchanged)
   const setInitialFeeds = useCallback((initialFeeds: FeedStatusData[]) => {
@@ -161,5 +200,6 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
     error,
     setInitialFeeds,
     setInitialAlerts,
+    startWebSocket: connectWebSocket, // Expose connectWebSocket as startWebSocket
   };
 };
