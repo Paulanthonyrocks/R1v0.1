@@ -10,7 +10,6 @@ import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
 const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
     const { feeds, sendMessage, isConnected } = useRealtimeUpdates();
     const feed = feeds.find(f => f.id === id);
-    const isRunning = feed?.status === 'running' || feed?.status === 'starting';
 
     const toggleFeed = () => {
         if (!isConnected) {
@@ -21,8 +20,7 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
             console.warn('Feed data not found. Cannot toggle feed.');
             return;
         }
-        const newStatus = !isRunning;
-        setIsRunning(newStatus);
+        const newStatus = feed.status !== 'running';
         const messageType = newStatus ? 'start_feed' : 'stop_feed';
         sendMessage(messageType, { feed_id: id });
     };
@@ -42,15 +40,15 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
                 </div>
                 {/* Status badge */}
                 <Badge
-                    variant="default"
+                    variant={feed?.status === 'running' ? "default" : "outline"}
                     className={cn(
                         "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5",
-                        isRunning
+                        feed?.status === 'running'
                             ? "bg-primary text-primary-foreground animate-matrix-pulse"
                             : "bg-muted text-muted-foreground",
                     )}
                 >
-                    {isRunning ? "LIVE" : "STOPPED"}
+                    {feed?.status === 'running' ? "LIVE" : "STOPPED"}
                 </Badge>
             </div>
             <CardContent className="p-2">
