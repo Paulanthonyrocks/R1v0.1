@@ -37,11 +37,12 @@ import { mockStatCards, mockCongestionNodes } from '@/data/mockData'; // Adjust 
 const fetcher = async (url: string) => {
     const res = await fetch(url);
     if (!res.ok) {
-        let errorInfo: any = { detail: 'Failed to fetch data' };
+        let errorInfo: { detail: string } = { detail: 'Failed to fetch data' };
         try {
             // Try parsing JSON error details from backend
-            errorInfo = await res.json();
-        } catch (e) {
+            const json = await res.json();
+            errorInfo = json;
+        } catch {
             // Fallback if JSON parsing fails
             errorInfo.detail = res.statusText || errorInfo.detail;
         }
@@ -133,16 +134,16 @@ export default function DashboardPage() {
         }
     }, [alertsResponse, setInitialAlerts]);
 
+    // --- Loading & Error State Calculation ---
+    const isInitialLoading = isLoadingFeeds || isLoadingAlerts || isLoadingTrends;
+    const fetchError = feedsError || alertsError || trendsError;
+
     // --- Start WebSocket after initial data is loaded ---
     useEffect(() => {
         if (!isInitialLoading) {
             startWebSocket();
         }
-    }, [alertsResponse, setInitialAlerts]);
-
-    // --- Loading & Error State Calculation ---
-    const isInitialLoading = isLoadingFeeds || isLoadingAlerts || isLoadingTrends;
-    const fetchError = feedsError || alertsError || trendsError;
+    }, [alertsResponse, setInitialAlerts, isInitialLoading, startWebSocket]);
     const errorMessage = wsError ? (isConnected ? 'Real-time updates may be interrupted.' : wsError) : (fetchError ? `Failed to load initial data: ${fetchError.message}` : null);
 
     // --- Data Preparation for Rendering ---
