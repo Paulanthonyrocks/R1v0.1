@@ -151,8 +151,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
             except Exception as e:
                 logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
-                # Send an error back to the client
-                await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
 
             current_time = time.time()
             if current_time - last_pong > ping_interval:
@@ -173,7 +171,3 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket Error: {e}", exc_info=True)
         logger.error(f"Error with WebSocket connection from {client_host}:{client_port}: {e}")
         await manager.disconnect(websocket)
-        try:
-            await websocket.close(code=1011)
-        except RuntimeError:
-            pass

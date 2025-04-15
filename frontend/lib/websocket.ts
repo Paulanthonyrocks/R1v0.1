@@ -3,6 +3,8 @@
 class WebSocketClient {
   private socket: WebSocket | null = null;
   private url: string;
+  private pingInterval: number = 30000; // Interval in milliseconds (30 seconds)
+  private pingTimer: any;
 
   constructor(url: string) {
     this.url = url;
@@ -14,6 +16,7 @@ class WebSocketClient {
 
       this.socket.onopen = () => {
         console.log('WebSocket connected');
+        this.startPinging();
         resolve();
       };
 
@@ -27,6 +30,7 @@ class WebSocketClient {
       };
 
       this.socket.onerror = (error) => {
+        clearInterval(this.pingTimer);
         console.error('WebSocket error:', error);
         reject(error);
       };
@@ -38,6 +42,7 @@ class WebSocketClient {
   }
 
   public disconnect(): void {
+    clearInterval(this.pingTimer);
     if (this.socket) {
       this.socket.close();
     }
@@ -64,6 +69,13 @@ class WebSocketClient {
     } catch (error) {
       console.error('Error parsing incoming message:', error);
     }
+  }
+
+  private startPinging(): void {
+    this.pingTimer = setInterval(() => {
+      this.sendMessage('ping', {});
+      console.log('Sent ping');
+    }, this.pingInterval);
   }
 
 }
