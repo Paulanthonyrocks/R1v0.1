@@ -1,9 +1,7 @@
 // lib/hooks.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-    FeedStatusData, KpiData, AlertData,
-    FeedUpdatePayload, KpiUpdatePayload, NewAlertPayload,
-    UseRealtimeUpdatesReturn, RealtimeDataActions // Correctly import RealtimeDataActions
+    FeedStatusData, KpiData, AlertData, KpiUpdatePayload, UseRealtimeUpdatesReturn,
 } from '@/lib/types';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
