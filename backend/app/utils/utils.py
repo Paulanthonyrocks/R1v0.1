@@ -386,9 +386,34 @@ class DatabaseManager:
     def close(self): # ... (logic unchanged) ...
         pass
 
-# --- Main block for testing ---
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    logger.info("Running basic checks in utils.py...")
-    # ... (instantiation checks - unchanged) ...
-    logger.info("Basic checks in utils.py finished.")
+    # --- Alert Management ---
+    async def get_alerts_filtered(self, filters: Dict, limit: int, offset: int) -> List[Dict]:
+        if not self.conn_pool:
+            return []
+        conn = None  # Initialize conn to None
+        try:
+            conn = self.conn_pool.getconn()
+            cursor = conn.cursor()
+
+            # Construct the SQL query based on provided filters
+            query = "SELECT timestamp, severity, feed_id, message FROM alerts WHERE 1=1"
+            params = []
+
+            if filters.get("severity"):
+                query += " AND severity = ?"
+                params.append(filters["severity"])
+            if filters.get("feed_id"):
+                query += " AND feed_id = ?"
+                params.append(filters["feed_id"])
+            if filters.get("search"):
+                query += " AND message LIKE ?"
+                params.append(f"%{filters['search']}%")  # Using LIKE for case-insensitive search
+
+            # Apply pagination
+            query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            # Process results into a list of dictionaries
+            alerts = [{"timestamp": row[0], "severity": row[1], "message":

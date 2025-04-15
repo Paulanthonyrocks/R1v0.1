@@ -11,10 +11,12 @@ tenacity>=8.2.0 # For retries (used in DatabaseManager, LicensePlatePreprocessor
 aiofiles>=23.1.0 # Good practice for async file ops if needed
 
 # ML/CV Dependencies
-# NOTE: Install PyTorch based on your system (CPU/CUDA) from https://pytorch.org/
-# Example: torch torchvision torchaudio
-# Example CPU-only: torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# torch>=2.0.0 # Add the correct torch install command based on your environment
+# NOTE:  These torch versions might require specific CUDA versions. Adapt as needed for your hardware
+# For CPU-only or specific CUDA versions, refer to https://pytorch.org/get-started/locally/
+#  and adjust as needed (including the --index-url).  No index URL assumes standard PyPI.
+torch==2.0.0
+torchvision
+torchaudio
 # ultralytics needs torch
 ultralytics>=8.0.0 # YOLO library
 opencv-python-headless>=4.6.0 # Use headless if no GUI needed on server
