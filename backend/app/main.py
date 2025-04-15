@@ -177,7 +177,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             except Exception as e:
                 logger.exception("Error during WebSocket communication:")
-                await websocket.send_text(json.dumps({"type": "error", "message": "Internal server error"}))
+                await websocket.send_text(json.dumps({"type": "error", "message": f"Internal server error: {str(e)}"}))
 
     except Exception as e:
         logger.error(f"WebSocket Error: {e}", exc_info=True)

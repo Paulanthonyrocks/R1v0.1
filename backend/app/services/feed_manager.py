@@ -273,15 +273,15 @@ class FeedManager:
                     # Check if process died while queue empty
                     async with self._lock:
                         entry = self.process_registry.get(feed_id)
-                        if entry and entry.get('process') and not entry['process'].is_alive() and entry['status'] == 'running':
-                            logger.warning(f"Process for feed '{feed_id}' found dead. Marking as error.")
-                            entry['status'] = 'error'
-                            entry['error_message'] = "Process terminated unexpectedly."
-                            entry['process'] = None
-                            feed_ids_to_update.add(feed_id)
-                            kpi_update_needed = True # Feed status count changed
-                            # Consider broadcasting an ERROR alert immediately
-                            # await self._broadcast_alert(feed_id, "ERROR", entry['error_message']) # Requires moving broadcast call
+                        if entry and entry.get('process'):
+                            process = entry['process']
+                            if entry['status'] == 'running' and process.wait(0) is not None:
+                                logger.warning(f"Process for feed '{feed_id}' found dead (confirmed by wait(0)). Marking as error.")
+                                entry['status'] = 'error'
+                                entry['error_message'] = "Process terminated unexpectedly."
+                                entry['process'] = None
+                                feed_ids_to_update.add(feed_id)
+                                kpi_update_needed = True # Feed status count changed
                     continue
                 except Exception as e:
                     logger.error(f"Error reading queue for feed '{feed_id}': {e}")
@@ -481,6 +481,11 @@ class FeedManager:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             feed_ids_stopped = feed_ids_to_stop # Store IDs that were attempted to stop
 
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    feed_id = feed_ids_to_stop[i]
+                    logger.error(f"Error stopping feed {feed_id}: {result}", exc_info=True)
+
         # Broadcast updates outside the lock
         for feed_id in feed_ids_stopped:
              await self._broadcast_feed_update(feed_id) # Broadcast stopped status for each
@@ -536,79 +541,82 @@ class FeedManager:
         # This method needs to be async if joining the process might block event loop
         # But process.join() itself is blocking. Running in executor?
 
-        entry = self.process_registry.get(feed_id)
-        if not entry:
-            logger.warning(f"Cleanup requested for non-existent feed_id: {feed_id}")
-            return
+        try:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                logger.warning(f"Cleanup requested for non-existent feed_id: {feed_id}")
+                return
 
-        process: Optional[Process] = entry.get('process')
-        stop_event: Optional[MPEvent] = entry.get('stop_event')
-        result_queue: Optional[MPQueue] = entry.get('result_queue')
-        status = entry.get('status')
+            process: Optional[Process] = entry.get('process')
+            stop_event: Optional[MPEvent] = entry.get('stop_event')
+            result_queue: Optional[MPQueue] = entry.get('result_queue')
+            status = entry.get('status')
 
-        logger.debug(f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})")
+            logger.debug(f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})")
 
-        # 1. Signal Stop Event
-        if stop_event and not stop_event.is_set():
-            try:
-                stop_event.set()
-                logger.debug(f"Stop event set for {feed_id}")
-            except Exception as e:
-                logger.error(f"Error setting stop event for {feed_id}: {e}")
+            # 1. Signal Stop Event
+            if stop_event and not stop_event.is_set():
+                try:
+                    stop_event.set()
+                    logger.debug(f"Stop event set for {feed_id}")
+                except Exception as e:
+                    logger.error(f"Error setting stop event for {feed_id}: {e}", exc_info=True)
 
-        # 2. Join Process (potentially blocking - run in executor)
-        if process and process.is_alive():
-            pid = process.pid
-            logger.debug(f"Joining process {pid} for feed '{feed_id}'...")
-            try:
-                # Run the blocking join in a thread pool executor
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, process.join, 1.5) # Timeout 1.5s
+            # 2. Join Process (potentially blocking - run in executor)
+            if process and process.is_alive():
+                pid = process.pid
+                logger.debug(f"Joining process {pid} for feed '{feed_id}'...")
+                try:
+                    # Run the blocking join in a thread pool executor
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, process.join, 1.5) # Timeout 1.5s
 
-                if process.is_alive():
-                    logger.warning(f"Process {pid} for '{feed_id}' did not exit gracefully after join timeout. Terminating.")
-                    await loop.run_in_executor(None, process.terminate)
-                    await asyncio.sleep(0.2) # Give terminate time
                     if process.is_alive():
-                        logger.error(f"Process {pid} for '{feed_id}' FAILED TO TERMINATE.")
+                        logger.warning(f"Process {pid} for '{feed_id}' did not exit gracefully after join timeout. Terminating.")
+                        await loop.run_in_executor(None, process.terminate)
+                        await asyncio.sleep(0.2) # Give terminate time
+                        if process.is_alive():
+                            logger.error(f"Process {pid} for '{feed_id}' FAILED TO TERMINATE.")
+                        else:
+                             logger.info(f"Process {pid} terminated.")
                     else:
-                         logger.info(f"Process {pid} terminated.")
-                else:
-                    logger.info(f"Process {pid} for '{feed_id}' joined successfully.")
-            except Exception as e:
-                logger.error(f"Error joining/terminating process {pid} for '{feed_id}': {e}")
-                # Try terminate again if join failed?
-                if process.is_alive(): process.terminate()
+                        logger.info(f"Process {pid} for '{feed_id}' joined successfully.")
+                except Exception as e:
+                    logger.error(f"Error joining/terminating process {pid} for '{feed_id}': {e}", exc_info=True)
+                    # Try terminate again if join failed?
+                    if process.is_alive(): process.terminate()
 
 
-        # 3. Close Process Handle (if supported and process exists)
-        if process:
-             try: process.close()
-             except Exception as e: logger.warning(f"Error closing process handle for {feed_id}: {e}")
+            # 3. Close Process Handle (if supported and process exists)
+            if process:
+                 try: process.close()
+                 except Exception as e: logger.error(f"Error closing process handle for {feed_id}: {e}", exc_info=True)
 
-        # 4. Drain and Close Queue
-        if result_queue:
-            drained_count = 0
-            while True:
-                try: result_queue.get_nowait(); drained_count += 1
-                except queue.Empty: break
-                except Exception: break # Error reading queue
-            if drained_count > 0: logger.debug(f"Drained {drained_count} items from result queue for {feed_id} during cleanup.")
-            try: result_queue.close(); result_queue.join_thread()
-            except Exception as e: logger.warning(f"Error closing result queue for {feed_id}: {e}")
+            # 4. Drain and Close Queue
+            if result_queue:
+                drained_count = 0
+                while True:
+                    try: result_queue.get_nowait(); drained_count += 1
+                    except queue.Empty: break
+                    except Exception: break # Error reading queue
+                if drained_count > 0: logger.debug(f"Drained {drained_count} items from result queue for {feed_id} during cleanup.")
+                try: result_queue.close(); result_queue.join_thread()
+                except Exception as e: logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
 
-        # 5. Update Registry Status
-        entry['status'] = 'stopped'
-        entry['process'] = None
-        entry['result_queue'] = None
-        entry['stop_event'] = None
-        entry['reduce_fps_event'] = None
-        entry['start_time'] = None
-        entry['latest_metrics'] = None
-        # Keep 'source', 'error_message' (if any previous error occurred)
-        # Keep 'timer' object? Or reset it? Resetting seems cleaner.
-        entry['timer'] = None
-        logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+            # 5. Update Registry Status
+            entry['status'] = 'stopped'
+            entry['process'] = None
+            entry['result_queue'] = None
+            entry['stop_event'] = None
+            entry['reduce_fps_event'] = None
+            entry['start_time'] = None
+            entry['latest_metrics'] = None
+            # Keep 'source', 'error_message' (if any previous error occurred)
+            # Keep 'timer' object? Or reset it? Resetting seems cleaner.
+            entry['timer'] = None
+            logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+        except Exception as e:
+            logger.error(f"Unexpected error during cleanup for feed {feed_id}: {e}", exc_info=True)
 
 
     async def shutdown(self):

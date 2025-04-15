@@ -85,7 +85,9 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
               case 'error':
                   // Handle error messages from the backend
                   console.error('Received error from backend:', message.message);
-                  setError(message.message);
+                  if (error !== message.message) { // Only update if the message is different
+                    setError(message.message);
+                  }
                   break;
 
               case 'ping':
