@@ -53,9 +53,17 @@ class WebSocketClient {
   }
   
   private handleIncomingMessage(message: string): void {
-    // Placeholder for handling incoming messages
-    console.log('Received message:', message);
-    // In the next steps, we'll add logic to parse the message and update the UI
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'ping') {
+        console.log('Received ping, sending pong');
+        this.sendMessage('pong', {}); // Respond with a pong
+      } else {
+        console.log('Received message:', data);
+      }
+    } catch (error) {
+      console.error('Error parsing incoming message:', error);
+    }
   }
 
 }

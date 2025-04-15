@@ -113,6 +113,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 json_data = await websocket.receive_text()
+                last_pong = time.time()  # Update last_pong on any received message
                 message = json.loads(json_data)
                 logger.debug(f"Received WS message: {message}")
 
@@ -153,7 +154,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Send an error back to the client
                 await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
 
-            current_time = time.time()
+            current_time = time.time()\n            
             if current_time - last_pong > ping_interval:
                 logger.debug("Sending ping to client")
                 await websocket.send_text(json.dumps({"type": "ping"}))
@@ -164,10 +165,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.warning("No pong response from client, closing connection.")
                 await websocket.close(code=1001, reason="No pong response")
                 break
-
-            if message_type == "pong":
-                logger.debug("Received pong from client")
-                last_pong = time.time()
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected from {client_host}:{client_port}")

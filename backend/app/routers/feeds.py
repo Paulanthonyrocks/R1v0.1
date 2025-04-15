@@ -24,6 +24,7 @@ async def get_feeds_status(
     """
     Endpoint to get the status of all registered feeds.
     """
+    logger.info(f'Received request for get_feeds_status')
     try:
         statuses = await fm.get_all_statuses() # Assume async method
         return statuses

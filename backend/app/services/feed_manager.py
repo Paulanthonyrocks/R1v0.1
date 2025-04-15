@@ -128,6 +128,33 @@ class FeedManager:
         else:
             logger.debug(f"Broadcast skipped (No WS Manager): Type={message_type}")
 
+    async def get_all_statuses(self) -> List[FeedStatus]:
+        """Retrieves the status of all feeds."""
+        async with self._lock:
+            statuses = []
+            for feed_id, entry in self.process_registry.items():
+                try:
+                    status = FeedStatus(
+                        id=feed_id,
+                        source=entry['source'],
+                        status=entry['status'],
+                        fps=entry['timer'].get_fps('loop_total')
+                        if entry.get('timer') and entry['status'] == 'running'
+                        else None,
+                        error_message=entry.get('error_message'),
+                    )
+                    statuses.append(status)
+                except Exception as e:
+                    logger.error(
+                        f"Error creating FeedStatus for feed '{feed_id}': {e}",
+                        exc_info=True,
+                    )
+                    # Consider how to handle errors (e.g., return a default status or skip)
+                    # For now, we skip to avoid crashing the entire request
+
+        return statuses
+
+
     async def _broadcast_feed_update(self, feed_id: str):
         """Sends feed status update via WebSocket manager."""
         async with self._lock:
