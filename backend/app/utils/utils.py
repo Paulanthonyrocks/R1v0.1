@@ -416,4 +416,11 @@ class DatabaseManager:
             cursor.execute(query, params)
             results = cursor.fetchall()
             # Process results into a list of dictionaries
-            alerts = [{"timestamp": row[0], "severity": row[1], "message":
+            alerts = [{"timestamp": row[0], "severity": row[1], "feed_id": row[2], "message": row[3]} for row in results]
+            return alerts
+        except Exception as e:
+            logger.error(f"Database error in get_alerts_filtered: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                self.conn_pool.putconn(conn)
