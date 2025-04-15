@@ -109,10 +109,29 @@ async def websocket_endpoint(websocket: WebSocket):
 
     last_pong = time.time()
     ping_interval = 30  # Send a ping every 30 seconds
+    pong_timeout = 60  # Wait for 60 seconds for a pong
+
+    async def send_ping():
+        nonlocal last_pong
+        try:
+            logger.debug("Sending ping to client")
+            await websocket.send_text(json.dumps({"type": "ping"}))
+            last_pong = time.time()
+        except Exception as e:
+            logger.error(f"Error sending ping: {e}")
+
     try:
         while True:
             try:
-                json_data = await websocket.receive_text()
+                # Check for pong response
+                current_time = time.time()
+                if current_time - last_pong > pong_timeout:
+                    logger.warning("No pong response from client, closing connection.")
+                    await websocket.close(code=1001, reason="No pong response")
+                    break
+
+                # Receive data with timeout
+                json_data = await websocket.receive_text(timeout=ping_interval)
                 last_pong = time.time()  # Update last_pong on any received message
                 message = json.loads(json_data)
                 logger.debug(f"Received WS message: {message}")
@@ -139,6 +158,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         logger.error("FeedManager not available.")
                         # Optionally send an error back to the client
+                elif message_type == "pong":
+                    logger.debug("Received pong from client")
+                    # Update last_pong on receiving pong
+                    last_pong = time.time()
                 else:
                     logger.warning(f"Unknown message type: {message_type}")
                     # Send an error back to the client
@@ -149,25 +172,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 extra = {"message_type": message_type, "feed_id": data.get("feed_id") if data else None, "processing_time": processing_time}
                 logger.info(f"Processed WebSocket message", extra=extra)
 
+            except asyncio.TimeoutError:
+                # Send ping if no message received within ping_interval
+                await send_ping()
+
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected from {client_host}:{client_port}")
+                await manager.disconnect(websocket)
+                break
+
             except Exception as e:
                 logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
 
-            current_time = time.time()
-            if current_time - last_pong > ping_interval:
-                logger.debug("Sending ping to client")
-                await websocket.send_text(json.dumps({"type": "ping"}))
-                last_pong = current_time
-
-            # Check for pong response
-            if current_time - last_pong > ping_interval + 10:  # Allow 10 seconds for pong
-                logger.warning("No pong response from client, closing connection.")
-                await websocket.close(code=1001, reason="No pong response")
-                break
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected from {client_host}:{client_port}")
-        await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"WebSocket Error: {e}", exc_info=True)
-        logger.error(f"Error with WebSocket connection from {client_host}:{client_port}: {e}")
+    finally:
         await manager.disconnect(websocket)
+
+import asyncio

@@ -4,7 +4,7 @@ class WebSocketClient {
   private socket: WebSocket | null = null;
   private url: string;
   private pingInterval: number = 30000; // Interval in milliseconds (30 seconds)
-  private pingTimer: any;
+  private pingTimer: NodeJS.Timeout | undefined;
 
   constructor(url: string) {
     this.url = url;
@@ -48,7 +48,7 @@ class WebSocketClient {
     }
   }
 
-  public sendMessage(type: string, data: any): void {
+  public sendMessage(type: string, data: unknown): void {
     const message = { type, data };
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
