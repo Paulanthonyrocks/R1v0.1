@@ -192,6 +192,25 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
      console.log(`Initial alerts set (${initialAlerts.length}) from API data.`);
   }, []);
 
+
+    // Function to send messages, checking for open connection
+    const sendMessage = useCallback((action: string, payload: object = {}) => {
+      if (isConnected && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const message = {
+          type: action,
+          data: payload,
+        };
+        wsRef.current.send(JSON.stringify(message));
+        console.debug(`Sent message: Type=${action}, Data=${JSON.stringify(payload)}`);
+        return true; // Indicate message was sent
+      } else {
+        console.warn(`WebSocket is not open. Cannot send message: Type=${action}, Data=${JSON.stringify(payload)}`);
+        setError('Attempted to send message while disconnected. Reconnecting...');
+        connectWebSocket();  // Attempt to reconnect
+        return false; // Indicate message was not sent
+      }
+    }, [isConnected, connectWebSocket]);
+
   return {
     isConnected,
     feeds,
@@ -201,5 +220,6 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
     setInitialFeeds,
     setInitialAlerts,
     startWebSocket: connectWebSocket, // Expose connectWebSocket as startWebSocket
+    sendMessage,
   };
 };

@@ -5,12 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Eye } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { SurveillanceFeedProps } from '@/lib/types'; // Import props type
-import { ws } from '@/lib/websocket'; // Import WebSocket client
 import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
 
 const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
-    const { feeds } = useRealtimeUpdates();    
-    const feed = feeds.find(f => f.id === id);    
+    const { feeds, sendMessage, isConnected } = useRealtimeUpdates();
+    const feed = feeds.find(f => f.id === id);
     const [isRunning, setIsRunning] = useState(feed?.status === 'running' || feed?.status === 'starting');
 
     // Update isRunning when feed status changes
@@ -19,10 +18,14 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
     }, [feed]);
 
     const toggleFeed = () => {
+        if (!isConnected) {
+            console.warn('WebSocket is not connected. Cannot toggle feed.');
+            return;
+        }
         const newStatus = !isRunning;
         setIsRunning(newStatus);
         const messageType = newStatus ? 'start_feed' : 'stop_feed';
-        ws.sendMessage(messageType, { feed_id: id });
+        sendMessage(messageType, { feed_id: id });
     };
 
     return (
@@ -53,7 +56,7 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
             </div>
             <CardContent className="p-2">
                 <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors">{name}</h4>
-                <p className="text-[10px] text-muted-foreground">{node}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{node}</p>
             </CardContent>
         </Card>
     );

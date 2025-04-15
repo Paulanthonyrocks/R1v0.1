@@ -115,4 +115,4 @@ export interface RealtimeDataActions {
   setInitialAlerts: (alerts: AlertData[]) => void;
 }
 
-export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { startWebSocket: () => void; };
+export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { startWebSocket: () => void; sendMessage: (action: string, payload?: object) => boolean; };

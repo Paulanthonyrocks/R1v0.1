@@ -107,27 +107,25 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)  # Proceed to connect if manager is valid
     logger.info(f"WebSocket connected from {client_host}:{client_port}")
 
-    last_pong = time.time()
+    last_activity = time.time()
     ping_interval = 30  # Send a ping every 30 seconds
     pong_timeout = 60  # Wait for 60 seconds for a pong
 
-    async def send_ping():
-        nonlocal last_pong
+    async def send_ping(websocket: WebSocket):
         try:
-            logger.debug("Sending ping to client")
-            await websocket.send_text(json.dumps({"type": "ping"}))
-            last_pong = time.time()
+                logger.debug("Sending ping to client")
+                await websocket.send_text(json.dumps({"type": "ping"}))
         except Exception as e:
-            logger.error(f"Error sending ping: {e}")
+                logger.error(f"Error sending ping: {e}")
 
     try:
-        while True:
+        while True:  # Main loop for receiving messages
             try:
-                # Check for pong response
-                current_time = time.time()
-                if current_time - last_pong > pong_timeout:
-                    logger.warning("No pong response from client, closing connection.")
-                    await websocket.close(code=1001, reason="No pong response")
+                # Check for timeout
+                if time.time() - last_activity > pong_timeout:
+                    logger.warning("Client unresponsive, closing connection.")
+                    await websocket.close(code=1000, reason="Client unresponsive")
+                    await manager.disconnect(websocket)
                     break
 
                 # Receive data with timeout
@@ -172,17 +170,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 extra = {"message_type": message_type, "feed_id": data.get("feed_id") if data else None, "processing_time": processing_time}
                 logger.info(f"Processed WebSocket message", extra=extra)
 
-            except asyncio.TimeoutError:
-                # Send ping if no message received within ping_interval
-                await send_ping()
-
             except WebSocketDisconnect:
                 logger.info(f"WebSocket disconnected from {client_host}:{client_port}")
                 await manager.disconnect(websocket)
                 break
 
             except Exception as e:
-                logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
+                logger.exception("Error during WebSocket communication:")
+                await websocket.send_text(json.dumps({"type": "error", "message": "Internal server error"}))
 
     except Exception as e:
         logger.error(f"WebSocket Error: {e}", exc_info=True)
