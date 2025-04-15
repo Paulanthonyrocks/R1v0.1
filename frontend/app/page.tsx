@@ -24,7 +24,7 @@ import ErrorBoundary from '@/components/ErrorBoundary'; // Import ErrorBoundary
 
 // Import types
 import {
-    StatCardData, KpiData, AlertData, FeedStatusData, TrendDataPoint, AlertsResponse, SeverityLevel
+    StatCardData, AlertData, FeedStatusData, TrendDataPoint, AlertsResponse, SeverityLevel
 } from '@/lib/types'; // Adjust path if needed
 
 // Import the WebSocket hook
