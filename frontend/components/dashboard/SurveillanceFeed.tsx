@@ -10,16 +10,15 @@ import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
 const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
     const { feeds, sendMessage, isConnected } = useRealtimeUpdates();
     const feed = feeds.find(f => f.id === id);
-    const [isRunning, setIsRunning] = useState(feed?.status === 'running' || feed?.status === 'starting');
-
-    // Update isRunning when feed status changes
-    useEffect(() => {
-        setIsRunning(feed?.status === 'running' || feed?.status === 'starting');
-    }, [feed]);
+    const isRunning = feed?.status === 'running' || feed?.status === 'starting';
 
     const toggleFeed = () => {
         if (!isConnected) {
             console.warn('WebSocket is not connected. Cannot toggle feed.');
+            return;
+        }
+        if (!feed) {
+            console.warn('Feed data not found. Cannot toggle feed.');
             return;
         }
         const newStatus = !isRunning;
