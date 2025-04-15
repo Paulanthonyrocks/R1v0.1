@@ -154,7 +154,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Send an error back to the client
                 await websocket.send_text(json.dumps({"type": "error", "data": {"message": "Error processing message"}}))
 
-            current_time = time.time()\n            
+            current_time = time.time()
             if current_time - last_pong > ping_interval:
                 logger.debug("Sending ping to client")
                 await websocket.send_text(json.dumps({"type": "ping"}))

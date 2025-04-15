@@ -9,6 +9,12 @@ from app.models.feeds import FeedStatus, FeedCreateRequest, FeedCreateResponse, 
 from app.dependencies import get_feed_manager
 # Import Services
 from app.services.feed_manager import FeedManager, FeedNotFoundError, FeedOperationError, ResourceLimitError
+import logging
+
+# Configure logging (optional, can be configured globally in main.py)
+# logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter()
 
