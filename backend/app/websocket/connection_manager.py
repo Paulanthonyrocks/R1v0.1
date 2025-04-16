@@ -104,8 +104,11 @@ class ConnectionManager:
         """Sends a ping message and waits for a pong response."""
         try:
              await websocket.send_text("ping")
-             # Set a timeout for the pong response (e.g., 5 seconds)
-             await asyncio.wait_for(self.receive_pong(websocket), timeout=5)
+             await asyncio.wait_for(
+                 self.receive_pong(websocket),
+                 timeout=5  # Set a timeout for the pong response (e.g., 5 seconds)
+             )
+
         except asyncio.TimeoutError:
              # No pong received, connection likely broken
              logger.warning(f"Ping timeout for {websocket.client}. Disconnecting.")
@@ -118,7 +121,7 @@ class ConnectionManager:
     async def receive_pong(self, websocket: WebSocket):
         """Receives and validates a pong response."""
         message = await websocket.receive_text()
-        if message == "pong":
+        if message == "pong":  
              return  # Pong received
         else:
              raise Exception(f"Invalid pong response: '{message}'")
