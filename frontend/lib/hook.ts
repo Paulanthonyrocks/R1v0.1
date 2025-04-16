@@ -7,7 +7,7 @@ import {
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
 const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
 const MAX_RECONNECT_DELAY_MS = 30000; // Max delay 30s
-const MAX_RECONNECT_ATTEMPTS = 5;     // Max attempts before stopping
+const MAX_RECONNECT_ATTEMPTS = 6;     // Max attempts before stopping
 
 export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
   const wsRef = useRef<WebSocket | null>(null);
