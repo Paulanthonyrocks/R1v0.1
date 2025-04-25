@@ -1,11 +1,11 @@
 import React from 'react';
-import CesiumGlobe from '@/components/CesiumGlobe';
+import ThreeGrid from '@/components/CesiumGlobe';
 
 const TrafficGridPage: React.FC = () => {
   return (
     <div>
       <h1>Traffic Grid</h1>
-      <CesiumGlobe />
+      <ThreeGrid />
       {/* Add other traffic grid content here */}
     </div>
   );

@@ -1,10 +1,15 @@
 // frontend/lib/websocket.ts
 
+// Make the listener type generic
+type MessageListener<T> = (data: T) => void;
+
 class WebSocketClient {
   private socket: WebSocket | null = null;
   private url: string;
   private pingInterval: number = 30000; // Interval in milliseconds (30 seconds)
   private pingTimer: NodeJS.Timeout | undefined;
+  // Use MessageListener<unknown> for the internal map
+  private listeners: Map<string, Set<MessageListener<unknown>>> = new Map();
 
   constructor(url: string) {
     this.url = url;
@@ -56,15 +61,51 @@ class WebSocketClient {
       console.error('WebSocket is not open. Cannot send message:', message);
     }
   }
-  
+
+  // Make subscribe generic to accept typed listeners
+  public subscribe<T>(messageType: string, listener: MessageListener<T>): void {
+    if (!this.listeners.has(messageType)) {
+      this.listeners.set(messageType, new Set());
+    }
+    // Cast the specific listener to MessageListener<unknown> for storage
+    this.listeners.get(messageType)?.add(listener as MessageListener<unknown>);
+  }
+
+  // Make unsubscribe generic
+  public unsubscribe<T>(messageType: string, listener: MessageListener<T>): void {
+    // Cast the specific listener to MessageListener<unknown> for lookup/deletion
+    this.listeners.get(messageType)?.delete(listener as MessageListener<unknown>);
+    if (this.listeners.get(messageType)?.size === 0) {
+      this.listeners.delete(messageType);
+    }
+  }
+
   private handleIncomingMessage(message: string): void {
     try {
-      const data = JSON.parse(message);
-      if (data.type === 'ping') {
+      const parsedData = JSON.parse(message);
+      const messageType = parsedData.type;
+      // Explicitly type messagePayload as unknown
+      const messagePayload: unknown = parsedData.data;
+
+      if (messageType === 'ping') {
         console.log('Received ping, sending pong');
         this.sendMessage('pong', {}); // Respond with a pong
       } else {
-        console.log('Received message:', data);
+        console.log(`Received message type: ${messageType}`, messagePayload);
+        // Notify listeners for this message type
+        if (this.listeners.has(messageType)) {
+          // Iterate over listeners typed as MessageListener<unknown>
+          this.listeners.get(messageType)?.forEach((listener: MessageListener<unknown>) => {
+            try {
+              // Call the listener with the unknown payload.
+              // Type safety relies on the consumer subscribing with the correct type T
+              // and the listener function expecting that type T.
+              listener(messagePayload);
+            } catch (error) {
+              console.error(`Error in listener for message type ${messageType}:`, error);
+            }
+          });
+        }
       }
     } catch (error) {
       console.error('Error parsing incoming message:', error);

@@ -14,7 +14,7 @@ aiofiles>=23.1.0 # Good practice for async file ops if needed
 # NOTE:  These torch versions might require specific CUDA versions. Adapt as needed for your hardware
 # For CPU-only or specific CUDA versions, refer to https://pytorch.org/get-started/locally/
 #  and adjust as needed (including the --index-url).  No index URL assumes standard PyPI.
-torch==2.0.0
+torch>=2.0.0
 torchvision
 torchaudio
 # ultralytics needs torch

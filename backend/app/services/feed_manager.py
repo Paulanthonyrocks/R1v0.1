@@ -6,8 +6,11 @@ import time
 import numpy as np
 import psutil
 import re
-from multiprocessing import Process, Queue as MPQueue, Event as MPEvent, Lock, Value, set_start_method, get_start_method
-from typing import Dict, Any, Optional, List, Tuple
+from multiprocessing import Process, Queue as MPQueue, Event, Lock, Value, set_start_method, get_start_method
+from typing import Dict, Any, Optional, List, Tuple, Type
+
+# Create type alias for Event to use in type hints
+MPEvent = Type[Event]
 from pathlib import Path
 import queue # For queue.Empty exception
 import json # For potentially logging complex objects
@@ -52,7 +55,8 @@ class FeedManager:
         #       'start_time': float | None,
         #       'error_message': str | None,
         #       'latest_metrics': Dict | None,
-        #       'timer': FrameTimer | None
+        #       'timer': FrameTimer | None,
+        #       'is_sample_feed': bool # Added flag
         #   }
         # }
         self.process_registry: Dict[str, Dict[str, Any]] = {}
@@ -64,6 +68,7 @@ class FeedManager:
         self._connection_manager: Optional[ConnectionManager] = None # Added type hint
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = 1.0 # Seconds
+        self._sample_feed_id: Optional[str] = None # Store the ID of the sample feed
 
         # Load available feeds from config if needed (or assume they are added dynamically)
         self._initialize_available_feeds()
@@ -88,8 +93,10 @@ class FeedManager:
                 self.process_registry[feed_id] = {
                     'process': None, 'result_queue': None, 'stop_event': None,
                     'reduce_fps_event': None, 'status': 'stopped', 'source': str(resolved_path),
-                    'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None
+                    'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
+                    'is_sample_feed': True # Mark as sample feed
                 }
+                self._sample_feed_id = feed_id # Store the sample feed ID
                 logger.info(f"Initialized sample feed '{feed_id}' as stopped.")
             else:
                 logger.warning(f"Sample video path configured but not found: {resolved_path}")
@@ -257,6 +264,7 @@ class FeedManager:
             active_queues: List[Tuple[str, MPQueue]] = []
             feed_ids_to_update = set() # Track feeds needing a status broadcast
             kpi_update_needed = False
+            sample_feed_check_needed = False # Flag to check sample feed status later
 
             async with self._lock: # Lock briefly to get active queues
                 for feed_id, entry in self.process_registry.items():
@@ -275,14 +283,27 @@ class FeedManager:
                         entry = self.process_registry.get(feed_id)
                         if entry and entry.get('process'):
                             process = entry['process']
-                            if entry['status'] == 'running' and process.wait(0) is not None:
-                                logger.warning(f"Process for feed '{feed_id}' found dead (confirmed by wait(0)). Marking as error.")
-                                entry['status'] = 'error'
-                                entry['error_message'] = "Process terminated unexpectedly."
-                                entry['process'] = None
-                                feed_ids_to_update.add(feed_id)
-                                kpi_update_needed = True # Feed status count changed
-                    continue
+                            # Check if process is alive without blocking
+                            if not process.is_alive():
+                                exitcode = process.exitcode
+                                logger.warning(f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error.")
+                                if entry['status'] != 'error': # Avoid redundant updates/checks
+                                    entry['status'] = 'error'
+                                    entry['error_message'] = f"Process terminated unexpectedly (exitcode: {exitcode})."
+                                    entry['process'] = None # Clear process handle
+                                    feed_ids_to_update.add(feed_id)
+                                    kpi_update_needed = True
+                                    if not entry.get('is_sample_feed'):
+                                        sample_feed_check_needed = True # Real feed died, check sample
+                            # Optional: Check via wait(0) if is_alive() is unreliable on some platforms
+                            # elif entry['status'] == 'running' and process.wait(0) is not None:
+                            #     logger.warning(f"Process for feed '{feed_id}' found dead (confirmed by wait(0)). Marking as error.")
+                            #     entry['status'] = 'error'
+                            #     entry['error_message'] = "Process terminated unexpectedly."
+                            #     entry['process'] = None
+                            #     feed_ids_to_update.add(feed_id)
+                            #     kpi_update_needed = True # Feed status count changed
+                    continue # Go to next queue if this one is empty
                 except Exception as e:
                     logger.error(f"Error reading queue for feed '{feed_id}': {e}")
                     continue
@@ -303,6 +324,9 @@ class FeedManager:
                                         entry['status'] = 'running'
                                         feed_ids_to_update.add(feed_id)
                                         kpi_update_needed = True # Feed status count changed
+                                        # If a real feed just started, check sample feed status
+                                        if not entry.get('is_sample_feed'):
+                                            sample_feed_check_needed = True
 
                             # TODO: Optionally broadcast per-feed metrics if needed by UI
                             # await self._broadcast("feed_metrics", {"feed_id": feed_id, "metrics": metrics})
@@ -314,8 +338,8 @@ class FeedManager:
 
             # --- Broadcast Updates (outside the queue read loop) ---
             # Broadcast individual feed updates if status changed
-            for feed_id in feed_ids_to_update:
-                await self._broadcast_feed_update(feed_id)
+            for feed_id_to_update in feed_ids_to_update:
+                await self._broadcast_feed_update(feed_id_to_update)
 
             # Broadcast global KPIs periodically or if status changed
             current_time = time.time()
@@ -323,20 +347,35 @@ class FeedManager:
                  await self._broadcast_kpi_update()
                  self._last_kpi_broadcast_time = current_time
 
+            # Check if sample feed needs starting/stopping
+            if sample_feed_check_needed:
+                await self._check_and_manage_sample_feed()
+
             await asyncio.sleep(0.1) # Prevent busy-waiting
 
         logger.info("Result queue reader task stopped.")
 
     async def add_and_start_feed(self, source: str, name_hint: Optional[str]) -> str:
         """Adds a new feed source and starts processing."""
+        feed_id = None
+        started_real_feed = False
         async with self._lock:
             self._check_resources() # Raises ResourceLimitError if limits exceeded
 
             # Validate source format if needed (e.g., check file exists, webcam format)
             is_webcam = source.startswith("webcam:")
-            if not is_webcam and not Path(source).exists():
-                 raise ValueError(f"Source path does not exist: {source}")
-            # Could add more validation
+            is_file = Path(source).is_file() # Check if it's a file path
+
+            # Prevent adding the configured sample video path again manually
+            if self._sample_feed_id and str(Path(source).resolve()) == str(Path(self.process_registry[self._sample_feed_id]['source']).resolve()):
+                 raise ValueError(f"Cannot manually add the configured sample feed: {source}")
+
+            if not is_webcam and not is_file: # Allow non-file paths for potential network streams
+                 logger.warning(f"Source is not a webcam or existing file: {source}. Assuming network stream.")
+                 # Could add more validation for network stream formats here if needed
+            elif is_file and not Path(source).exists():
+                 raise ValueError(f"Source file path does not exist: {source}")
+
 
             feed_id = self._generate_feed_id(source, name_hint)
             logger.info(f"Adding and starting new feed: '{feed_id}' for source: {source}")
@@ -356,30 +395,39 @@ class FeedManager:
                 'start_time': time.time(),
                 'error_message': None,
                 'latest_metrics': None,
-                'timer': FrameTimer() # Init timer immediately
+                'timer': FrameTimer(), # Init timer immediately
+                'is_sample_feed': False # Manually added feeds are not sample feeds
             }
 
             try:
                  self._launch_worker(feed_id, source)
                  logger.info(f"Worker process launched for feed '{feed_id}'.")
+                 started_real_feed = True # Mark that a real feed was started
             except Exception as e:
                 logger.error(f"Failed to launch worker for '{feed_id}': {e}", exc_info=True)
                 # Clean up registry entry if launch failed
-                self.process_registry[feed_id]['status'] = 'error'
-                self.process_registry[feed_id]['error_message'] = f"Failed to launch process: {e}"
+                entry = self.process_registry[feed_id] # Get ref
+                entry['status'] = 'error'
+                entry['error_message'] = f"Failed to launch process: {e}"
                 # Close queues/events?
                 if result_queue: result_queue.close()
-                raise FeedOperationError(f"Failed to launch worker for '{feed_id}'.") from e
-                entry['status'] = 'error' # Update status before broadcast
+                # Don't remove from registry, keep it in error state
+                # del self.process_registry[feed_id]
                 await self._broadcast_feed_update(feed_id) # Broadcast error status
                 raise FeedOperationError(f"Failed to launch worker for '{feed_id}'.") from e
 
-        await self._broadcast_feed_update(feed_id) # Broadcast 'starting' status
-        await self._broadcast_kpi_update() # Update counts
+        # Broadcast updates and check sample feed outside the lock
+        if feed_id:
+            await self._broadcast_feed_update(feed_id) # Broadcast 'starting' status
+            await self._broadcast_kpi_update() # Update counts
+            if started_real_feed:
+                await self._check_and_manage_sample_feed() # Check if sample needs stopping
         return feed_id
 
     async def start_feed(self, feed_id: str):
         """Starts an existing feed that is currently stopped."""
+        is_sample = False
+        started_real_feed = False
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
@@ -387,7 +435,11 @@ class FeedManager:
             if entry['status'] != 'stopped':
                 raise FeedOperationError(f"Cannot start feed '{feed_id}': Status is '{entry['status']}' (must be 'stopped').")
 
-            self._check_resources()
+            # Check resources only if it's NOT the sample feed OR if other feeds are running
+            is_sample = entry.get('is_sample_feed', False)
+            if not is_sample or self._any_real_feeds_active_unsafe():
+                self._check_resources()
+
             logger.info(f"Starting existing feed: '{feed_id}'")
 
             # Re-create communication primitives
@@ -403,6 +455,8 @@ class FeedManager:
             try:
                 self._launch_worker(feed_id, entry['source'])
                 logger.info(f"Worker process launched for restarting feed '{feed_id}'.")
+                if not is_sample:
+                    started_real_feed = True # Mark that a real feed was started
             except Exception as e:
                 logger.error(f"Failed to launch worker for restarting '{feed_id}': {e}", exc_info=True)
                 entry['status'] = 'error'
@@ -410,87 +464,125 @@ class FeedManager:
                 if entry['result_queue']: entry['result_queue'].close()
                 entry['result_queue'] = None
                 entry['stop_event'] = None
-                raise FeedOperationError(f"Failed to launch worker for restarting '{feed_id}'.") from e
+                # Don't remove from registry
                 await self._broadcast_feed_update(feed_id) # Broadcast error status
                 raise FeedOperationError(f"Failed to launch worker for restarting '{feed_id}'.") from e
 
+        # Broadcast updates and check sample feed outside the lock
         await self._broadcast_feed_update(feed_id) # Broadcast 'starting' status
         await self._broadcast_kpi_update() # Update counts
+        if started_real_feed:
+             await self._check_and_manage_sample_feed() # Check if sample needs stopping
 
     async def stop_feed(self, feed_id: str):
         """Stops a running or starting feed."""
+        stopped_real_feed = False
+        is_sample = False
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
                 raise FeedNotFoundError(feed_id)
-            if entry['status'] not in ['running', 'starting', 'error']:
+
+            is_sample = entry.get('is_sample_feed', False)
+            current_status = entry['status']
+
+            if current_status not in ['running', 'starting', 'error']:
                 # Allow stopping feeds in error state for cleanup
-                if entry['status'] != 'error':
-                    raise FeedOperationError(f"Cannot stop feed '{feed_id}': Status is '{entry['status']}'.")
+                if current_status != 'error':
+                    raise FeedOperationError(f"Cannot stop feed '{feed_id}': Status is '{current_status}'.")
                 else:
                     logger.warning(f"Stopping feed '{feed_id}' already in error state for cleanup.")
 
-            logger.info(f"Stopping feed: '{feed_id}' (Status: {entry['status']})")
+            logger.info(f"Stopping feed: '{feed_id}' (Status: {current_status})")
             await self._cleanup_process(feed_id) # Updates status to 'stopped' in registry
 
+            # Check if a real feed was stopped
+            if current_status in ['running', 'starting'] and not is_sample:
+                stopped_real_feed = True
+
+        # Broadcast updates and check sample feed outside the lock
         await self._broadcast_feed_update(feed_id) # Broadcast 'stopped' status
         await self._broadcast_kpi_update() # Update counts
-
+        if stopped_real_feed:
+            await self._check_and_manage_sample_feed() # Check if sample needs starting
 
     async def restart_feed(self, feed_id: str):
         """Restarts a feed by stopping and then starting it."""
         logger.info(f"Restart requested for feed: '{feed_id}'")
         original_source = None
+        is_sample = False
         async with self._lock:
              entry = self.process_registry.get(feed_id)
              if not entry:
                  raise FeedNotFoundError(feed_id)
              original_source = entry['source'] # Store source before stopping
+             is_sample = entry.get('is_sample_feed', False)
 
         if not original_source: # Should not happen if entry exists
              raise FeedOperationError(f"Cannot restart {feed_id}, source not found.")
 
         try:
             logger.debug(f"Stopping '{feed_id}' for restart...")
-            await self.stop_feed(feed_id)
+            await self.stop_feed(feed_id) # This will handle broadcasts and sample check if it was a real feed
             # Wait briefly for resources to release (optional but can help)
             await asyncio.sleep(1.0)
             logger.debug(f"Starting '{feed_id}' after stop...")
-            await self.start_feed(feed_id) # start_feed handles resource check again
+            await self.start_feed(feed_id) # This handles resource check, broadcasts, and sample check if it's a real feed
             logger.info(f"Feed '{feed_id}' restart sequence initiated.")
         except Exception as e:
             logger.error(f"Error during restart sequence for '{feed_id}': {e}", exc_info=True)
             # Mark as error if restart failed midway
             async with self._lock:
                 entry = self.process_registry.get(feed_id)
-                if entry:
+                if entry and entry['status'] != 'stopped': # Avoid marking as error if stop succeeded but start failed
                     entry['status'] = 'error'
                     entry['error_message'] = f"Restart failed: {e}"
             await self._broadcast_feed_update(feed_id)
+            # No need to check sample feed here, start/stop handles it
             raise FeedOperationError(f"Restart failed for '{feed_id}': {e}") from e
-
 
     async def stop_all_feeds(self):
         logger.info("Stopping all active feeds requested.")
         feed_ids_stopped = []
+        stopped_real_feed = False
         async with self._lock:
+            # Stop only non-sample feeds first
             feed_ids_to_stop = [ fid for fid, entry in self.process_registry.items()
-                                 if entry['status'] in ['running', 'starting', 'error'] ]
-            logger.info(f"Found {len(feed_ids_to_stop)} feeds to stop: {feed_ids_to_stop}")
-            tasks = [self._cleanup_process(feed_id) for feed_id in feed_ids_to_stop]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            feed_ids_stopped = feed_ids_to_stop # Store IDs that were attempted to stop
+                                 if entry['status'] in ['running', 'starting', 'error'] and not entry.get('is_sample_feed') ]
+            logger.info(f"Found {len(feed_ids_to_stop)} non-sample feeds to stop: {feed_ids_to_stop}")
+            if feed_ids_to_stop:
+                stopped_real_feed = True
+                tasks = [self._cleanup_process(feed_id) for feed_id in feed_ids_to_stop]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                feed_ids_stopped.extend(feed_ids_to_stop) # Store IDs that were attempted to stop
 
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    feed_id = feed_ids_to_stop[i]
-                    logger.error(f"Error stopping feed {feed_id}: {result}", exc_info=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        feed_id = feed_ids_to_stop[i]
+                        logger.error(f"Error stopping feed {feed_id}: {result}", exc_info=True)
+                        # Status is likely already 'error' or cleanup failed, broadcast happens below
+
+            # Now check if sample feed needs stopping (it might have been running)
+            if self._sample_feed_id and self.process_registry[self._sample_feed_id]['status'] in ['running', 'starting', 'error']:
+                 logger.info(f"Stopping sample feed '{self._sample_feed_id}' as part of stop_all.")
+                 try:
+                     await self._cleanup_process(self._sample_feed_id)
+                     feed_ids_stopped.append(self._sample_feed_id)
+                 except Exception as e:
+                     logger.error(f"Error stopping sample feed {self._sample_feed_id}: {e}", exc_info=True)
+
 
         # Broadcast updates outside the lock
         for feed_id in feed_ids_stopped:
              await self._broadcast_feed_update(feed_id) # Broadcast stopped status for each
+
         if feed_ids_stopped: # If any feeds were stopped, update KPIs
             await self._broadcast_kpi_update()
+
+        # After stopping real feeds, check if sample needs starting (it should)
+        if stopped_real_feed:
+             await self._check_and_manage_sample_feed()
+
         logger.info("Finished stopping all active feeds.")
 
     def _launch_worker(self, feed_id: str, source: str):
@@ -537,20 +629,28 @@ class FeedManager:
 
 
     async def _cleanup_process(self, feed_id: str):
-        """Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held."""
+        #Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held.\"\"\"
         # This method needs to be async if joining the process might block event loop
         # But process.join() itself is blocking. Running in executor?
-
+        needs_sample_check = False # Flag to check sample feed after releasing lock
         try:
             entry = self.process_registry.get(feed_id)
             if not entry:
                 logger.warning(f"Cleanup requested for non-existent feed_id: {feed_id}")
                 return
 
-            process: Optional[Process] = entry.get('process')
-            stop_event: Optional[MPEvent] = entry.get('stop_event')
-            result_queue: Optional[MPQueue] = entry.get('result_queue')
+            # Separate declaration and assignment for type checking
+            process: Optional[Process]
+            stop_event: Optional[MPEvent]
+            result_queue: Optional[MPQueue]
+            status: Optional[str]
+            is_sample: bool
+
+            process = entry.get('process')
+            stop_event = entry.get('stop_event')
+            result_queue = entry.get('result_queue')
             status = entry.get('status')
+            is_sample = entry.get('is_sample_feed', False)
 
             logger.debug(f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})")
 
@@ -603,20 +703,40 @@ class FeedManager:
                 try: result_queue.close(); result_queue.join_thread()
                 except Exception as e: logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
 
-            # 5. Update Registry Status
-            entry['status'] = 'stopped'
-            entry['process'] = None
-            entry['result_queue'] = None
-            entry['stop_event'] = None
-            entry['reduce_fps_event'] = None
-            entry['start_time'] = None
-            entry['latest_metrics'] = None
-            # Keep 'source', 'error_message' (if any previous error occurred)
-            # Keep 'timer' object? Or reset it? Resetting seems cleaner.
-            entry['timer'] = None
-            logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+            # 5. Update Registry Status (Only if not already stopped - avoid overwriting error state if cleanup failed)
+            if entry['status'] != 'stopped':
+                entry['status'] = 'stopped'
+                entry['process'] = None
+                entry['result_queue'] = None
+                entry['stop_event'] = None
+                entry['reduce_fps_event'] = None
+                entry['start_time'] = None
+                # Keep 'source', 'error_message' (if any previous error occurred)
+                # Keep 'timer' object? Or reset it? Resetting seems cleaner.
+                entry['timer'] = None
+                entry['latest_metrics'] = None # Clear metrics on stop
+                logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+
+            # Check if a real feed was cleaned up (even from error state)
+            # Need to trigger sample feed check if the last real feed is now stopped
+            if status in ['running', 'starting', 'error'] and not is_sample:
+                 needs_sample_check = True # Set flag to check after lock release
+
         except Exception as e:
             logger.error(f"Unexpected error during cleanup for feed {feed_id}: {e}", exc_info=True)
+            # Ensure status is error if cleanup fails badly
+            entry = self.process_registry.get(feed_id)
+            if entry and entry['status'] != 'error':
+                 entry['status'] = 'error'
+                 entry['error_message'] = f"Cleanup failed: {e}"
+                 # Attempt to broadcast this error state
+                 loop = asyncio.get_running_loop()
+                 loop.call_soon(asyncio.create_task, self._broadcast_feed_update(feed_id))
+
+        # Perform sample check outside the lock if needed
+        if needs_sample_check:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(asyncio.create_task, self._check_and_manage_sample_feed())
 
 
     async def shutdown(self):
@@ -624,8 +744,8 @@ class FeedManager:
         logger.info("FeedManager shutdown initiated.")
         self._stop_reader_flag = True # Signal reader task to stop
 
-        # Stop all running feeds
-        await self.stop_all_feeds()
+        # Stop all running feeds (including sample)
+        await self.stop_all_feeds() # stop_all now handles sample feed too
 
         # Wait for the reader task to finish
         if self._result_reader_task:
@@ -639,3 +759,54 @@ class FeedManager:
                 logger.error(f"Error waiting for result reader task: {e}")
 
         logger.info("FeedManager shutdown complete.")
+
+
+    # --- Sample Feed Management ---
+
+    def _any_real_feeds_active_unsafe(self) -> bool:
+        """Checks if any non-sample feeds are running/starting. Assumes lock is held."""
+        for feed_id, entry in self.process_registry.items():
+            if not entry.get('is_sample_feed', False) and entry['status'] in ['running', 'starting']:
+                return True
+        return False
+
+    async def _check_and_manage_sample_feed(self):
+        """Starts or stops the sample feed based on the status of real feeds."""
+        if not self._sample_feed_id:
+            logger.debug("Sample feed management check: No sample feed configured.")
+            return
+
+        feed_id_to_stop = None
+        feed_id_to_start = None
+
+        async with self._lock:
+            sample_entry = self.process_registry.get(self._sample_feed_id)
+            if not sample_entry:
+                logger.error(f"Sample feed ID {self._sample_feed_id} not found in registry during check.")
+                return
+
+            sample_status = sample_entry['status']
+            real_feeds_active = any(
+                entry['status'] in ['running', 'starting'] and not entry.get('is_sample_feed', False)
+                for entry in self.process_registry.values()
+            )
+
+            if real_feeds_active and sample_status == 'running':
+                logger.info(f"Stopping sample feed '{self._sample_feed_id}' as real feeds are active.")
+                feed_id_to_stop = self._sample_feed_id
+
+            elif not real_feeds_active and sample_status == 'stopped':
+                logger.info(f"Starting sample feed '{self._sample_feed_id}' as no real feeds are active.")
+                feed_id_to_start = self._sample_feed_id
+
+        if feed_id_to_stop:
+            try:
+                await self.stop_feed(feed_id_to_stop)
+            except Exception as e:
+                logger.error(f"Error stopping sample feed: {e}", exc_info=True)
+
+        if feed_id_to_start:
+            try:
+                await self.start_feed(feed_id_to_start)
+            except Exception as e:
+                logger.error(f"Error starting sample feed: {e}", exc_info=True)
