@@ -23,48 +23,53 @@ import ReportAnomalyModal from '@/components/dashboard/ReportAnomalyModal';
 import ErrorBoundary from '@/components/ErrorBoundary'; // Import ErrorBoundary
 
 // Import types
-import {
-    StatCardData, AlertData, FeedStatusData, TrendDataPoint, AlertsResponse, SeverityLevel
-} from '@/lib/types'; // Adjust path if needed
+import { StatCardData, AlertData, FeedStatusData, TrendDataPoint, AlertsResponse, SeverityLevel, KpiData } from '@/lib/types'; // Add KpiData type
 
-// Import the WebSocket hook
-import { useRealtimeUpdates } from '@/lib/hook'; // Adjust path if needed
+// Import the WebSocket client instance
+import { ws } from '@/lib/websocket';
 
 // Import mock data only for fallbacks/placeholders
-import { mockStatCards, mockCongestionNodes } from '@/data/mockData'; // Adjust path if needed
+import { mockStatCards, mockCongestionNodes } from '@/data/mockData'; // Add mockSurveillanceFeeds
 
 // --- SWR Fetcher Function ---
 const fetcher = async (url: string) => {
     const res = await fetch(url);
     if (!res.ok) {
-        let errorInfo: { detail: string } = { detail: 'Failed to fetch data' };
+        const contentType = res.headers.get('content-type');
+        let errorMessage = 'Failed to fetch data';
+        
         try {
-            // Try parsing JSON error details from backend
-            const json = await res.json();
-            errorInfo = json;
+            if (contentType?.includes('application/json')) {
+                // Try parsing JSON error details from backend
+                const json = await res.json();
+                errorMessage = json.detail || json.message || errorMessage;
+            } else {
+                // For non-JSON responses (like HTML), use status text
+                errorMessage = `Server error: ${res.status} ${res.statusText}`;
+            }
         } catch {
-            // Fallback if JSON parsing fails
-            errorInfo.detail = res.statusText || errorInfo.detail;
+            errorMessage = `Server error: ${res.status} ${res.statusText}`;
         }
-        const error = new Error(errorInfo.detail || `HTTP error! Status: ${res.status}`);
-        // You could attach more info to the error object if needed
-        // error.status = res.status;
-        throw error;
+        
+        throw new Error(errorMessage);
     }
     return res.json();
 };
 
-// Base API URL (use environment variable)
+// Base API URL
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 // --- Main Page Component ---
 export default function DashboardPage() {
     // --- State Management ---
-    // Real-time data state from WebSocket hook
-    const {
-        isConnected, feeds: wsFeeds, kpis, alerts: wsAlerts,
-        error: wsError, setInitialFeeds, setInitialAlerts, startWebSocket,
-    } = useRealtimeUpdates();
+    // State for WebSocket connection status
+    const [isConnected, setIsConnected] = useState(false);
+    const [wsError, setWsError] = useState<string | null>(null);
+
+    // State for real-time data from WebSocket
+    const [kpiData, setKpiData] = useState<KpiData | null>(null);
+    const [liveFeeds, setLiveFeeds] = useState<FeedStatusData[]>([]);
+    const [liveAlerts, setLiveAlerts] = useState<AlertData[]>([]);
 
     // State for Chart Time Range Selection
     const [timeRange, setTimeRange] = useState<'day' | 'week' | 'month'>('week'); // Default to week
@@ -75,7 +80,7 @@ export default function DashboardPage() {
 
     // --- SWR Data Fetching ---
     // Fetch initial feeds status
-    const { data: feedsData, error: feedsError, isLoading: isLoadingFeeds } = useSWR<FeedStatusData[]>(
+    const { data: initialFeedsData, error: feedsError, isLoading: isLoadingFeeds } = useSWR<FeedStatusData[]>(
         `${API_BASE_URL}/feeds`, fetcher, { revalidateOnFocus: false }
     );
 
@@ -84,7 +89,7 @@ export default function DashboardPage() {
 
     // Fetch initial page of alerts
     const {
-        data: alertsResponse,
+        data: initialAlertsResponse,
         error: alertsError,
         isLoading: isLoadingAlerts,
         mutate: mutateAlerts,
@@ -120,46 +125,157 @@ export default function DashboardPage() {
         { revalidateOnFocus: false }
     );
 
-    // --- State Synchronization ---
-    // Load initial data from SWR into the WebSocket hook's state once loaded
+    // --- WebSocket Connection and Subscription ---
     useEffect(() => {
-        if (feedsData) {
-            setInitialFeeds(feedsData);
+        let isMounted = true;
+
+        const connectWebSocket = async () => {
+            try {
+                await ws.connect();
+                if (isMounted) {
+                    setIsConnected(true);
+                    setWsError(null);
+                    console.log("WebSocket connected successfully.");
+                }
+            } catch (error) {
+                console.error("WebSocket connection failed:", error);
+                if (isMounted) {
+                    setIsConnected(false);
+                    setWsError("Failed to connect to real-time updates.");
+                }
+            }
+        };
+
+        connectWebSocket();
+
+        // Define listeners
+        const handleKpiUpdate = (data: KpiData) => {
+            console.log('Received kpi_update:', data);
+            if (isMounted) setKpiData(data);
+        };
+        const handleFeedUpdate = (data: FeedStatusData) => {
+            console.log('Received feed_update:', data);
+            if (isMounted) {
+                setLiveFeeds(prevFeeds => {
+                    const index = prevFeeds.findIndex(f => f.id === data.id);
+                    if (index !== -1) {
+                        // Update existing feed
+                        const updatedFeeds = [...prevFeeds];
+                        updatedFeeds[index] = data;
+                        return updatedFeeds;
+                    } else {
+                        // Add new feed (should ideally come from initial load first)
+                        return [...prevFeeds, data];
+                    }
+                });
+            }
+        };
+        const handleNewAlert = (data: AlertData) => {
+            console.log('Received new_alert:', data);
+             if (isMounted) {
+                // Add to the beginning of the list and potentially limit size
+                setLiveAlerts(prevAlerts => [data, ...prevAlerts].slice(0, 100)); // Keep latest 100
+             }
+        };
+
+        // Subscribe
+        ws.subscribe('kpi_update', handleKpiUpdate);
+        ws.subscribe('feed_update', handleFeedUpdate);
+        ws.subscribe('new_alert', handleNewAlert);
+
+        // Cleanup on unmount
+        return () => {
+            isMounted = false;
+            ws.unsubscribe('kpi_update', handleKpiUpdate);
+            ws.unsubscribe('feed_update', handleFeedUpdate);
+            ws.unsubscribe('new_alert', handleNewAlert);
+            ws.disconnect();
+            console.log("WebSocket disconnected.");
+        };
+    }, []); // Empty dependency array ensures this runs only once on mount
+
+    // --- State Synchronization (Load initial data into live state) ---
+    useEffect(() => {
+        if (initialFeedsData) {
+            setLiveFeeds(initialFeedsData);
         }
-    }, [feedsData, setInitialFeeds]);
+    }, [initialFeedsData]);
 
     useEffect(() => {
-        if (alertsResponse?.alerts) {
-            setInitialAlerts(alertsResponse.alerts);
+        if (initialAlertsResponse?.alerts) {
+            setLiveAlerts(initialAlertsResponse.alerts);
         }
-    }, [alertsResponse, setInitialAlerts]);
+    }, [initialAlertsResponse]);
 
     // --- Loading & Error State Calculation ---
     const isInitialLoading = isLoadingFeeds || isLoadingAlerts || isLoadingTrends;
     const fetchError = feedsError || alertsError || trendsError;
-
-    // --- Start WebSocket after initial data is loaded ---
-    useEffect(() => {
-        if (!isInitialLoading) {
-            startWebSocket();
-        }
-    }, [alertsResponse, setInitialAlerts, isInitialLoading, startWebSocket]);
     const errorMessage = wsError ? (isConnected ? 'Real-time updates may be interrupted.' : wsError) : (fetchError ? `Failed to load initial data: ${fetchError.message}` : null);
 
+
     // --- Data Preparation for Rendering ---
-    // Prioritize WebSocket data, fall back to SWR data, then empty array
-    const displayFeeds = wsFeeds.length > 0 ? wsFeeds : feedsData || [];
-    const displayAlerts = wsAlerts.length > 0 ? wsAlerts : alertsResponse?.alerts || [];
-    
-    // Map KPIs to StatCard data using mock structure as template
-    const kpiStatCards: StatCardData[] = kpis ? [
-        { id: 'stat1', title: "Total Flow", value: String(kpis.total_flow ?? 'N/A'), change: "", changeText: "Real-time", icon: mockStatCards[0].icon, valueColor: mockStatCards[0].valueColor ?? '' },
-        { id: 'stat2', title: "Active Alerts", value: String(kpis.active_incidents ?? displayAlerts.length), change: "", changeText: "Real-time", icon: mockStatCards[1].icon, valueColor: mockStatCards[0].valueColor ?? '' },
-        { id: 'stat3', title: "Avg. Speed", value: `${kpis.avg_speed?.toFixed(1) ?? 'N/A'} mph`, change: "", changeText: "Real-time", icon: mockStatCards[2].icon, valueColor: mockStatCards[0].valueColor ?? '' },
-        // FIX: Removed unreachable `?? ''` as the ternary always returns a string.
-        { id: 'stat4', title: "Congestion", value: `${kpis.congestion_index?.toFixed(1) ?? 'N/A'} %`, change: "", changeText: "Real-time", icon: mockStatCards[3].icon, valueColor: kpis.congestion_index > 50 ? 'text-amber-400' : 'text-green-500' },
-    ] : // Fallback/loading structure
-        Array.from({ length: 4 }).map((_, i) => ({ ...mockStatCards[i], value: '...', change: '', changeText: 'Loading...' }));
+    // Use live data if available, otherwise initial data
+    const displayFeeds = liveFeeds.length > 0 ? liveFeeds : initialFeedsData || [];
+    const displayAlerts = liveAlerts.length > 0 ? liveAlerts : initialAlertsResponse?.alerts || [];
+
+    // Detect if we're using sample feed
+    const isUsingSampleFeed = displayFeeds.length === 1 && displayFeeds[0]?.source?.includes('sample_traffic.mp4');
+
+    // Banner component for sample feed notice will be rendered in the return statement
+    const sampleFeedBanner = isUsingSampleFeed && (
+        <div className="p-4 bg-info/10 text-info-foreground border border-info rounded-md flex items-center gap-3 mb-4">
+            <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+            <div>
+                <p className="font-semibold">Demo Mode</p>
+                <p className="text-sm">Currently displaying sample feed data. Add a real feed to see live traffic analysis.</p>
+            </div>
+        </div>
+    );
+
+    // Map KPIs from WebSocket state (kpiData) to StatCard data
+    const kpiStatCards: StatCardData[] = kpiData ? [
+        {
+            id: 'stat1',
+            title: "Total Flow", // Placeholder - KPI data doesn't have total flow yet
+            value: String(kpiData.feed_status_counts?.running ?? 'N/A'), // Example: Use running feeds count
+            change: isUsingSampleFeed ? "Sample Feed" : "",
+            changeText: isUsingSampleFeed ? "Demo Data" : "Real-time",
+            icon: mockStatCards[0].icon,
+            valueColor: mockStatCards[0].valueColor ?? ''
+        },
+        {
+            id: 'stat2',
+            title: "Active Alerts",
+            value: String(kpiData.active_incidents ?? displayAlerts.length), // Use KPI data if available
+            change: isUsingSampleFeed ? "Sample Feed" : "",
+            changeText: isUsingSampleFeed ? "Demo Data" : "Real-time",
+            icon: mockStatCards[1].icon,
+            valueColor: mockStatCards[1].valueColor ?? ''
+        },
+        {
+            id: 'stat3',
+            title: "Avg. Speed",
+            value: `${kpiData.avg_speed?.toFixed(1) ?? 'N/A'} mph`,
+            change: isUsingSampleFeed ? "Sample Feed" : "",
+            changeText: isUsingSampleFeed ? "Demo Data" : "Real-time",
+            icon: mockStatCards[2].icon,
+            valueColor: mockStatCards[2].valueColor ?? ''
+        },
+        {
+            id: 'stat4',
+            title: "Congestion",
+            value: `${kpiData.congestion_index?.toFixed(1) ?? 'N/A'} %`,
+            change: isUsingSampleFeed ? "Sample Feed" : "",
+            changeText: isUsingSampleFeed ? "Demo Data" : "Real-time",
+            icon: mockStatCards[3].icon,
+            valueColor: kpiData.congestion_index > 50 ? 'text-amber-400' : 'text-green-500'
+        },
+    ] : Array.from({ length: 4 }).map((_, i) => ({ // Loading state
+        ...mockStatCards[i],
+        value: '...',
+        change: '',
+        changeText: 'Connecting...'
+    }));
 
     // --- Event Handlers ---
     const handleAnomalySelect = (alert: AlertData) => {
@@ -195,7 +311,7 @@ export default function DashboardPage() {
 
     // Event handlers for pagination
     const handleNextPage = () => {
-        if (alertsResponse?.total_pages && currentPage < alertsResponse.total_pages) {
+        if (initialAlertsResponse?.total_pages && currentPage < initialAlertsResponse.total_pages) {
             setCurrentPage(currentPage + 1);
             mutateAlerts(); // Trigger re-fetch
         }
@@ -213,12 +329,9 @@ export default function DashboardPage() {
     // Note: Errors like 7026 (JSX element implicitly has type 'any') usually indicate
     // a missing @types/react or incorrect TS/JSX setup, not an error in the code itself.
     return (
-
         <ErrorBoundary fallbackClassName="m-4 sm:m-6 lg:m-8" componentName="DashboardPage">
-            {/* Added responsive padding to the main container */}
-
-
             <div className="relative flex flex-col gap-6 md:gap-8 px-4 sm:px-6 lg:px-8">
+                {sampleFeedBanner}
 
                 {/* Connection / Fetch Error Banner */}
                 {errorMessage && (
@@ -231,10 +344,10 @@ export default function DashboardPage() {
                     </div>
                 )}
 
-        {/* Section 1: Stats Cards (KPIs) - Added responsive gap */}
+                {/* Section 1: Stats Cards (KPIs) */}
                 <ErrorBoundary componentName="StatsSection">
                     <PageLayout className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                        {(isLoadingFeeds || isLoadingAlerts || !kpis)
+                        {(isInitialLoading && !kpiData) // Show skeletons only during initial load AND before first KPI update
                             ? Array.from({ length: 4 }).map((_, index) => <StatCardSkeleton key={index} />)
                             : (kpiStatCards.map((stat, index) => {
                                     // Ensure all required props are present, fallback to mock data if necessary
@@ -245,9 +358,10 @@ export default function DashboardPage() {
                                             id={stat.id}
                                             title={stat.title}
                                             value={stat.value}
-                                            change={stat.change ?? mockStat.change}
-                                            changeText={stat.changeText ?? mockStat.changeText}
-                                            icon={stat.icon ?? mockStat.icon}
+                                            change={stat.change ?? ''} // Use data from kpiData
+                                            changeText={stat.changeText ?? ''} // Use data from kpiData
+                                            icon={stat.icon ?? mockStat.icon} // Fallback icon
+                                            valueColor={stat.valueColor} // Use calculated color
                                         />
                                     );
                                 }))
@@ -255,7 +369,7 @@ export default function DashboardPage() {
                     </PageLayout>
                 </ErrorBoundary>
 
-        {/* Section 2: Map and Anomalies - Added responsive grid/height */}
+                {/* Section 2: Map and Anomalies */}
                 <ErrorBoundary componentName="MapAndAnomaliesSection">
                     {/* Updated section grid definition */}
                     <section className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6 md:gap-8">
@@ -308,7 +422,7 @@ export default function DashboardPage() {
                             </CardHeader>
                             {/* Anomalies Content - Adjusted max-h */}
                             <CardContent className="p-0 divide-y divide-secondary max-h-[50vh] sm:max-h-[480px] overflow-y-auto">
-                                {isLoadingAlerts ? (
+                                {isLoadingAlerts && liveAlerts.length === 0 ? (
                                     <div className="p-6 text-center text-muted-foreground animate-pulse">Loading Anomalies...</div>
                                 ) : displayAlerts.length === 0 ? (
                                     <div className="p-6 text-center text-muted-foreground">No active anomalies reported.</div>
@@ -316,9 +430,9 @@ export default function DashboardPage() {
                                     <div>
                                         <List
                                             rowCount={displayAlerts.length}
-                                            rowHeight={80}
-                                            width={350}
-                                            height={300}
+                                            rowHeight={80} // Adjust as needed
+                                            width={350} // Adjust width based on Card size
+                                            height={300} // Adjust height based on Card size
                                             rowRenderer={({ key, index, style }) => {
                                                 const alert = displayAlerts[index];
                                                 return (
@@ -342,7 +456,7 @@ export default function DashboardPage() {
                                             </Button>
                                             <Button
                                                 onClick={handleNextPage}
-                                                disabled={!alertsResponse?.total_pages || currentPage === alertsResponse.total_pages}
+                                                disabled={!initialAlertsResponse?.total_pages || currentPage === initialAlertsResponse.total_pages}
                                                 variant="outline"
                                                 size="sm"
                                             >
@@ -356,8 +470,7 @@ export default function DashboardPage() {
                     </section>
                 </ErrorBoundary>
 
-                {/* Section 3: Charts - Added responsive height */}
-                {/* FIX: Moved children inside the ErrorBoundary tags */}
+                {/* Section 3: Charts */}
                 <ErrorBoundary componentName="ChartsSection">
                     <PageLayout className="lg:grid-cols-2 gap-6 md:gap-8"> {/* Keep consistent gap */}
                         {/* Flow Analysis Card - Responsive Height */}
@@ -416,6 +529,7 @@ export default function DashboardPage() {
                                      ? Array.from({ length: 4 }).map((_, index) => <CongestionNodeSkeleton key={index} />)
                                      : (
                                          <>
+
                                              {/* Disclaimer for mock data */}
                                              <div className="text-xs text-muted-foreground mb-2 border-l-2 border-amber-500 pl-2">
                                                  Displaying mock data - backend integration pending.
@@ -435,26 +549,19 @@ export default function DashboardPage() {
                 {/* Section 4: Surveillance Feeds - Added responsive grid/gap */}
                 <ErrorBoundary componentName="FeedsSection">
                     <PageLayout title="Surveillance Feeds" className="grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-                        {isLoadingFeeds
+                        {isLoadingFeeds && liveFeeds.length === 0
                             ? Array.from({ length: 4 }).map((_, index) => <SurveillanceFeedSkeleton key={index} />)
                             : displayFeeds.length === 0
                                 ? <div className="col-span-full text-center text-muted-foreground p-4">No active feeds found.</div>
-                                : displayFeeds.map((feed) => {
-                                    // Ensure feed.status is provided, even if it's a placeholder
-                                    const feedStatus = feed.status;
-                                    if (feedStatus === undefined) {
-                                        console.warn(`Feed ${feed.id} is missing 'status'.`);
-                                    }
-                                    return (
-                                        <SurveillanceFeed
-                                            key={feed.id}
-                                            id={feed.id}
-                                            name={feed.name || feed.source}
-                                            node={feed.id}
-                                            status={feedStatus || 'unknown'} // Provide a default or handle appropriately
-                                        />
-                                    );
-                                })
+                                : displayFeeds.map((feed) => (
+                                    <SurveillanceFeed
+                                        key={feed.id}
+                                        id={feed.id}
+                                        name={feed.name || feed.source}
+                                        node={feed.id} // Assuming node is same as id for now
+                                        status={feed.status || 'unknown'}
+                                    />
+                                ))
                         }
                     </PageLayout>
                 </ErrorBoundary>

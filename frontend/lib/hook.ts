@@ -1,7 +1,7 @@
 // lib/hooks.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-    FeedStatusData, KpiData, AlertData, KpiUpdatePayload, UseRealtimeUpdatesReturn,
+    FeedStatusData, KpiData, AlertData, KpiUpdatePayload,
 } from '@/lib/types';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
@@ -9,7 +9,20 @@ const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
 const MAX_RECONNECT_DELAY_MS = 30000; // Max delay 30s
 const MAX_RECONNECT_ATTEMPTS = 6;     // Max attempts before stopping
 
-export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
+type RealtimeData = {
+    isConnected: boolean;
+    feeds: FeedStatusData[];
+    kpis: KpiData | null;
+    alerts: AlertData[];
+    error: string | null;
+    setInitialFeeds: (feeds: FeedStatusData[]) => void;
+    setInitialAlerts: (alerts: AlertData[]) => void;
+    startWebSocket: () => void;
+};
+
+type MessageSender = (type: string, data?: unknown) => void;
+
+export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSender } {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0); // Track attempts
@@ -20,6 +33,8 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [alerts, setAlerts] = useState<AlertData[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isReady, setIsReady] = useState(false);
+  const readyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Memoized connection function - now private
   const connectWebSocket = useCallback(() => {
@@ -50,6 +65,11 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
       setError(null); // Clear error on successful connection
       reconnectAttempts.current = 0; // Reset attempts on successful connection
       lastPingRef.current = Date.now();
+      
+      // Set ready state after a short delay
+      readyTimeoutRef.current = setTimeout(() => {
+          setIsReady(true);
+      }, 500); // 500ms delay
     };
 
     ws.onmessage = (event) => {
@@ -116,7 +136,11 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
     ws.onclose = (event) => {
       console.log(`WebSocket disconnected: Code=${event.code}, Reason=${event.reason}`);
       setIsConnected(false);
+      setIsReady(false);
       wsRef.current = null; // Clear the ref
+      if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+      }
 
       // Attempt reconnect if not intentionally closed and max attempts not reached
       if (event.code !== 1000 && event.code !== 1005 && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
@@ -142,7 +166,7 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
          console.log("WebSocket closed cleanly.");
       }
     };
-  }, []); // Dependency array is empty, connectWebSocket is stable
+  }, [error]); // Dependency array is empty, connectWebSocket is stable
   
   // Heartbeat monitoring effect
   useEffect(() => {
@@ -193,23 +217,18 @@ export const useRealtimeUpdates = (): UseRealtimeUpdatesReturn => {
   }, []);
 
 
-    // Function to send messages, checking for open connection
-    const sendMessage = useCallback((action: string, payload: object = {}) => {
-      if (isConnected && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const message = {
-          type: action,
-          data: payload,
-        };
-        wsRef.current.send(JSON.stringify(message));
-        console.debug(`Sent message: Type=${action}, Data=${JSON.stringify(payload)}`);
-        return true; // Indicate message was sent
-      } else {
-        console.warn(`WebSocket is not open. Cannot send message: Type=${action}, Data=${JSON.stringify(payload)}`);
-        setError('Attempted to send message while disconnected. Reconnecting...');
-        connectWebSocket();  // Attempt to reconnect
-        return false; // Indicate message was not sent
-      }
-    }, [isConnected, connectWebSocket]);
+    // Modified sendMessage function
+    const sendMessage = useCallback((type: string, data: unknown = {}) => {
+        if (!isConnected || !wsRef.current || !isReady) {
+            console.warn('WebSocket is not ready. Cannot send message:', { type, data });
+            return;
+        }
+        if (wsRef.current.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket connection is not in OPEN state. Cannot send message:', { type, data });
+            return;
+        }
+        wsRef.current.send(JSON.stringify({ type, data }));
+    }, [isConnected, isReady]);
 
   return {
     isConnected,

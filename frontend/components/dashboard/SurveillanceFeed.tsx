@@ -10,6 +10,20 @@ import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
 const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
     const { feeds, sendMessage, isConnected } = useRealtimeUpdates();
     const feed = feeds.find(f => f.id === id);
+    const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
+    useEffect(() => {
+        // Set video URL based on feed status and source
+        if (feed?.status === 'running' && feed.source) {
+            // Assuming feed.source contains the stream URL or path
+            // If it's just an identifier, you might need to construct the URL
+            // e.g., setVideoUrl(`/api/stream/${feed.source}`);
+            setVideoUrl(feed.source);
+        } else {
+            // Set to null if not running or no source provided
+            setVideoUrl("/sample_traffic.mp4");
+        }
+    }, [feed]); // Re-run effect when feed data changes
 
     const toggleFeed = () => {
         if (!isConnected) {
@@ -34,10 +48,19 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
             onClick={toggleFeed} // Add click handler to the card
         >
             <div className="bg-black aspect-video flex items-center justify-center relative group">
-                {/* Placeholder for video feed or image */}
-                <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
-                    <Eye className="text-matrix-dark text-4xl" />
-                </div>
+                {videoUrl ? (
+                    <video
+                        src={videoUrl}
+                        controls
+                        autoPlay
+                        loop
+                        className="w-full h-full object-cover"
+                    />
+                ) : (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
+                        <Eye className="text-matrix-dark text-4xl" />
+                    </div>
+                )}
                 {/* Status badge */}
                 <Badge
                     variant={feed?.status === 'running' ? "default" : "outline"}

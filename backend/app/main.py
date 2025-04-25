@@ -6,9 +6,11 @@ from pathlib import Path
 import time
 from typing import Dict, Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
-import json  # Import the json module
+from fastapi.responses import JSONResponse
+import json
+from fastapi.responses import FileResponse
 
 # --- Import application modules ---
 # Routers
@@ -28,6 +30,24 @@ app = FastAPI(
     version="1.0.0",
     description="API for managing traffic analysis feeds, data, and real-time updates.",
 )
+
+# --- Exception Handlers ---
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Ensure all unhandled exceptions return JSON rather than HTML"""
+    logger.exception("Unhandled exception occurred:")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": "Internal Server Error"}
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Convert HTTPExceptions to JSON format"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "HTTP Exception"}
+    )
 
 # --- Event Handlers ---
 @app.on_event("startup")
@@ -128,8 +148,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     await manager.disconnect(websocket)
                     break
 
-                # Receive data with timeout
-                json_data = await websocket.receive_text(timeout=ping_interval)
+                # Receive data without timeout
+                json_data = await websocket.receive_text()
                 last_pong = time.time()  # Update last_pong on any received message
                 message = json.loads(json_data)
                 logger.debug(f"Received WS message: {message}")
@@ -183,5 +203,13 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket Error: {e}", exc_info=True)
     finally:
         await manager.disconnect(websocket)
+
+# --- Serve Sample Video Endpoint ---
+@app.get("/api/v1/sample-video")
+def get_sample_video():
+    video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Sample video not found.")
+    return FileResponse(video_path, media_type="video/mp4")
 
 import asyncio
