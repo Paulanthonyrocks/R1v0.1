@@ -30,6 +30,45 @@ const ThreeGrid: React.FC = () => {
     // Scene objects with proper typing
     const sceneRef = useRef<SceneRefs | null>(null);
 
+        const loadGeoJSON = async (scene: THREE.Scene) => {
+        console.log('Loading GeoJSON...');
+        try {
+            const response = await fetch('/continents.geojson');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const geojson = await response.json();
+            const features = geojson.features || [];
+            features.forEach((feature: any) => {
+                const coords = feature.geometry.coordinates;
+                const type = feature.geometry.type;
+                // Handle MultiPolygon and Polygon
+                const polygons = type === 'Polygon' ? [coords] : coords;
+                polygons.forEach((polygon: any) => {
+                    polygon.forEach((ring: any) => {
+                        const points: THREE.Vector3[] = ring.map(([lon, lat]: [number, number]) => {
+                            // Convert lat/lon to 3D sphere coordinates
+                            const phi = (90 - lat) * (Math.PI / 180);
+                            const theta = (lon + 180) * (Math.PI / 180);
+                            const radius = 50.1; // slightly above globe
+                            return new THREE.Vector3(
+                                radius * Math.sin(phi) * Math.cos(theta),
+                                radius * Math.cos(phi),
+                                radius * Math.sin(phi) * Math.sin(theta)
+                            );
+                        });
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        const material = new THREE.LineBasicMaterial({ color: 0x00ff00, opacity: 0.7, transparent: true });
+                        const line = new THREE.Line(geometry, material);
+                        scene.add(line);
+                    });
+                });
+            });
+            console.log('GeoJSON loaded successfully.');
+        } catch (error) {
+            console.error('Error loading GeoJSON:', error);
+        }
+    };
     // Scene setup effect
     useEffect(() => {
         const container = containerRef.current;
@@ -56,38 +95,7 @@ const ThreeGrid: React.FC = () => {
         const globe = new THREE.Mesh(globeGeometry, globeMaterial);
         scene.add(globe);
 
-        // --- Add continent/country outlines from GeoJSON ---
-        fetch('/continents.geojson')
-            .then(res => res.json())
-            .then(geojson => {
-                const features = geojson.features || [];
-                features.forEach((feature: any) => {
-                    const coords = feature.geometry.coordinates;
-                    const type = feature.geometry.type;
-                    // Handle MultiPolygon and Polygon
-                    const polygons = type === 'Polygon' ? [coords] : coords;
-                    polygons.forEach((polygon: any) => {
-                        polygon.forEach((ring: any) => {
-                            const points: THREE.Vector3[] = ring.map(([lon, lat]: [number, number]) => {
-                                // Convert lat/lon to 3D sphere coordinates
-                                const phi = (90 - lat) * (Math.PI / 180);
-                                const theta = (lon + 180) * (Math.PI / 180);
-                                const radius = 50.1; // slightly above globe
-                                return new THREE.Vector3(
-                                    radius * Math.sin(phi) * Math.cos(theta),
-                                    radius * Math.cos(phi),
-                                    radius * Math.sin(phi) * Math.sin(theta)
-                                );
-                            });
-                            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                            const material = new THREE.LineBasicMaterial({ color: 0x00ff00, opacity: 0.7, transparent: true });
-                            const line = new THREE.Line(geometry, material);
-                            scene.add(line);
-                        });
-                    });
-                });
-            })
-            .catch(() => {/* ignore if file not found */});
+        loadGeoJSON(scene)
         // --- End continent/country outlines ---
 
         // Add orbit controls
@@ -239,10 +247,10 @@ const ThreeGrid: React.FC = () => {
                     return marker;
                 });
 
-                setFeeds((prevFeeds) => {
+                setFeeds((prevFeeds: FeedMarker[]) => {
                     // Remove old markers
-                    prevFeeds.forEach(feed => {
-                        if (feed.mesh) sceneRef.current?.scene.remove(feed.mesh);
+                    prevFeeds.forEach((feed) => {
+                       if (feed.mesh) sceneRef.current?.scene.remove(feed.mesh);
                         if (feed.label) sceneRef.current?.scene.remove(feed.label);
                     });
 
@@ -297,11 +305,11 @@ const ThreeGrid: React.FC = () => {
                     type="text"
                     placeholder="Search location..."
                     className="bg-black text-green-500 border border-green-500 rounded px-3 py-2 w-64"
-                    onChange={(e) => {
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                         if (!sceneRef.current) return;
                         
                         const searchTerm = e.target.value.toLowerCase();
-                        const matchedFeed = feeds.find(f => 
+                        const matchedFeed = feeds.find((f: FeedMarker) =>
                             f.name.toLowerCase().includes(searchTerm) || 
                             f.id.toLowerCase().includes(searchTerm)
                         );
