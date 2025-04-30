@@ -1,11 +1,11 @@
 // app/page.tsx
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import MatrixCard from "@/components/MatrixCard";
 import MatrixButton from "@/components/MatrixButton";
 import {
-  Chart as ChartJS,
+  Chart,
   CategoryScale,
   LinearScale,
   BarElement,
@@ -17,7 +17,7 @@ import {
 import { Bar, Doughnut } from "react-chartjs-2";
 import dynamic from "next/dynamic";
 
-ChartJS.register(
+Chart.register(
   CategoryScale,
   LinearScale,
   BarElement,
@@ -53,14 +53,34 @@ const getRandomData = (length: number) => {
   return Array.from({ length }, () => Math.floor(Math.random() * 100));
 };
 
-const getRandomStatus = () => {
-  const statuses = ["online", "offline", "warning"];
-  return statuses[Math.floor(Math.random() * statuses.length)];
-};
-
 const HomePage = () => {
   const [dataType, setDataType] = useState("trafficFlow");
   const [isLoading, setIsLoading] = useState(true);
+  const [matrixLines, setMatrixLines] = useState<string[]>([]);
+  const matrixContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+      const numLines = 30;
+      const newLines = Array.from({ length: numLines }, () => {
+        const lineLength = Math.floor(Math.random() * 20) + 5;
+      return Array.from({ length: lineLength }, () =>
+        Math.random() < 0.5 ? "0" : "1"
+      ).join("");
+    });
+    setMatrixLines(newLines);
+
+    const intervalId = setInterval(() => {
+      setMatrixLines((prevLines) => {
+        const updatedLines = prevLines.map((line) => {
+          const lineLength = line.length;
+          return Array.from({ length: lineLength }, () =>
+            Math.random() < 0.5 ? "0" : "1"
+          ).join("");
+        });
+        return updatedLines;
+      });
+    }, 500);
+    return () => clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -100,11 +120,26 @@ const HomePage = () => {
     );
   }
   return (
-    <div className="w-full p-4">
-      <h1 className="text-2xl mb-4 font-bold uppercase">Traffic Management Dashboard</h1>
-      <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-        <MatrixCard title="World Map" colorOverride="hsl(240, 80%, 45%)">
-          <div className="h-[300px] w-full">
+    <div className="h-screen bg-matrix-bg flex flex-col items-center justify-center overflow-hidden relative">
+      <div
+        ref={matrixContainerRef}
+        className="absolute inset-0 z-0 pointer-events-none overflow-hidden"
+        aria-hidden="true"
+      >
+        <div className="absolute inset-0 grid grid-cols-30 animate-matrix gap-2 font-matrix">
+          {matrixLines.map((line, index) => (
+            <div key={index} className="text-matrix-text text-sm">
+              {line}
+            </div>
+          ))}
+        </div>
+      </div>
+      <main className="relative z-10 w-full p-4">        <h1 className="text-2xl mb-4 font-bold uppercase">Traffic Management Dashboard</h1>
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
+            <MatrixCard title="World Map" colorOverride="hsl(240, 80%, 45%)">
+            <div className="h-[300px] w-full">
+
+
             <Map />
           </div>
         </MatrixCard>
@@ -139,7 +174,8 @@ const HomePage = () => {
           )}
         </div>
       </div>
-    </div>
+      </main>
+    </div>        
   );
 };
 
