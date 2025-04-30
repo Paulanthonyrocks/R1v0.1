@@ -70,13 +70,12 @@ const AnomaliesPage = () => {
     const map = useMap();
 
       map.setView(center, zoom);
-    return (<>{children}</>);
-    return (
-      <></>
-    );
-  }
-  
-  if (loading) {
+      return (<>
+        {children}
+      </>);
+    }
+
+  if (loading) {    
     return <Loading />;
   }
 
@@ -99,7 +98,7 @@ const AnomaliesPage = () => {
         {anomalies.map((anomaly) => (
           <MatrixCard
             key={anomaly.id}
-            title={
+            title={              
               anomaly.type
             }
             colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
@@ -118,11 +117,12 @@ const AnomaliesPage = () => {
                 <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
               </p>
               <div className="h-[300px] w-full">
-                <MapContainer
+                <MapContainer                  
                   style={{ height: "300px", width: "100%" }}
                   className="map-container"
                   >
-                  <MapWrapper center={anomaly.location} zoom={13} >
+                  <MapWrapper center={anomaly.location} zoom={13}>
+
                       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                       <Marker position={anomaly.location}><Popup>Anomaly {anomaly.id}</Popup></Marker>
                   </Marker>                  
@@ -130,11 +130,11 @@ const AnomaliesPage = () => {
               </div>
               <div className="flex justify-end mt-2">
 
-                {!anomaly.resolved && (
-                  <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
+                {!anomaly.resolved && (<MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
                     Resolve
-                  </MatrixButton>
-                )}
+                  </MatrixButton>)}
+                
+                
                 <MatrixButton onClick={() => handleDismiss(anomaly.id)} color="red">Dismiss</MatrixButton>
               </div>
             </div>
