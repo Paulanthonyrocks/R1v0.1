@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES6",
+    "module": "commonjs",
+    "jsx": "preserve",
+    "strict": true,
+    "moduleResolution": "node",
+    "outDir": ".next/server",
+    "rootDir": ".",
+    "isolatedModules": true,
+    "incremental": true,
+    "noEmit": true
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

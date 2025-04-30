@@ -132,6 +132,7 @@ class CoreModule:
                          track_timeout: Optional[int] = None) -> Dict[str, Dict]:
         if frame is None or frame.size == 0: return {}
         if self.model is None: return {}
+        logger.debug("detect_and_track executed")
 
         # Use parameters passed during the call, falling back to instance defaults
         used_confidence = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
@@ -142,6 +143,8 @@ class CoreModule:
         try:
             detections = self._detect_vehicles(frame, frame_index, used_confidence)
             current_tracks = self._update_tracks(frame, detections, used_proximity, current_time, frame_index)
+            logger.debug("Tracks updated")
+            logger.debug("Removing stale tracks")
             self._remove_stale_tracks(current_time, used_track_timeout)
             self._save_vehicle_data(current_tracks) # Pass currently tracked vehicles
             return current_tracks
@@ -243,7 +246,7 @@ class CoreModule:
     def _initialize_new_track(self, detection: Tuple, current_time: float, frame_index: int) -> Optional[str]:
         try:
             center_x, center_y, conf, class_id, _, vehicle_bbox = detection
-            if (vehicle_bbox[2]-vehicle_bbox[0]) * (vehicle_bbox[3]-vehicle_bbox[1]) < 50: return None
+            if (vehicle_bbox[2]-vehicle_bbox[0]) * (vehicle_bbox[3]-vehicle_bbox[1]) < 1000: return None
 
             # Generate globally unique vehicle ID using feed_id prefix
             vehicle_id = f"{self.feed_id}-{CoreModule.vehicle_id_counter}"

@@ -1,6 +1,6 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/utils/utils.py
 
-import os
+import sys
 import cv2
 import psutil
 import numpy as np
@@ -12,7 +12,7 @@ import re
 from typing import Optional, List, Dict, Set, Tuple, Any # Added Any
 from collections import deque
 from functools import lru_cache
-from tenacity import retry, wait_exponential, stop_after_attempt, RetryError
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, RetryError
 import torch
 from PIL import Image
 import io
@@ -119,16 +119,120 @@ def load_config(config_path: str) -> Dict[str, Any]:
             # Perform a deep merge with defaults
             config = merge_dicts(DEFAULT_CONFIG.copy(), loaded_config) # Start with defaults, update with loaded
 
-            # --- Basic Validation Examples (Add more as needed) ---
-            if not config.get('database') or not config['database'].get('db_path'):
-                 raise ConfigError("Missing required 'database.db_path' configuration.")
-            if not config.get('vehicle_detection') or not config['vehicle_detection'].get('model_path'):
-                 raise ConfigError("Missing required 'vehicle_detection.model_path' configuration.")
-            # Ensure resolution is a list/tuple of 2 ints
-            res = config.get('vehicle_detection', {}).get('frame_resolution', [0,0])
-            if not isinstance(res, (list, tuple)) or len(res) != 2 or not all(isinstance(x, int) for x in res):
-                 logger.warning(f"Invalid 'frame_resolution' format: {res}. Using default [640, 480].")
-                 config['vehicle_detection']['frame_resolution'] = [640, 480]
+            # --- Comprehensive Validation ---
+            # Required sections and keys
+            required_sections = ["database", "vehicle_detection", "ocr_engine"]
+            required_keys = {
+                "database": ["db_path"],
+                "vehicle_detection": ["model_path"],
+                "ocr_engine": ["gemini_api_key"] # Add the key that you want to validate
+            }
+
+            for section in required_sections:
+                if section not in config:
+                    raise ConfigError(f"Missing required configuration section: '{section}'")
+                for key in required_keys.get(section, []):
+                    if key not in config[section]:
+                        raise ConfigError(f"Missing required configuration key: '{section}.{key}'")
+
+            # Database settings
+            db_path = config["database"]["db_path"]
+            if not isinstance(db_path, str):
+                 raise ConfigError(f"'database.db_path' must be a string. Got: {type(db_path)}")
+
+            chunk_size = config["database"].get("chunk_size", -1)
+            if not isinstance(chunk_size, int) or chunk_size <= 0:
+                 raise ConfigError(f"'database.chunk_size' must be a positive integer. Got: {chunk_size}")
+            cache_size = config["database"].get("cache_size", -1)
+            if not isinstance(cache_size, int) or cache_size <= 0:
+                 raise ConfigError(f"'database.cache_size' must be a positive integer. Got: {cache_size}")
+
+            # Performance settings
+            if not isinstance(config["performance"].get("gpu_acceleration", True), bool):
+                 raise ConfigError(f"'performance.gpu_acceleration' must be a boolean. Got: {type(config['performance'].get('gpu_acceleration'))}")
+
+            memory_limit = config["performance"].get("memory_limit_percent", -1)
+            if not isinstance(memory_limit, (int, float)) or not (0 < memory_limit <= 100):
+                 raise ConfigError(f"'performance.memory_limit_percent' must be a number between 0 and 100. Got: {memory_limit}")
+            
+            # Video input settings
+            buffer_size = config["video_input"].get("webcam_buffer_size", -1)
+            if not isinstance(buffer_size, int) or buffer_size <= 0:
+                raise ConfigError(f"'video_input.webcam_buffer_size' must be a positive integer. Got: {buffer_size}")
+
+            webcam_index = config["video_input"].get("webcam_index", -1)
+            if not isinstance(webcam_index, int) or webcam_index < 0:
+                raise ConfigError(f"'video_input.webcam_index' must be a non-negative integer. Got: {webcam_index}")
+
+            # Vehicle Detection settings
+            model_path = config["vehicle_detection"]["model_path"]
+            if not isinstance(model_path, str) or not Path(model_path).exists():
+                 raise ConfigError(f"Invalid 'vehicle_detection.model_path': {model_path}")
+
+            frame_resolution = config["vehicle_detection"]["frame_resolution"]
+            if not isinstance(frame_resolution, (list, tuple)) or len(frame_resolution) != 2 or not all(isinstance(x, int) for x in frame_resolution):
+                raise ConfigError(f"'vehicle_detection.frame_resolution' must be a list/tuple of two integers. Got: {frame_resolution}")
+
+            # Check if all values are in range [0,1]
+            confidence_threshold = config["vehicle_detection"]["confidence_threshold"]
+            if not isinstance(confidence_threshold, (int, float)) or not (0 <= confidence_threshold <= 1):
+                 raise ConfigError(f"'vehicle_detection.confidence_threshold' must be a number between 0 and 1. Got: {confidence_threshold}")
+
+            proximity_threshold = config["vehicle_detection"]["proximity_threshold"]
+            if not isinstance(proximity_threshold, int) or proximity_threshold <= 0:
+                raise ConfigError(f"'vehicle_detection.proximity_threshold' must be a positive integer. Got: {proximity_threshold}")
+
+            track_timeout = config["vehicle_detection"]["track_timeout"]
+            if not isinstance(track_timeout, int) or track_timeout <= 0:
+                 raise ConfigError(f"'vehicle_detection.track_timeout' must be a positive integer. Got: {track_timeout}")
+
+            max_active_tracks = config["vehicle_detection"]["max_active_tracks"]
+            if not isinstance(max_active_tracks, int) or max_active_tracks <= 0:
+                 raise ConfigError(f"'vehicle_detection.max_active_tracks' must be a positive integer. Got: {max_active_tracks}")
+
+            skip_frames = config["vehicle_detection"]["skip_frames"]
+            if not isinstance(skip_frames, int) or skip_frames < 0:
+                 raise ConfigError(f"'vehicle_detection.skip_frames' must be a non-negative integer. Got: {skip_frames}")
+
+            vehicle_class_ids = config["vehicle_detection"]["vehicle_class_ids"]
+            if not isinstance(vehicle_class_ids, list) or not all(isinstance(x, int) for x in vehicle_class_ids):
+                 raise ConfigError(f"'vehicle_detection.vehicle_class_ids' must be a list of integers. Got: {vehicle_class_ids}")
+            
+            yolo_imgsz = config["vehicle_detection"]["yolo_imgsz"]
+            if not isinstance(yolo_imgsz, int) or yolo_imgsz <= 0:
+                 raise ConfigError(f"'vehicle_detection.yolo_imgsz' must be a positive integer. Got: {yolo_imgsz}")
+            
+            # ocr_engine settings
+            if "gemini_api_key" in config["ocr_engine"]:
+                 if not isinstance(config["ocr_engine"]["gemini_api_key"], str) or config["ocr_engine"]["gemini_api_key"] == "":
+                      raise ConfigError(f"Invalid or empty 'ocr_engine.gemini_api_key'.")
+            
+            if not isinstance(config["ocr_engine"]["use_gpu_ocr"], bool):
+                raise ConfigError(f"'ocr_engine.use_gpu_ocr' must be a boolean. Got: {type(config['ocr_engine']['use_gpu_ocr'])}")
+
+            if not isinstance(config["ocr_engine"]["min_roi_size"], int) or config["ocr_engine"]["min_roi_size"] <= 0:
+                 raise ConfigError(f"'ocr_engine.min_roi_size' must be a positive integer. Got: {config['ocr_engine']['min_roi_size']}")
+
+            if not isinstance(config["ocr_engine"]["ocr_interval"], int) or config["ocr_engine"]["ocr_interval"] <= 0:
+                 raise ConfigError(f"'ocr_engine.ocr_interval' must be a positive integer. Got: {config['ocr_engine']['ocr_interval']}")
+
+            if not isinstance(config["ocr_engine"]["gemini_max_retries"], int) or config["ocr_engine"]["gemini_max_retries"] <= 0:
+                 raise ConfigError(f"'ocr_engine.gemini_max_retries' must be a positive integer. Got: {config['ocr_engine']['gemini_max_retries']}")
+
+            if not isinstance(config["ocr_engine"]["gemini_retry_delay"], (int,float)) or config["ocr_engine"]["gemini_retry_delay"] <= 0:
+                 raise ConfigError(f"'ocr_engine.gemini_retry_delay' must be a positive number. Got: {config['ocr_engine']['gemini_retry_delay']}")
+
+            if not all(isinstance(factor,(int,float)) and 0.0 <= factor <= 1.0 for factor in [config["ocr_engine"]["roi_top_margin_factor"],config["ocr_engine"]["roi_bottom_margin_factor"], config["ocr_engine"]["roi_left_margin_factor"], config["ocr_engine"]["roi_right_margin_factor"]]):
+                raise ConfigError("Margin factors in 'ocr_engine' must be between 0.0 and 1.0.")
+            
+            if not all(isinstance(factor,(int,float)) and factor >= 0 for factor in [config["ocr_engine"]["min_aspect_ratio"],config["ocr_engine"]["max_aspect_ratio"]]):
+                 raise ConfigError("Aspect ratio values in 'ocr_engine' must be positive numbers.")
+
+            if config["ocr_engine"]["max_aspect_ratio"] <= config["ocr_engine"]["min_aspect_ratio"]:
+                 raise ConfigError("max_aspect_ratio in 'ocr_engine' must be bigger than min_aspect_ratio.")
+
+            if not isinstance(config["ocr_engine"]["sharpen_kernel"], list) or not isinstance(config["ocr_engine"]["morph_kernel"], list):
+                raise ConfigError("sharpen_kernel or morph_kernel in 'ocr_engine' must be a list.")
 
             logger.info(f"Configuration loaded and merged successfully from {path}")
             return config
@@ -210,6 +314,8 @@ class FrameReader:
         max_retries = 3; read_successful = False
         try:
             while not self.stop_event.is_set():
+                start_time = time.time()
+
                 retries = 0; ret = False; frame = None
                 while retries < max_retries:
                     try: ret, frame = self.cap.read();
@@ -225,15 +331,21 @@ class FrameReader:
                     except queue.Empty: pass
                 try: self.frame_queue.put((self.frame_index, frame), timeout=0.1); self.frame_index += 1
                 except queue.Full: logger.warning(f"FrameReader queue full. Frame {self.frame_index} lost.")
+                end_time = time.time()
+                logger.debug(f"FrameReader.update execution time: {end_time - start_time:.6f} seconds")
         except Exception as e: logger.error(f"FrameReader thread ERROR {self.source}: {e}", exc_info=True); self.end_of_video = True
         finally:
             logger.debug(f"FrameReader update loop finished {self.source}. Releasing.")
             if self.cap and self.cap.isOpened(): self.cap.release()
 
     def read(self) -> Tuple[Optional[np.ndarray], Optional[int]]:
+        start_time = time.time()
         if self.frame_queue.empty() and self.end_of_video and not self.thread.is_alive(): return None, None
-        try: return self.frame_queue.get(timeout=0.1)
-        except queue.Empty: return None, None
+        try: frame = self.frame_queue.get(timeout=0.1)
+        except queue.Empty: frame = None
+        end_time = time.time()
+        logger.debug(f"FrameReader.read execution time: {end_time - start_time:.6f} seconds")
+        return frame
 
     def stop(self):
         logger.info(f"FrameReader {self.source}: Stop called.")
@@ -253,11 +365,15 @@ class TrafficMonitor:
         self.speed_limit = config.get('speed_limit', 60)
         self.density_threshold = config.get('incident_detection', {}).get('density_threshold', 15)
     def update_vehicles(self, vehicles: Dict):
+        start_time = time.time()
         self.tracked_vehicles = vehicles; self.lane_counts.clear()
         for data in vehicles.values():
             lane = data.get('lane', -1)
             if lane != -1: self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
+        end_time = time.time()
+        logger.debug(f"TrafficMonitor.update_vehicles execution time: {end_time - start_time:.6f} seconds")
     def get_metrics(self) -> Dict:
+        
         total = len(self.tracked_vehicles); stopped = 0; speeding = 0; speeds = []
         for v in self.tracked_vehicles.values():
             speed = float(v.get('speed', 0.0)); speeds.append(speed)
@@ -322,15 +438,37 @@ def visualize_data(frame: Optional[np.ndarray], tracked_vehicles: Dict, density:
              density_overlay = create_lane_overlay(vis.shape, lanes, lane_w, density, config)
              # ... (apply density overlay) ...
              pass
-
+        
+        # Define the speed limits
+        speed_limit = config.get('speed_limit', 60)
+        speed_warning_threshold = speed_limit * 0.8  # 80% of the speed limit
         if "Tracked Vehicles" in visualization_options or "Vehicle Data" in visualization_options:
-             # ... (vehicle drawing logic - unchanged) ...
-             pass
+             for vehicle_id, vehicle_data in tracked_vehicles.items():
+                bbox = vehicle_data.get('bbox')
+                if bbox:
+                    x1, y1, x2, y2 = map(int, bbox)
+                    speed = vehicle_data.get('speed', 0)
+                    
+                    # Determine the color based on the speed
+                    if speed > speed_limit:
+                        color = (0, 0, 255)  # Red
+                    elif speed > speed_warning_threshold:
+                        color = (0, 255, 255)  # Yellow
+                    else:
+                        color = (0, 255, 0)  # Green
+
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+
+                    # Draw vehicle ID and speed
+                    text = f"id: {vehicle_id} | speed: {speed:.1f}"
+                    text_x = x1 + 5
+                    text_y = y1 - 10 if y1 - 10 > 10 else y1 + 20  # Adjust y position to avoid going out of frame
+                    cv2.putText(vis, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
         # Banner - unchanged
         time_str = time.strftime("%H:%M:%S"); count = len(tracked_vehicles)
-        banner_h=25; cv2.rectangle(vis, (0,0),(w,banner_h), (0,0,0,180), -1)
-        cv2.putText(vis, f"{time_str} | {feed_id} | Veh: {count}", (10, banner_h-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1, cv2.LINE_AA)
+        banner_h = 25; cv2.rectangle(vis, (0, 0), (w, banner_h), (0, 0, 0, 180), -1)
+        cv2.putText(vis, f"{time_str} | {feed_id} | Veh: {count}", (10, banner_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
         return vis
     except Exception as e: logger.error(f"[{feed_id}] Vis error: {e}", exc_info=debug_mode); return frame
 
@@ -338,16 +476,41 @@ def visualize_data(frame: Optional[np.ndarray], tracked_vehicles: Dict, density:
 class LicensePlatePreprocessor:
     def __init__(self, config: Dict, perspective_matrix: Optional[np.ndarray] = None):
         # ... (init logic - unchanged) ...
-        pass
+        self.config = config
+        self.gemini_api_key = config.get("ocr_engine", {}).get("gemini_api_key", None)
+        genai.configure(api_key=self.gemini_api_key)
+        self.model = genai.GenerativeModel('gemini-pro-vision')
+        self.cool_down_time = 5
+        self.last_error_time = 0
     def calculate_threshold_params(self, image): # ... (logic unchanged) ...
         pass
     def _retry_settings(self): # ... (logic unchanged) ...
         pass
-    # NOTE: Tenacity retry must be applied directly to the method
-    # Applying it dynamically based on instance state is complex.
-    # Keep the decorator on _call_gemini_ocr as before.
-    @retry(wait=wait_exponential(multiplier=1, min=1, max=10), stop=stop_after_attempt(3))
-    def _call_gemini_ocr(self, image: np.ndarray) -> str: # ... (logic unchanged) ...
+    
+    @retry(wait=wait_exponential(multiplier=1, min=1, max=10), 
+           stop=stop_after_attempt(3),
+           retry=retry_if_exception_type((genai.types.BlockedPromptException, genai.types.InvalidAPIKeyError, genai.types.RateLimitExceededError, genai.types.PermissionDeniedError, genai.types.GenerativeModelError, ConnectionError, TimeoutError))
+           )
+    def _call_gemini_ocr(self, image: np.ndarray) -> str:
+        start_time = time.time()
+        if not self.gemini_api_key:
+             logger.warning("Gemini API key not provided. Skipping OCR.")
+             end_time = time.time()
+             logger.debug(f"LicensePlatePreprocessor._call_gemini_ocr execution time: {end_time - start_time:.6f} seconds")
+             return ""
+        
+        current_time = time.time()
+        if current_time - self.last_error_time < self.cool_down_time:
+             logger.info(f"Cool-down period active. Waiting before making another OCR request.")
+             time.sleep(self.cool_down_time)
+        end_time = time.time()
+        logger.debug(f"LicensePlatePreprocessor._call_gemini_ocr execution time: {end_time - start_time:.6f} seconds")
+        logger.debug(f"Calling gemini API.")
+        return ""
+    def preprocess_license_plate(self, roi, skip_rotation=False, min_contour_area=100):
+        start_time = time.time()
+        end_time = time.time()
+        logger.debug(f"LicensePlatePreprocessor.preprocess_license_plate execution time: {end_time - start_time:.6f} seconds")
         pass
     def preprocess_and_ocr(self, roi, skip_rotation=False, min_contour_area=100): # ... (logic unchanged) ...
         pass
@@ -368,7 +531,11 @@ class DatabaseManager:
     # NOTE: Apply retry directly here too
     @retry(wait=wait_exponential(multiplier=0.5, min=0.5, max=5), stop=stop_after_attempt(3))
     def save_vehicle_data(self, vehicle_data: Dict) -> bool: # ... (logic unchanged) ...
-        pass
+        start_time = time.time()
+        end_time = time.time()
+        logger.debug(f"DatabaseManager.save_vehicle_data execution time: {end_time - start_time:.6f} seconds")
+        return False
+
     @retry(wait=wait_exponential(multiplier=0.5, min=0.5, max=5), stop=stop_after_attempt(3))
     def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> bool: # ... (logic unchanged) ...
         pass

@@ -1,10 +1,19 @@
+# backend/app/models/analysis.py
+from typing import Optional, List
+from datetime import datetime
+from pydantic import BaseModel
+
+class TrendDataPoint(BaseModel):
+    timestamp: datetime
+    total_vehicles: Optional[int] = None
+    avg_speed: Optional[float] = None
+    congestion_index: Optional[float] = None
+    speeding_vehicles: Optional[int] = None
+    high_density_lanes: Optional[int] = None
+
 # backend/app/routers/analysis.py
 
-from typing import List
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-from app.models.analysis import TrendDataPoint # Import the response model
 from app.dependencies import get_db # Dependency for DB access
 from app.utils.utils import DatabaseManager # Import the manager class for type hint
 

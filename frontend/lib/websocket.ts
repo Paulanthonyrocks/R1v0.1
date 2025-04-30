@@ -26,17 +26,18 @@ class WebSocketClient {
       };
 
       this.socket.onclose = (event) => {
+        console.log('WebSocket onclose event:', event);
         if (event.wasClean) {
           console.log(`WebSocket closed cleanly, code=${event.code}, reason=${event.reason}`);
         } else {
-          console.error('WebSocket connection died');
+          console.error('WebSocket connection died:', event);
         }
         this.socket = null;
       };
 
       this.socket.onerror = (error) => {
         clearInterval(this.pingTimer);
-        console.error('WebSocket error:', error);
+        console.error('WebSocket error:', JSON.stringify(error));
         reject(error);
       };
 

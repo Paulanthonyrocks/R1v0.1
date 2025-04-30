@@ -52,7 +52,6 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
                     <video
                         src={videoUrl}
                         controls
-                        autoPlay
                         loop
                         className="w-full h-full object-cover"
                     />

@@ -1,5 +1,5 @@
 /* styles/globals.css */
-/* Optional: Import a custom font like Share Tech Mono */
+/* Import a custom font like IBM Plex Mono */
 /* @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap'); */
 
 /* --- Tailwind Directives (Keep at the top) --- */
@@ -10,25 +10,27 @@
 /* --- Base Layer: Global styles and CSS Variable Definitions --- */
 @layer base {
   /* --- CSS Variable Definitions --- */
+  
   :root {
     /* --- Theme Variables (Matrix Theme Example) --- */
-    --matrix: 137 100% 50%;        /* Primary Green HSL Value */
-    --matrix-light: 137 100% 65%;   /* Lighter Green */
-    --matrix-dark: 137 100% 15%;    /* Darker Green */
-    --matrix-bg: 0 0% 4%;           /* Very Dark Background HSL Value */
-    --matrix-panel: 0 0% 7%;        /* Slightly Lighter Panel Background */
-    --matrix-text: var(--matrix);  /* Default text is primary green */
-    --matrix-border-color: 137 100% 40%; /* Border color HSL Value */
-    --matrix-muted-text: 137 40% 45%; /* Muted text HSL Value (adjusted contrast) */
-
+    --matrix: 140 80% 45%; /* Primary Green HSL Value */
+    --matrix-light: 140 60% 60%; /* Lighter Green */
+    --matrix-dark: 140 70% 20%; /* Darker Green */
+    --matrix-bg: 0 0% 8%; /* Very Dark Background HSL Value */
+    --matrix-panel: 0 0% 14%; /* Slightly Lighter Panel Background */
+    --matrix-text: var(--matrix); /* Default text is primary green */
+    --matrix-border-color: 140 60% 40%; /* Border color HSL Value */
+    --matrix-muted-text: 140 40% 55%; /* Muted text HSL Value (adjusted contrast) */
     /* --- Font Definitions --- */
-    /* --font-matrix: "Share Tech Mono", monospace; */ /* Use if imported */
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&display=swap');
+    --font-matrix: "IBM Plex Mono", monospace;
     --font-matrix: "Courier New", monospace;    /* Fallback Matrix font */
     /* --font-sans: "Inter", sans-serif; */     /* Define if using Inter or another sans-serif */
 
     /* --- Layout & Radius --- */
     --radius: 0.625rem;             /* Base border radius (approx 10px) */
 
+    /* --- Shacdn-ui variable mapping --- */
     /* --- Shadcn Variable Mapping --- */
     /* Map standard Shadcn variable names to your theme variables */
     --background: var(--matrix-bg);                /* App background */
@@ -51,6 +53,21 @@
     --input: var(--matrix-border-color);           /* Input borders */
     --ring: var(--matrix-light);                   /* Focus rings */
     --radius: var(--radius);                       /* Use base radius variable */
+    
+    /* --- Colors --- */
+    --background-start: 0 0% 10%; /* Gradient start */
+    --background-end: 0 0% 5%; /* Gradient end */
+    --noise-opacity: 0.03; /* Noise opacity */
+    --scanline-opacity: 0.08; /* Scanline opacity */
+    --scanline-width: 1px; /* Scanline width */
+
+    /* --- Transitions --- */
+    --transition-duration: 0.2s;
+
+    /* --- Shadows --- */
+    --shadow-color: 0 0% 0%; /* Use black or dark gray */
+    --shadow-intensity: 0.2; /* Adjust intensity of shadow */
+
   }
 
   /* Optional: Dark Mode Override (Define if implementing toggle) */
@@ -64,14 +81,38 @@
 
   /* --- Base Body Styles --- */
   body {
+    /* Base background: subtle gradient */
+    background-image:
+      linear-gradient(to bottom,
+          hsl(var(--background-start)),
+          hsl(var(--background-end)));
+    
+    /* Noise effect overlay */
+    &::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACVSURBVChTY2AYYNgLxIuJv+T/n4eBgSEAAAEcBA/x6c22AAAAAElFTkSuQmCC");
+        background-repeat: repeat;
+        opacity: var(--noise-opacity);
+        pointer-events: none; /* Make the noise layer not interactable */
+        z-index: 0;
+    }
+
     /* Apply theme variables DIRECTLY, not using @apply for these */
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-family: var(--font-matrix); /* Apply default matrix font */
+    font-family: var(--font-matrix);
 
     /* Standard Tailwind utilities that don't depend on custom theme vars are OK */
     @apply antialiased; /* Apply font smoothing */
-
+    @apply text-sm;
+    @apply font-light;
+    @apply tracking-wider;
+    @apply uppercase;
     /* Other base styles */
     min-height: 100vh;
     overflow-x: hidden; /* Prevent horizontal scroll */
@@ -102,30 +143,107 @@
 }
 
 /* --- Components Layer: Custom reusable component classes --- */
+
 @layer components {
   /* Custom Card Style with Glow Effect */
   .matrix-glow-card {
-      @apply border overflow-hidden; /* Apply base border and overflow utilities */
+      @apply border overflow-hidden rounded-md; /* Apply base border and overflow utilities */
       /* Apply theme values directly using CSS variables */
       border-color: hsl(var(--border));
       background-color: hsl(var(--card));
       border-radius: var(--radius);
-      box-shadow:
-        0 0 2px 1px hsla(var(--matrix-light), 0.6), /* Inner lighter glow */
-        0 0 6px 1px hsla(var(--matrix), 0.5);      /* Outer main glow */
-      @apply transition-shadow duration-300;       /* Smooth transition for hover */
+      box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2), /* Inner lighter glow */
+        0 0 2px 1px hsla(var(--matrix), 0.2);
+      @apply transition-all duration-200;       /* Smooth transition for hover */
   }
   .matrix-glow-card:hover {
       /* Enhance glow on hover */
       box-shadow:
-        0 0 4px 2px hsla(var(--matrix-light), 0.7),
-        0 0 12px 3px hsla(var(--matrix), 0.6);
+      0 0 2px 2px hsla(var(--matrix-light), 0.3), /* Inner lighter glow */
+      0 0 4px 1px hsla(var(--matrix), 0.2);
   }
 
-  /* Custom Text Glow Effect */
-  .matrix-text-glow {
-      text-shadow: 0 0 6px hsla(var(--matrix), 0.7); /* Use primary matrix color */
+  /* Custom input and button styles */
+  .matrix-input,
+  .matrix-button {
+    @apply border rounded-md px-3 py-1;
+    border-color: hsl(var(--border));
+    background-color: hsl(var(--input));
+    color: hsl(var(--foreground));
+    transition: background-color var(--transition-duration), border-color var(--transition-duration), box-shadow var(--transition-duration);
+    box-shadow: 0 0 1px hsla(var(--matrix), 0.2);
+    
+    &:focus {
+      outline: none;
+      border-color: hsl(var(--primary));
+      box-shadow: 0 0 3px hsla(var(--primary), 0.5);
+    }
+
+    &:hover {
+        border-color: hsl(var(--matrix-light));
+        box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
+    }
+
+    &:disabled {
+      background-color: hsl(var(--muted));
+      border-color: hsl(var(--muted));
+      color: hsl(var(--muted-foreground));
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    &::placeholder {
+        color: hsl(var(--muted-foreground));
+    }
   }
+
+  .matrix-link {
+      @apply text-primary transition-colors;
+
+      &:hover {
+          color: hsl(var(--matrix-light));
+      }
+  }
+
+    /* Custom Scanlines Effect */
+    .scanlines {
+      &::after {
+          content: "";
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background-image: linear-gradient(
+              to bottom,
+              transparent 0%,
+              hsla(var(--matrix), var(--scanline-opacity)) var(--scanline-width),
+              transparent var(--scanline-width)
+          );
+          background-size: 100% 5px; /* Adjust spacing as needed */
+          pointer-events: none; /* Prevent scanlines from capturing mouse events */
+          z-index: 1; /* Ensure scanlines are on top of other content */
+      }
+  }
+
+    /* Style for interactive buttons */
+    .matrix-button {
+      @apply text-white rounded-md shadow-sm border;
+      background-color: hsl(var(--primary)); /* Solid primary background */
+      border-color: hsl(var(--primary));
+      padding: 0.5rem 1rem; /* Adjust padding as needed */
+      transition: background-color var(--transition-duration), border-color var(--transition-duration); /* Smooth transitions */
+
+      &:hover {
+          background-color: hsl(var(--matrix-light)); /* Lighter on hover */
+          border-color: hsl(var(--matrix-light));
+      }
+
+      &:active {
+          background-color: hsl(var(--matrix-dark)); /* Darker on active */
+          border-color: hsl(var(--matrix-dark));
+      }
+    }
+    
 
   /* Custom Map Grid Background */
   .map-grid {
