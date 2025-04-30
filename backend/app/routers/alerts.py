@@ -1,9 +1,33 @@
 # backend/app/routers/alerts.py
 
+# backend/app/models/alerts.py
+from typing import List
+from datetime import datetime
+from pydantic import BaseModel, Field, validator
+
+class AlertItem(BaseModel):
+    """
+    Represents a single alert item.
+    """
+    id: int = Field(..., description="Unique identifier for the alert.")
+    timestamp: datetime = Field(..., description="Timestamp when the alert occurred.")
+    severity: str = Field(..., description="Severity level of the alert (low, medium, high).")
+    feed_id: str = Field(..., description="Identifier of the feed that generated the alert.")
+    message: str = Field(..., description="Descriptive message of the alert.")
+
+    @validator('severity')
+    def validate_severity(cls, value):
+        if value not in ['low', 'medium', 'high']:
+            raise ValueError("Severity must be one of: low, medium, high")
+        return value
+
+class AlertsResponse(BaseModel):
+    alerts: List[AlertItem]
+    total_count: int
+    page: int
+    limit: int
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-from app.models.alerts import AlertItem, AlertsResponse # Import response models
 from app.dependencies import get_db # Dependency for DB access
 from app.utils.utils import DatabaseManager # Import the manager class for type hint
 
@@ -50,8 +74,8 @@ async def get_alerts(
     # Placeholder implementation:
     print(f"Fetching alerts with filters: {filters}, page: {page}, limit: {limit}") # Replace logic
     example_alerts = [
-        AlertItem(timestamp="2023-10-27T10:40:00Z", severity="ERROR", feed_id="Feed 1", message="Something failed"),
-        AlertItem(timestamp="2023-10-27T10:35:00Z", severity="WARNING", feed_id="Feed 2", message="High density lane 3"),
+        AlertItem(id=1,timestamp="2023-10-27T10:40:00Z", severity="high", feed_id="Feed 1", message="Something failed"),
+        AlertItem(id=2,timestamp="2023-10-27T10:35:00Z", severity="medium", feed_id="Feed 2", message="High density lane 3"),
     ]
     total_count = 2 # Example
 

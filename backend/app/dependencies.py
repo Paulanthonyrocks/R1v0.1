@@ -1,10 +1,10 @@
-# /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py (Updated)
+# /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
 
 from typing import Dict, Any
-from app.database import get_database_manager
-from app.services import get_feed_manager, get_connection_manager
+from .database import get_database_manager
+from .services import get_feed_manager, get_connection_manager
 # --- Import config getter from the new config module ---
-from app.config import get_current_config
+from .config import get_current_config
 
 async def get_db():
     """Dependency to get the database manager instance."""

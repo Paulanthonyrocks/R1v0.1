@@ -1,10 +1,37 @@
-# backend/app/routers/feeds.py
+# backend/app/models/feeds.py
+from typing import Optional, List
+from datetime import datetime
+from pydantic import BaseModel, Field
 
+class FeedStatus(BaseModel):
+    id: str
+    source: str
+    status: str = Field(..., examples=["stopped", "running", "starting", "error"])
+    fps: Optional[float] = None
+    error_message: Optional[str] = None
+
+class FeedDetails(FeedStatus):
+    name: Optional[str] = None
+    last_update: Optional[datetime] = None
+    last_capture: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+class FeedCreateRequest(BaseModel):
+    source: str = Field(..., examples=["/path/to/video.mp4", "webcam:0"])
+    name_hint: Optional[str] = None
+
+class FeedCreateResponse(BaseModel):
+    id: str
+    status: str = "starting"
+    message: str
+
+class StandardResponse(BaseModel):
+    success: bool = True
+    message: str
+# backend/app/routers/feeds.py
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 
-# Import Models (adjust path if models are elsewhere)
-from app.models.feeds import FeedStatus, FeedCreateRequest, FeedCreateResponse, StandardResponse
 # Import Dependencies
 from app.dependencies import get_feed_manager
 # Import Services

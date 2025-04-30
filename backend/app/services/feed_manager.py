@@ -10,6 +10,17 @@ from multiprocessing import Process, Queue as MPQueue, Event, Lock, Value, set_s
 from typing import Dict, Any, Optional, List, Tuple, Type
 
 # Create type alias for Event to use in type hints
+from enum import Enum
+
+class FeedStatus(Enum):
+    """Enum to represent the possible states of a feed."""
+
+    RUNNING = 'running'
+    STOPPED = 'stopped'
+    STARTING = 'starting'
+    ERROR = 'error'
+
+
 MPEvent = Type[Event]
 from pathlib import Path
 import queue # For queue.Empty exception
@@ -20,7 +31,6 @@ from datetime import datetime # For alert timestamps
 from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
 
 # Import Pydantic models (or define similar structure if not using Pydantic internally)
-from app.models.feeds import FeedStatus
 from app.models.alerts import AlertItem # Import Alert model
 
 # Import core worker and utilities (adjust path as needed)
@@ -39,8 +49,19 @@ try:
     logger.info(f"Multiprocessing start method: {get_start_method()}")
 except Exception as e:
     logger.warning(f"Could not set multiprocessing start method ('spawn'): {e}")
+    
 
 
+
+
+
+
+
+
+
+
+
+    
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -56,7 +77,8 @@ class FeedManager:
         #       'error_message': str | None,
         #       'latest_metrics': Dict | None,
         #       'timer': FrameTimer | None,
-        #       'is_sample_feed': bool # Added flag
+        #       'is_sample_feed': bool, # Added flag
+        #       'is_looped_feed': bool # New flag
         #   }
         # }
         self.process_registry: Dict[str, Dict[str, Any]] = {}
@@ -95,7 +117,8 @@ class FeedManager:
                     'reduce_fps_event': None, 'status': 'stopped', 'source': str(resolved_path),
                     'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
                     'is_sample_feed': True # Mark as sample feed
-                }
+                ,'is_looped_feed': True
+            }
                 self._sample_feed_id = feed_id # Store the sample feed ID
                 logger.info(f"Initialized sample feed '{feed_id}' as stopped.")
             else:
@@ -170,15 +193,15 @@ class FeedManager:
                 return
             status_model = FeedStatus(
                 id=feed_id,
-                source=entry['source'],
-                status=entry['status'],
-                fps=entry['timer'].get_fps('loop_total') if entry.get('timer') and entry['status'] == 'running' else None,
-                error_message=entry.get('error_message')
+                 source=entry['source'],
+                 status=entry['status'],
+                 fps=entry['timer'].get_fps('loop_total') if entry.get('timer') and entry['status'] == 'running' else None,
+                 error_message=entry.get('error_message')
             )
             data_dict = status_model.dict() # Use .model_dump() in Pydantic v2
-
+            data_dict["is_sample_feed"] = entry.get("is_sample_feed", False)
+            
         await self._broadcast("feed_update", data_dict) # Use helper
-        logger.debug(f"Broadcasted feed update for {feed_id}, Status: {data_dict.get('status')}")
 
     async def _broadcast_alert(self, feed_id: Optional[str], severity: str, message: str):
         """Sends a new alert via WebSocket manager."""
@@ -199,46 +222,44 @@ class FeedManager:
         # Calculate KPIs (similar logic to app.py, but based on FeedManager state)
         async with self._lock: # Lock needed to read registry safely
              running_feeds = 0
-             error_feeds = 0
-             idle_feeds = 0
-             all_speeds = []
-             congestion_index = 0.0 # Default
+             error_feeds = 0 
+             idle_feeds = 0 
+             all_speeds = [] 
+             congestion_index = 0.0 
 
-             for entry in self.process_registry.values():
-                 if entry['status'] == 'running':
-                     running_feeds += 1
-                     metrics = entry.get('latest_metrics')
-                     if metrics and isinstance(metrics.get('avg_speed'), (int, float)):
-                         all_speeds.append(float(metrics['avg_speed']))
-                 elif entry['status'] == 'error':
-                     error_feeds += 1
-                 elif entry['status'] == 'stopped':
-                     idle_feeds += 1
-                 # 'starting' feeds aren't counted as running or idle for KPIs yet
+             for entry in self.process_registry.values(): 
+                 if entry['status'] == 'running': 
+                     running_feeds += 1 
+                     metrics = entry.get('latest_metrics') 
+                     if metrics and isinstance(metrics.get('avg_speed'), (int, float)): 
+                         all_speeds.append(float(metrics['avg_speed'])) 
+                 elif entry['status'] == 'error': 
+                     error_feeds += 1 
+                 elif entry['status'] == 'stopped': 
+                     idle_feeds += 1 
+             
+             avg_speed_kpi = round(float(np.median(all_speeds)), 1) if all_speeds else 0.0 
+             speed_limit_kpi = self.config.get('speed_limit', 60) 
+             congestion_thresh = self.config.get('incident_detection', {}).get('congestion_speed_threshold', 20) 
 
-             # Calculate avg speed (median?) and congestion
-             avg_speed_kpi = round(float(np.median(all_speeds)), 1) if all_speeds else 0.0
-             speed_limit_kpi = self.config.get('speed_limit', 60)
-             congestion_thresh = self.config.get('incident_detection', {}).get('congestion_speed_threshold', 20)
+             if avg_speed_kpi < congestion_thresh and running_feeds > 0: 
+                 congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / congestion_thresh)))), 1) 
+             elif speed_limit_kpi > 0 and running_feeds > 0: 
+                 congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / speed_limit_kpi)))), 1) 
 
-             if avg_speed_kpi < congestion_thresh and running_feeds > 0:
-                  congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / congestion_thresh)))), 1)
-             elif speed_limit_kpi > 0 and running_feeds > 0:
-                  congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / speed_limit_kpi)))), 1)
+             
+             active_incidents_kpi = 0 
 
-             # TODO: Get active incident count (e.g., count recent critical/error alerts from DB or internal deque?)
-             active_incidents_kpi = 0 # Placeholder
-
-        kpi_data = {
-            "congestion_index": congestion_index,
-            "avg_speed": avg_speed_kpi,
-            "active_incidents": active_incidents_kpi,
-            "feed_status_counts": {
-                "running": running_feeds,
-                "error": error_feeds,
-                "idle": idle_feeds
+             kpi_data = { 
+             "congestion_index": congestion_index, 
+             "avg_speed": avg_speed_kpi, 
+             "active_incidents": active_incidents_kpi, 
+             "feed_status_counts": { 
+                 "running": running_feeds, 
+                 "error": error_feeds, 
+                 "idle": idle_feeds 
+             } 
              }
-        }
         await self._broadcast("kpi_update", kpi_data)
         logger.debug(f"Broadcasted KPI update: {kpi_data}")
 
@@ -628,6 +649,77 @@ class FeedManager:
         logger.info(f"Launched process PID {process.pid} for feed '{feed_id}'.")
 
 
+    def _signal_stop_event(self, feed_id: str, stop_event: Optional[MPEvent]):
+        """Signals the stop event for a feed."""
+        if stop_event and not stop_event.is_set():
+            try:
+                stop_event.set()
+                logger.debug(f"Stop event set for {feed_id}")
+            except Exception as e:
+                logger.error(f"Error setting stop event for {feed_id}: {e}", exc_info=True)
+
+
+    async def _join_process(self, feed_id: str, process: Optional[Process]):
+        """Joins a process with a timeout, terminating it if needed."""
+        if process and process.is_alive():
+            pid = process.pid
+            logger.debug(f"Joining process {pid} for feed '{feed_id}'...")
+            try:
+                # Run the blocking join in a thread pool executor
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, process.join, 1.5)  # Timeout 1.5s
+
+                if process.is_alive():
+                    logger.warning(
+                        f"Process {pid} for '{feed_id}' did not exit gracefully after join timeout. Terminating.")
+                    await loop.run_in_executor(None, process.terminate)
+                    await asyncio.sleep(0.2)  # Give terminate time
+                    if process.is_alive():
+                        logger.error(f"Process {pid} for '{feed_id}' FAILED TO TERMINATE.")
+                    else:
+                        logger.info(f"Process {pid} terminated.")
+                else:
+                    logger.info(f"Process {pid} for '{feed_id}' joined successfully.")
+            except Exception as e:
+                logger.error(f"Error joining/terminating process {pid} for '{feed_id}': {e}", exc_info=True)
+                # Try terminate again if join failed?
+                if process.is_alive():
+                    process.terminate()
+
+    def _close_queue(self, feed_id: str, result_queue: Optional[MPQueue]):
+        """Drains and closes a queue."""
+        if result_queue:
+            drained_count = 0
+            while True:
+                try:
+                    result_queue.get_nowait();
+                    drained_count += 1
+                except queue.Empty:
+                    break
+                except Exception:
+                    break  # Error reading queue
+            if drained_count > 0:
+                logger.debug(
+                    f"Drained {drained_count} items from result queue for {feed_id} during cleanup.")
+            try:
+                result_queue.close();
+                result_queue.join_thread()
+            except Exception as e:
+                logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
+
+    def _update_registry_status(self, entry, feed_id: str):
+         entry['status'] = 'stopped'
+         entry['process'] = None
+         entry['result_queue'] = None
+         entry['stop_event'] = None
+         entry['reduce_fps_event'] = None
+         entry['start_time'] = None
+         # Keep 'source', 'error_message' (if any previous error occurred)
+         # Keep 'timer' object? Or reset it? Resetting seems cleaner.
+         entry['timer'] = None
+         entry['latest_metrics'] = None # Clear metrics on stop
+         logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+
     async def _cleanup_process(self, feed_id: str):
         #Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held.\"\"\"
         # This method needs to be async if joining the process might block event loop
@@ -640,13 +732,7 @@ class FeedManager:
                 return
 
             # Separate declaration and assignment for type checking
-            process: Optional[Process]
-            stop_event: Optional[MPEvent]
-            result_queue: Optional[MPQueue]
-            status: Optional[str]
-            is_sample: bool
-
-            process = entry.get('process')
+            process: Optional[Process] = entry.get('process')
             stop_event = entry.get('stop_event')
             result_queue = entry.get('result_queue')
             status = entry.get('status')
@@ -654,75 +740,28 @@ class FeedManager:
 
             logger.debug(f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})")
 
-            # 1. Signal Stop Event
-            if stop_event and not stop_event.is_set():
-                try:
-                    stop_event.set()
-                    logger.debug(f"Stop event set for {feed_id}")
-                except Exception as e:
-                    logger.error(f"Error setting stop event for {feed_id}: {e}", exc_info=True)
+            self._signal_stop_event(feed_id, stop_event)
+            await self._join_process(feed_id, process)
 
-            # 2. Join Process (potentially blocking - run in executor)
-            if process and process.is_alive():
-                pid = process.pid
-                logger.debug(f"Joining process {pid} for feed '{feed_id}'...")
-                try:
-                    # Run the blocking join in a thread pool executor
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, process.join, 1.5) # Timeout 1.5s
-
-                    if process.is_alive():
-                        logger.warning(f"Process {pid} for '{feed_id}' did not exit gracefully after join timeout. Terminating.")
-                        await loop.run_in_executor(None, process.terminate)
-                        await asyncio.sleep(0.2) # Give terminate time
-                        if process.is_alive():
-                            logger.error(f"Process {pid} for '{feed_id}' FAILED TO TERMINATE.")
-                        else:
-                             logger.info(f"Process {pid} terminated.")
-                    else:
-                        logger.info(f"Process {pid} for '{feed_id}' joined successfully.")
-                except Exception as e:
-                    logger.error(f"Error joining/terminating process {pid} for '{feed_id}': {e}", exc_info=True)
-                    # Try terminate again if join failed?
-                    if process.is_alive(): process.terminate()
-
-
-            # 3. Close Process Handle (if supported and process exists)
+            # Close Process Handle (if supported and process exists)
             if process:
-                 try: process.close()
-                 except Exception as e: logger.error(f"Error closing process handle for {feed_id}: {e}", exc_info=True)
+                try:
+                    process.close()
+                except Exception as e:
+                    logger.error(f"Error closing process handle for {feed_id}: {e}", exc_info=True)
 
-            # 4. Drain and Close Queue
-            if result_queue:
-                drained_count = 0
-                while True:
-                    try: result_queue.get_nowait(); drained_count += 1
-                    except queue.Empty: break
-                    except Exception: break # Error reading queue
-                if drained_count > 0: logger.debug(f"Drained {drained_count} items from result queue for {feed_id} during cleanup.")
-                try: result_queue.close(); result_queue.join_thread()
-                except Exception as e: logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
+            self._close_queue(feed_id, result_queue)
 
             # 5. Update Registry Status (Only if not already stopped - avoid overwriting error state if cleanup failed)
             if entry['status'] != 'stopped':
-                entry['status'] = 'stopped'
-                entry['process'] = None
-                entry['result_queue'] = None
-                entry['stop_event'] = None
-                entry['reduce_fps_event'] = None
-                entry['start_time'] = None
-                # Keep 'source', 'error_message' (if any previous error occurred)
-                # Keep 'timer' object? Or reset it? Resetting seems cleaner.
-                entry['timer'] = None
-                entry['latest_metrics'] = None # Clear metrics on stop
-                logger.debug(f"Registry updated to 'stopped' for {feed_id}")
+                self._update_registry_status(entry, feed_id)
 
             # Check if a real feed was cleaned up (even from error state)
             # Need to trigger sample feed check if the last real feed is now stopped
             if status in ['running', 'starting', 'error'] and not is_sample:
                  needs_sample_check = True # Set flag to check after lock release
 
-        except Exception as e:
+        except Exception as e:    
             logger.error(f"Unexpected error during cleanup for feed {feed_id}: {e}", exc_info=True)
             # Ensure status is error if cleanup fails badly
             entry = self.process_registry.get(feed_id)

@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "name": "Traffic Flow - Downtown",
+    "location": {
+      "lat": 34.0522,
+      "long": -118.2437
+    },
+    "timestamp": "2023-11-20T10:00:00Z",
+    "status": "Moderate",
+    "details": "Traffic is flowing at a moderate pace in the downtown area."
+  },
+  {
+    "id": 2,
+    "name": "Highway Congestion - I-405",
+    "location": {
+      "lat": 34.0188,
+      "long": -118.4983
+    },
+    "timestamp": "2023-11-20T10:15:00Z",
+    "status": "Heavy",
+    "details": "Heavy congestion reported on the I-405 highway due to rush hour."
+  },
+  {
+    "id": 3,
+    "name": "Incident Report - Sunset Blvd",
+    "location": {
+      "lat": 34.0901,
+      "long": -118.3888
+    },
+    "timestamp": "2023-11-20T10:30:00Z",
+    "status": "Blocked",
+    "details": "Incident reported on Sunset Blvd, causing a blockage in the eastbound lane."
+  }
+]

@@ -1,8 +1,13 @@
+"use client"
+
 import React from 'react';
 import { Button } from '@/components/ui/button';
 // Using Panel icons for clearer collapse/expand indication
 import { PanelLeftClose, PanelRightOpen, Bell, Terminal, Power } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useUser } from '@/lib/auth/UserContext';
+import { UserRole } from '@/lib/auth/roles';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 // Props now include state for ARIA attributes
 interface HeaderProps {
@@ -11,6 +16,7 @@ interface HeaderProps {
 }
 
 export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderProps) {
+  const { userRole, setUserRole } = useUser();
   return (
     // Use bg-card, apply theme border color via border-border
     <header className={cn(
@@ -40,16 +46,34 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
       </div>
 
       {/* Placeholder action icons */}
-      <div className="flex items-center space-x-1 md:space-x-2">
-        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-secondary" aria-label="Notifications">
-          <Bell className="h-4 w-4 md:h-5 md:w-5" />
-        </Button>
-         <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-secondary" aria-label="Terminal Access">
-          <Terminal className="h-4 w-4 md:h-5 md:w-5" />
-        </Button>
-         <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-400 hover:bg-destructive/10" aria-label="Logout"> {/* Use destructive color hint */}
-          <Power className="h-4 w-4 md:h-5 md:w-5" />
-        </Button>
+      <div className="flex items-center space-x-2">
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="flex items-center space-x-2">
+                    {userRole}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuItem onClick={() => setUserRole(UserRole.VIEWER)}>
+                    {UserRole.VIEWER}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setUserRole(UserRole.OPERATOR)}>
+                    {UserRole.OPERATOR}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setUserRole(UserRole.ADMIN)}>
+                    {UserRole.ADMIN}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-secondary" aria-label="Notifications">
+              <Bell className="h-4 w-4 md:h-5 md:w-5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-secondary" aria-label="Terminal Access">
+              <Terminal className="h-4 w-4 md:h-5 md:w-5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-400 hover:bg-destructive/10" aria-label="Logout"> {/* Use destructive color hint */}
+              <Power className="h-4 w-4 md:h-5 md:w-5" />
+            </Button>
       </div>
     </header>
   );

@@ -15,11 +15,12 @@ from fastapi.responses import FileResponse
 # --- Import application modules ---
 # Routers
 from app.routers import feeds, config as config_router, analysis, alerts
+from . import api
 # Initializers/Getters - Import config initializer now
-from app.config import initialize_config, get_current_config  # Import config init/getter
-from app.database import initialize_database, close_database, get_database_manager
-from app.services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager
-from app.services.services import health_check as services_health_check # Import directly
+from .config import initialize_config, get_current_config  # Import config init/getter
+from .database import initialize_database, close_database, get_database_manager
+from .services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager
+from .services.services import health_check as services_health_check # Import directly
 # Logging will be reconfigured by initialize_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ async def startup_event():
     # 1. Initialize Configuration (Using imported initializer)
     try:
         # Define path relative to main.py's parent's parent -> backend/configs/config.yaml
-        config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
+        config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml" # kept parent.parent because config.yaml is not in the app dir
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
         # Logging is now configured within initialize_config
     except Exception as e:
@@ -107,6 +108,7 @@ try:
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     logger.info("API routers included successfully.")
+    app.include_router(api.router, prefix="/api", tags=["API"])
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)
     # Decide if startup should fail if routers can't be included
@@ -207,9 +209,13 @@ async def websocket_endpoint(websocket: WebSocket):
 # --- Serve Sample Video Endpoint ---
 @app.get("/api/v1/sample-video")
 def get_sample_video():
-    video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
+    video_path = Path(__file__).parent / "data" / "sample_traffic.mp4"
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Sample video not found.")
     return FileResponse(video_path, media_type="video/mp4")
 
 import asyncio
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=9002, reload=True)
