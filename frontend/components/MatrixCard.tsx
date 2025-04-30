@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 
 interface MatrixCardProps {
   title: string;
-  content: string;
+  content?: string;
   icon?: React.ReactNode;
   className?: string;
   colorOverride?: string;
+  children?: React.ReactNode;
 }
 
-const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className, colorOverride }) => {
+const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className, colorOverride, children }) => {
   const [isHovered, setIsHovered] = useState(false);
 
   const cardStyle: React.CSSProperties = {
@@ -38,7 +39,8 @@ const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className
         {icon && <div className="text-3xl" style={{ color: colorOverride || 'var(--matrix-light)' }}>{icon}</div>}
         <h3 className="text-base" style={titleStyle}>{title}</h3>
       </div>
-      <p className="text-sm" style={{ color: 'var(--matrix-muted-text)' }}>{content}</p>
+      {content && <p className="text-sm" style={{ color: 'var(--matrix-muted-text)' }}>{content}</p>}
+      {children}
     </div>
   );
 };
