@@ -104,9 +104,9 @@ export interface ReportAnomalyModalProps {
   onSubmit?: (data: { message: string; severity: SeverityLevel; description?: string; location?: string }) => void;
 }
 
-
-
-export interface KpiUpdatePayload extends KpiData {}
+export interface MatrixCardProps {
+  title: string;
+}
 // --- Hook Return Types ---
 export interface RealtimeData {
   isConnected: boolean;
