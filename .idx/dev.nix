@@ -24,11 +24,14 @@
 
       backend = { # Start of 'backend' set
         command = [
+          "cd backend"
           "uvicorn"
-          "backend.app.main:app" # Path to your FastAPI app instance
-          "--host" "0.0.0.0"    # Listen on all interfaces
-          "--port" "$PORT"     # Use the port assigned by IDX
-          "--reload" # Optional reload flag
+          "app.main:app" 
+          "--host" 
+          "0.0.0.0" 
+          "--port" 
+          "9002" 
+          "--reload"
         ]; # <--- Correctly closed list, semicolon needed after it.
         manager = "web";
       }; # <--- Semicolon needed after 'backend' set definition

@@ -31,7 +31,7 @@ from datetime import datetime # For alert timestamps
 from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
 
 # Import Pydantic models (or define similar structure if not using Pydantic internally)
-from app.models.alerts import AlertItem # Import Alert model
+from app.routers.alerts import AlertItem # Import Alert model
 
 # Import core worker and utilities (adjust path as needed)
 from app.core.processing_worker import process_video

@@ -59,7 +59,16 @@ export interface AlertsResponse {
 }
 
 // --- Component Prop Types ---
-export interface StatCardProps extends StatCardData {}
+
+export interface MatrixCardProps {
+  title: string;
+  content?: string;
+  colorOverride?: string;
+  children?: React.ReactNode;
+}
+export interface StatCardProps  {
+  children?: React.ReactNode;
+}
 
 export interface AnomalyItemProps extends AlertData {
   onSelect?: (alert: AlertData) => void;
@@ -96,11 +105,8 @@ export interface ReportAnomalyModalProps {
 }
 
 
-// --- WebSocket Payloads ---
-export interface FeedUpdatePayload extends FeedStatusData {}
-export interface KpiUpdatePayload extends KpiData {}
-export interface NewAlertPayload extends AlertData {}
 
+export interface KpiUpdatePayload extends KpiData {}
 // --- Hook Return Types ---
 export interface RealtimeData {
   isConnected: boolean;
