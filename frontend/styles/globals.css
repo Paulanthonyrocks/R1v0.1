@@ -13,7 +13,7 @@
   
   :root {
     /* --- Theme Variables (Matrix Theme Example) --- */
-    --matrix: 140 80% 45%; /* Primary Green HSL Value */
+    --matrix: 143 50% 55%; /* Primary Green HSL Value */
     --matrix-light: 140 60% 60%; /* Lighter Green */
     --matrix-dark: 140 70% 20%; /* Darker Green */
     --matrix-bg: 0 0% 8%; /* Very Dark Background HSL Value */
@@ -58,8 +58,8 @@
     --background-start: 0 0% 10%; /* Gradient start */
     --background-end: 0 0% 5%; /* Gradient end */
     --noise-opacity: 0.03; /* Noise opacity */
-    --scanline-opacity: 0.08; /* Scanline opacity */
-    --scanline-width: 1px; /* Scanline width */
+    --scanline-opacity: 0.04; /* Scanline opacity */
+    --scanline-width: 0.5px; /* Scanline width */
 
     /* --- Transitions --- */
     --transition-duration: 0.2s;
@@ -161,6 +161,12 @@
       box-shadow:
       0 0 2px 2px hsla(var(--matrix-light), 0.3), /* Inner lighter glow */
       0 0 4px 1px hsla(var(--matrix), 0.2);
+  }
+
+  .matrix-card {
+    background: rgb(0, 30, 0, .5);
+    border: none;
+    box-shadow: none;
   }
 
   /* Custom input and button styles */
