@@ -1,25 +1,11 @@
 "use client";
-import "leaflet/dist/leaflet.css";
+import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
-import MatrixButton from "@/components/MatrixButton";
 import { useState, useEffect } from "react";
-import dynamic from "next/dynamic";
+import L from 'leaflet'; // Import Leaflet library itself
+import { MapContainer, TileLayer, Marker, Popup, } from 'react-leaflet';
 
-
-
-
-
-const Loading = () => (
-  <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50">
-    <div className="animate-pulse text-matrix text-2xl">Loading...</div>
-  </div>
-);
-
-const MapContainer = dynamic(() => import('react-leaflet').then(mod => mod.MapContainer), { loading: () => <Loading />, ssr: false })
-const TileLayer = dynamic(() => import('react-leaflet').then(mod => mod.TileLayer), { loading: () => <Loading />, ssr: false })
-const Marker = dynamic(() => import('react-leaflet').then(mod => mod.Marker), { loading: () => <Loading />, ssr: false })
-const Popup = dynamic(() => import('react-leaflet').then(mod => mod.Popup), { loading: () => <Loading />, ssr: false })
-const useMap = dynamic(() => import('react-leaflet').then(mod => mod.useMap), { loading: () => <Loading />, ssr: false })
+import 'leaflet/dist/leaflet.css';
 
 const anomalySeverities = ["low", "medium", "high"];
 
@@ -31,7 +17,20 @@ const anomalyTypes = [
   "Other",
 ];
 
-const locations = [
+// Fix Leaflet's default icon path issue with webpack/Next.js.
+if (typeof window !== 'undefined') {
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
+    iconUrl: '/leaflet/dist/images/marker-icon.png',
+    shadowUrl: '/leaflet/dist/images/marker-shadow.png',
+    });
+}
+
+
+// Define Location type for clarity
+type LocationTuple = [number, number];
+
+const locations: LocationTuple[] = [
   [34.0522, -118.2437],
   [37.7749, -122.4194],
   [40.7128, -74.0060],
@@ -39,43 +38,48 @@ const locations = [
   [29.7604, -95.3698],
 ];
 
-const generateAnomaly = (index: number) => ({
+// Define Anomaly type for clarity
+interface Anomaly {
+  id: number;
+  type: string;
+  severity: "low" | "medium" | "high";
+  description: string;
+  timestamp: string;
+  location: LocationTuple;
+  resolved: boolean;
+}
+
+const generateAnomaly = (index: number): Anomaly => ({
   id: index,
   type: anomalyTypes[index % anomalyTypes.length],
-  severity: anomalySeverities[index % anomalySeverities.length],
+  severity: anomalySeverities[index % anomalySeverities.length] as "low" | "medium" | "high",
   description: `Placeholder description for anomaly ${index + 1}. This is a sample description of the detected anomaly.`,
   timestamp: new Date(Date.now() - index * 1000 * 60 * 60).toLocaleString(),
   location: locations[index % locations.length],
   resolved: false,
 });
 
-const Anomalies = [...Array(5)].map((_, index) => generateAnomaly(index));
-
-
+const InitialAnomalies: Anomaly[] = [...Array(5)].map((_, index) => generateAnomaly(index));
 
 
 const AnomaliesPage = () => {
-  const [anomalies, setAnomalies] = useState(Anomalies);
+  const [anomalies, setAnomalies] = useState<Anomaly[]>(InitialAnomalies);
   const [loading, setLoading] = useState(true);
 
 
   useEffect(() => {
-    setLoading(true);
-    setTimeout(() => {
+    // Simulate loading delay
+    const timer = setTimeout(() => {
       setLoading(false);
-    }, 1000);
+    }, 500); // Reduced delay slightly, adjust as needed
+
+    return () => clearTimeout(timer); // Cleanup timer on unmount
   }, []);
 
-  function MapWrapper({ center, zoom, children }: { center: number[]; zoom: number, children: React.ReactNode }) {
-    const map = useMap();
+  // Removed MapWrapper component as it's not needed here.
+  // MapContainer handles initial center and zoom.
 
-      map.setView(center, zoom);
-      return (<>
-        {children}
-      </>);
-    }
-
-  if (loading) {    
+  if (loading) {
     return <Loading />;
   }
 
@@ -94,55 +98,83 @@ const AnomaliesPage = () => {
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4 uppercase">Detected Anomalies</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {anomalies.map((anomaly) => (
-          <MatrixCard
-            key={anomaly.id}
-            title={              
-              anomaly.type
-            }
-            colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
-              ? "hsl(0, 100%, 50%)"
-              : anomaly.severity === "medium"
-                ? "hsl(60, 100%, 50%)"
-                : "hsl(120, 100%, 50%)"
-            }
-          >
-            <div className="flex flex-col ">
+      {anomalies.length === 0 ? (
+         <p className="text-matrix-muted-text">No anomalies to display.</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {anomalies.map((anomaly) => (
+            <MatrixCard
+              key={anomaly.id}
+              
+              title={anomaly.type}
+              // Use severity for color logic, but override if resolved
+              colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
+                ? "hsl(0, 100%, 50%)" // Red
+                : anomaly.severity === "medium"
+                  ? "hsl(39, 100%, 50%)" // Orange/Yellow
+                  : "hsl(120, 100%, 35%)" // Green (adjusted brightness slightly)
+              }
+            >
+              <div className="flex flex-col ">
 
-              <p className="text-sm">
-                <span className="font-semibold">Description:</span> {anomaly.description}
-              </p>
-              <p className="mt-2 text-xs text-matrix-muted-text">
-                <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
-              </p>
-              <div className="h-[300px] w-full">
-                <MapContainer                  
-                  style={{ height: "300px", width: "100%" }}
-                  className="map-container"
+                <p className="text-sm mb-1">
+                  <span className="font-semibold">Severity:</span> <span className={`capitalize ${
+                     anomaly.severity === "high" ? "text-red-500" :
+                     anomaly.severity === "medium" ? "text-yellow-500" :
+                     "text-green-500"
+                  }`}>{anomaly.severity}</span>
+                  {anomaly.resolved && <span className="ml-2 text-gray-500">(Resolved)</span>}
+                </p>
+                <p className="text-sm">
+                  <span className="font-semibold">Description:</span> {anomaly.description}
+                </p>
+                <p className="mt-2 text-xs text-matrix-muted-text">
+                  <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
+                </p>
+                {/* Ensure map container has a fallback height/width if needed */}
+                <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden"> {/* Added bg for placeholder look */}
+                  <MapContainer
+                    center={[51.505, -0.09]}
+                    zoom={13}                    
+                    className="map-container" // Add specific styles if needed
+                    scrollWheelZoom={false}
                   >
-                  <MapWrapper center={anomaly.location} zoom={13}>
-
-                      <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                      <Marker position={anomaly.location}><Popup>Anomaly {anomaly.id}</Popup></Marker>
-                  </Marker>                  
-                </MapContainer>
+                    <TileLayer
+                      attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    <Marker position={anomaly.location}>
+                      <Popup>
+                        <b>{anomaly.type}</b><br/>ID: {anomaly.id}<br/>Severity: {anomaly.severity}
+                      </Popup>
+                    </Marker>
+                  </MapContainer>
+                </div>
+                <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x for button spacing */}
+                  {!anomaly.resolved && (
+                    <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
+                      Resolve
+                    </MatrixButton>
+                  )}
+                  
+                  <MatrixButton onClick={() => handleDismiss(anomaly.id)} color="red">
+                    Dismiss
+                  </MatrixButton>
+                </div>
               </div>
-              <div className="flex justify-end mt-2">
-
-                {!anomaly.resolved && (<MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
-                    Resolve
-                  </MatrixButton>)}
-                
-                
-                <MatrixButton onClick={() => handleDismiss(anomaly.id)} color="red">Dismiss</MatrixButton>
-              </div>
-            </div>
-          </MatrixCard>
-        ))}
-      </div>
+            </MatrixCard>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
+
+const Loading = () => (
+  <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50">
+    <div className="animate-pulse text-matrix text-2xl">Loading...</div>
+  </div>
+);
+
 
 export default AnomaliesPage;
