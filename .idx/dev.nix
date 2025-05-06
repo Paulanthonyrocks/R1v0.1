@@ -6,8 +6,9 @@
     pkgs.nodejs_20
     pkgs.tesseract
     # Add the base OpenCV library here if needed system-wide,
-    # but the python bindings below are key for the app.
     pkgs.opencv4
+    pkgs.docker-compose
+    pkgs.sudo
 
     # Define the Python environment with packages managed by Nix
     (pkgs.python311.withPackages (ps: [
@@ -22,6 +23,12 @@
       ps.numpy
       ps.tenacity
       ps.aiofiles
+
+      # --- Kafka ---
+      ps.kafka-python
+
+      # --- Database ---
+      ps.pymongo
 
       # --- ML/CV Dependencies (Managed by Nix where possible) ---
       ps.pytorch
