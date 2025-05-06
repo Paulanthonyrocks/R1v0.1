@@ -28,8 +28,15 @@ class AlertsResponse(BaseModel):
     limit: int
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from app.dependencies import get_db # Dependency for DB access
+# Remove the direct import causing the cycle
+# from app.dependencies import get_db
 from app.utils.utils import DatabaseManager # Import the manager class for type hint
+# Remove the redundant/incorrect model import
+# from ..models.alerts import AlertItem, AlertsResponse
+
+# Add logging import and setup
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -48,11 +55,15 @@ async def get_alerts(
     search: Optional[str] = Query(None, description="Search term within alert messages (case-insensitive)"),
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
-    db: DatabaseManager = Depends(get_db)
+    # Remove Depends(get_db) here
 ) -> AlertsResponse:
     """
     Endpoint to fetch alerts with filtering and pagination.
     """
+    # Import get_db locally inside the function
+    from app.dependencies import get_db
+    db: DatabaseManager = await get_db() # Call the dependency function
+
     if severity and severity.upper() not in SEVERITY_LEVELS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,23 +78,21 @@ async def get_alerts(
     # Calculate offset for pagination
     offset = (page - 1) * limit
 
-    # TODO: Implement the actual database query method in DatabaseManager
-    # It should handle filtering, pagination (LIMIT, OFFSET), and counting total matching records
-    # Example: results = db.get_alerts_filtered(filters=filters, limit=limit, offset=offset)
-    # Example: total_count = db.count_alerts_filtered(filters=filters)
-    # Placeholder implementation:
-    print(f"Fetching alerts with filters: {filters}, page: {page}, limit: {limit}") # Replace logic
-    example_alerts = [
-        AlertItem(id=1,timestamp="2023-10-27T10:40:00Z", severity="high", feed_id="Feed 1", message="Something failed"),
-        AlertItem(id=2,timestamp="2023-10-27T10:35:00Z", severity="medium", feed_id="Feed 2", message="High density lane 3"),
-    ]
-    total_count = 2 # Example
+    # Use the db instance obtained locally
+    print(f"Fetching alerts with filters: {filters}, page: {page}, limit: {limit}")
 
     try:
-        # alerts_list = await db.get_alerts_filtered(filters=filters, limit=limit, offset=offset) # Assuming async
-        # total_count = await db.count_alerts_filtered(filters=filters) # Assuming async
-        # return AlertsResponse(alerts=alerts_list, total_count=total_count, page=page, limit=limit)
-         return AlertsResponse(alerts=example_alerts, total_count=total_count, page=page, limit=limit) # Return example
+        # Use the actual async method from DatabaseManager
+        alerts_list = await db.get_alerts_filtered(filters=filters, limit=limit, offset=offset)
+        # TODO: Implement a method to count total alerts based on filters
+        # total_count = await db.count_alerts_filtered(filters=filters)
+        total_count = len(alerts_list) # Placeholder count
+
+        # Convert DB results (dicts) to AlertItem models if necessary
+        # This assumes get_alerts_filtered returns dicts matching AlertItem fields
+        alert_items = [AlertItem(**alert_data) for alert_data in alerts_list]
+
+        return AlertsResponse(alerts=alert_items, total_count=total_count, page=page, limit=limit)
     except Exception as e:
-        # Log the exception e
+        logger.error(f"Failed to retrieve alerts: {e}", exc_info=True) # Add logging
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve alerts")

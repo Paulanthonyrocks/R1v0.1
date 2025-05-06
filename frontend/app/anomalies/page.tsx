@@ -2,10 +2,8 @@
 import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
 import { useState, useEffect } from "react";
-import L from 'leaflet'; // Import Leaflet library itself
-import { MapContainer, TileLayer, Marker, Popup, } from 'react-leaflet';
-
-import 'leaflet/dist/leaflet.css';
+import dynamic from 'next/dynamic';
+import MatrixButton from '@/components/MatrixButton';
 
 const anomalySeverities = ["low", "medium", "high"];
 
@@ -17,15 +15,22 @@ const anomalyTypes = [
   "Other",
 ];
 
+// Create dynamic Map component with correct path
+const Map = dynamic(() => import('../../components/AnomalyMap'), {
+  ssr: false,
+  loading: () => <div className="h-[250px] w-full bg-gray-700 rounded overflow-hidden flex items-center justify-center text-gray-400">Loading map...</div>
+});
+
 // Fix Leaflet's default icon path issue with webpack/Next.js.
 if (typeof window !== 'undefined') {
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
-    iconUrl: '/leaflet/dist/images/marker-icon.png',
-    shadowUrl: '/leaflet/dist/images/marker-shadow.png',
+  import('leaflet').then((L) => {
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
+      iconUrl: '/leaflet/dist/images/marker-icon.png',
+      shadowUrl: '/leaflet/dist/images/marker-shadow.png',
     });
+  });
 }
-
 
 // Define Location type for clarity
 type LocationTuple = [number, number];
@@ -105,18 +110,15 @@ const AnomaliesPage = () => {
           {anomalies.map((anomaly) => (
             <MatrixCard
               key={anomaly.id}
-              
               title={anomaly.type}
-              // Use severity for color logic, but override if resolved
               colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
-                ? "hsl(0, 100%, 50%)" // Red
+                ? "hsl(0, 100%, 50%)"
                 : anomaly.severity === "medium"
-                  ? "hsl(39, 100%, 50%)" // Orange/Yellow
-                  : "hsl(120, 100%, 35%)" // Green (adjusted brightness slightly)
+                  ? "hsl(39, 100%, 50%)"
+                  : "hsl(120, 100%, 35%)"
               }
             >
-              <div className="flex flex-col ">
-
+              <div className="flex flex-col">
                 <p className="text-sm mb-1">
                   <span className="font-semibold">Severity:</span> <span className={`capitalize ${
                      anomaly.severity === "high" ? "text-red-500" :
@@ -131,32 +133,15 @@ const AnomaliesPage = () => {
                 <p className="mt-2 text-xs text-matrix-muted-text">
                   <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
                 </p>
-                {/* Ensure map container has a fallback height/width if needed */}
-                <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden"> {/* Added bg for placeholder look */}
-                  <MapContainer
-                    center={[51.505, -0.09]}
-                    zoom={13}                    
-                    className="map-container" // Add specific styles if needed
-                    scrollWheelZoom={false}
-                  >
-                    <TileLayer
-                      attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
-                    <Marker position={anomaly.location}>
-                      <Popup>
-                        <b>{anomaly.type}</b><br/>ID: {anomaly.id}<br/>Severity: {anomaly.severity}
-                      </Popup>
-                    </Marker>
-                  </MapContainer>
+                <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden">
+                  <Map location={anomaly.location} anomaly={anomaly} />
                 </div>
-                <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x for button spacing */}
+                <div className="flex justify-end mt-2 space-x-2">
                   {!anomaly.resolved && (
                     <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
                       Resolve
                     </MatrixButton>
                   )}
-                  
                   <MatrixButton onClick={() => handleDismiss(anomaly.id)} color="red">
                     Dismiss
                   </MatrixButton>

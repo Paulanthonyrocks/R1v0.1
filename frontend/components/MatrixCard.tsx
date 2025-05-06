@@ -12,34 +12,24 @@ interface MatrixCardProps {
 const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className, colorOverride, children }) => {
   const [isHovered, setIsHovered] = useState(false);
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: 'var(--matrix-panel)', // Use Matrix panel color
-    border: `1px solid var(--matrix-border-color)`, // Subtle border
-    transition: 'transform 0.2s ease', // Smooth transition for hover
-    transform: isHovered ? 'translateY(-1px)' : 'translateY(0)', // Subtle lift on hover
-    borderRadius: '0.5rem',
-    padding: '1.5rem',
-  };
-
-  const titleStyle: React.CSSProperties = {
-    color: colorOverride || 'var(--matrix-text)',
-    fontVariant: 'small-caps',
-    fontFamily: 'var(--font-mono)',
-    fontWeight: 'lighter',
-  };
-
   return (
     <div
-      className={`flex flex-col gap-3 ${className}`}
-      style={cardStyle}
+      className={`matrix-card ${isHovered ? 'matrix-card--hover' : 'matrix-card--default'} flex flex-col gap-3 ${className || ''}`}
+      {...(colorOverride ? { 'data-color-override': 'true', style: { '--color-override': colorOverride } as React.CSSProperties } : {})}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       <div className="flex items-center gap-4">
-        {icon && <div className="text-3xl" style={{ color: colorOverride || 'var(--matrix-light)' }}>{icon}</div>}
-        <h3 className="text-base" style={titleStyle}>{title}</h3>
+        {icon && (
+          <div className="text-3xl matrix-card__icon">
+            {icon}
+          </div>
+        )}
+        <h3 className="text-base matrix-card__title">
+          {title}
+        </h3>
       </div>
-      {content && <p className="text-sm" style={{ color: 'var(--matrix-muted-text)' }}>{content}</p>}
+      {content && <p className="text-sm matrix-card__content">{content}</p>}
       {children}
     </div>
   );

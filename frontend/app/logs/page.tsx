@@ -1,10 +1,21 @@
+"use client";
+
 import MatrixCard from "@/components/MatrixCard";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import MatrixButton from "@/components/MatrixButton";
 
 const SystemLogsPage = () => {
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
   const [selectedLog, setSelectedLog] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Simulate initial data loading
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleLogClick = (index: number) => {
     setSelectedLog(index);
