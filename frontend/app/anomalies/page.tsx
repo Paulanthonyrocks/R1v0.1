@@ -1,18 +1,9 @@
 "use client";
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import 'leaflet/dist/leaflet.css';
-<<<<<<< HEAD
 import MatrixCard from "@/components/MatrixCard";
-import { useState, useEffect } from "react";
 import dynamic from 'next/dynamic';
 import MatrixButton from '@/components/MatrixButton';
-=======
-import AnomalyMap from '@/app/AnomalyMap';
-import MatrixCard from '@/components/MatrixCard';
-import MatrixButton from '@/components/MatrixButton';
-import { useState, useEffect } from 'react';
-import L from 'leaflet';
->>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
 
 const anomalySeverities = ["low", "medium", "high"];
 
@@ -24,26 +15,35 @@ const anomalyTypes = [
     "Other",
 ];
 
-<<<<<<< HEAD
-// Create dynamic Map component with correct path
-const Map = dynamic(() => import('../../components/AnomalyMap'), {
+// Create dynamic Map component (assumed to be AnomalyMap)
+// Renamed to AnomalyMapDynamic to avoid potential naming conflicts and clarify it's a dynamic import.
+// The path '../../components/AnomalyMap' assumes this file is in 'app/anomalies/page.tsx'
+// and AnomalyMap component is in 'components/AnomalyMap.tsx' relative to the 'app' or 'src' directory root.
+// Adjust the path if your project structure is different.
+const AnomalyMapDynamic = dynamic(() => import('../../components/AnomalyMap'), {
   ssr: false,
   loading: () => <div className="h-[250px] w-full bg-gray-700 rounded overflow-hidden flex items-center justify-center text-gray-400">Loading map...</div>
 });
 
 // Fix Leaflet's default icon path issue with webpack/Next.js.
+// This needs to run only on the client side.
 if (typeof window !== 'undefined') {
-  import('leaflet').then((L) => {
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
-      iconUrl: '/leaflet/dist/images/marker-icon.png',
-      shadowUrl: '/leaflet/dist/images/marker-shadow.png',
-    });
+  import('leaflet').then(LModule => {
+    // It's good practice to check if the imported module and its properties exist
+    if (LModule && LModule.Icon && LModule.Icon.Default) {
+      LModule.Icon.Default.mergeOptions({
+        iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png', // These paths must exist in the /public directory
+        iconUrl: '/leaflet/dist/images/marker-icon.png',          // e.g., public/leaflet/dist/images/marker-icon.png
+        shadowUrl: '/leaflet/dist/images/marker-shadow.png',
+      });
+    } else {
+      console.warn("Leaflet L.Icon.Default not found after dynamic import. Map icons might be misconfigured.");
+    }
+  }).catch(error => {
+    console.error("Error dynamically importing Leaflet for icon setup:", error);
   });
 }
 
-=======
->>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
 // Define Location type for clarity
 type LocationTuple = [number, number];
 
@@ -84,29 +84,17 @@ const AnomaliesPage = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>(InitialAnomalies);
   const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        // Fix Leaflet's default icon path issue with webpack/Next.js.
-        //this is a client side effect
-        L.Icon.Default.mergeOptions({
-            iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
-            iconUrl: '/leaflet/dist/images/marker-icon.png',
-            shadowUrl: '/leaflet/dist/images/marker-shadow.png',
-        });
-    }, []);
-
-
+  // The Leaflet icon fix useEffect that was present in one of the merge branches has been removed,
+  // as this is now handled globally and client-side at the module level.
 
   useEffect(() => {
     // Simulate loading delay
     const timer = setTimeout(() => {
       setLoading(false);
-    }, 500); // Reduced delay slightly, adjust as needed
+    }, 500); 
 
     return () => clearTimeout(timer); // Cleanup timer on unmount
   }, []);
-
-  // Removed MapWrapper component as it's not needed here.
-  // MapContainer handles initial center and zoom.
 
   if (loading) {
     return <Loading />;
@@ -157,15 +145,12 @@ const AnomaliesPage = () => {
                 <p className="mt-2 text-xs text-matrix-muted-text">
                   <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
                 </p>
-<<<<<<< HEAD
+                {/* Map rendering section - merged from HEAD and ceca87d... */}
                 <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden">
-                  <Map location={anomaly.location} anomaly={anomaly} />
+                  {/* Pass both location and anomaly to AnomalyMapDynamic as AnomalyMap expects 'location' */}
+                  <AnomalyMapDynamic location={anomaly.location} anomaly={anomaly} />
                 </div>
-                <div className="flex justify-end mt-2 space-x-2">
-=======
-                 <AnomalyMap key={anomaly.id} anomaly={anomaly} />
-                <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x for button spacing */}
->>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
+                <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x-2 for button spacing */}
                   {!anomaly.resolved && (
                    <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
                         Resolve
