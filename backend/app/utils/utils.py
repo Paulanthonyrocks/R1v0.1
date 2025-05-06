@@ -25,6 +25,7 @@ from pathlib import Path
 import time
 from multiprocessing import Queue as MPQueue
 import yaml # <<< --- ADDED IMPORT --- >>>
+from typing import Tuple, Dict, Any, List, Optional, Set
 
 # Logging setup
 # Configure logging properly in your main application (e.g., using FastAPI's setup)
