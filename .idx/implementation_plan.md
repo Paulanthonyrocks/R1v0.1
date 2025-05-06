@@ -20,9 +20,13 @@ The Traffic Management Hub aims to provide a centralized system for monitoring, 
 **Tasks:**
 
 *   Design and implement data ingestion API/service endpoints.
+    *   Define initial API contract (e.g., `POST /api/v1/traffic-data` with expected JSON payload schema: `{ timestamp: string, sensor_id: string, location: { lat: number, lon: number }, speed?: number, occupancy?: number, vehicle_count?: number }`).
+    *   Consider different endpoint structures for various data source types if necessary.
 *   Integrate with initial data sources (e.g., simulated data, existing sensors - TBD).
 *   Implement data validation and basic processing logic.
 *   Store raw and processed data in a time-series database.
+    *   Define initial schema for raw traffic data (e.g., fields: `timestamp`, `sensor_id`, `latitude`, `longitude`, `speed`, `vehicle_count`).
+    *   Define initial schema for processed data (e.g., aggregated congestion levels per road segment, fields: `segment_id`, `timestamp`, `congestion_level`).
 
 **Technologies:**
 
@@ -36,6 +40,8 @@ The Traffic Management Hub aims to provide a centralized system for monitoring, 
 **Overview:** Develop the frontend to display traffic data on an interactive map.
 
 **Tasks:**
+
+*   **Dependency:** This module is dependent on the **Data Ingestion Module** to be functional to provide the necessary data.
 
 *   Choose a map library (e.g., Leaflet, Mapbox GL JS).
 *   Implement map initialization and basemap integration.
@@ -58,7 +64,10 @@ The Traffic Management Hub aims to provide a centralized system for monitoring, 
 *   Design a simple interface to list available traffic signals.
 *   Implement functionality to change signal phases (e.g., red, yellow, green) for a selected signal.
 *   Integrate with a dummy or simulated traffic signal API/service.
+    *   Define dummy signal API: e.g., `GET /signals` (list signals), `POST /signals/{id}/set_phase` (body: `{ phase: 'green' | 'yellow' | 'red' }`).
 *   Add basic status display for each signal.
+    *   Define basic signal status schema: e.g., `{ id: string, current_phase: 'green' | 'yellow' | 'red', last_updated: string }`.
+
 
 **Technologies:**
 
@@ -82,13 +91,9 @@ The Traffic Management Hub aims to provide a centralized system for monitoring, 
 
 **Technologies:**
 
-*   Authentication Service (e.g., Firebase Auth, Auth0)
-*   Backend Framework (for handling authentication callbacks and authorization logic)
-*   Frontend Framework (for implementing login/registration UI)
-
 ### Real-time Traffic Data Display
 
-**Overview:** Enhance the real-time visualization module to display more detailed and dynamic traffic information on the map.
+**Overview:** Enhance the real-time visualization module from the immediate steps to display more detailed and dynamic traffic information on the map, potentially including advanced overlays and data types.
 
 **Tasks:**
 
@@ -99,4 +104,3 @@ The Traffic Management Hub aims to provide a centralized system for monitoring, 
 *   Route Optimization Engine
 *   Integration with more diverse data sources
 *   Mobile Application Development
-*   User Authentication and Authorization
