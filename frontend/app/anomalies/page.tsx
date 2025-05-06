@@ -1,20 +1,30 @@
 "use client";
+import React from 'react';
 import 'leaflet/dist/leaflet.css';
+<<<<<<< HEAD
 import MatrixCard from "@/components/MatrixCard";
 import { useState, useEffect } from "react";
 import dynamic from 'next/dynamic';
 import MatrixButton from '@/components/MatrixButton';
+=======
+import AnomalyMap from '@/app/AnomalyMap';
+import MatrixCard from '@/components/MatrixCard';
+import MatrixButton from '@/components/MatrixButton';
+import { useState, useEffect } from 'react';
+import L from 'leaflet';
+>>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
 
 const anomalySeverities = ["low", "medium", "high"];
 
 const anomalyTypes = [
-  "Traffic Congestion",
-  "Signal Malfunction",
-  "Road Closure",
-  "Accident",
-  "Other",
+    "Traffic Congestion",
+    "Signal Malfunction",
+    "Road Closure",
+    "Accident",
+    "Other",
 ];
 
+<<<<<<< HEAD
 // Create dynamic Map component with correct path
 const Map = dynamic(() => import('../../components/AnomalyMap'), {
   ssr: false,
@@ -32,6 +42,8 @@ if (typeof window !== 'undefined') {
   });
 }
 
+=======
+>>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
 // Define Location type for clarity
 type LocationTuple = [number, number];
 
@@ -43,7 +55,7 @@ const locations: LocationTuple[] = [
   [29.7604, -95.3698],
 ];
 
-// Define Anomaly type for clarity
+// Define Anomaly type for clarity, and export it
 interface Anomaly {
   id: number;
   type: string;
@@ -53,6 +65,7 @@ interface Anomaly {
   location: LocationTuple;
   resolved: boolean;
 }
+export type { Anomaly };
 
 const generateAnomaly = (index: number): Anomaly => ({
   id: index,
@@ -70,6 +83,17 @@ const InitialAnomalies: Anomaly[] = [...Array(5)].map((_, index) => generateAnom
 const AnomaliesPage = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>(InitialAnomalies);
   const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        // Fix Leaflet's default icon path issue with webpack/Next.js.
+        //this is a client side effect
+        L.Icon.Default.mergeOptions({
+            iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
+            iconUrl: '/leaflet/dist/images/marker-icon.png',
+            shadowUrl: '/leaflet/dist/images/marker-shadow.png',
+        });
+    }, []);
+
 
 
   useEffect(() => {
@@ -133,13 +157,18 @@ const AnomaliesPage = () => {
                 <p className="mt-2 text-xs text-matrix-muted-text">
                   <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
                 </p>
+<<<<<<< HEAD
                 <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden">
                   <Map location={anomaly.location} anomaly={anomaly} />
                 </div>
                 <div className="flex justify-end mt-2 space-x-2">
+=======
+                 <AnomalyMap key={anomaly.id} anomaly={anomaly} />
+                <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x for button spacing */}
+>>>>>>> ceca87d866ce6b0fc0bc72daa15675129164aef3
                   {!anomaly.resolved && (
-                    <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
-                      Resolve
+                   <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
+                        Resolve
                     </MatrixButton>
                   )}
                   <MatrixButton onClick={() => handleDismiss(anomaly.id)} color="red">

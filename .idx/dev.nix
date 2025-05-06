@@ -1,10 +1,13 @@
 # .idx/dev.nix
 {pkgs}: {
   channel = "stable-24.05";
-
+  
   packages = [
     pkgs.nodejs_20
     pkgs.tesseract
+    # Add the base OpenCV library here if needed system-wide,
+    # but the python bindings below are key for the app.
+    pkgs.opencv4
 
     # Define the Python environment with packages managed by Nix
     (pkgs.python311.withPackages (ps: [
@@ -25,25 +28,25 @@
       ps.torchvision
       ps.torchaudio
       # ultralytics removed - will be installed via pip
-      ps.opencv4 # Using nixpkgs opencv
+      ps.opencv4 # <--- Python bindings for OpenCV provided by Nix
       ps.scipy
       # filterpy removed - will be installed via pip
 
       # --- OCR Dependencies ---
       ps.pillow
       ps.pytesseract
-      # google-generativeai removed - will be installed via pip
+      ps.google-generativeai # <--- Managed by Nix
 
       # --- Utilities ---
-      ps.pip # Needed for installing extra requirements
-      # ps.wheel
-      # ps.setuptools
+      ps.pip # Needed for installing extra requirements from requirements.txt
+      # ps.wheel # Usually not needed unless building wheels directly
+      # ps.setuptools # Usually pulled in as a dependency if needed
 
     ])) # End of python311.withPackages
   ]; # End of packages
 
   idx.extensions = [
-    # ... (keep all your extensions)
+    # ... (keep all your extensions) ...
     "amazonwebservices.amazon-q-vscode"
     "Angular.ng-template"
     "anysphere.pyright"
@@ -85,6 +88,8 @@
     previews = {
 
       backend = {
+        # Use absolute path for python from the Nix env for clarity
+        # command = ["python", "-m", "uvicorn", ...] might be more robust
         command = [
           "uvicorn"
           "app.main:app"
@@ -93,11 +98,22 @@
           "--port"
           "9002"
           "--reload"
+          # --app-dir should point relative to where uvicorn is run or use absolute
+          # Assuming uvicorn runs from workspace root by default in IDX context
           "--app-dir"
-          "backend/"
+          "backend/" # Ensure this points correctly to where main.py is inside app/
         ];
         manager = "web";
-      }; # ; needed
+        # Ensure the backend waits for the pip install potentially
+        # startupProbe = { # Optional: Add a probe if startup takes long after install
+        #  httpGet = {
+        #    path = "/docs"; # Or some health check endpoint
+        #    port = 9002;
+        #  };
+        #  initialDelaySeconds = 15; # Wait after pip install might finish
+        #  periodSeconds = 5;
+        #};
+      }; # end backend preview
 
       frontend = {
         command = [
@@ -107,12 +123,13 @@
         ];
         manager = "web";
         env = {
-          NEXT_PUBLIC_API_URL = "http://localhost:9002";
+          # This assumes the backend is accessible via localhost from the frontend container
+          NEXT_PUBLIC_API_URL = "{preview.backend.url}"; # Use IDX variable interpolation
         };
-      };
+      }; # end frontend preview
 
     };
-  };
+  }; # end idx.previews
 
   # Workspace lifecycle hooks
   idx.workspace = {
@@ -120,16 +137,16 @@
     onCreate = {
       # Install frontend dependencies
       npm-install = "cd frontend && npm install";
-      # Install Python dependencies MISSING from Nixpkgs using pip
-      pip-install-extras = "cd backend && pip install --no-cache-dir -r requirements-extra.txt";
-    }; # ; needed
+      # Install ONLY Python dependencies NOT managed by Nix
+      pip-install = "cd backend && pip install --no-cache-dir -r requirements.txt";
+    }; # end onCreate
 
     # Commands to run every time the workspace starts
     onStart = {
       log-start = "echo Nix environment ready. Starting previews...";
-      # Check frontend config and a key backend file / requirements file
-      check-files = "ls -l frontend/package.json backend/app/main.py backend/requirements-extra.txt || true";
-    };
-  }; # End of idx.workspace set
+      # Check files again
+      check-files = "ls -l frontend/package.json backend/app/main.py backend/requirements.txt || true";
+    }; # end onStart
+  }; # End of idx.workspace
 
-} # End of main function set
+} # End of main function
