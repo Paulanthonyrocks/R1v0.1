@@ -18,6 +18,7 @@ from PIL import Image
 import io
 import pytesseract
 import google.generativeai as genai
+from google.api_core import exceptions as api_core_exceptions
 from pathlib import Path
 import time
 from multiprocessing import Queue as MPQueue
@@ -487,9 +488,20 @@ class LicensePlatePreprocessor:
     def _retry_settings(self): # ... (logic unchanged) ...
         pass
     
-    @retry(wait=wait_exponential(multiplier=1, min=1, max=10), 
+    @retry(wait=wait_exponential(multiplier=1, min=1, max=10),
            stop=stop_after_attempt(3),
-           retry=retry_if_exception_type((genai.types.BlockedPromptException, genai.types.InvalidAPIKeyError, genai.types.RateLimitExceededError, genai.types.PermissionDeniedError, genai.types.GenerativeModelError, ConnectionError, TimeoutError))
+           retry=retry_if_exception_type((
+               # Use exceptions from google.api_core instead of genai.types
+               api_core_exceptions.Unauthenticated, # Replaces InvalidAPIKeyError
+               api_core_exceptions.ResourceExhausted, # Replaces RateLimitExceededError
+               api_core_exceptions.PermissionDenied,
+               api_core_exceptions.GoogleAPICallError, # General API error, can cover GenerativeModelError cases
+               api_core_exceptions.DeadlineExceeded, # Added for timeouts
+               api_core_exceptions.InternalServerError, # Added for server issues
+               # Keep existing network errors
+               ConnectionError,
+               TimeoutError
+           ))
            )
     def _call_gemini_ocr(self, image: np.ndarray) -> str:
         start_time = time.time()
@@ -503,10 +515,25 @@ class LicensePlatePreprocessor:
         if current_time - self.last_error_time < self.cool_down_time:
              logger.info(f"Cool-down period active. Waiting before making another OCR request.")
              time.sleep(self.cool_down_time)
-        end_time = time.time()
-        logger.debug(f"LicensePlatePreprocessor._call_gemini_ocr execution time: {end_time - start_time:.6f} seconds")
-        logger.debug(f"Calling gemini API.")
-        return ""
+
+        try:
+            # Your actual call to the gemini model goes here
+            # ... existing code ...
+            return ""  # Replace with actual OCR result
+        except (api_core_exceptions.Unauthenticated, # Match retry exceptions
+                api_core_exceptions.ResourceExhausted,
+                api_core_exceptions.PermissionDenied,
+                api_core_exceptions.GoogleAPICallError,
+                api_core_exceptions.DeadlineExceeded,
+                api_core_exceptions.InternalServerError,
+                ConnectionError,
+                TimeoutError) as e:
+            logger.error(f"Error during OCR: {type(e).__name__}: {str(e)}")
+            self.last_error_time = time.time()
+            raise
+        finally:
+            end_time = time.time()
+            logger.debug(f"LicensePlatePreprocessor._call_gemini_ocr execution time: {end_time - start_time:.6f} seconds")
     def preprocess_license_plate(self, roi, skip_rotation=False, min_contour_area=100):
         start_time = time.time()
         end_time = time.time()

@@ -20,6 +20,8 @@ const ExportPage: React.FC = () => {
 
   const handleFormatSelect = (format: string) => {
     setSelectedFormat(format);
+    // Reset preview when format changes
+    setDataPreview("");
   };
 
   const handleDataSelect = (data: string) => {
@@ -30,9 +32,16 @@ const ExportPage: React.FC = () => {
 
   const handleTimeRangeSelect = (range: string) => {
     setTimeRange(range);
+    // Reset preview when time range changes
+    setDataPreview("");
   };
 
   const handleExport = () => {
+    if (selectedData.length === 0) {
+      setDataPreview("Please select data to export");
+      return;
+    }
+
     setExportProgress(0);
     const interval = setInterval(() => {
       setExportProgress((prev) => {
@@ -45,7 +54,7 @@ const ExportPage: React.FC = () => {
     }, 300);
 
     setTimeout(() => {
-      setDataPreview("This is a preview of the exported data");
+      setDataPreview(`Preview of ${selectedData.join(", ")} data in ${selectedFormat} format for ${timeRange}`);
     }, 1000);
   };
 
@@ -57,17 +66,26 @@ const ExportPage: React.FC = () => {
         </div>
       )}
       <h1 className="text-3xl font-bold mb-4">Export Data</h1>
-      <MatrixCard>
+      <MatrixCard title="Export Configuration">
         <div className="mb-4">
           <h2 className="text-xl">Select Format</h2>
           <div className="flex space-x-2">
-            <MatrixButton onClick={() => handleFormatSelect("CSV")}>
+            <MatrixButton 
+              onClick={() => handleFormatSelect("CSV")}
+              backgroundColor={selectedFormat === "CSV" ? "var(--matrix)" : ""}
+            >
               CSV
             </MatrixButton>
-            <MatrixButton onClick={() => handleFormatSelect("JSON")}>
+            <MatrixButton 
+              onClick={() => handleFormatSelect("JSON")}
+              backgroundColor={selectedFormat === "JSON" ? "var(--matrix)" : ""}
+            >
               JSON
             </MatrixButton>
-            <MatrixButton onClick={() => handleFormatSelect("XML")}>
+            <MatrixButton 
+              onClick={() => handleFormatSelect("XML")}
+              backgroundColor={selectedFormat === "XML" ? "var(--matrix)" : ""}
+            >
               XML
             </MatrixButton>
           </div>
@@ -96,10 +114,16 @@ const ExportPage: React.FC = () => {
         <div className="mb-4">
           <h2 className="text-xl">Select Time Range</h2>
           <div className="flex space-x-2">
-            <MatrixButton onClick={() => handleTimeRangeSelect("Last 24h")}>
+            <MatrixButton 
+              onClick={() => handleTimeRangeSelect("Last 24h")}
+              backgroundColor={timeRange === "Last 24h" ? "var(--matrix)" : ""}
+            >
               Last 24h
             </MatrixButton>
-            <MatrixButton onClick={() => handleTimeRangeSelect("Last Week")}>
+            <MatrixButton 
+              onClick={() => handleTimeRangeSelect("Last Week")}
+              backgroundColor={timeRange === "Last Week" ? "var(--matrix)" : ""}
+            >
               Last Week
             </MatrixButton>
           </div>
@@ -107,11 +131,12 @@ const ExportPage: React.FC = () => {
         <MatrixButton onClick={handleExport}>Export</MatrixButton>
         {exportProgress > 0 && (
           <div className="mt-4">
-            <div className="h-4 bg-matrix-panel rounded-full overflow-hidden">
-              <div
-                className="h-full bg-matrix"
-                style={{ width: `${exportProgress}%` }}
-              ></div>
+            <div className="matrix-progress-bar">
+              <div 
+                className="matrix-progress-bar__fill"
+                data-progress="true"
+                {...{ style: { '--progress-value': `${exportProgress}%` } as React.CSSProperties }}
+              />
             </div>
             <p className="text-sm mt-1">
               {exportProgress === 100
@@ -126,13 +151,6 @@ const ExportPage: React.FC = () => {
             <p className="text-matrix-muted-text">{dataPreview}</p>
           </div>
         )}
-      </MatrixCard>
-    </div>
-  );
-};
-
-export default ExportPage;
-        </div>
       </MatrixCard>
     </div>
   );

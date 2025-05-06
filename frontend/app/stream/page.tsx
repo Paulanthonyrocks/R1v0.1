@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect } from 'react';
 import { Chart } from "react-google-charts";
 import MatrixButton from '../../components/MatrixButton';
