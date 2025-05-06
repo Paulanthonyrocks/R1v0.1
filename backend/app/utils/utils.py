@@ -956,6 +956,32 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged ON alerts(acknowledged);")
         logger.debug("Table creation check finished.")
 
+        # Create table for raw traffic data
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS raw_traffic_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                sensor_id TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                speed REAL,
+                occupancy REAL,
+                vehicle_count INTEGER
+            )
+        ''')
+
+        # Create table for processed traffic data
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS processed_traffic_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                segment_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                congestion_level REAL NOT NULL
+            )
+        ''')
+
+        logger.debug("Traffic data tables created successfully.")
+
 
     # --- Retry Decorator for DB Writes ---
     db_write_retry_decorator = retry(
