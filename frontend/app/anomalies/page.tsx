@@ -1,31 +1,21 @@
 "use client";
+import React from 'react';
 import 'leaflet/dist/leaflet.css';
-import MatrixCard from "@/components/MatrixCard";
-import { useState, useEffect } from "react";
-import L from 'leaflet'; // Import Leaflet library itself
-import { MapContainer, TileLayer, Marker, Popup, } from 'react-leaflet';
-
-import 'leaflet/dist/leaflet.css';
+import AnomalyMap from '@/app/AnomalyMap';
+import MatrixCard from '@/components/MatrixCard';
+import MatrixButton from '@/components/MatrixButton';
+import { useState, useEffect } from 'react';
+import L from 'leaflet';
 
 const anomalySeverities = ["low", "medium", "high"];
 
 const anomalyTypes = [
-  "Traffic Congestion",
-  "Signal Malfunction",
-  "Road Closure",
-  "Accident",
-  "Other",
+    "Traffic Congestion",
+    "Signal Malfunction",
+    "Road Closure",
+    "Accident",
+    "Other",
 ];
-
-// Fix Leaflet's default icon path issue with webpack/Next.js.
-if (typeof window !== 'undefined') {
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
-    iconUrl: '/leaflet/dist/images/marker-icon.png',
-    shadowUrl: '/leaflet/dist/images/marker-shadow.png',
-    });
-}
-
 
 // Define Location type for clarity
 type LocationTuple = [number, number];
@@ -38,7 +28,7 @@ const locations: LocationTuple[] = [
   [29.7604, -95.3698],
 ];
 
-// Define Anomaly type for clarity
+// Define Anomaly type for clarity, and export it
 interface Anomaly {
   id: number;
   type: string;
@@ -48,6 +38,7 @@ interface Anomaly {
   location: LocationTuple;
   resolved: boolean;
 }
+export type { Anomaly };
 
 const generateAnomaly = (index: number): Anomaly => ({
   id: index,
@@ -65,6 +56,17 @@ const InitialAnomalies: Anomaly[] = [...Array(5)].map((_, index) => generateAnom
 const AnomaliesPage = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>(InitialAnomalies);
   const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        // Fix Leaflet's default icon path issue with webpack/Next.js.
+        //this is a client side effect
+        L.Icon.Default.mergeOptions({
+            iconRetinaUrl: '/leaflet/dist/images/marker-icon-2x.png',
+            iconUrl: '/leaflet/dist/images/marker-icon.png',
+            shadowUrl: '/leaflet/dist/images/marker-shadow.png',
+        });
+    }, []);
+
 
 
   useEffect(() => {
@@ -131,29 +133,11 @@ const AnomaliesPage = () => {
                 <p className="mt-2 text-xs text-matrix-muted-text">
                   <span className="font-semibold">Timestamp:</span> {anomaly.timestamp}
                 </p>
-                {/* Ensure map container has a fallback height/width if needed */}
-                <div className="h-[250px] w-full mt-3 mb-2 bg-gray-700 rounded overflow-hidden"> {/* Added bg for placeholder look */}
-                  <MapContainer
-                    center={[51.505, -0.09]}
-                    zoom={13}                    
-                    className="map-container" // Add specific styles if needed
-                    scrollWheelZoom={false}
-                  >
-                    <TileLayer
-                      attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
-                    <Marker position={anomaly.location}>
-                      <Popup>
-                        <b>{anomaly.type}</b><br/>ID: {anomaly.id}<br/>Severity: {anomaly.severity}
-                      </Popup>
-                    </Marker>
-                  </MapContainer>
-                </div>
+                 <AnomalyMap key={anomaly.id} anomaly={anomaly} />
                 <div className="flex justify-end mt-2 space-x-2"> {/* Added space-x for button spacing */}
                   {!anomaly.resolved && (
-                    <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
-                      Resolve
+                   <MatrixButton onClick={() => handleResolve(anomaly.id)} color="green">
+                        Resolve
                     </MatrixButton>
                   )}
                   

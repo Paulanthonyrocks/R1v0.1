@@ -1,31 +1,4 @@
-# Core FastAPI
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+# backend/requirements.txt
 
-# Configuration & Utilities
-pyyaml>=6.0
-psutil>=5.9.0
-numpy>=1.21.0
-tenacity>=8.2.0
-aiofiles>=23.1.0
-
-# ML/CV Dependencies
-# NOTE:  These torch versions might require specific CUDA versions. Adapt as needed for your hardware
-# For CPU-only or specific CUDA versions, refer to https://pytorch.org/get-started/locally/
-#  and adjust as needed (including the --index-url).  No index URL assumes standard PyPI.
-torch>=2.0.0
-torchvision
-torchaudio
-ultralytics>=8.0.0
-opencv-python-headless>=4.6.0
-scipy>=1.8.0
-filterpy>=1.4.5
-
-# OCR Dependencies
-pillow>=9.0.0
-pytesseract>=0.3.10
-google-generativeai>=0.3.0
-
-# Database
-# sqlite3 is built-in
+ultralytics>=8.0.0  # <--- Keep: Not managed by Nix
+filterpy>=1.4.5    # <--- Keep: Not managed by Nix
