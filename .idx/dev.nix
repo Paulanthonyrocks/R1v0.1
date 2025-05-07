@@ -98,17 +98,9 @@
         # Use absolute path for python from the Nix env for clarity
         # command = ["python", "-m", "uvicorn", ...] might be more robust
         command = [
-          "uvicorn"
-          "app.main:app"
-          "--host"
-          "0.0.0.0"
-          "--port"
-          "9002"
-          "--reload"
-          # --app-dir should point relative to where uvicorn is run or use absolute
-          # Assuming uvicorn runs from workspace root by default in IDX context
-          "--app-dir"
-          "backend/" # Ensure this points correctly to where main.py is inside app/
+          "/bin/sh"
+          "-c"
+          "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 9002 --reload"
         ];
         manager = "web";
         # Ensure the backend waits for the pip install potentially
