@@ -1,22 +1,20 @@
+// src/components/AnomalyMap.tsx
 'use client';
 
 import dynamic from 'next/dynamic';
 import type { ComponentType } from 'react';
 import 'leaflet/dist/leaflet.css';
+import type { Anomaly } from '@/app/anomalies/page'; // Assuming Anomaly type is exported from page.tsx
 
+// Updated props to accept full anomaly objects and interaction handlers
 interface AnomalyMapProps {
-  location: [number, number];
-  anomaly: {
-    id: number;
-    type: string;
-    severity: string;
-    description: string;
-  };
+  anomalies: Anomaly[]; // Changed from locations to full Anomaly objects
+  onMarkerClick?: (anomalyId: number) => void;
+  activeAnomalyId?: number | null; // To potentially highlight a marker
 }
 
-// Dynamically import MapComponent with SSR disabled
 const DynamicMap: ComponentType<AnomalyMapProps> = dynamic(
-  () => import('./MapComponent'),
+  () => import('@/components/MapComponent').then(mod => mod.default ),
   {
     ssr: false,
     loading: () => (

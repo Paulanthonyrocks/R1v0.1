@@ -1,8 +1,10 @@
 /* styles/globals.css */
-/* Import a custom font like IBM Plex Mono */
-/* @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap'); */
 
-/* --- Tailwind Directives (Keep at the top) --- */
+/* --- Font Imports (Keep at the very top) --- */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&display=swap');
+/* @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap'); */ /* If you need this too */
+
+/* --- Tailwind Directives (Immediately after imports) --- */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -10,7 +12,6 @@
 /* --- Base Layer: Global styles and CSS Variable Definitions --- */
 @layer base {
   /* --- CSS Variable Definitions --- */
-  
   :root {
     /* --- Theme Variables (Matrix Theme Example) --- */
     --matrix: 143 50% 55%; /* Primary Green HSL Value */
@@ -21,126 +22,107 @@
     --matrix-text: var(--matrix); /* Default text is primary green */
     --matrix-border-color: 140 60% 40%; /* Border color HSL Value */
     --matrix-muted-text: 140 40% 55%; /* Muted text HSL Value (adjusted contrast) */
+    
+    /* --- Neon Blue (Example, ensure you define it if neon-text class is used) --- */
+    --neon-blue-hsl: 197 100% 50%; /* HSL for #00f7ff */
+
+
     /* --- Font Definitions --- */
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&display=swap');
-    --font-matrix: "IBM Plex Mono", monospace;
-    --font-matrix: "Courier New", monospace;    /* Fallback Matrix font */
+    /* The @import is now at the top of the file */
+    --font-matrix: "IBM Plex Mono", "Courier New", monospace; /* Combined with fallback */
     /* --font-sans: "Inter", sans-serif; */     /* Define if using Inter or another sans-serif */
 
     /* --- Layout & Radius --- */
     --radius: 0.625rem;             /* Base border radius (approx 10px) */
 
-    /* --- Shacdn-ui variable mapping --- */
     /* --- Shadcn Variable Mapping --- */
-    /* Map standard Shadcn variable names to your theme variables */
-    --background: var(--matrix-bg);                /* App background */
-    --foreground: var(--matrix-text);              /* Default text color */
-    --card: var(--matrix-panel);                   /* Card background */
-    --card-foreground: var(--matrix-text);         /* Card text color */
-    --popover: var(--matrix-panel);                /* Popover background */
-    --popover-foreground: var(--matrix-text);      /* Popover text color */
-    --primary: var(--matrix);                      /* Primary interactive color */
-    --primary-foreground: var(--matrix-bg);        /* Text on primary bg (dark) */
-    --secondary: var(--matrix-dark);               /* Secondary interactive color */
-    --secondary-foreground: var(--matrix-light);   /* Text on secondary bg (light) */
-    --muted: var(--matrix-dark);                   /* Muted background elements */
-    --muted-foreground: var(--matrix-muted-text);  /* Muted text color */
-    --accent: var(--matrix-dark);                  /* Accent elements (can be same as secondary) */
-    --accent-foreground: var(--matrix-light);      /* Text on accent elements */
-    --destructive: 0 84% 60%;                      /* Destructive actions (Standard Red HSL) */
-    --destructive-foreground: 0 0% 98%;            /* Text on destructive bg (Light) */
-    --border: var(--matrix-border-color);          /* Element borders */
-    --input: var(--matrix-border-color);           /* Input borders */
-    --ring: var(--matrix-light);                   /* Focus rings */
-    --radius: var(--radius);                       /* Use base radius variable */
+    --background: var(--matrix-bg);
+    --foreground: var(--matrix-text);
+    --card: var(--matrix-panel);
+    --card-foreground: var(--matrix-text);
+    --popover: var(--matrix-panel);
+    --popover-foreground: var(--matrix-text);
+    --primary: var(--matrix);
+    --primary-foreground: var(--matrix-bg);
+    --secondary: var(--matrix-dark);
+    --secondary-foreground: var(--matrix-light);
+    --muted: var(--matrix-dark);
+    --muted-foreground: var(--matrix-muted-text);
+    --accent: var(--matrix-dark);
+    --accent-foreground: var(--matrix-light);
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: var(--matrix-border-color);
+    --input: var(--matrix-border-color); /* Assuming input bg and border are related */
+    --ring: var(--matrix-light);
+    /* --radius: var(--radius); /* This is fine, but since Shadcn's --radius is just 'radius', ensure Tailwind config matches if you use Shadcn's CLI */
     
-    /* --- Colors --- */
-    --background-start: 0 0% 10%; /* Gradient start */
-    --background-end: 0 0% 5%; /* Gradient end */
-    --noise-opacity: 0.03; /* Noise opacity */
-    --scanline-opacity: 0.04; /* Scanline opacity */
-    --scanline-width: 0.5px; /* Scanline width */
+    /* --- Colors for body background gradient & noise/scanlines --- */
+    --background-start: 0 0% 10%;
+    --background-end: 0 0% 5%;
+    --noise-opacity: 0.03;
+    --scanline-opacity: 0.04;
+    --scanline-width: 0.5px;
 
     /* --- Transitions --- */
     --transition-duration: 0.2s;
 
     /* --- Shadows --- */
-    --shadow-color: 0 0% 0%; /* Use black or dark gray */
-    --shadow-intensity: 0.2; /* Adjust intensity of shadow */
-
+    --shadow-color: 0 0% 0%;
+    --shadow-intensity: 0.2;
   }
-
-  /* Optional: Dark Mode Override (Define if implementing toggle) */
-  /* .dark { */
-  /*   --background: 0 0% 98%; */
-  /*   --foreground: 0 0% 9%; */
-  /*   --card: 0 0% 96%; */
-  /*   --primary: ...; */
-  /*   ... etc ... */
-  /* } */
 
   /* --- Base Body Styles --- */
   body {
-    /* Base background: subtle gradient */
     background-image:
       linear-gradient(to bottom,
           hsl(var(--background-start)),
           hsl(var(--background-end)));
-    
-    /* Noise effect overlay */
-    &::before {
-        content: "";
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACVSURBVChTY2AYYNgLxIuJv+T/n4eBgSEAAAEcBA/x6c22AAAAAElFTkSuQmCC");
-        background-repeat: repeat;
-        opacity: var(--noise-opacity);
-        pointer-events: none; /* Make the noise layer not interactable */
-        z-index: 0;
-    }
-
-    /* Apply theme variables DIRECTLY, not using @apply for these */
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--background)); /* Fallback or base */
     color: hsl(var(--foreground));
     font-family: var(--font-matrix);
 
-    /* Standard Tailwind utilities that don't depend on custom theme vars are OK */
-    @apply antialiased; /* Apply font smoothing */
-    @apply text-sm;
-    @apply font-light;
-    @apply tracking-wider;
-    @apply uppercase;
-    /* Other base styles */
+    @apply antialiased text-sm font-light tracking-wider uppercase;
+    
     min-height: 100vh;
-    overflow-x: hidden; /* Prevent horizontal scroll */
+    overflow-x: hidden;
+  }
+
+  /* Noise effect overlay on body */
+  body::before {
+      content: "";
+      position: fixed; /* Fixed to viewport */
+      top: 0;
+      left: 0;
+      width: 100vw; /* Cover full viewport width */
+      height: 100vh; /* Cover full viewport height */
+      background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACVSURBVChTY2AYYNgLxIuJv+T/n4eBgSEAAAEcBA/x6c22AAAAAElFTkSuQmCC");
+      background-repeat: repeat;
+      opacity: var(--noise-opacity);
+      pointer-events: none;
+      z-index: -1; /* Behind content but above body's direct background */
   }
 
   /* --- Custom Scrollbars (Themed) --- */
-  /* Webkit (Chrome, Safari, Edge) */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: hsl(var(--matrix-bg)); /* Match background */
+    background: hsl(var(--matrix-bg));
   }
   ::-webkit-scrollbar-thumb {
-    background: hsl(var(--matrix-dark)); /* Use dark matrix color */
-    border-radius: 3px;
+    background: hsl(var(--matrix-dark));
+    border-radius: 3px; /* Use a fixed value or var(--radius) if it makes sense */
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--matrix-light)); /* Lighter on hover */
+    background: hsl(var(--matrix-light));
   }
 
-  /* IE and older Edge */
   * {
     -ms-overflow-style: -ms-autohiding-scrollbar;
   }
 
-  /* Hide scrollbars on mobile/touch devices while preserving functionality */
   @media (pointer: coarse) {
     ::-webkit-scrollbar {
       display: none;
@@ -152,178 +134,412 @@
 }
 
 /* --- Components Layer: Custom reusable component classes --- */
-
 @layer components {
-  /* Custom Card Style with Glow Effect */
   .matrix-glow-card {
-      @apply border overflow-hidden rounded-md; /* Apply base border and overflow utilities */
-      /* Apply theme values directly using CSS variables */
-      border-color: hsl(var(--border));
-      background-color: hsl(var(--card));
-      border-radius: var(--radius);
-      box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2), /* Inner lighter glow */
-        0 0 2px 1px hsla(var(--matrix), 0.2);
-      @apply transition-all duration-200;       /* Smooth transition for hover */
+    @apply border overflow-hidden rounded-md;
+    border-color: hsl(var(--border));
+    background-color: hsl(var(--card));
+    border-radius: var(--radius);
+    box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2),
+                0 0 2px 1px hsla(var(--matrix), 0.2);
+    @apply transition-all duration-200;
   }
   .matrix-glow-card:hover {
-      /* Enhance glow on hover */
-      box-shadow:
-      0 0 2px 2px hsla(var(--matrix-light), 0.3), /* Inner lighter glow */
-      0 0 4px 1px hsla(var(--matrix), 0.2);
+    box-shadow: 0 0 2px 2px hsla(var(--matrix-light), 0.3),
+                0 0 4px 1px hsla(var(--matrix), 0.2);
   }
 
-  .matrix-card {
-    background: rgb(0, 30, 0, .5);
-    border: none;
-    box-shadow: none;
+ .glossy-gradient {
+    background: linear-gradient( /* Adjusted for frosted glass effect */
+      to bottom,
+      hsla(var(--matrix-panel), 0.6) 0%, /* More transparent start */
+      hsla(var(--matrix-light), 0.1) 50%, /* Very transparent middle */
+      hsla(var(--matrix-panel), 0.6) 100% /* More transparent end */
+    );
+    backdrop-filter: blur(8px); /* Stronger blur for frosted effect */
   }
 
-  /* Custom input and button styles */
-  .matrix-input,
-  .matrix-button {
-    @apply border rounded-md px-3 py-1;
+  /* .matrix-card from previous iteration, seems redundant with matrix-glow-card or Shadcn mapping.
+     If you need a simpler card without glow: */
+  .simple-matrix-card {
+    @apply p-6 rounded-md border; /* Tailwind p-6 is 1.5rem */
+    background-color: hsl(var(--card));
     border-color: hsl(var(--border));
-    background-color: hsl(var(--input));
+    border-radius: var(--radius);
+  }
+
+
+  .matrix-input,
+  .matrix-button { /* Combined for base styling, button gets more specific overrides below */
+    @apply border rounded-md px-3 py-1; /* py-1 might be too small for buttons */
+    border-color: hsl(var(--input)); /* --input for border as per Shadcn */
+    background-color: hsl(var(--matrix-panel)); /* Using matrix-panel for a darker input bg */
     color: hsl(var(--foreground));
+    border-radius: var(--radius);
     transition: background-color var(--transition-duration), border-color var(--transition-duration), box-shadow var(--transition-duration);
     box-shadow: 0 0 1px hsla(var(--matrix), 0.2);
-    
-    &:focus {
-      outline: none;
-      border-color: hsl(var(--primary));
-      box-shadow: 0 0 3px hsla(var(--primary), 0.5);
-    }
-
-    &:hover {
-        border-color: hsl(var(--matrix-light));
-        box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
-    }
-
-    &:disabled {
-      background-color: hsl(var(--muted));
-      border-color: hsl(var(--muted));
+  }
+  .matrix-input:focus,
+  .matrix-button:focus { /* Combined focus */
+    outline: none;
+    border-color: hsl(var(--ring)); /* Using --ring for focus border, as per Shadcn */
+    box-shadow: 0 0 0 1px hsl(var(--ring)); /* Shadcn-like ring */
+  }
+  .matrix-input:hover,
+  .matrix-button:hover { /* Combined hover */
+    border-color: hsl(var(--matrix-light));
+    box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
+  }
+  .matrix-input:disabled,
+  .matrix-button:disabled { /* Combined disabled */
+    background-color: hsl(var(--muted));
+    border-color: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  .matrix-input::placeholder {
       color: hsl(var(--muted-foreground));
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-    &::placeholder {
-        color: hsl(var(--muted-foreground));
-    }
   }
 
   .matrix-link {
-      @apply text-primary transition-colors;
-
-      &:hover {
-          color: hsl(var(--matrix-light));
-      }
+    color: hsl(var(--primary)); /* Use HSL for consistency */
+    @apply transition-colors;
+  }
+  .matrix-link:hover {
+    color: hsl(var(--matrix-light));
   }
 
-    /* Custom Scanlines Effect */
-    .scanlines {
-      &::after {
-          content: "";
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background-image: linear-gradient(
-              to bottom,
-              transparent 0%,
-              hsla(var(--matrix), var(--scanline-opacity)) var(--scanline-width),
-              transparent var(--scanline-width)
-          );
-          background-size: 100% 5px; /* Adjust spacing as needed */
-          pointer-events: none; /* Prevent scanlines from capturing mouse events */
-          z-index: 1; /* Ensure scanlines are on top of other content */
-      }
+  /* Custom Scanlines Effect */
+  .scanlines::after { /* Applied to specific elements, not body globally unless intended */
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: linear-gradient(
+          to bottom,
+          transparent 0%,
+          hsla(var(--matrix), var(--scanline-opacity)) var(--scanline-width),
+          transparent var(--scanline-width)
+      );
+      background-size: 100% 5px;
+      pointer-events: none;
+      z-index: 1; /* Ensure scanlines are on top of other content within the element */
   }
 
-    /* Style for interactive buttons */
-    .matrix-button {
-      @apply text-white rounded-md shadow-sm border;
-      background-color: hsl(var(--primary)); /* Solid primary background */
-      border-color: hsl(var(--primary));
-      padding: 0.5rem 1rem; /* Adjust padding as needed */
-      transition: background-color var(--transition-duration), border-color var(--transition-duration); /* Smooth transitions */
-
-      &:hover {
-          background-color: hsl(var(--matrix-light)); /* Lighter on hover */
-          border-color: hsl(var(--matrix-light));
-      }
-
-      &:active {
-          background-color: hsl(var(--matrix-dark)); /* Darker on active */
-          border-color: hsl(var(--matrix-dark));
-      }
-    }
-    
+  /* Style for interactive buttons - more specific than the combined .matrix-button above */
+  .matrix-button {
+    /* Base styles from combined rule are inherited */
+    @apply text-primary-foreground font-semibold; /* Text on primary for buttons */
+    background-color: hsl(var(--primary));
+    border-color: hsl(var(--primary)); /* Ensure border matches bg */
+    padding: 0.5rem 1rem; /* Overriding the py-1 from combined rule */
+  }
+  .matrix-button:hover {
+    background-color: hsl(var(--matrix-light));
+    border-color: hsl(var(--matrix-light));
+    /* text-primary-foreground might still work, or you might need a different color if matrix-light is too light */
+  }
+  .matrix-button:active {
+    background-color: hsl(var(--matrix-dark));
+    border-color: hsl(var(--matrix-dark));
+  }
+  
   /* --- Progress Bar Styles --- */
   .matrix-progress-bar {
     width: 100%;
     height: 1rem;
     background-color: hsl(var(--matrix-panel));
-    border-radius: 0.375rem;
+    border-radius: var(--radius); /* Use theme radius */
     overflow: hidden;
+    border: 1px solid hsl(var(--border)); /* Optional border */
   }
-
   .matrix-progress-bar__fill {
     height: 100%;
-    background-color: hsl(var(--matrix));
+    background-color: hsl(var(--primary)); /* Use primary for fill */
     transition: width 0.3s ease-in-out;
-    width: var(--progress-width, 0%);
+    /* width: var(--progress-width, 0%); /* This variable needs to be set via inline style on the element */
   }
+  /*.matrix-progress-bar__fill[style*="width"] { /* Alternative to data-attributes if setting width inline */
+      /* This selector is just an example if you set width via style attr */
+
 
   /* Custom Map Grid Background */
   .map-grid {
-      /* Create grid lines using linear gradients */
-      background-image:
-          linear-gradient(hsla(var(--matrix), 0.08) 1px, transparent 1px), /* Horizontal lines */
-          linear-gradient(90deg, hsla(var(--matrix), 0.08) 1px, transparent 1px); /* Vertical lines */
-      /* Grid size (adjust performance if needed: 50px 50px) */
-      background-size: 25px 25px;
-      @apply border; /* Apply base border utility */
-      /* Apply theme border color and radius directly */
-      border-color: hsl(var(--border));
-      border-radius: var(--radius);
+    background-image:
+        linear-gradient(hsla(var(--matrix), 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, hsla(var(--matrix), 0.08) 1px, transparent 1px);
+    background-size: 25px 25px;
+    @apply border;
+    border-color: hsl(var(--border));
+    border-radius: var(--radius);
   }
 
-  /* --- Matrix Card Component Styles --- */
+
+  /* --- Matrix Card Component Styles (Potentially redundant if using .matrix-glow-card or .simple-matrix-card) --- */
+  /* Consider removing if covered by above card styles or Shadcn mapping. This section had some conflicting variable names. */
+  /*
   .matrix-card {
-    background-color: var(--matrix-panel);
-    border: 1px solid var(--matrix-border-color);
+    background-color: var(--matrix-panel); // This is hsl(var(--matrix-panel))
+    border: 1px solid var(--matrix-border-color); // This is hsl(var(--border))
     transition: transform 0.2s ease;
-    border-radius: 0.5rem;
+    border-radius: var(--radius); // Use theme radius
     padding: 1.5rem;
   }
-
   .matrix-card--hover {
     transform: translateY(-1px);
   }
-
-  .matrix-card--default {
+  .matrix-card--default { // This class seems unnecessary
     transform: translateY(0);
   }
-
   .matrix-card__title,
   .matrix-card__icon {
-    color: var(--matrix-card-color, var(--matrix-text));
+    // color: var(--matrix-card-color, var(--matrix-text)); // This custom var --matrix-card-color is not defined broadly
+    color: hsl(var(--foreground)); // Default to foreground
   }
-
   .matrix-card__content {
-    color: var(--matrix-muted-text);
+    color: hsl(var(--muted-foreground));
   }
-
-  /* --- Matrix Card Color Variants --- */
-  .matrix-card[data-color-override] {
-    --matrix-card-color: var(--color-override);
+  .matrix-card[data-color-override] { // This is a good pattern for overrides
+    // --matrix-card-color: var(--color-override); // Ensure --color-override is defined or used directly
+    color: var(--color-override-hsl, hsl(var(--primary))); // Example with HSL
   }
+  */
 
-  /* --- Progress Bar Progress States --- */
-  .matrix-progress-bar__fill[data-progress] {
-    --progress-width: var(--progress-value);
+  /* --- Old styles from original HTML to be integrated or removed --- */
+  /* These were very specific to the old HTML structure and might not be needed if using the new component classes */
+
+  .matrix-text { /* This class might now primarily be for specific font choices if body isn't monospace, or for a stronger green */
+      font-family: var(--font-matrix); /* Redundant if body is already using it */
+      color: hsl(var(--primary)); /* Or a slightly different green if needed */
+  }
+  
+  .matrix-border { /* This class added a box-shadow too. Covered by .matrix-glow-card or borders on other elements. */
+      border: 1px solid hsl(var(--primary));
+      box-shadow: 0 0 10px hsl(var(--primary));
+      /* Consider if this utility is still needed distinct from component borders */
+  }
+  
+  .matrix-glow { /* Text shadow */
+      text-shadow: 0 0 5px hsl(var(--primary));
+  }
+  
+  /* .matrix-bg was background-color: rgba(13, 2, 8, 0.9); maps to bg-background or bg-card */
+
+  /* .matrix-code is for JS generated rain, its base color can be set here */
+  .matrix-code {
+      position: absolute;
+      color: hsla(var(--matrix), 0.2); /* Base color for the falling characters */
+      font-family: var(--font-matrix); /* Ensure it uses the matrix font */
+      font-size: 14px; /* Or make responsive */
+      line-height: 1.2;
+      user-select: none;
+      z-index: 0; /* Ensure it's behind interactive UI but above body static bg */
+      animation: matrixFall linear infinite;
+  }
+  
+  .hero-bg { /* Specific gradient and SVG pattern for hero */
+      background: linear-gradient(hsla(var(--matrix-bg), 0.9), hsla(var(--matrix-bg), 0.7)), 
+                  url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0,0 L100,0 L100,100 L0,100 Z" fill="none" stroke="hsl(var(--matrix))" stroke-width="0.5"/></svg>');
+      background-size: 20px 20px; /* SVG grid size */
+  }
+  
+  /* .feature-card:hover .feature-underline - this specific underline animation should be part of .matrix-glow-card or a dedicated feature card component */
+  .feature-underline { /* If kept, ensure colors match theme */
+    height: 1px;
+    background: linear-gradient(90deg, hsl(var(--primary)), transparent);
+    width: 0;
+    transition: width 0.3s ease-out; /* Original was transition-all */
+  }
+  .matrix-glow-card:hover .feature-underline { /* Example integration */
+      width: 100%;
+  }
+  
+  .pulse { animation: pulse 2s infinite; }
+  .float { animation: float 3s ease-in-out infinite; }
+  
+  /* .grid-pattern - replaced by body background or .map-grid */
+  
+  .road-animation { position: relative; overflow: hidden; }
+  .road-animation::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+      animation: roadScan 3s linear infinite;
+  }
+  
+  .neon-text { /* Assumes --neon-blue-hsl is defined in :root */
+      text-shadow: 0 0 5px hsl(var(--neon-blue-hsl, var(--primary))), 0 0 10px hsl(var(--neon-blue-hsl, var(--primary)));
+  }
+  
+  .section-divider {
+      height: 100px;
+      background: linear-gradient(180deg, hsl(var(--background)), transparent); /* Use theme bg */
+      position: relative;
+  }
+  .section-divider::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+  }
+  
+  .scroll-transition { opacity: 0; transform: translateY(20px); transition: all 0.6s ease-out; }
+  .scroll-transition.visible { opacity: 1; transform: translateY(0); }
+  
+  .parallax-bg { background-attachment: fixed; background-position: center; background-repeat: no-repeat; background-size: cover; }
+  
+  .smart-city-bg { position: relative; overflow: hidden; }
+  .smart-city-bg::before { /* Ensure SVG stroke color uses theme variable */
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: 
+          url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" preserveAspectRatio="none"><path d="M20,20 L180,20 L180,180 L20,180 Z" fill="none" stroke="hsl(var(--matrix))" stroke-width="0.3" stroke-dasharray="5,5"/></svg>') center/contain no-repeat,
+          linear-gradient(90deg, transparent, hsla(var(--matrix), 0.05), transparent);
+      opacity: 0.3;
+      pointer-events: none;
+  }
+  
+  .process-bg { position: relative; }
+  .process-bg::before { /* Horizontal line */
+      content: '';
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 80%; height: 2px;
+      background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+  }
+  .process-bg::after { /* Radial gradients */
+      content: '';
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 80%; height: 80%;
+      background: 
+          radial-gradient(circle at 20% 50%, hsla(var(--matrix), 0.1) 0%, transparent 20%),
+          radial-gradient(circle at 50% 50%, hsla(var(--matrix), 0.1) 0%, transparent 30%),
+          radial-gradient(circle at 80% 50%, hsla(var(--matrix), 0.1) 0%, transparent 20%);
+      pointer-events: none;
+  }
+  
+  .data-flow { position: absolute; width: 100%; height: 100%; top: 0; left: 0; pointer-events: none; }
+  .data-node { /* Color from --matrix via CSS variable */
+      position: absolute; width: 8px; height: 8px;
+      background-color: hsl(var(--primary));
+      border-radius: 50%;
+      opacity: 0;
+      animation: dataFlow 3s infinite;
+  }
+  
+  .demo-visual { position: relative; overflow: hidden; }
+  .demo-visual::before { /* Diagonal pattern */
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: 
+          linear-gradient(135deg, transparent 45%, hsla(var(--matrix), 0.1) 45%, hsla(var(--matrix), 0.1) 55%, transparent 55%),
+          linear-gradient(-135deg, transparent 45%, hsla(var(--matrix), 0.1) 45%, hsla(var(--matrix), 0.1) 55%, transparent 55%);
+      background-size: 20px 20px;
+      opacity: 0.5;
+  }
+  
+  .demo-grid { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 2px; position: absolute; inset: 0; padding: 20px; }
+  .demo-cell {
+      background-color: hsla(var(--matrix), 0.05);
+      border: 1px solid hsla(var(--matrix), 0.1);
+      position: relative; overflow: hidden;
+  }
+  .demo-cell::after { /* Animated gradient */
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, transparent, hsla(var(--matrix), 0.1), transparent);
+      animation: demoCellPulse 5s infinite;
+  }
+  
+  .demo-graph {
+      position: absolute; bottom: 20px; left: 20px; right: 20px; height: 100px;
+      background-color: hsla(var(--matrix), 0.05);
+      border: 1px solid hsla(var(--matrix), 0.2);
+  }
+  .demo-graph-line {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+      background-color: hsl(var(--primary));
+      animation: demoGraphScan 3s linear infinite;
+  }
+  
+  .demo-stats { position: absolute; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .demo-stat {
+      background-color: hsla(var(--matrix), 0.1);
+      border: 1px solid hsla(var(--matrix), 0.3);
+      padding: 5px 10px;
+      font-family: var(--font-matrix);
+      font-size: 12px;
+      color: hsl(var(--primary));
+      animation: demoStatPulse 3s infinite;
   }
 }
 
-/* NOTE: No redundant @tailwind utilities; directive at the end */
+/* --- Keyframes (Should be at the global scope, not inside layers) --- */
+@keyframes matrixFall {
+    0% { transform: translateY(-100vh) translateX(0) rotate(0deg); opacity: 0; }
+    10% { opacity: 0.8; }
+    90% { opacity: 0.8; }
+    100% { transform: translateY(100vh) translateX(20px) rotate(5deg); opacity: 0; }
+}
+@keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+@keyframes dataFlow { /* For .data-node */
+    0% { transform: scale(1); opacity: 0.3; }
+    50% { transform: scale(1.1); opacity: 0.7; }
+    100% { transform: scale(1); opacity: 0.3; }
+}
+@keyframes roadScan { /* For .road-animation::after */
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+@keyframes demoCellPulse { /* For .demo-cell::after */
+    0%, 100% { opacity: 0.1; }
+    50% { opacity: 0.3; }
+}
+@keyframes demoGraphScan { /* For .demo-graph-line */
+    0% { transform: translateY(0) scaleY(0.1); opacity: 0; }
+    10% { transform: translateY(0) scaleY(1); opacity: 1; }
+    90% { transform: translateY(-100%) scaleY(1); opacity: 1; }
+    100% { transform: translateY(-100%) scaleY(0.1); opacity: 0; }
+}
+@keyframes demoStatPulse { /* For .demo-stat */
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1; }
+}
+
+/* --- Responsive Overrides (Should also be at global scope or within layers carefully) --- */
+/* Keep these as they were, they primarily adjust Tailwind grid/flex */
+@media (max-width: 768px) {
+    .hero-content {
+        flex-direction: column;
+    }
+    .hero-text {
+        width: 100% !important; /* Important might be needed if Tailwind utilities have higher specificity */
+        padding: 0 1rem;
+    }
+    .feature-grid {
+        grid-template-columns: 1fr !important;
+    }
+    .parallax-bg {
+        background-attachment: scroll;
+    }
+    /* Hiding complex ::before/::after on mobile can improve performance */
+    .smart-city-bg::before,
+    .process-bg::before,
+    .process-bg::after {
+        display: none;
+    }
+}

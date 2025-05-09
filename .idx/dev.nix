@@ -118,12 +118,12 @@
         command = [
           "/bin/sh"
           "-c"
-          "cd frontend && npm run dev -- --port $PORT --hostname 0.0.0.0"
+          "cd frontend && npm run dev -- --port 3000 --hostname 0.0.0.0"
         ];
         manager = "web";
         env = {
           # This assumes the backend is accessible via localhost from the frontend container
-          NEXT_PUBLIC_API_URL = "{preview.backend.url}"; # Use IDX variable interpolation
+          NEXT_PUBLIC_API_URL = "{https://localhost:3000}"; # Use IDX variable interpolation
         };
       }; # end frontend preview
 
