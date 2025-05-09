@@ -42,7 +42,7 @@ const TrafficGridPage: React.FC = () => {
   }, []);
 
   const handleZoomIn = () => setZoom((prevZoom) => prevZoom + 0.1);
-  const handleZoomOut = () => setZoom((prevZoom) => Math.max(0.5, zoom - 0.1));
+  const handleZoomOut = () => setZoom(() => Math.max(0.5, zoom - 0.1));
 
   const handleGridItemClick = (item: GridItemData) => {
     alert(`Clicked on ${item.label}. Details: ${item.details}`);

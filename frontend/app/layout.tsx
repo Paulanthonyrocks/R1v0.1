@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import "@/styles/globals.css";
 import { cn } from "@/lib/utils";
 
@@ -16,18 +22,24 @@ const inter = Inter({
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={cn(
           "min-h-screen bg-background antialiased flex flex-col font-matrix text-foreground",
           inter.variable, // Provide fallback sans font variable
+
         )}
       >
         <ThemeProvider attribute="class">
           <Nav />
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">{children}</main>
+          <main
+            className={cn("flex-1 overflow-y-auto p-4 md:p-6 lg:p-8")}
+            style={{ paddingTop: pathname !== '/' ? '4rem' : undefined }}
+          >{children}</main>
         </ThemeProvider>
+
       </body>
     </html>
   );
@@ -35,19 +47,41 @@ export default function RootLayout({
 
 function Nav() {
   return (
-    <nav className="fixed top-0 left-0 w-full z-50 bg-matrix-panel border-b border-matrix-border-color p-4">
+    <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg">
       <div className="container mx-auto flex items-center justify-between flex-wrap">
-        <h1 className="text-xl font-bold uppercase">Traffic Management Hub</h1>
-        <ul className="flex space-x-4">
-          <li><Link href="/">Home</Link></li>
-          <li><Link href="/anomalies">Anomalies</Link></li>
-          <li><Link href="/export">Export</Link></li>
-          <li><Link href="/grid">Grid</Link></li>
-          <li><Link href="/logs">Logs</Link></li>
-          <li><Link href="/nodes">Nodes</Link></li>
-          <li><Link href="/stream">Stream</Link></li>
-          <li><Link href="/surveillance">Surveillance</Link></li>
-        </ul>
+        <h1 className="text-xl font-bold uppercase">Route One</h1>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            {/* You might want a button here for better accessibility and styling */}
+            <button className="text-foreground hover:text-primary focus:outline-none">
+              Menu
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem asChild>
+              <Link href="/">Home</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/anomalies">Anomalies</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/export">Export</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/grid">Grid</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/logs">Logs</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/nodes">Nodes</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href="/stream">Stream</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild><Link href="/surveillance">Surveillance</Link></DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </nav>
   );
