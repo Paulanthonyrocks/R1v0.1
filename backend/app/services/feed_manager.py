@@ -349,8 +349,7 @@ class FeedManager:
                                         if not entry.get('is_sample_feed'):
                                             sample_feed_check_needed = True
 
-                            # TODO: Optionally broadcast per-feed metrics if needed by UI
-                            # await self._broadcast("feed_metrics", {"feed_id": feed_id, "metrics": metrics})
+                            await self._broadcast("feed_metrics", {"feed_id": feed_id, "metrics": metrics})
 
                         else:
                             logger.warning(f"Queue item feed_id mismatch for {feed_id}")

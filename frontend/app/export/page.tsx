@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from "react";
 import MatrixCard from "@/components/MatrixCard";
+import AuthGuard from "@/components/auth/AuthGuard";
 import MatrixButton from "@/components/MatrixButton";
+import { UserRole } from "@/lib/auth/roles";
 
 const ExportPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
@@ -59,6 +61,7 @@ const ExportPage: React.FC = () => {
   };
 
   return (
+    <AuthGuard requiredRole={UserRole.OPERATOR}>
     <div className="container mx-auto p-4">
       {loading && (
         <div className="fixed top-0 left-0 w-full h-full flex items-center justify-center bg-matrix-bg z-50">
@@ -153,6 +156,7 @@ const ExportPage: React.FC = () => {
         )}
       </MatrixCard>
     </div>
+    </AuthGuard>
   );
 };
 

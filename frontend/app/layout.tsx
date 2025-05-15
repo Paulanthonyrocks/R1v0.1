@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 
+import { useUser, UserProvider } from "@/lib/auth/UserContext"; // Import UserProvider and useUser
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +26,7 @@ export default function RootLayout({
   const pathname = usePathname();
   return (
     <html lang="en" suppressHydrationWarning>
+      <UserProvider> {/* Wrap content with UserProvider */}
       <body
         className={cn(
           "min-h-screen bg-background antialiased flex flex-col font-matrix text-foreground",
@@ -38,14 +40,19 @@ export default function RootLayout({
             className={cn("flex-1 overflow-y-auto p-4 md:p-6 lg:p-8")}
             style={{ paddingTop: pathname !== '/' ? '4rem' : undefined }}
           >{children}</main>
-        </ThemeProvider>
-
+        </ThemeProvider> {/* Close ThemeProvider */}
       </body>
+      </UserProvider> {/* Close UserProvider */}
     </html>
   );
 }
 
 function Nav() {
+  const { user } = useUser(); // Use the useUser hook
+
+  if (!user) {
+    return null; // Only render Nav if user is authenticated
+  }
   return (
     <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg">
       <div className="container mx-auto flex items-center justify-between flex-wrap">

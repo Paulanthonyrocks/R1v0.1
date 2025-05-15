@@ -1,8 +1,6 @@
 // src/components/MapComponent.tsx
-'use client';
-
-import { useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+'use client'; // Add useId import
+import React, { useEffect, useRef, useId } from 'react'; // Removed useState
 import L from 'leaflet';
 import type { Anomaly } from '@/app/anomalies/page'; // Assuming Anomaly type is exported from page.tsx
 
@@ -42,7 +40,7 @@ interface MapComponentProps {
   activeAnomalyId?: number | null;
 }
 
-const FitBoundsToAnomalies: React.FC<{ anomalies: Anomaly[] }> = ({ anomalies }) => {
+/* const FitBoundsToAnomalies: React.FC<{ anomalies: Anomaly[] }> = React.memo(({ anomalies }) => {
   const map = useMap();
   useEffect(() => {
     if (anomalies && anomalies.length > 0) {
@@ -57,67 +55,105 @@ const FitBoundsToAnomalies: React.FC<{ anomalies: Anomaly[] }> = ({ anomalies })
     }
   }, [anomalies, map]);
   return null;
-};
+}); */
 
 
 const MapComponent = ({ anomalies, onMarkerClick, activeAnomalyId }: MapComponentProps) => {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const leafletMapRef = useRef<L.Map | null>(null); // Ref to store Leaflet map instance
+  const mapId = useId(); // <--- Generate a unique ID for this component instance
+
+  // Effect to set default icon options (runs once)
   useEffect(() => {
+    // This effect for default icon options should ideally run only once per application load,
+    // or be managed carefully if icons are dynamic globally.
+    // It's generally safe here if MapComponent is the primary map display.
     L.Icon.Default.mergeOptions({
       iconRetinaUrl: iconRetinaUrl.src,
       iconUrl: iconDefaultUrl.src,
       shadowUrl: shadowUrl.src,
     });
-  }, []);
+  }, []); // Empty dependency array ensures this runs once after initial mount of this component instance
 
-  const initialCenter: [number, number] = anomalies.length > 0 && anomalies[0].location?.length === 2 ? anomalies[0].location : [0, 0];
-  const initialZoom = anomalies.length > 0 ? 13 : 2;
+  // Effect to initialize and manage map lifecycle (runs when mapId or initial data changes)
+  useEffect(() => {
+    if (mapRef.current && !leafletMapRef.current) {
+      // Initialize the map if the container exists and map is not already initialized.
+      // Use a default center/zoom if no anomalies are present initially.
+      leafletMapRef.current = L.map(mapRef.current, {
+        center: anomalies.length > 0 && anomalies[0].location?.length === 2 ? [anomalies[0].location[0], anomalies[0].location[1]] : [0, 0],
+        zoom: anomalies.length > 0 ? 13 : 2,
+        scrollWheelZoom: true, // Enable mouse wheel zooming
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(leafletMapRef.current);
+    }
+
+    // We need to manage markers manually now
+    // Keep track of created markers to remove them later
+    const markers: L.Marker[] = [];
+
+    if (leafletMapRef.current) {
+      // Clear existing markers when anomalies data changes
+      leafletMapRef.current.eachLayer(layer => {
+        if (layer instanceof L.Marker) {
+          leafletMapRef.current?.removeLayer(layer);
+        }
+      });
+
+      anomalies.forEach(anomaly => {
+        if (anomaly.location && Array.isArray(anomaly.location) && anomaly.location.length === 2) {
+          const marker = L.marker([anomaly.location[0], anomaly.location[1]], {
+            // Use a different icon if the anomaly is active
+            icon: activeAnomalyId === anomaly.id
+              ? L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', shadowUrl: shadowUrl.src, iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] }) // Example red icon for active
+              : createSeverityIcon(anomaly.severity), // Use your custom icon function for others
+}).addTo(leafletMapRef.current!);
+
+          // Add a popup
+          marker.bindPopup(`
+            <div>
+              <h3 className="text-lg font-bold">${anomaly.type}</h3>
+              <p>Severity: ${anomaly.severity}</p>
+              <p>${anomaly.description}</p>
+              <p>${new Date(anomaly.timestamp).toLocaleString()}</p>
+            </div>
+          `);
+
+          // Add click handler
+          marker.on('click', () => {
+            onMarkerClick?.(anomaly.id);
+          });
+
+          markers.push(marker); // Store reference
+        }
+      });
+    }
+
+    // Cleanup function to remove the map when the component unmounts or mapId changes
+    return () => {
+      if (leafletMapRef.current) {
+        // Clean up markers before removing the map
+        markers.forEach(marker => {
+          leafletMapRef.current?.removeLayer(marker);
+        });
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+      }
+    };
+  }, [mapId, anomalies, activeAnomalyId, onMarkerClick]); // Depend on data, active anomaly, and click handler
 
   return (
-    <div className="h-full w-full">
-      <MapContainer
-        center={initialCenter}
-        zoom={initialZoom}
-        scrollWheelZoom={true}
-        className="h-full w-full"
-      >
-        <TileLayer
-          attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        {anomalies.map((anomaly) => {
-          if (!Array.isArray(anomaly.location) || anomaly.location.length !== 2 || typeof anomaly.location[0] !== 'number' || typeof anomaly.location[1] !== 'number') {
-            console.warn(`Invalid location data for anomaly ID ${anomaly.id}:`, anomaly.location);
-            return null;
-          }
-          // Pass the actual severity to the icon creation function
-          const customIcon = createSeverityIcon(anomaly.severity);
-          const isActive = activeAnomalyId === anomaly.id;
-
-          return (
-            <Marker
-              key={anomaly.id}
-              position={anomaly.location}
-              icon={customIcon}
-              eventHandlers={{
-                click: () => {
-                  onMarkerClick?.(anomaly.id);
-                },
-              }}
-              zIndexOffset={isActive ? 1000 : 0}
-            >
-              <Popup>
-                <b>{anomaly.type}</b> (Severity: {anomaly.severity})<br />
-                {anomaly.description.substring(0, 50)}...<br />
-                Lat: {anomaly.location[0].toFixed(5)}, Lon: {anomaly.location[1].toFixed(5)}
-                {isActive && <><br /><b className="text-matrix-green">Selected Anomaly</b></>}
-              </Popup>
-            </Marker>
-          );
-        })}
-        <FitBoundsToAnomalies anomalies={anomalies} />
-      </MapContainer>
+    <div ref={mapRef} key={mapId} // Key forces div remount if mapId changes
+        className="h-full w-full" // Ensure this class correctly applies height: 100%
+       style={{ height: '100%', width: '100%' }} // Ensure height/width are set
+    >
     </div>
   );
 };
+
+MapComponent.displayName = 'MapComponent'; // Add display name for debugging
 
 export default MapComponent;

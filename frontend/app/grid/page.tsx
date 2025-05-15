@@ -1,5 +1,7 @@
 "use client";
 
+import { UserRole } from "@/lib/auth/roles";
+import AuthGuard from "@/components/auth/AuthGuard";
 import MatrixCard from '@/components/MatrixCard';
 import { useState, useEffect } from 'react';
 
@@ -49,42 +51,44 @@ const TrafficGridPage: React.FC = () => {
   };
 
   return (
-    <div className="p-4 w-full h-screen flex flex-col">
-      {isLoading ? (
-        <div className="flex-grow flex items-center justify-center">
-          <div className="animate-pulse text-matrix text-2xl uppercase">Loading...</div>
-        </div>
-      ) : (
-        <>
-          <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Grid View</h1>
-
-          <div className="flex mb-4">
-            <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md mr-2" onClick={handleZoomIn}>Zoom In</button>
-            <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md" onClick={handleZoomOut}>Zoom Out</button>
+    <AuthGuard requiredRole={UserRole.VIEWER}>
+      <div className="p-4 w-full h-screen flex flex-col">
+        {isLoading ? (
+          <div className="flex-grow flex items-center justify-center">
+            <div className="animate-pulse text-matrix text-2xl uppercase">Loading...</div>
           </div>
+        ) : (
+          <>
+            <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Grid View</h1>
 
-          <div
-            className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-grow overflow-auto"
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}
-          >
-            {gridItems.map((item) => (
-              <div key={item.id} onClick={() => handleGridItemClick(item)} style={{ cursor: 'pointer' }}>
-                <MatrixCard
-                  title={item.label}
-                >
-                  <div className="flex flex-col gap-2">
-                    <p className="text-matrix-muted-text">Traffic: {item.trafficFlow}</p>
-                    <p className="text-matrix-muted-text">Signal: {item.signalStatus}</p>
-                    <p className="text-matrix-muted-text">Incidents: {item.incidents}</p>
-                    <p className="text-matrix-muted-text">Node Health: {item.nodeHealth}%</p>
-                  </div>
-                </MatrixCard>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
+            <div className="flex mb-4">
+              <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md mr-2" onClick={handleZoomIn}>Zoom In</button>
+              <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md" onClick={handleZoomOut}>Zoom Out</button>
+            </div>
+
+            <div
+              className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-grow overflow-auto"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}
+            >
+              {gridItems.map((item) => (
+                <div key={item.id} onClick={() => handleGridItemClick(item)} style={{ cursor: 'pointer' }}>
+                  <MatrixCard
+                    title={item.label}
+                  >
+                    <div className="flex flex-col gap-2">
+                      <p className="text-matrix-muted-text">Traffic: {item.trafficFlow}</p>
+                      <p className="text-matrix-muted-text">Signal: {item.signalStatus}</p>
+                      <p className="text-matrix-muted-text">Incidents: {item.incidents}</p>
+                      <p className="text-matrix-muted-text">Node Health: {item.nodeHealth}%</p>
+                    </div>
+                  </MatrixCard>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </AuthGuard>
   );
 };
 
