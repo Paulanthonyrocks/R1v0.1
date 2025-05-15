@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { cn } from '@/lib/utils'; // Adjust the import based on your project structure
+import { usePathname } from 'next/navigation';
 
 // It's good practice to define icons if you're using markers,
 // though circles don't strictly need this, it avoids some common Leaflet issues.
@@ -30,6 +32,7 @@ interface TrafficDataItem {
 const MapComponent = () => { // Renamed to avoid conflict with built-in Map type
   const mapContainerRef = useRef<HTMLDivElement | null>(null); // Ref for the map container div
   const mapInstanceRef = useRef<L.Map | null>(null); // Ref to store the map instance
+  const pathname = usePathname();
 
   useEffect(() => {
     // Ensure the map container is available and map isn't already initialized
@@ -89,7 +92,16 @@ const MapComponent = () => { // Renamed to avoid conflict with built-in Map type
 
   // Note: The div now uses mapContainerRef instead of a direct id="map"
   // This is generally a more React-idiomatic way to handle DOM elements.
-  return <div ref={mapContainerRef} style={{ height: '100vh', width: '100%' }} />;
+  return (
+    <main
+      className={cn(
+        // ...other classes...
+        pathname !== '/' && 'pt-16'
+      )}
+    >
+      <div ref={mapContainerRef} style={{ height: '100vh', width: '100%' }} />
+    </main>
+  );
 };
 
 export default MapComponent;
