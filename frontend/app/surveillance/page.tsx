@@ -2,10 +2,18 @@
 
 import MatrixCard from '@/components/MatrixCard';
 import { useState } from 'react';
-import LoadingScreen from '@/components/LoadingScreen';
+import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
+import { UserRole } from '@/lib/auth/roles'; // Import UserRole
+
+const Loading = () => (
+  <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50 top-16">
+    <div className="animate-pulse text-matrix text-2xl">Loading...</div>
+  </div>
+);
 
 const SurveillancePage = () => {
-  const [loading, setLoading] = useState(false);
+  const [loading,] = useState(false);
+  // In a real application, you would likely fetch data here and set loading based on that.
 
   const cameraFeeds = [
     { id: 1, name: 'Camera 1', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
@@ -20,34 +28,36 @@ const SurveillancePage = () => {
   ];
 
   if (loading) {
-    return <LoadingScreen />;
+    return <Loading />;
   }
 
   return (
-    <div className="p-4 w-full relative">
-      <h1 className="text-2xl font-bold mb-4 uppercase">SURVEILLANCE</h1>
+    <AuthGuard requiredRole={UserRole.OPERATOR}>
+      <div className="p-4 w-full relative">
+        <h1 className="text-2xl font-bold mb-4 uppercase">SURVEILLANCE</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 ">
-        {cameraFeeds.map((camera) => (
-          <MatrixCard key={camera.id} className="p-4 flex flex-col">
-            <h2 className="text-lg font-bold mb-2">{camera.name}</h2>
-            <div className="flex-grow relative">
-              <video
-                className="w-full h-full object-cover"
-                controls
-                src={camera.url}
-              />
-              <div className="absolute top-2 right-2">
-                {/* Placeholder for alerts */}
-                <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">Alert</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 ">
+          {cameraFeeds.map((camera) => (
+            <MatrixCard key={camera.id} className="p-4 flex flex-col" title="Camera Feed">
+              <h2 className="text-lg font-bold mb-2">{camera.name}</h2>
+              <div className="flex-grow relative">
+                <video
+                  className="w-full h-full object-cover"
+                  controls
+                  src={camera.url}
+                />
+                <div className="absolute top-2 right-2">
+                  {/* Placeholder for alerts */}
+                  <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">Alert</span>
+                </div>
+                {/* Placeholder for controls */}
+                <div className="absolute bottom-2 right-2">Controls</div>
               </div>
-              {/* Placeholder for controls */}
-              <div className="absolute bottom-2 right-2">Controls</div>
-            </div>
-          </MatrixCard>
-        ))}
+            </MatrixCard>
+          ))}
+        </div>
       </div>
-    </div>
+    </AuthGuard>
   );
 };
 

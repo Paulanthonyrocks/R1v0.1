@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { Chart } from "react-google-charts";
 import MatrixButton from '../../components/MatrixButton';
 import MatrixCard from '../../components/MatrixCard';
+import AuthGuard from "@/components/auth/AuthGuard";
+import { UserRole } from "@/lib/auth/roles";
 
 const StreamPage: React.FC = () => {
   const placeholderData = [
@@ -74,64 +76,62 @@ const StreamPage: React.FC = () => {
   };
 
   return (
-    <div className="p-4 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative">
-      {isLoading && (
-        <div className="absolute top-0 left-0 w-full h-full flex justify-center items-center bg-matrix-bg z-50">
-          <div className="animate-pulse text-white">Loading...</div>
-        </div>
-      )}
-      <h1 className="text-2xl font-bold col-span-full">
-        Real-Time Stream
-      </h1>
+    <AuthGuard requiredRole={UserRole.OPERATOR}>
+      <div className="p-4 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative">
+        {isLoading && (
+          <div className="absolute top-0 left-0 w-full h-full flex justify-center items-center bg-matrix-bg z-50">
+            <div className="animate-pulse text-white">Loading...</div>
+          </div>
+        )}
+        <h1 className="text-2xl font-bold col-span-full">
+          Real-Time Stream
+        </h1>
 
-      <MatrixCard title="Data Type Selection" className="col-span-full">
-        <div className="flex flex-wrap gap-2">
-          {dataTypes.map((type) => (
-            <MatrixButton
-              key={type}
-              onClick={() => handleDataTypeChange(type)}
-              className={`${selectedDataType === type
-                ? "bg-matrix"
-                : "bg-matrix-dark"
-                }`}
-            >
-              {type}
-            </MatrixButton>
-          ))}
-        </div>
-      </MatrixCard>
-
-      <div className="col-span-full">
-        <MatrixCard title="Chart">
-          <Chart
-            chartType="LineChart"
-            width="100%"
-            height="400px"
-            data={chartData}
-            options={chartOptions}
-          />
+        <MatrixCard title="Data Type Selection" className="col-span-full">
+          <div className="flex flex-wrap gap-2">
+            {dataTypes.map((type) => (
+              <MatrixButton
+                key={type}
+                onClick={() => handleDataTypeChange(type)}
+                className={`${selectedDataType === type
+                  ? "bg-matrix"
+                  : "bg-matrix-dark"
+                  }`}
+              >
+                {type}
+              </MatrixButton>
+            ))}
+          </div>
         </MatrixCard>
-      </div>
 
-      <div className='col-span-full'>
-        {placeholderData
-          .filter((data) => data.title === selectedDataType)
-          .map((data, index) => (
-            <MatrixCard
-              key={index}
-              title={data.title}
-              className='animate-fade-in'
-            >
-              <p className="text-sm">
-                {data.description}
-              </p>
-              <p className="text-xs text-matrix-muted-text mt-2">
-                {data.timestamp}
-              </p>
-            </MatrixCard>
-          ))}
+        <div className="col-span-full">
+          <MatrixCard title="Chart">
+            <Chart
+              chartType="LineChart"
+              width="100%"
+              height="400px"
+              data={chartData}
+              options={chartOptions}
+            />
+          </MatrixCard>
+        </div>
+
+        <div className='col-span-full'>
+          {placeholderData
+            .filter((data) => data.title === selectedDataType)
+            .map((data, index) => (
+              <MatrixCard
+                key={index}
+                title={data.title}
+                className='animate-fade-in'
+              >
+                <p className="text-sm">{data.description}</p>
+                <p className="text-xs text-matrix-muted-text mt-2">{data.timestamp}</p>
+              </MatrixCard>
+            ))}
+        </div>
       </div>
-    </div>
+    </AuthGuard>
   );
 };
 

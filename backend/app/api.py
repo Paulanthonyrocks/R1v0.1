@@ -3,6 +3,7 @@ from enum import Enum
 from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime
+from app.models.feeds import FeedStatusData
 
 from app.services.services import get_feed_manager
 from app.services.feed_manager import FeedManager
@@ -14,13 +15,6 @@ class StatusEnum(str, Enum):
     stopped = "stopped"
     running = "running"
     starting = "starting"
-    
-class FeedStatusData:
-    def __init__(self, id: str, source: str, name: str, status: StatusEnum):
-        self.id = id
-        self.source = source
-        self.name = name
-        self.status = status
 
 class TrafficData(BaseModel):
     timestamp: datetime
@@ -33,6 +27,7 @@ class TrafficData(BaseModel):
 router = APIRouter()
 
 @router.get("/v1/feeds", response_model=List[FeedStatusData])
+
 async def get_feeds():
     """Test endpoint to get the list of feeds"""
     test_feeds = [
