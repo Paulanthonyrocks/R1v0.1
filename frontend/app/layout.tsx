@@ -26,23 +26,22 @@ export default function RootLayout({
   const pathname = usePathname();
   return (
     <html lang="en" suppressHydrationWarning>
-      <UserProvider> {/* Wrap content with UserProvider */}
-      <body
-        className={cn(
-          "min-h-screen bg-background antialiased flex flex-col font-matrix text-foreground",
-          inter.variable, // Provide fallback sans font variable
-
-        )}
-      >
-        <ThemeProvider attribute="class">
-          <Nav />
-          <main
-            className={cn("flex-1 overflow-y-auto p-4 md:p-6 lg:p-8")}
-            style={{ paddingTop: pathname !== '/' ? '4rem' : undefined }}
-          >{children}</main>
-        </ThemeProvider> {/* Close ThemeProvider */}
-      </body>
-      </UserProvider> {/* Close UserProvider */}
+      <UserProvider>
+        <body
+          className={cn(
+            "min-h-screen bg-background antialiased flex flex-col font-matrix text-foreground",
+            inter.variable, // Provide fallback sans font variable
+          )}
+        >
+          <ThemeProvider attribute="class">
+            <Nav />
+            <main
+              className={cn("flex-1 overflow-y-auto p-4 md:p-6 lg:p-8")}
+              style={{ paddingTop: pathname !== '/' ? '4rem' : undefined }}
+            >{children}</main>
+          </ThemeProvider>
+        </body>
+      </UserProvider>
     </html>
   );
 }
