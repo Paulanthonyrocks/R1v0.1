@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import time
+from datetime import datetime, timezone
 from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError, NoBrokersAvailable
 from pymongo import MongoClient
@@ -109,21 +110,21 @@ def process_raw_data(raw_data_model: RawTrafficDataInputModel) -> ProcessedTraff
         raw_data_model.average_speed
     )
     processed_data = ProcessedTrafficDataDBModel(
-        **raw_data_model.dict(),
+        **raw_data_model.model_dump(),
         congestion_score=congestion_score,
-        processing_timestamp=int(time.time())
+        processing_timestamp=datetime.now(timezone.utc)
     )
     return processed_data
 
 # --- Database Operations (with Idempotency) ---
 def store_processed_data_to_db(collection, data: ProcessedTrafficDataDBModel):
-    document_id = f"{data.sensor_id}_{int(data.timestamp)}"
+    document_id = f"{data.sensor_id}_{int(data.timestamp.timestamp())}"
     retries = 3
     for attempt in range(retries):
         try:
             collection.update_one(
                 {'_id': document_id},
-                {'$set': data.dict()}, # data.model_dump() in Pydantic v2
+                {'$set': data.model_dump()},
                 upsert=True
             )
             logger.debug(f"Upserted processed data with ID: {document_id}")
@@ -146,16 +147,16 @@ def store_processed_data_to_db(collection, data: ProcessedTrafficDataDBModel):
 
 
 def store_aggregated_data_to_db(collection, data: RegionalAggregatedTrafficDBModel):
-    document_id = f"{data.region_id}_{data.window_start_time}"
+    document_id = f"{data.region_id}_{int(data.window_start_time.timestamp())}"
     retries = 3
     for attempt in range(retries):
         try:
             collection.update_one(
                 {'_id': document_id},
-                {'$set': data.dict()}, # data.model_dump() in Pydantic v2
+                {'$set': data.model_dump()},
                 upsert=True
             )
-            logger.info(f"Upserted regional aggregated data for region {data.region_id}, window {data.window_start_time}")
+            logger.info(f"Upserted regional aggregated data for region {data.region_id}, window {data.window_start_time.isoformat()}")
             return # Success
         except OperationFailure as e:
             logger.warning(f"MongoDB operation failure storing aggregated data (ID: {document_id}) attempt {attempt + 1}/{retries}: {e}")
@@ -188,9 +189,9 @@ def add_to_windowed_data(processed_data: ProcessedTrafficDataDBModel):
         logger.warning(f"Sensor ID {sensor_id} not found in SENSOR_TO_REGION_MAPPING. Skipping aggregation for this message.")
         return # Corrected: return should be on its own line
 
-    window_key = get_window_key(event_timestamp)
-    windowed_data_store.setdefault(region_id, {}).setdefault(window_key, {}).setdefault(sensor_id, []).append(congestion_score)
-    logger.debug(f"Added score {congestion_score} for sensor {sensor_id} to region {region_id}, window {window_key}")
+    window_key_ts = get_window_key(event_timestamp.timestamp())
+    windowed_data_store.setdefault(region_id, {}).setdefault(window_key_ts, {}).setdefault(sensor_id, []).append(congestion_score)
+    logger.debug(f"Added score {congestion_score} for sensor {sensor_id} to region {region_id}, window_ts {window_key_ts}")
 
 
 def process_completed_windows(current_processing_time: float, agg_collection):
@@ -198,20 +199,20 @@ def process_completed_windows(current_processing_time: float, agg_collection):
     completed_windows_to_process = []
 
     for region_id, region_data in list(windowed_data_store.items()):
-        for window_key in list(region_data.keys()):
-            if window_key + config.WINDOW_SIZE_SECONDS <= current_processing_time:
-                completed_windows_to_process.append((region_id, window_key))
+        for window_key_ts in list(region_data.keys()):
+            if window_key_ts + config.WINDOW_SIZE_SECONDS <= current_processing_time:
+                completed_windows_to_process.append((region_id, window_key_ts))
 
-    for region_id, window_key in completed_windows_to_process:
-        logger.info(f"Processing completed window for region {region_id}, window key {window_key}")
+    for region_id, window_key_ts in completed_windows_to_process:
+        logger.info(f"Processing completed window for region {region_id}, window_ts {window_key_ts}")
         
         region_specific_data = windowed_data_store.get(region_id, {})
-        if window_key in region_specific_data:
-            sensor_data_for_window = region_specific_data.pop(window_key)
+        if window_key_ts in region_specific_data:
+            sensor_data_for_window = region_specific_data.pop(window_key_ts)
             if not region_specific_data:
                 windowed_data_store.pop(region_id, None)
         else:
-            logger.warning(f"Window key {window_key} not found for region {region_id} during processing. Already processed?")
+            logger.warning(f"Window_ts {window_key_ts} not found for region {region_id} during processing. Already processed?")
             continue # Corrected: continue should be indented
 
         all_scores_in_window = []
@@ -228,7 +229,7 @@ def process_completed_windows(current_processing_time: float, agg_collection):
 
         aggregated_data_model = RegionalAggregatedTrafficDBModel(
             region_id=region_id,
-            window_start_time=window_key,
+            window_start_time=datetime.fromtimestamp(window_key_ts, tz=timezone.utc),
             average_congestion_score=round(avg_congestion, 2),
             sensor_count_in_window=sensor_count,
             message_count_in_window=message_count
@@ -238,7 +239,7 @@ def process_completed_windows(current_processing_time: float, agg_collection):
         except Exception as e:
             # The store_aggregated_data_to_db function now handles its own retries and raises on final failure.
             # This exception block will catch that final failure.
-            logger.error(f"FINAL FAILURE: Could not store aggregated data for region {region_id}, window {window_key}. Data for this window is lost. Error: {e}", exc_info=True)
+            logger.error(f"FINAL FAILURE: Could not store aggregated data for region {region_id}, window {window_key_ts}. Data for this window is lost. Error: {e}", exc_info=True)
             # Optionally, attempt to put the sensor_data_for_window back or send to a more persistent DLQ.
             # For simplicity, we log the loss here.
 
@@ -248,23 +249,23 @@ def process_all_remaining_windows(agg_collection):
     logger.info("Processing all remaining windows before shutdown...")
     all_keys_to_process = []
     for region_id, region_data in list(windowed_data_store.items()):
-        for window_key in list(region_data.keys()):
-            all_keys_to_process.append((region_id, window_key))
+        for window_key_ts in list(region_data.keys()):
+            all_keys_to_process.append((region_id, window_key_ts))
     
     if not all_keys_to_process:
         logger.info("No remaining windows to process.")
         return
 
-    for region_id, window_key in all_keys_to_process:
-        logger.info(f"Processing remaining window for region {region_id}, window key {window_key}")
+    for region_id, window_key_ts in all_keys_to_process:
+        logger.info(f"Processing remaining window for region {region_id}, window_ts {window_key_ts}")
         
         region_specific_data = windowed_data_store.get(region_id, {})
-        if window_key in region_specific_data:
-            sensor_data_for_window = region_specific_data.pop(window_key)
+        if window_key_ts in region_specific_data:
+            sensor_data_for_window = region_specific_data.pop(window_key_ts)
             if not region_specific_data:
                 windowed_data_store.pop(region_id, None)
         else:
-            logger.warning(f"Remaining window key {window_key} not found for region {region_id}. Already processed?")
+            logger.warning(f"Remaining window_ts {window_key_ts} not found for region {region_id}. Already processed?")
             continue
 
         all_scores_in_window = []
@@ -281,7 +282,7 @@ def process_all_remaining_windows(agg_collection):
 
         aggregated_data_model = RegionalAggregatedTrafficDBModel(
             region_id=region_id,
-            window_start_time=window_key,
+            window_start_time=datetime.fromtimestamp(window_key_ts, tz=timezone.utc),
             average_congestion_score=round(avg_congestion, 2),
             sensor_count_in_window=sensor_count,
             message_count_in_window=message_count
@@ -289,7 +290,7 @@ def process_all_remaining_windows(agg_collection):
         try:
             store_aggregated_data_to_db(agg_collection, aggregated_data_model)
         except Exception as e:
-            logger.error(f"FINAL FAILURE: Could not store remaining aggregated data for region {region_id}, window {window_key}. Data lost. Error: {e}", exc_info=True)
+            logger.error(f"FINAL FAILURE: Could not store remaining aggregated data for region {region_id}, window {window_key_ts}. Data lost. Error: {e}", exc_info=True)
 
 
 # --- Main Application Logic ---

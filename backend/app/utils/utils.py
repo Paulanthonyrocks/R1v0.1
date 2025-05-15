@@ -23,6 +23,9 @@ import google.generativeai as genai
 from google.api_core import exceptions as google_api_exceptions
 from multiprocessing import Queue as MPQueue
 from typing import Tuple, Dict, Any, List, Optional, Set
+from pymongo import MongoClient
+from pymongo.database import Database as MongoDatabase # For type hinting
+from pymongo.errors import ConnectionFailure, ConfigurationError as MongoConfigurationError
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -53,6 +56,18 @@ class DatabaseError(Exception):
 DEFAULT_CONFIG: Dict[str, Any] = {
     "logging": {"level": "INFO", "log_path": "./logs/backend.log"},
     "database": {"db_path": "data/vehicle_data.db", "chunk_size": 100},
+    "mongodb": {
+        "uri": "mongodb://localhost:27017/",
+        "database_name": "traffic_management_hub",
+        "raw_traffic_collection": "raw_traffic_data",
+        "processed_traffic_collection": "processed_traffic_data",
+        "vehicle_tracks_collection": "vehicle_tracks"
+    },
+    "traffic_signal_control_service": {
+        "base_url": None,
+        "api_key": None,
+        "timeout_seconds": 10
+    },
     "performance": {"gpu_acceleration": True, "memory_limit_percent": 85},
     "video_input": {"webcam_buffer_size": 2, "webcam_index": 0},
     "vehicle_detection": {
@@ -637,15 +652,31 @@ class LicensePlatePreprocessor:
 # --- DatabaseManager (Simplified for SQLite) ---
 class DatabaseManager:
     def __init__(self, config: Dict):
+        # SQLite configuration
         self.db_config = config.get("database", {})
         self.db_path = self.db_config.get("db_path")
-        if not self.db_path: raise ConfigError("Database path ('db_path') not found in config.")
+        if not self.db_path: raise ConfigError("SQLite database path ('db_path') not found in config.")
         self.chunk_size = self.db_config.get("chunk_size", 100)
-        self.lock = threading.RLock() # RLock for re-entrant calls if needed
-        logger.info(f"Initializing DatabaseManager with db path: {self.db_path}")
-        self._initialize_database()
+        self.lock = threading.RLock()
+        logger.info(f"Initializing DatabaseManager with SQLite db path: {self.db_path}")
+        self._initialize_sqlite_database()
 
-    def _get_connection(self) -> sqlite3.Connection:
+        # MongoDB configuration
+        self.mongo_config = config.get("mongodb", {})
+        self.mongo_uri = self.mongo_config.get("uri")
+        self.mongo_db_name = self.mongo_config.get("database_name")
+        self.raw_traffic_collection_name = self.mongo_config.get("raw_traffic_collection", "raw_traffic_data")
+        
+        self.mongo_client: Optional[MongoClient] = None
+        self.mongo_db: Optional[MongoDatabase] = None
+
+        if self.mongo_uri and self.mongo_db_name:
+            logger.info(f"MongoDB URI found. Initializing MongoDB connection to {self.mongo_db_name}...")
+            self._initialize_mongodb()
+        else:
+            logger.warning("MongoDB URI or database_name not found in config. MongoDB will not be initialized.")
+
+    def _get_sqlite_connection(self) -> sqlite3.Connection: # Renamed for clarity
         try:
             conn = sqlite3.connect(self.db_path, timeout=10.0); conn.row_factory = sqlite3.Row
             try: conn.execute("PRAGMA journal_mode=WAL;"); conn.execute("PRAGMA synchronous=NORMAL;")
@@ -653,15 +684,15 @@ class DatabaseManager:
             return conn
         except sqlite3.Error as e: logger.error(f"Failed to connect to DB {self.db_path}: {e}", exc_info=True); raise DatabaseError(f"DB connect fail: {e}") from e
 
-    def _initialize_database(self):
-        logger.info(f"Initializing DB schema at {self.db_path}...")
+    def _initialize_sqlite_database(self): # Renamed for clarity
+        logger.info(f"Initializing SQLite DB schema at {self.db_path}...")
         try:
-            with self._get_connection() as conn: self._create_tables(conn.cursor())
-            logger.info("DB schema initialization check complete.")
+            with self._get_sqlite_connection() as conn: self._create_sqlite_tables(conn.cursor()) # Renamed for clarity
+            logger.info("SQLite DB schema initialization check complete.")
         except sqlite3.Error as e: logger.error(f"DB init error: {e}", exc_info=True); raise DatabaseError(f"DB schema init fail: {e}") from e
         except Exception as e: logger.error(f"Unexpected DB init error: {e}", exc_info=True); raise DatabaseError(f"Unexpected DB init error: {e}") from e
 
-    def _create_tables(self, cursor: sqlite3.Cursor):
+    def _create_sqlite_tables(self, cursor: sqlite3.Cursor): # Renamed for clarity
         cursor.execute('''CREATE TABLE IF NOT EXISTS vehicle_tracks (
                 feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, class_id INTEGER, confidence REAL,
                 bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
@@ -676,9 +707,49 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_feed_severity ON alerts(feed_id, severity);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged ON alerts(acknowledged);")
-        cursor.execute('''CREATE TABLE IF NOT EXISTS raw_traffic_data (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, sensor_id TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, speed REAL, occupancy REAL, vehicle_count INTEGER)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS processed_traffic_data (id INTEGER PRIMARY KEY AUTOINCREMENT, segment_id TEXT NOT NULL, timestamp TEXT NOT NULL, congestion_level REAL NOT NULL)''')
-        logger.debug("DB table creation check finished.")
+        
+        # Raw traffic data will now primarily go to MongoDB if configured.
+        # This SQLite table can be kept for fallback or removed if MongoDB is mandatory.
+        cursor.execute('''CREATE TABLE IF NOT EXISTS raw_traffic_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            timestamp TEXT NOT NULL, 
+            sensor_id TEXT NOT NULL, 
+            latitude REAL NOT NULL, 
+            longitude REAL NOT NULL, 
+            speed REAL, 
+            occupancy REAL, 
+            vehicle_count INTEGER
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS processed_traffic_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            segment_id TEXT NOT NULL, 
+            timestamp TEXT NOT NULL, 
+            congestion_level REAL NOT NULL
+        )''')
+        logger.debug("SQLite DB table creation check finished.")
+
+    def _initialize_mongodb(self):
+        try:
+            self.mongo_client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=5000) # Timeout for connection
+            # The ismaster command is cheap and does not require auth.
+            self.mongo_client.admin.command('ismaster') # Verify connection
+            self.mongo_db = self.mongo_client[self.mongo_db_name]
+            logger.info(f"Successfully connected to MongoDB server. Database: '{self.mongo_db_name}'")
+            # Optionally, create indexes here if needed for MongoDB collections, e.g.:
+            # self.mongo_db[self.raw_traffic_collection_name].create_index([("timestamp", -1), ("sensor_id", 1)], background=True)
+        except ConnectionFailure as e:
+            logger.error(f"MongoDB connection failed to {self.mongo_uri}: {e}", exc_info=True)
+            self.mongo_client = None
+            self.mongo_db = None
+            # Depending on policy, could raise DatabaseError or ConfigError
+        except MongoConfigurationError as e:
+            logger.error(f"MongoDB configuration error for {self.mongo_uri}: {e}", exc_info=True)
+            self.mongo_client = None
+            self.mongo_db = None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during MongoDB initialization for {self.mongo_uri}: {e}", exc_info=True)
+            self.mongo_client = None
+            self.mongo_db = None
 
     db_write_retry_decorator = retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(4), retry=retry_if_exception_type(sqlite3.OperationalError))
 
@@ -689,7 +760,7 @@ class DatabaseManager:
             bbox=vd.get('bbox',[None]*4); center=vd.get('center',[None]*2); flags_str=','.join(sorted(list(vd.get('flags',set()))))
             params=(vd.get('feed_id','unknown'),vd.get('track_id'),vd.get('timestamp',time.time()),vd.get('class_id'),vd.get('confidence'),bbox[0],bbox[1],bbox[2],bbox[3],center[0],center[1],vd.get('speed'),vd.get('acceleration'),vd.get('lane'),vd.get('direction'),vd.get('license_plate'),vd.get('ocr_confidence'),flags_str)
             with self.lock:
-                with self._get_connection() as conn: conn.execute(sql, params)
+                with self._get_sqlite_connection() as conn: conn.execute(sql, params)
             logger.debug(f"Saved track: Feed={params[0]},Track={params[1]},Time={params[2]:.2f}")
             return True
         except RetryError as e: logger.error(f"DB save_vehicle_data failed retries: {e}. TrackID: {vd.get('track_id')}"); return False
@@ -710,7 +781,7 @@ class DatabaseManager:
                 prepared.append((vd.get('feed_id','unknown'),vd.get('track_id'),vd.get('timestamp',time.time()),vd.get('class_id'),vd.get('confidence'),bbox[0],bbox[1],bbox[2],bbox[3],center[0],center[1],vd.get('speed'),vd.get('acceleration'),vd.get('lane'),vd.get('direction'),vd.get('license_plate'),vd.get('ocr_confidence'),flags_str))
             if not prepared: return True
             with self.lock:
-                with self._get_connection() as conn: conn.executemany(sql, prepared)
+                with self._get_sqlite_connection() as conn: conn.executemany(sql, prepared)
             logger.debug(f"Saved batch of {len(prepared)} vehicle records.")
             return True
         except RetryError as e: logger.error(f"DB save_vehicle_data_batch failed retries: {e}."); return False
@@ -722,7 +793,7 @@ class DatabaseManager:
 
     def get_recent_tracks(self, feed_id: Optional[str] = None, limit: int = 100) -> List[Dict]:
         try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor=conn.cursor()
                 if feed_id: cursor.execute("SELECT * FROM vehicle_tracks WHERE feed_id=? ORDER BY timestamp DESC LIMIT ?", (feed_id,limit))
                 else: cursor.execute("SELECT * FROM vehicle_tracks ORDER BY timestamp DESC LIMIT ?", (limit,))
@@ -731,7 +802,7 @@ class DatabaseManager:
 
     def get_track_history(self, feed_id: str, track_id: int, limit: int = 50) -> List[Dict]:
          try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor=conn.cursor(); cursor.execute("SELECT * FROM vehicle_tracks WHERE feed_id=? AND track_id=? ORDER BY timestamp DESC LIMIT ?", (feed_id,track_id,limit))
                 return [dict(row) for row in reversed(cursor.fetchall())]
          except sqlite3.Error as e: logger.error(f"DB error get track history (feed={feed_id},track={track_id}): {e}", exc_info=True); return []
@@ -739,7 +810,7 @@ class DatabaseManager:
     @lru_cache(maxsize=4)
     def get_vehicle_stats(self, time_window_secs: int = 300) -> Dict:
         try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor=conn.cursor(); min_ts = time.time()-time_window_secs
                 cursor.execute("SELECT COUNT(*) as total_vehicles, AVG(speed) as average_speed_kmh, SUM(CASE WHEN speed < ? THEN 1 ELSE 0 END) as stopped_vehicles FROM vehicle_tracks WHERE timestamp > ?", (DEFAULT_CONFIG['stopped_speed_threshold_kmh'], min_ts))
                 res=cursor.fetchone(); stats=dict(res) if res else {'total_vehicles':0,'average_speed_kmh':0.0,'stopped_vehicles':0}
@@ -750,7 +821,7 @@ class DatabaseManager:
     @lru_cache(maxsize=4)
     def get_vehicle_counts_by_type(self, time_window_secs: int = 300) -> Dict[str, int]:
         try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor=conn.cursor(); min_ts = time.time()-time_window_secs
                 cursor.execute("WITH LT AS (SELECT feed_id,track_id,class_id,MAX(timestamp) as mt FROM vehicle_tracks WHERE timestamp > ? GROUP BY feed_id,track_id) SELECT vt.class_id,COUNT(DISTINCT lt.track_id) as count FROM vehicle_tracks vt JOIN LT ON vt.feed_id=LT.feed_id AND vt.track_id=LT.track_id AND vt.timestamp=LT.mt GROUP BY vt.class_id", (min_ts,))
                 results=cursor.fetchall(); type_map=TrafficMonitor.vehicle_type_map; counts={name:0 for name in type_map.values()}; counts['unknown']=0
@@ -760,7 +831,7 @@ class DatabaseManager:
 
     def get_alerts_filtered(self, filters: Dict, limit: int = 100, offset: int = 0) -> List[Dict]:
         try:
-            with self._get_connection() as conn:
+            with self._get_sqlite_connection() as conn:
                 cursor=conn.cursor(); base_q="SELECT id,timestamp,severity,feed_id,message,details,acknowledged FROM alerts WHERE 1=1"; params=[]; conds=[]
                 allowed={"severity","feed_id","acknowledged"}
                 for k,v in filters.items():
@@ -780,7 +851,7 @@ class DatabaseManager:
         try:
             params=(severity,feed_id,message,details)
             with self.lock:
-                with self._get_connection() as conn: conn.execute(sql,params)
+                with self._get_sqlite_connection() as conn: conn.execute(sql,params)
             logger.info(f"Saved alert: Sev={severity},Feed={feed_id},Msg='{message[:60]}...'")
             return True
         except RetryError as e: logger.error(f"DB save_alert failed retries: {e}."); return False
@@ -796,7 +867,7 @@ class DatabaseManager:
         try:
             ack_val = 1 if acknowledge else 0
             with self.lock:
-                with self._get_connection() as conn:
+                with self._get_sqlite_connection() as conn:
                     cursor=conn.cursor(); cursor.execute(sql,(ack_val,alert_id)); conn.commit() # Explicit commit for UPDATE
                     if cursor.rowcount==0: logger.warning(f"Alert ID {alert_id} not found for ack."); return False
             logger.info(f"Alert ID {alert_id} ack status set to {acknowledge}.")
@@ -808,8 +879,58 @@ class DatabaseManager:
             return False
         except Exception as e: logger.error(f"Unexpected error ack alert {alert_id}: {e}", exc_info=True); raise DatabaseError(f"Unexpected ack alert: {e}") from e
 
+    @retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception)) # Generic retry for Mongo
+    def save_raw_traffic_data_mongo(self, data: Dict) -> bool:
+        if not self.mongo_db:
+            logger.error("MongoDB not initialized. Cannot save raw_traffic_data.")
+            # Optionally, fall back to SQLite or raise an error
+            # For now, trying SQLite if MongoDB is not available
+            # return self.save_raw_traffic_data_sqlite(data) # Assuming such a method exists
+            raise DatabaseError("MongoDB not available for saving traffic data.")
+        
+        try:
+            collection = self.mongo_db[self.raw_traffic_collection_name]
+            result = collection.insert_one(data)
+            logger.debug(f"Saved raw traffic data to MongoDB with id: {result.inserted_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save raw traffic data to MongoDB: {e}", exc_info=True)
+            # Re-raise the exception to be caught by the retry decorator or calling function
+            raise DatabaseError(f"Failed to save to MongoDB: {e}") from e
+
+    def get_raw_traffic_data_mongo(self, query: Dict, limit: int = 1000, sort_criteria: Optional[List[Tuple[str, int]]] = None) -> List[Dict]:
+        if not self.mongo_db:
+            logger.warning("MongoDB not initialized. Cannot get raw_traffic_data.")
+            return []
+        try:
+            collection = self.mongo_db[self.raw_traffic_collection_name]
+            cursor = collection.find(query).limit(limit)
+            if sort_criteria:
+                cursor = cursor.sort(sort_criteria)
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"Failed to retrieve raw_traffic_data from MongoDB: {e}", exc_info=True)
+            return []
+
     def close(self):
-        logger.info("DatabaseManager close called (no specific action for simple SQLite).")
+        with self.lock: # Protect shared resource access
+            # Close SQLite (if it was ever initialized through its own connection pooling)
+            # The current _get_sqlite_connection creates a new conn each time, so no global conn to close here.
+            # If we had a self.sqlite_conn, we'd close it.
+            logger.info("DatabaseManager close called. SQLite connections are per-call.")
+
+            # Close MongoDB client
+            if self.mongo_client:
+                try:
+                    self.mongo_client.close()
+                    logger.info("MongoDB client connection closed.")
+                except Exception as e:
+                    logger.error(f"Error closing MongoDB client: {e}", exc_info=True)
+                finally:
+                    self.mongo_client = None
+                    self.mongo_db = None
+            else:
+                logger.info("MongoDB client was not initialized or already closed.")
 
 # --- Example Usage (Optional: for testing utils directly) ---
 if __name__ == "__main__":

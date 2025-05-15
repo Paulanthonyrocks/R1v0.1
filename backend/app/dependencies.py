@@ -2,9 +2,15 @@
 
 from typing import Dict, Any
 from .database import get_database_manager
-from .services import get_feed_manager, get_connection_manager
+from .services import get_feed_manager, get_connection_manager, get_traffic_signal_service, get_analytics_service
 # --- Import config getter from the new config module ---
 from .config import get_current_config
+from .services.traffic_signal_service import TrafficSignalService
+from .services.analytics_service import AnalyticsService
+from fastapi import HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import firebase_admin
+from firebase_admin import auth
 
 async def get_db():
     """Dependency to get the database manager instance."""
@@ -22,6 +28,77 @@ async def get_config() -> Dict[str, Any]: # Renamed for clarity if preferred, or
     """Dependency to get the currently loaded configuration dictionary."""
     config = get_current_config() # Call the getter from app.config
     return config
+
+async def get_tss() -> TrafficSignalService: # tss for TrafficSignalService
+    """Dependency to get the TrafficSignalService instance."""
+    tss = get_traffic_signal_service()
+    return tss
+
+async def get_as() -> AnalyticsService: # as for AnalyticsService
+    """Dependency to get the AnalyticsService instance."""
+    analytics_svc = get_analytics_service()
+    return analytics_svc
+
+# Scheme for API key header
+auth_scheme = HTTPBearer()
+
+async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> dict:
+    """
+    Dependency to get the current active user by verifying Firebase ID token.
+    Extracts token from 'Authorization: Bearer <token>' header.
+    """
+    if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
+        # This might happen if Firebase Admin SDK failed to initialize
+        # Or if it was initialized with a custom app name not stored in _DEFAULT_APP_NAME
+        # Log an error and raise an internal server error or a specific HTTPException
+        # For simplicity, raising a generic 503 Service Unavailable if Firebase app isn't ready.
+        # In a production system, this should be monitored closely.
+        # logger.error("Firebase Admin SDK default app not initialized. Cannot authenticate user.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firebase authentication service not available.",
+        )
+
+    if not token or not token.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated or bearer token missing",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        # Verify the ID token while checking if the token is revoked by passing check_revoked=True.
+        decoded_token = auth.verify_id_token(token.credentials, check_revoked=True)
+        # You can add additional checks here, e.g., check user roles from the token if they are set as custom claims
+        # For example: if not decoded_token.get("admin"): raise HTTPException(status_code=403, detail="Not authorized")
+        return decoded_token
+    except auth.RevokedIdTokenError:
+        # Token has been revoked. Inform the user to reauthenticate.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked, please re-authenticate.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except auth.UserDisabledError:
+        # Token belongs to a disabled user account.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is disabled.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except auth.InvalidIdTokenError as e:
+        # Token is invalid for other reasons (e.g., expired, malformed).
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {e}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception as e:
+        # Catch any other Firebase admin errors or unexpected errors during token verification
+        # logger.error(f"Error verifying Firebase ID token: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not validate credentials: {e}",
+        )
 
 # You might also need get_connection_manager if used as a dependency
 # async def get_cm():

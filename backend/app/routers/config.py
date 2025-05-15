@@ -3,7 +3,7 @@
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies import get_config # Dependency to get config dict
+from app.dependencies import get_config, get_current_active_user # Added get_current_active_user
 from app.utils.utils import load_config, ConfigError # Import config loading function
 from app.models.feeds import StandardResponse # Re-use standard response model
 from pathlib import Path
@@ -37,12 +37,14 @@ def filter_sensitive_data(data: Any) -> Any:
     description="Retrieves the currently loaded backend configuration, masking sensitive values.",
 )
 async def get_current_config(
-    config: Dict[str, Any] = Depends(get_config)
+    config: Dict[str, Any] = Depends(get_config),
+    current_user: dict = Depends(get_current_active_user) # Protected
 ) -> Dict[str, Any]:
     """
-    Endpoint to retrieve the active configuration.
+    Endpoint to retrieve the active configuration. Requires authentication.
     Sensitive keys like API keys will be masked.
     """
+    # logger.info(f"User {current_user.get(\"email\")} retrieved configuration.")
     # IMPORTANT: Filter sensitive data before returning
     return filter_sensitive_data(config.copy())
 
@@ -53,12 +55,13 @@ async def get_current_config(
     summary="Reload Configuration",
     description="Triggers the backend to reload its configuration from the config.yaml file.",
 )
-async def reload_configuration() -> StandardResponse:
+async def reload_configuration(current_user: dict = Depends(get_current_active_user)) -> StandardResponse: # Protected
     """
-    Endpoint to trigger a configuration reload.
+    Endpoint to trigger a configuration reload. Requires authentication.
     Note: This reloads the config into memory; running processes
     may need restarting separately to use the new config.
     """
+    # logger.info(f"User {current_user.get(\"email\")} initiated configuration reload.")
     global config # Need to potentially update the global config in main.py
 
     logger.info("Configuration reload requested via API.")
