@@ -33,7 +33,6 @@ Plan for scalability as data sources increase.
 Overview: Develop the frontend to display traffic data on an interactive map.
 Tasks:
 
-Choose a map library (e.g., Leaflet, Mapbox GL JS) — Completed.
 Implement real-time updates on the map using WebSockets or long-polling.
 Display basic traffic conditions (e.g., color-coded roads based on congestion levels).
 
@@ -54,8 +53,6 @@ Dependency: This module depends on the Data Ingestion Module to provide real-tim
 Overview: Provide a basic user interface for controlling traffic signals (initially a dummy implementation).
 Tasks:
 
-Design a simple UI for traffic signal control (e.g., buttons to change signal states) — Completed.
-Implement a backend API to simulate signal control interactions — Completed.
 Lay the groundwork for future integration with actual traffic signal systems.
 
 Technologies:

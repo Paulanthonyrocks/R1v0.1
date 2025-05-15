@@ -1,0 +1,43 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function to check if a user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to check if a user has a specific role
+    function hasRole(role) {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+
+    // Rules for traffic_data collection
+    match /traffic_data/{trafficDataId} {
+      allow read: if isAuthenticated(); // Authenticated users can read traffic data
+      allow write: if hasRole('operator') || hasRole('admin'); // Only operators and admins can write traffic data
+    }
+
+    // Rules for devices collection
+    match /devices/{deviceId} {
+      allow read, write: if hasRole('operator') || hasRole('admin'); // Only operators and admins can manage devices
+    }
+
+    // Rules for incidents collection
+    match /incidents/{incidentId} {
+      allow read: if isAuthenticated(); // Authenticated users can read incidents
+      allow write: if hasRole('operator') || hasRole('admin'); // Only operators and admins can manage incidents
+    }
+
+    // Rules for users collection (Admins only)
+    match /users/{userId} {
+      allow read, write: if hasRole('admin'); // Only admins can manage users
+    }
+
+    // Rules for configurations collection (Admins only)
+    match /configurations/{configId} {
+      allow read, write: if hasRole('admin'); // Only admins can manage configurations
+    }
+  }
+}

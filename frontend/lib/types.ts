@@ -61,10 +61,10 @@ export interface AlertsResponse {
 // --- Component Prop Types ---
 
 export interface MatrixCardProps {
-  title: string;
-  content?: string;
-  colorOverride?: string;
-  children?: React.ReactNode;
+ title: string;
+ content?: string;
+ colorOverride?: string;
+ children?: React.ReactNode;
 }
 export interface StatCardProps  {
   children?: React.ReactNode;
@@ -104,8 +104,13 @@ export interface ReportAnomalyModalProps {
   onSubmit?: (data: { message: string; severity: SeverityLevel; description?: string; location?: string }) => void;
 }
 
-export interface MatrixCardProps {
-  title: string;
+export interface MatrixButtonProps {
+ onClick: () => void;
+  text: string;
+ bgColor?: string;
+ textColor?: string;
+ backgroundColor?: string;
+ children?: React.ReactNode;
 }
 // --- Hook Return Types ---
 export interface RealtimeData {

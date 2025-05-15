@@ -1,8 +1,8 @@
 // lib/hooks.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-    FeedStatusData, KpiData, AlertData, KpiUpdatePayload,
-} from '@/lib/types';
+    FeedStatusData, KpiData, AlertData,
+} from '@/lib/types'; // Remove KpiUpdatePayload as it is unused
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
 const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
@@ -15,9 +15,12 @@ type RealtimeData = {
     kpis: KpiData | null;
     alerts: AlertData[];
     error: string | null;
+ isReady: boolean;
     setInitialFeeds: (feeds: FeedStatusData[]) => void;
+    setInitialKpis: (kpis: KpiData) => void;
     setInitialAlerts: (alerts: AlertData[]) => void;
     startWebSocket: () => void;
+    getStreamInfo: (streamId: string) => { status: string; liveUrl: string | null } | undefined;
 };
 
 type MessageSender = (type: string, data?: unknown) => void;
@@ -35,6 +38,7 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
   const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const readyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [streamInfoMap, setStreamInfoMap] = useState<Record<string, { status: string; liveUrl: string | null }>>({});
 
   // Memoized connection function - now private
   const connectWebSocket = useCallback(() => {
@@ -74,50 +78,65 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
 
     ws.onmessage = (event) => {
         // (Message handling logic - unchanged from previous correct version)
-        try {
-            const message = JSON.parse(event.data);
+ try {
+ const message = JSON.parse(event.data);
             switch (message.type) {
-
-              case 'feed_update':
-                setFeeds((prevFeeds: FeedStatusData[]) => {
-                  const updatedFeeds = (prevFeeds as FeedStatusData[]).map((feed: FeedStatusData) =>
-                      feed.id === message.data.id
-                          ? { ...feed, status: message.data.status }
-                          : feed
-                  );
-                  // Ensure a new array is created to trigger re-renders
-                  return [...updatedFeeds];
-                });
-                console.debug(`Feed ${message.data.id} updated to status: ${message.data.status}`);
-
-                break;
-              case 'kpi_update':
-                 setKpis(message.data as KpiUpdatePayload);
-                break;
-
-              case 'new_alert': {
-                const newAlert: AlertData = message.data;
-                setAlerts((prevAlerts) => [newAlert, ...prevAlerts]);
-                console.debug('Received new alert:', newAlert);
-                }
-                break;
-
-              case 'error':
-                  // Handle error messages from the backend
-                  console.error('Received error from backend:', message.message);
-                  if (error !== message.message) { // Only update if the message is different
-                    setError(message.message);
-                  }
-                  break;
-
-              case 'ping':
-                  console.debug('Received ping, sending pong...');
-                  ws.send(JSON.stringify({ type: 'pong' }));
-                  lastPingRef.current = Date.now();
-                  break;
-
-              default:
-                console.warn('Received unknown WebSocket message type:', message.type);
+ case 'initial_data':
+ setFeeds(message.data.feeds);
+ setKpis(message.data.kpis);
+ setAlerts(message.data.alerts);
+ setIsReady(true);
+ // Clear the ready timeout if data is received
+ if (readyTimeoutRef.current) {
+ clearTimeout(readyTimeoutRef.current);
+ readyTimeoutRef.current = null;
+ }
+ break;
+ case 'feed_update':
+ setFeeds(prevFeeds => {
+ const index = prevFeeds.findIndex(feed => feed.id === message.data.id);
+ if (index > -1) {
+ const newFeeds = [...prevFeeds];
+ newFeeds[index] = message.data;
+ return newFeeds;
+ } else {
+ return [...prevFeeds, message.data];
+ }
+ });
+ break;
+ case 'kpi_update':
+ setKpis(prevKpis => ({ ...prevKpis, ...message.data }));
+ break;
+ case 'alert_update':
+ setAlerts(prevAlerts => {
+ const existingAlertIndex = prevAlerts.findIndex(alert => alert.id === message.data.id);
+ if (existingAlertIndex > -1) {
+ const updatedAlerts = [...prevAlerts];
+ updatedAlerts[existingAlertIndex] = message.data;
+ return updatedAlerts;
+ } else {
+ return [...prevAlerts, message.data];
+ }
+ });
+ break;
+ case 'stream_update':
+                  const streamUpdateData = message.data as { streamId: string; info: { status: string; liveUrl: string | null } };
+ setStreamInfoMap(prevStreamInfoMap => ({
+ ...prevStreamInfoMap,
+ [streamUpdateData.streamId]: streamUpdateData.info,
+ }));
+ break;
+ case 'error':
+ setError(message.data.message);
+ console.error('WebSocket Error from Server:', message.data.message);
+ break;
+ case 'ping':
+ ws.send(JSON.stringify({ type: 'pong' }));
+ lastPingRef.current = Date.now();
+ break;
+ default:
+ console.warn('Unknown message type:', message.type);
+ break;
             }
 
         } catch (e) {
@@ -166,7 +185,7 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
          console.log("WebSocket closed cleanly.");
       }
     };
-  }, [error]); // Dependency array is empty, connectWebSocket is stable
+  }, []); // Remove error dependency
   
   // Heartbeat monitoring effect
   useEffect(() => {
@@ -216,6 +235,10 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
      console.log(`Initial alerts set (${initialAlerts.length}) from API data.`);
   }, []);
 
+  const setInitialKpis = useCallback((initialKpis: KpiData) => {
+    setKpis(initialKpis);
+    console.log('Initial KPIs set from API data.');
+  }, []);
 
     // Modified sendMessage function
     const sendMessage = useCallback((type: string, data: unknown = {}) => {
@@ -230,14 +253,22 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
         wsRef.current.send(JSON.stringify({ type, data }));
     }, [isConnected, isReady]);
 
+    // New function to get stream info
+    const getStreamInfo = useCallback((streamId: string) => {
+        return streamInfoMap[streamId];
+    }, [streamInfoMap]);
+
   return {
     isConnected,
     feeds,
     kpis,
     alerts,
     error,
+ isReady,
     setInitialFeeds,
+    setInitialKpis,
     setInitialAlerts,
+    getStreamInfo,
     startWebSocket: connectWebSocket, // Expose connectWebSocket as startWebSocket
     sendMessage,
   };
