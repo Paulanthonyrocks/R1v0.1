@@ -1,6 +1,7 @@
 "use client";
 
-import { FirebaseApp, initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { Auth, getAuth } from 'firebase/auth';
 import { Firestore, getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -12,15 +13,19 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-let app: FirebaseApp | null = null;
-let db: Firestore | null = null;
-
-if (
-  firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId && firebaseConfig.storageBucket && firebaseConfig.messagingSenderId && firebaseConfig.appId
-) {
+let app: FirebaseApp;
+if (!getApps().length) {
   app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
+} else {
+  app = getApp();
 }
 
-export { app, db };
-export {};
+// Check if app is not null before getting Firestore and Auth instances
+let db: Firestore | null = null;
+let auth: Auth | null = null;
+
+if (app) {
+  db = getFirestore(app);
+  auth = getAuth(app); // Get Auth instance
+}
+export { app, db, auth }; // Export auth

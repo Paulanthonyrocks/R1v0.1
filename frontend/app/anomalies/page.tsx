@@ -1,6 +1,6 @@
 // /home/user/R1v0.1/frontend/app/anomalies/page.tsx
-"use client"; // Added useEffect
-import React, { useState, useRef, useEffect, } from 'react'; // Added useRef
+"use client";
+import React, { useState, useRef, useMemo } from 'react'; // Added useRef, useMemo
 import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
 import dynamic from 'next/dynamic';
@@ -8,6 +8,8 @@ import MatrixButton from "@/components/MatrixButton";
 
 import useSWR from 'swr';
 import axios, { AxiosResponse } from 'axios';
+import { useEffect } from 'react';
+import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
 
 type LocationTuple = [number, number];
 
@@ -89,7 +91,6 @@ const AnomalyDetailModal: React.FC<{ anomaly: Anomaly | null; onClose: () => voi
       <div className="bg-matrix-panel p-6 rounded-lg shadow-xl max-w-lg w-full text-matrix border border-matrix-border">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold uppercase">{anomaly.type} - Details</h2>
-          {/* FIX 1: Changed "sm" to "small" */}
           <MatrixButton onClick={onClose} color="gray" size="small">Close</MatrixButton>
         </div>
         <div className="space-y-2 text-sm">
@@ -119,16 +120,12 @@ const fetcher = (url: string) => axios.get(url).then((res: AxiosResponse<Anomaly
 const AnomaliesPage = () => {
   const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher);
   const [selectedSeverity, setSelectedSeverity] = useState<SeverityFilter>(ALL_SEVERITIES);
-  const [sortOrder, setSortOrder] = useState<SortOrder>("newest"); // Added useState
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [selectedAnomalyForModal, setSelectedAnomalyForModal] = useState<Anomaly | null>(null);
   const [highlightedAnomalyId, setHighlightedAnomalyId] = useState<number | null>(null);
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
-  const [isMapInitialized, setIsMapInitialized] = useState(false); // State to track map initialization
-
-  useEffect(() => {
-    setIsMapInitialized(true); // Set to true after the component mounts
-  }, []);
+  const [mapId, setMapId] = useState(Date.now());
 
   const addToast = (message: string, type: 'success' | 'error') => {
     const id = Date.now();
@@ -146,6 +143,22 @@ const AnomaliesPage = () => {
       const dateB = new Date(b.timestamp).getTime();
       return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
     });
+
+  // Create a signature that changes only when relevant anomaly data changes
+  const anomaliesSignature = useMemo(() => {
+    // Only include anomalies with a valid location in the signature
+    return processedAnomalies
+      .filter(a => a.location && Array.isArray(a.location) && a.location.length >= 2)
+      .map(a => `${a.id}-${a.location[0]}-${a.location[1]}`)
+      .join('|');
+  }, [processedAnomalies]); // Depend on the processed list
+
+  // Add a key to the map component to force a remount when the anomalies change
+  // The key is updated when the anomaliesSignature changes
+  useEffect(() => {
+    // Update mapId when the list of processed anomalies changes to force map remount
+    setMapId(Date.now());
+  }, [anomaliesSignature]); // Depend on the signature
 
   const handleResolve = async (anomalyId: number) => {
     const optimisticData = allAnomalies.map(anomaly =>
@@ -198,114 +211,114 @@ const AnomaliesPage = () => {
   if (error) return <div className="p-4 text-red-500">Failed to load anomalies. Please try again later.</div>;
 
   return (
-    <div className="p-4">
-      <ToastContainer toasts={toasts} removeToast={removeToast} />
-      <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
+    <AuthGuard> {/* Wrap content with AuthGuard */}
+      <div className="p-4">
+        <ToastContainer toasts={toasts} removeToast={removeToast} />
+        <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
 
-      <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Detected Anomalies</h1>
+        <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Detected Anomalies</h1>
 
-      {/* Filters and Sorting UI */}
-      <div className="mb-6 flex flex-wrap items-center gap-4">
-        <div>
-          <label htmlFor="severity-filter" className="text-matrix-muted mr-2">Severity:</label>
-          <select
-            id="severity-filter"
-            value={selectedSeverity}
-            onChange={(e) => setSelectedSeverity(e.target.value as SeverityFilter)}
-            className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
-          >
-            <option value={ALL_SEVERITIES}>All</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-        <div>
-          <label htmlFor="sort-order" className="text-matrix-muted mr-2">Sort by:</label>
-          <select
-            id="sort-order"
-            value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-            className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
-          >
-            <option value="newest">Newest First</option>
-            <option value="oldest">Oldest First</option>
-          </select>
-        </div>
-      </div>
-
-      {/* TODO: Pagination controls could go here if implementing pagination */}
-
-      {processedAnomalies.length > 0 ? (
-        <>
-          <div className="h-[400px] w-full mb-6 bg-gray-700 rounded overflow-hidden">
-            {isMapInitialized && (
-            <AnomalyMap
-              anomalies={processedAnomalies}
-              onMarkerClick={handleMarkerClick}
-              activeAnomalyId={highlightedAnomalyId} // Or pass selectedAnomalyForModal?.id
-            />
-            )}
+        {/* Filters and Sorting UI */}
+        <div className="mb-6 flex flex-wrap items-center gap-4">
+          <div>
+            <label htmlFor="severity-filter" className="text-matrix-muted mr-2">Severity:</label>
+            <select
+              id="severity-filter"
+              value={selectedSeverity}
+              onChange={(e) => setSelectedSeverity(e.target.value as SeverityFilter)}
+              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
+            >
+              <option value={ALL_SEVERITIES}>All</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
           </div>
+          <div>
+            <label htmlFor="sort-order" className="text-matrix-muted mr-2">Sort by:</label>
+            <select
+              id="sort-order"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+            </select>
+          </div>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {processedAnomalies.map((anomaly) => (
-              <div
-                key={anomaly.id}
-                // FIX 2: Use block body for ref callback
-                ref={el => { cardRefs.current[anomaly.id] = el; }} // Assign ref for scrolling
-                className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-matrix-green shadow-lg' : ''}`}
-                onClick={() => handleCardClick(anomaly)} // Open modal on card click
-              >
-                <MatrixCard
-                  title={anomaly.type}
-                  colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
-                    ? "hsl(0, 100%, 50%)"
-                    : anomaly.severity === "medium"
-                      ? "hsl(39, 100%, 50%)"
-                      : "hsl(120, 100%, 35%)"
-                  }
+        {/* TODO: Pagination controls could go here if implementing pagination */}
+
+        {processedAnomalies.length > 0 ? (
+          <>
+            <div className="h-[400px] w-full mb-6 bg-gray-700 rounded overflow-hidden">
+              <AnomalyMap
+                key={mapId} // Use the mapId state as the key
+                anomalies={processedAnomalies}
+                onMarkerClick={handleMarkerClick}
+                activeAnomalyId={highlightedAnomalyId} // Or pass selectedAnomalyForModal?.id
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {processedAnomalies.map((anomaly) => (
+                <div
+                  key={anomaly.id}
+                  ref={el => { cardRefs.current[anomaly.id] = el; }} // Assign ref for scrolling
+                  className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-matrix-green shadow-lg' : ''}`}
+                  onClick={() => handleCardClick(anomaly)} // Open modal on card click
                 >
-                  {/* ... card content (same as before) ... */}
-                  <div className="flex flex-col">
-                    <p className="text-sm mb-1">
-                      <span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-                         anomaly.severity === "high" ? "text-red-400" :
-                         anomaly.severity === "medium" ? "text-orange-400" :
-                         "text-green-400"
-                      }`}>{anomaly.severity}</span>
-                      {anomaly.resolved && <span className="ml-2 text-gray-500">(Resolved)</span>}
-                    </p>
-                    <p className="text-sm">
-                      <span className="font-semibold">Description:</span> {anomaly.description}
-                    </p>
-                    <p className="mt-2 text-xs text-matrix-muted-text">
-                      <span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}
-                    </p>
-                    <div className="flex justify-end mt-2 space-x-2">
-                      {!anomaly.resolved && (
-                       <MatrixButton onClick={(e) => { e.stopPropagation(); handleResolve(anomaly.id); }} color="green">
-                            Resolve
+                  <MatrixCard
+                    title={anomaly.type}
+                    colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
+                      ? "hsl(0, 100%, 50%)"
+                      : anomaly.severity === "medium"
+                        ? "hsl(39, 100%, 50%)"
+                        : "hsl(120, 100%, 35%)"
+                    }
+                  >
+                    {/* ... card content (same as before) ... */}
+                    <div className="flex flex-col">
+                      <p className="text-sm mb-1">
+                        <span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
+                           anomaly.severity === "high" ? "text-red-400" :
+                           anomaly.severity === "medium" ? "text-orange-400" :
+                           "text-green-400"
+                        }`}>{anomaly.severity}</span>
+                        {anomaly.resolved && <span className="ml-2 text-gray-500">(Resolved)</span>}
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-semibold">Description:</span> {anomaly.description}
+                      </p>
+                      <p className="mt-2 text-xs text-matrix-muted-text">
+                        <span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}
+                      </p>
+                      <div className="flex justify-end mt-2 space-x-2">
+                        {!anomaly.resolved && (
+                         <MatrixButton onClick={(e) => { e.stopPropagation(); handleResolve(anomaly.id); }} color="green">
+                              Resolve
+                          </MatrixButton>
+                        )}
+                        <MatrixButton onClick={(e) => { e.stopPropagation(); handleDismiss(anomaly.id); }} color="red">
+                          Dismiss
                         </MatrixButton>
-                      )}
-                      <MatrixButton onClick={(e) => { e.stopPropagation(); handleDismiss(anomaly.id); }} color="red">
-                        Dismiss
-                      </MatrixButton>
+                      </div>
                     </div>
-                  </div>
-                </MatrixCard>
-              </div>
-            ))}
+                  </MatrixCard>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="text-center text-matrix-muted py-10">
+            {allAnomalies.length === 0 ? "No anomalies detected." : "No anomalies match the current filters."}
           </div>
-        </>
-      ) : (
-        <div className="text-center text-matrix-muted py-10">
-          {allAnomalies.length === 0 ? "No anomalies detected." : "No anomalies match the current filters."}
-        </div>
-      )}
-      {/* TODO: Form for reporting new anomalies could be triggered here */}
-    </div>
-  );
+        )}
+        {/* TODO: Form for reporting new anomalies could be triggered here */}
+      </div>
+    </AuthGuard> /* Close AuthGuard */
+ )
 };
 
 export default AnomaliesPage;

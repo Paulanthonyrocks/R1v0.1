@@ -123,7 +123,7 @@
         manager = "web";
         env = {
           # This assumes the backend is accessible via localhost from the frontend container
-          NEXT_PUBLIC_API_URL = "{https://localhost:3000}"; # Use IDX variable interpolation
+          NEXT_PUBLIC_API_URL = "localhost:9002";
         };
       }; # end frontend preview
 
