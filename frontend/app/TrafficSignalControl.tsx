@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 
+interface Signal {
+  id: string;
+}
+
 const TrafficSignalControl = () => {
-  const [signals, setSignals] = useState([]);
-  const [selectedSignal, setSelectedSignal] = useState(null);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [selectedSignal, setSelectedSignal] = useState<string | null>(null);
   const [phase, setPhase] = useState('');
 
   useEffect(() => {
