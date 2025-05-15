@@ -49,43 +49,52 @@ export default function RootLayout({
 function Nav() {
   const { user } = useUser(); // Use the useUser hook
 
-  if (!user) {
-    return null; // Only render Nav if user is authenticated
-  }
   return (
     <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg">
       <div className="container mx-auto flex items-center justify-between flex-wrap">
-        <h1 className="text-xl font-bold uppercase">Route One</h1>
+        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors">Route One</Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {/* You might want a button here for better accessibility and styling */}
             <button className="text-foreground hover:text-primary focus:outline-none">
               Menu
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild>
-              <Link href="/">Home</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/anomalies">Anomalies</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/export">Export</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/grid">Grid</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/logs">Logs</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/nodes">Nodes</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/stream">Stream</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild><Link href="/surveillance">Surveillance</Link></DropdownMenuItem>
+            {!user ? (
+              <DropdownMenuItem asChild>
+                <Link href="/login">Login</Link>
+              </DropdownMenuItem>
+            ) : (
+              <>
+                <DropdownMenuItem asChild>
+                  <Link href="/">Home</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/dashboard">Dashboard</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/anomalies">Anomalies</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/export">Export</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/grid">Grid</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/logs">Logs</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/nodes">Nodes</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/stream">Stream</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/surveillance">Surveillance</Link>
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
