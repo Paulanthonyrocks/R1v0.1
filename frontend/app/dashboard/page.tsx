@@ -2,14 +2,28 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
+import useSWR from 'swr';
 import WebSocketClient from '@/lib/websocket'; // Adjust the import path if necessary
 import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
+
+const fetcher = (url: string) => fetch(url).then(res => res.json());
+
+const MetricCard = ({ title, value, unit, color, children }: { title: string, value: React.ReactNode, unit?: string, color?: string, children?: React.ReactNode }) => (
+  <div className={`bg-gray-800 p-4 rounded shadow text-center flex flex-col items-center justify-center min-w-[140px]`}>
+    <div className="text-xs text-gray-400 uppercase mb-1">{title}</div>
+    <div className={`text-2xl font-bold mb-1 ${color ? color : ''}`}>{value}{unit && <span className="text-base font-normal ml-1">{unit}</span>}</div>
+    {children}
+  </div>
+);
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging)
   const [messages, setMessages] = useState<string[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+
+  // Fetch real-time analytics every 5 seconds
+  const { data: metrics, error: metricsError, isLoading: metricsLoading } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
 
   useEffect(() => {
     // Instantiate the WebSocketClient
@@ -74,11 +88,32 @@ const DashboardPage: React.FC = () => {
     };
   }, []); // Empty dependency array ensures effect runs once on mount and cleans up on unmount
 
+  // Helper to color metrics
+  const getCongestionColor = (val: number) => val > 70 ? 'text-red-400' : val > 40 ? 'text-yellow-400' : 'text-green-400';
+  const getSpeedColor = (val: number) => val < 20 ? 'text-red-400' : val < 40 ? 'text-yellow-400' : 'text-green-400';
+  const getIncidentColor = (val: number) => val > 0 ? 'text-red-400' : 'text-green-400';
+
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}> {/* Wrap content with AuthGuard and specify required role */}
       <div className="p-4 text-matrix">
         <h1 className="text-2xl font-bold mb-4 uppercase">Dashboard</h1>
-        <p>WebSocket Status: {isConnected ? 'Connected' : 'Disconnected'}</p>
+
+        {/* Real-time Analytics Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <MetricCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" color={metrics ? getCongestionColor(metrics.congestion_index) : ''} />
+          <MetricCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" color={metrics ? getSpeedColor(metrics.average_speed_kmh) : ''} />
+          <MetricCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} color={metrics ? getIncidentColor(metrics.active_incidents_count) : ''} />
+          <MetricCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running">
+            <div className="text-xs text-gray-400 mt-1">
+              {metrics?.feed_statuses && (
+                <>
+                  <span className="mr-2">Stopped: <span className="text-yellow-400">{metrics.feed_statuses.stopped}</span></span>
+                  <span>Error: <span className="text-red-400">{metrics.feed_statuses.error}</span></span>
+                </>
+              )}
+            </div>
+          </MetricCard>
+        </div>
 
         {/* Placeholder for video stream */}
         <div className="mb-4 bg-gray-800 p-4 rounded">
@@ -89,9 +124,9 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Placeholder for metrics/anomalies */}
+        {/* WebSocket debug/messages */}
         <div className="bg-gray-800 p-4 rounded">
-          <h2 className="text-xl font-semibold mb-2">Real-time Data</h2>
+          <h2 className="text-xl font-semibold mb-2">Real-time Data (WebSocket Debug)</h2>
           <div className="max-h-60 overflow-y-auto text-sm">
               {messages.map((msg, index) => (
                   <p key={index} className="mb-1 break-all">{msg}</p>
