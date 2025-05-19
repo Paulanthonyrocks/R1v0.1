@@ -52,18 +52,6 @@ try:
 except Exception as e:
     logger.warning(f"Could not set multiprocessing start method ('spawn'): {e}")
     
-
-
-
-
-
-
-
-
-
-
-
-    
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config

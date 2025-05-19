@@ -4,6 +4,7 @@ import MatrixCard from '@/components/MatrixCard';
 import { useState } from 'react';
 import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
 import { UserRole } from '@/lib/auth/roles'; // Import UserRole
+import useSWR from 'swr';
 
 const Loading = () => (
   <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50 top-16">
@@ -11,8 +12,17 @@ const Loading = () => (
   </div>
 );
 
+const fetcher = (url: string) => fetch(url).then(res => res.json());
+
+const AlertBadge = ({ congestion, incidents }: { congestion: number, incidents: number }) => {
+  if (incidents > 0 || congestion > 70) return <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">Alert</span>;
+  if (congestion > 40) return <span className="bg-yellow-400 text-black text-xs font-bold px-2 py-1 rounded">Warning</span>;
+  return <span className="bg-green-500 text-white text-xs font-bold px-2 py-1 rounded">OK</span>;
+};
+
 const SurveillancePage = () => {
   const [loading,] = useState(false);
+  const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
   // In a real application, you would likely fetch data here and set loading based on that.
 
   const cameraFeeds = [
@@ -47,8 +57,8 @@ const SurveillancePage = () => {
                   src={camera.url}
                 />
                 <div className="absolute top-2 right-2">
-                  {/* Placeholder for alerts */}
-                  <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">Alert</span>
+                  {/* Analytics-based alert badge */}
+                  <AlertBadge congestion={metrics?.congestion_index ?? 0} incidents={metrics?.active_incidents_count ?? 0} />
                 </div>
                 {/* Placeholder for controls */}
                 <div className="absolute bottom-2 right-2">Controls</div>

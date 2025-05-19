@@ -51,7 +51,7 @@ class TrafficSignalService:
             logger.warning(f"Cannot broadcast signal state for {signal_id}: ConnectionManager not available.")
             return
 
-        ws_payload = SignalStateUpdate(signal_id=signal_id, state=signal_state)
+        ws_payload = SignalStateUpdate(signal_data=signal_state)
         message = WebSocketMessage(
             event_type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE,
             payload=ws_payload

@@ -18,6 +18,8 @@ import asyncio
 from bson import ObjectId
 from fastapi import status
 
+from app.routers.analytics import router as analytics_router
+
 
 # StatusEnum is now FeedOperationalStatusEnum in app.models.feeds
 # class StatusEnum(str, Enum):
@@ -212,3 +214,6 @@ async def set_signal_phase(
     except Exception as e:
         # logger.error(f"Unexpected error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred while setting signal phase for {signal_id}.")
+
+app = FastAPI()
+app.include_router(analytics_router, prefix="/v1/analytics")
