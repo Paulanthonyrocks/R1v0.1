@@ -8,16 +8,15 @@ from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import json
-from fastapi.responses import FileResponse
 import firebase_admin
 from firebase_admin import credentials
 import uuid # For generating unique client IDs for WebSockets
 
 # --- Import application modules ---
 # Routers
-from app.routers import feeds, config as config_router, analysis, alerts
+from app.routers import feeds, config as config_router, analysis, alerts, video, incidents
 from . import api
 # Initializers/Getters - Import config initializer now
 from .config import initialize_config, get_current_config  # Import config init/getter
@@ -162,6 +161,8 @@ try:
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
+    app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
+    app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
     logger.info("API routers included successfully.")
     app.include_router(api.router, prefix="/api", tags=["API"])
 except Exception as e:
@@ -246,10 +247,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 # --- Serve Sample Video Endpoint ---
 @app.get("/api/v1/sample-video")
 def get_sample_video():
+    """Serve the sample video file directly"""
     video_path = Path(__file__).parent / "data" / "sample_traffic.mp4"
     if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Sample video not found.")
-    return FileResponse(video_path, media_type="video/mp4")
+        raise HTTPException(status_code=404, detail="Sample video file not found")
+    return FileResponse(str(video_path), media_type="video/mp4")
 
 import asyncio
 

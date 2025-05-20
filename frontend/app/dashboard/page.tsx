@@ -20,10 +20,9 @@ const MetricCard = ({ title, value, unit, color, children }: { title: string, va
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging)
   const [messages, setMessages] = useState<string[]>([]);
-  const [isConnected, setIsConnected] = useState(false);
 
   // Fetch real-time analytics every 5 seconds
-  const { data: metrics, error: metricsError, isLoading: metricsLoading } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
+  const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
 
   useEffect(() => {
     // Instantiate the WebSocketClient
@@ -33,7 +32,6 @@ const DashboardPage: React.FC = () => {
     // Add event listeners
     const handleOpen = () => {
       console.log('WebSocket connection opened successfully in DashboardPage.');
-      setIsConnected(true);
       setMessages(prev => [...prev, 'WebSocket connection opened.']);
     };
 
@@ -58,7 +56,6 @@ const DashboardPage: React.FC = () => {
 
     const handleError = (event: Event) => {
       console.error('WebSocket error in DashboardPage:', event);
-      setIsConnected(false);
       // Attempt to get a more specific error message from the event
       const errorEvent = event as ErrorEvent;
       const errorMessage = errorEvent.message || (errorEvent.error ? String(errorEvent.error) : 'Unknown WebSocket error');
@@ -67,7 +64,6 @@ const DashboardPage: React.FC = () => {
 
     const handleClose = (event: CloseEvent) => {
       console.log('WebSocket connection closed in DashboardPage:', event?.code, event?.reason);
-      setIsConnected(false);
       setMessages(prev => [...prev, `WebSocket connection closed (Code: ${event.code}, Reason: ${event.reason}).`]);
     };
 
@@ -118,9 +114,14 @@ const DashboardPage: React.FC = () => {
         {/* Placeholder for video stream */}
         <div className="mb-4 bg-gray-800 p-4 rounded">
           <h2 className="text-xl font-semibold mb-2">Video Feed (Sample)</h2>
-          {/* Video element would go here */}
           <div className="w-full h-96 bg-gray-700 flex items-center justify-center text-gray-400 rounded">
-            Placeholder for video stream
+            <video
+              src="/api/v1/sample-video"
+              controls
+              autoPlay
+              className="w-full h-full object-cover rounded"
+              style={{ background: '#000' }}
+            />
           </div>
         </div>
 

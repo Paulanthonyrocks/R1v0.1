@@ -1,9 +1,12 @@
 # backend/requirements.txt
 # Core FastAPI
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+fastapi>=0.68.0
+uvicorn>=0.15.0
+python-multipart>=0.0.5
 httpx>=0.25.0 # For async HTTP calls
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+pydantic>=1.8.2
 
 # Configuration & Utilities
 pyyaml>=6.0
@@ -20,7 +23,7 @@ torch>=2.0.0
 torchvision
 torchaudio
 ultralytics>=8.0.0
-opencv-python-headless>=4.6.0
+opencv-python>=4.5.3
 scipy>=1.8.0
 filterpy>=1.4.5
 
@@ -34,4 +37,4 @@ sqlite3 is built-in
 pymongo>=4.0.0 # For MongoDB support
 
 # Firebase Admin
-firebase-admin>=6.0.0
+firebase-admin>=5.0.0
