@@ -32,6 +32,7 @@ class StandardResponse(BaseModel):
 # backend/app/routers/feeds.py
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import JSONResponse
 
 # Import Dependencies
 from app.dependencies import get_feed_manager, get_current_active_user
@@ -262,3 +263,18 @@ async def get_specific_feed_status(
     if not feed_status:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed with ID '{feed_id}' not found.")
     return feed_status
+
+@router.get("/{feed_id}/kpis", summary="Get latest KPIs for a specific feed")
+async def get_feed_kpis(
+    feed_id: str,
+    fm: FeedManager = Depends(get_feed_manager),
+    current_user: Optional[dict] = Depends(get_current_active_user_optional)
+):
+    """Get the latest KPIs/metrics for a specific feed (including sample video)."""
+    feed_status = await fm.get_feed_status(feed_id)
+    if not feed_status:
+        raise HTTPException(status_code=404, detail=f"Feed with ID '{feed_id}' not found.")
+    metrics = getattr(feed_status, 'latest_metrics', None)
+    if not metrics:
+        return JSONResponse(content={"message": "No metrics available yet."}, status_code=202)
+    return JSONResponse(content=metrics)

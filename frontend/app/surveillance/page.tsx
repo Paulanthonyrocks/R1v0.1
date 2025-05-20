@@ -26,7 +26,7 @@ const SurveillancePage = () => {
   // In a real application, you would likely fetch data here and set loading based on that.
 
   const cameraFeeds = [
-    { id: 1, name: 'Camera 1', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
+    { id: 1, name: 'Camera 1', url: '/api/v1/sample-video' },
     { id: 2, name: 'Camera 2', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
     { id: 3, name: 'Camera 3', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
     { id: 4, name: 'Camera 4', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
