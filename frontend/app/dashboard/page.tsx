@@ -90,9 +90,16 @@ const DashboardPage: React.FC = () => {
   const getIncidentColor = (val: number) => val > 0 ? 'text-red-400' : 'text-green-400';
 
   return (
-    <AuthGuard requiredRole={UserRole.VIEWER}> {/* Wrap content with AuthGuard and specify required role */}
+    <AuthGuard requiredRole={UserRole.PLANNER}> {/* Wrap content with AuthGuard and specify required role */}
       <div className="p-4 text-matrix">
         <h1 className="text-2xl font-bold mb-4 uppercase">Dashboard</h1>
+
+        {/* Navigation Links */}
+        <nav className="mb-6 flex gap-4">
+          <a href="/preferences" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Preferences</a>
+          <a href="/history" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Route History</a>
+          <a href="/impacts" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Weather & Events</a>
+        </nav>
 
         {/* Real-time Analytics Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -119,8 +126,7 @@ const DashboardPage: React.FC = () => {
               src="/api/v1/sample-video"
               controls
               autoPlay
-              className="w-full h-full object-cover rounded"
-              style={{ background: '#000' }}
+              className="w-full h-full object-cover rounded bg-black"
             />
           </div>
         </div>

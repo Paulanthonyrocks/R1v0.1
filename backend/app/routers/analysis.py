@@ -1,7 +1,10 @@
 # backend/app/models/analysis.py
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TrendDataPoint(BaseModel):
     timestamp: datetime
@@ -10,6 +13,21 @@ class TrendDataPoint(BaseModel):
     congestion_index: Optional[float] = None
     speeding_vehicles: Optional[int] = None
     high_density_lanes: Optional[int] = None
+
+class LocationPredictionRequest(BaseModel):
+    location: LocationModel
+    prediction_time: Optional[datetime] = None
+    prediction_window_hours: Optional[int] = Field(default=24, ge=1, le=168)
+    include_historical_context: Optional[bool] = Field(default=True)
+    
+class PredictionResponse(BaseModel):
+    location: LocationModel
+    prediction_time: datetime
+    incident_likelihood: float = Field(..., ge=0, le=1)
+    confidence_score: float = Field(..., ge=0, le=1)
+    contributing_factors: List[str]
+    recommendations: List[str]
+    historical_context: Optional[Dict[str, Any]]
 
 # backend/app/routers/analysis.py
 
@@ -102,6 +120,31 @@ async def predict_incident_likelihood_endpoint(
 ) -> Dict[str, Any]:
     prediction = await analytics_svc.predict_incident_likelihood(request_data.location, request_data.prediction_time)
     return prediction
+
+@router.post(
+    "/predictions/location",
+    response_model=PredictionResponse,
+    summary="Get Detailed Traffic Predictions",
+    description="Get detailed traffic predictions for a specific location, including historical context and recommendations.",
+    dependencies=[Depends(get_current_active_user)]
+)
+async def get_location_predictions(
+    request: LocationPredictionRequest,
+    analytics_svc: AnalyticsService = Depends(get_as)
+) -> PredictionResponse:
+    """Get detailed traffic predictions for a location"""
+    try:
+        prediction = await analytics_svc.predict_incident_likelihood(
+            location=request.location,
+            prediction_time=request.prediction_time
+        )
+        return PredictionResponse(**prediction)
+    except Exception as e:
+        logger.error(f"Error getting predictions: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating predictions: {str(e)}"
+        )
 
 # TODO:
 # - Consider if the old /trends that queries DB for List[TrendDataPoint] should be kept as a separate endpoint.

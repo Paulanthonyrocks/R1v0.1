@@ -53,6 +53,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     FEED_STATUS_UPDATE = "feed_status_update"
     GENERAL_NOTIFICATION = "general_notification"
     ERROR_NOTIFICATION = "error_notification"
+    PREDICTION_ALERT = "prediction_alert"  # New type for predictions
     # Add other specific event types as needed
     PONG = "pong" # For keep-alive
     AUTH_SUCCESS = "auth_success"
@@ -71,4 +72,4 @@ class WebSocketMessage(BaseModel):
         Dict[str, Any] # For simple payloads like pong or auth status
     ]
     client_id: Optional[str] = Field(None, description="Identifier for a specific client if the message is targeted, otherwise None for broadcast.")
-    correlation_id: Optional[str] = Field(None, description="Optional ID to correlate requests and responses if applicable") 
+    correlation_id: Optional[str] = Field(None, description="Optional ID to correlate requests and responses if applicable")

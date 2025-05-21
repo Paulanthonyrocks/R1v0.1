@@ -1,16 +1,29 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
 
 from typing import Dict, Any
-from .database import get_database_manager
-from .services import get_feed_manager, get_connection_manager, get_traffic_signal_service, get_analytics_service
-# --- Import config getter from the new config module ---
-from .config import get_current_config
-from .services.traffic_signal_service import TrafficSignalService
-from .services.analytics_service import AnalyticsService
 from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import firebase_admin
 from firebase_admin import auth
+
+from .database import get_database_manager
+from .services import (
+    get_feed_manager, 
+    get_connection_manager, 
+    get_traffic_signal_service, 
+    get_analytics_service,
+    get_personalized_routing_service,
+    get_route_optimization_service,
+    get_weather_service,
+    get_event_service
+)
+from .config import get_current_config
+from .services.traffic_signal_service import TrafficSignalService
+from .services.analytics_service import AnalyticsService
+from .services.route_optimization_service import RouteOptimizationService
+from .services.personalized_routing_service import PersonalizedRoutingService
+from .services.weather_service import WeatherService
+from .services.event_service import EventService
 
 async def get_db():
     """Dependency to get the database manager instance."""
@@ -38,6 +51,32 @@ async def get_as() -> AnalyticsService: # as for AnalyticsService
     """Dependency to get the AnalyticsService instance."""
     analytics_svc = get_analytics_service()
     return analytics_svc
+
+async def get_ros() -> RouteOptimizationService:
+    """Dependency to get the RouteOptimizationService instance."""
+    route_service = get_route_optimization_service()
+    return route_service
+
+async def get_personalized_routing_service() -> PersonalizedRoutingService:
+    """Dependency to get the PersonalizedRoutingService instance."""
+    routing_service = get_personalized_routing_service()
+    if routing_service is None:
+        raise RuntimeError("PersonalizedRoutingService not initialized")
+    return routing_service
+
+async def get_weather_service_api() -> WeatherService:
+    """Dependency to get the WeatherService instance."""
+    weather_service = get_weather_service()
+    if weather_service is None:
+        raise RuntimeError("WeatherService not initialized")
+    return weather_service
+
+async def get_event_service_api() -> EventService:
+    """Dependency to get the EventService instance."""
+    event_service = get_event_service()
+    if event_service is None:
+        raise RuntimeError("EventService not initialized")
+    return event_service
 
 # Scheme for API key header
 auth_scheme = HTTPBearer()

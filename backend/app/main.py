@@ -4,26 +4,37 @@ import logging
 import logging.config
 from pathlib import Path
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, WebSocketState
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import json
 import firebase_admin
 from firebase_admin import credentials
 import uuid # For generating unique client IDs for WebSockets
+import asyncio
 
 # --- Import application modules ---
 # Routers
-from app.routers import feeds, config as config_router, analysis, alerts, video, incidents
+from app.routers import (
+    feeds, 
+    config as config_router, 
+    analysis, 
+    alerts, 
+    video, 
+    incidents,
+    personalized_routes
+)
 from . import api
 # Initializers/Getters - Import config initializer now
 from .config import initialize_config, get_current_config  # Import config init/getter
 from .database import initialize_database, close_database, get_database_manager
-from .services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager
+from .services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager, get_analytics_service
 from .services.services import health_check as services_health_check # Import directly
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification # Added imports
+from app.tasks.prediction_scheduler import PredictionScheduler # Import the new scheduler
 # Logging will be reconfigured by initialize_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -91,8 +102,7 @@ async def startup_event():
         # If service_account_path is absolute, project_root.parent / service_account_path might not be what you want.
         # A better approach for paths in config is to make them relative to config file or always absolute.
         # For now, let's assume service_account_path in config is relative to project root or absolute.
-        # If it's relative to backend/configs, then it should be: config_file_path_obj.parent / service_account_path
-
+        # If it's relative to backend/configs, then
         # Let's refine path resolution: Assume path in config is relative to project root (one level above backend dir)
         # The current __file__ is backend/app/main.py
         # project_root for firebase key should be where manage.py or similar top-level script is.
@@ -132,6 +142,16 @@ async def startup_event():
         # Decide if this should halt startup
         # raise RuntimeError(f"Service Initialization Failed: {e}") from e
 
+    # 5. Initialize Prediction Scheduler - Ensure this runs in the event loop
+    try:
+        loop = asyncio.get_running_loop()
+        # If PredictionScheduler is a long-running task, consider using create_task or similar
+        loop.create_task(PredictionScheduler().start())  # Assuming start() is the method to run the scheduler
+        logger.info("Prediction scheduler initialized and started.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Prediction Scheduler: {e}", exc_info=True)
+        # Decide on recovery or shutdown strategy
+
     logger.info("--- Startup complete ---")
 
 
@@ -144,6 +164,20 @@ async def shutdown_event():
     #     firebase_admin.delete_app(firebase_admin.get_app())
     #     logger.info("Firebase Admin SDK app deleted.")
     logger.info("--- Shutdown complete ---")
+
+# Global scheduler instance
+prediction_scheduler: Optional[PredictionScheduler] = None
+
+async def start_prediction_scheduler():
+    """Start the prediction scheduler as a background task"""
+    global prediction_scheduler
+    analytics_service = get_analytics_service()
+    if analytics_service:
+        prediction_scheduler = PredictionScheduler(analytics_service)
+        asyncio.create_task(prediction_scheduler.run())
+        logger.info("Prediction scheduler started")
+    else:
+        logger.error("Could not start prediction scheduler: analytics service not initialized")
 
 # --- CORS Middleware ---
 origins = [
@@ -163,6 +197,17 @@ try:
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
+    app.include_router(
+        personalized_routes.router, 
+        prefix="/api/routes", 
+        tags=["personalized-routing"]
+    )
+    # Register weather and events routers
+    from app.routers import weather, events
+    app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
+    app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
+    from app.routers import route_history
+    app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"])
     logger.info("API routers included successfully.")
     app.include_router(api.router, prefix="/api", tags=["API"])
 except Exception as e:

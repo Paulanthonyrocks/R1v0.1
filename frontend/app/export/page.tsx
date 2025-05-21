@@ -61,7 +61,7 @@ const ExportPage: React.FC = () => {
   };
 
   return (
-    <AuthGuard requiredRole={UserRole.OPERATOR}>
+    <AuthGuard requiredRole={UserRole.PLANNER}>
     <div className="container mx-auto p-4">
       {loading && (
         <div className="fixed top-0 left-0 w-full h-full flex items-center justify-center bg-matrix-bg z-50">

@@ -156,6 +156,7 @@
       hsla(var(--matrix-light), 0.1) 50%, /* Very transparent middle */
       hsla(var(--matrix-panel), 0.6) 100% /* More transparent end */
     );
+    -webkit-backdrop-filter: blur(8px); /* Safari support */
     backdrop-filter: blur(8px); /* Stronger blur for frosted effect */
   }
 
@@ -335,6 +336,7 @@
       font-family: var(--font-matrix); /* Ensure it uses the matrix font */
       font-size: 14px; /* Or make responsive */
       line-height: 1.2;
+      -webkit-user-select: none;
       user-select: none;
       z-index: 0; /* Ensure it's behind interactive UI but above body static bg */
       animation: matrixFall linear infinite;
