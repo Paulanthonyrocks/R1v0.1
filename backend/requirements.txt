@@ -26,6 +26,9 @@ ultralytics>=8.0.0
 opencv-python>=4.5.3
 scipy>=1.8.0
 filterpy>=1.4.5
+tensorflow>=2.13.0  # Deep learning framework
+tensorflow-cpu>=2.13.0  # CPU-only version for systems without GPU
+scikit-learn>=1.0.0  # For StandardScaler and other ML utilities
 
 # OCR Dependencies
 pillow>=9.0.0
@@ -33,8 +36,11 @@ pytesseract>=0.3.10
 google-generativeai>=0.3.0
 
 # Database
-sqlite3 is built-in
 pymongo>=4.0.0 # For MongoDB support
 
 # Firebase Admin
 firebase-admin>=5.0.0
+
+# Additional Dependencies
+aiohttp>=3.8.0  # For async HTTP requests
+redis>=4.0.0    # For caching support

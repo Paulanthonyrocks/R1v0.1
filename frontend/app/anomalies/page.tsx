@@ -10,6 +10,7 @@ import useSWR from 'swr';
 import axios, { AxiosResponse } from 'axios';
 import { useEffect } from 'react';
 import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
+import { UserRole } from '@/types/user'; // Import UserRole
 
 type LocationTuple = [number, number];
 
@@ -211,7 +212,7 @@ const AnomaliesPage = () => {
   if (error) return <div className="p-4 text-red-500">Failed to load anomalies. Please try again later.</div>;
 
   return (
-    <AuthGuard> {/* Wrap content with AuthGuard */}
+    <AuthGuard requiredRole={UserRole.AGENCY}>
       <div className="p-4">
         <ToastContainer toasts={toasts} removeToast={removeToast} />
         <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
@@ -317,7 +318,7 @@ const AnomaliesPage = () => {
         )}
         {/* TODO: Form for reporting new anomalies could be triggered here */}
       </div>
-    </AuthGuard> /* Close AuthGuard */
+    </AuthGuard>
  )
 };
 

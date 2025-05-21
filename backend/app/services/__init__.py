@@ -8,6 +8,7 @@ from .services import ( # Assuming your file is named services.py
     shutdown_services,
     get_feed_manager,
     get_connection_manager,
+    get_route_optimization_service,
     feed_manager_instance, # Expose instance if needed directly (less common)
     connection_manager_instance # Expose instance if needed directly (less common)
 )
@@ -24,6 +25,7 @@ __all__ = [
     "shutdown_services",
     "get_feed_manager",
     "get_connection_manager",
+    "get_route_optimization_service",
     # Add class names here if you want them included in '*' import
     # "FeedManager",
 ]

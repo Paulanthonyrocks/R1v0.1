@@ -42,7 +42,7 @@ const SurveillancePage = () => {
   }
 
   return (
-    <AuthGuard requiredRole={UserRole.OPERATOR}>
+    <AuthGuard requiredRole={UserRole.AGENCY}>
       <div className="p-4 w-full relative">
         <h1 className="text-2xl font-bold mb-4 uppercase">SURVEILLANCE</h1>
 

@@ -1,21 +1,32 @@
-# app/services.py (Example)
+# app/services.py
 import logging
-from app.services.feed_manager import FeedManager as FMClass # Assuming class is separate
-from app.websocket.connection_manager import ConnectionManager # Assuming class is separate
-from app.services.traffic_signal_service import TrafficSignalService # New import
-from app.services.analytics_service import AnalyticsService # New import
+from app.services.feed_manager import FeedManager as FMClass
+from app.websocket.connection_manager import ConnectionManager
+from app.services.traffic_signal_service import TrafficSignalService
+from app.services.analytics_service import AnalyticsService
+from app.services.route_optimization_service import RouteOptimizationService
+from app.services.personalized_routing_service import PersonalizedRoutingService
+from app.services.weather_service import WeatherService
+from app.services.event_service import EventService
 from typing import Optional, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 feed_manager_instance: Optional[FMClass] = None
-connection_manager_instance: Optional[ConnectionManager] = None # Add connection manager instance
+connection_manager_instance: Optional[ConnectionManager] = None
 _traffic_signal_service_instance: Optional[TrafficSignalService] = None
-_analytics_service_instance: Optional[AnalyticsService] = None # New service instance
+_analytics_service_instance: Optional[AnalyticsService] = None
+_route_optimization_service_instance: Optional[RouteOptimizationService] = None
+_personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
+_weather_service_instance: Optional[WeatherService] = None
+_event_service_instance: Optional[EventService] = None
 
 def initialize_services(config: Dict[str, Any]):
-    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance
+    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
+           _analytics_service_instance, _route_optimization_service_instance, \
+           _personalized_routing_service_instance, _weather_service_instance, _event_service_instance
+    
     logger.info("Initializing application services...")
     if connection_manager_instance is None:
          try:
@@ -51,6 +62,44 @@ def initialize_services(config: Dict[str, Any]):
         config=config.get("analytics_service", {}),
         connection_manager=connection_manager_instance
     )
+    _route_optimization_service_instance = RouteOptimizationService(
+        traffic_predictor=_analytics_service_instance._traffic_predictor,
+        data_cache=_analytics_service_instance._data_cache
+    )
+    # Initialize personalized routing service
+    try:
+        _personalized_routing_service_instance = PersonalizedRoutingService(
+            db_url=config.get("database", {}).get("url", "sqlite:///data/vehicle_data.db"),
+            traffic_predictor=_analytics_service_instance._traffic_predictor if _analytics_service_instance else None,
+            data_cache=_analytics_service_instance._data_cache if _analytics_service_instance else None
+        )
+        logger.info("PersonalizedRoutingService initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize PersonalizedRoutingService: {e}")
+        _personalized_routing_service_instance = None
+
+    # Initialize weather service
+    try:
+        _weather_service_instance = WeatherService(
+            api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
+            cache_ttl_minutes=config.get("weather_service", {}).get("cache_ttl_minutes", 10)
+        )
+        logger.info("WeatherService initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize WeatherService: {e}")
+        _weather_service_instance = None
+
+    # Initialize event service
+    try:
+        _event_service_instance = EventService(
+            api_url=config.get("event_service", {}).get("api_url", ""),
+            cache_ttl_minutes=config.get("event_service", {}).get("cache_ttl_minutes", 30)
+        )
+        logger.info("EventService initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize EventService: {e}")
+        _event_service_instance = None
+
     logger.info("Application services initialized.")
 
 def get_feed_manager() -> FMClass:
@@ -75,8 +124,33 @@ def get_analytics_service() -> AnalyticsService: # New getter
         raise RuntimeError("AnalyticsService not initialized.")
     return _analytics_service_instance
 
+def get_route_optimization_service() -> RouteOptimizationService:
+    """Get the route optimization service instance"""
+    if _route_optimization_service_instance is None:
+        logger.error("RouteOptimizationService accessed before initialization!")
+        raise RuntimeError("RouteOptimizationService not initialized.")
+    return _route_optimization_service_instance
+
+def get_personalized_routing_service() -> Optional[PersonalizedRoutingService]:
+    """Get the personalized routing service instance."""
+    return _personalized_routing_service_instance
+
+def get_weather_service() -> WeatherService:
+    """Get the weather service instance"""
+    if _weather_service_instance is None:
+        logger.error("WeatherService accessed before initialization!")
+        raise RuntimeError("WeatherService not initialized")
+    return _weather_service_instance
+
+def get_event_service() -> EventService:
+    """Get the event service instance"""
+    if _event_service_instance is None:
+        logger.error("EventService accessed before initialization!")
+        raise RuntimeError("EventService not initialized")
+    return _event_service_instance
+
 async def shutdown_services(): # Make async for feed manager shutdown
-    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance
+    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance, _route_optimization_service_instance
     logger.info("Shutting down application services...")
     if connection_manager_instance:
         try:
@@ -106,6 +180,9 @@ async def shutdown_services(): # Make async for feed manager shutdown
     if _analytics_service_instance:
         logger.info("AnalyticsService does not require explicit shutdown currently.")
         _analytics_service_instance = None
+
+    # Clear route optimization service
+    _route_optimization_service_instance = None
         
     logger.info("Application services shut down.")
 

@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from typing import List, Dict, Any, Set, Optional
-from fastapi import WebSocket, WebSocketDisconnect, WebSocketState
+from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 import json
 from datetime import datetime
 import firebase_admin # For auth checking in WS
