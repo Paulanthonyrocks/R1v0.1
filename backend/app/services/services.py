@@ -1,148 +1,165 @@
 # app/services.py (Example)
 import logging
-from app.services.feed_manager import FeedManager as FMClass # Assuming class is separate
-from app.websocket.connection_manager import ConnectionManager # Assuming class is separate
-from app.services.traffic_signal_service import TrafficSignalService # New import
-from app.services.analytics_service import AnalyticsService # New import
+from app.services.feed_manager import FeedManager as FMClass
+from app.websocket.connection_manager import ConnectionManager
+from app.services.traffic_signal_service import TrafficSignalService
+from app.services.analytics_service import AnalyticsService
 from typing import Optional, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Module-level instances, initialized by initialize_services
 feed_manager_instance: Optional[FMClass] = None
-connection_manager_instance: Optional[ConnectionManager] = None # Add connection manager instance
+connection_manager_instance: Optional[ConnectionManager] = None
 _traffic_signal_service_instance: Optional[TrafficSignalService] = None
-_analytics_service_instance: Optional[AnalyticsService] = None # New service instance
+_analytics_service_instance: Optional[AnalyticsService] = None
+
 
 def initialize_services(config: Dict[str, Any]):
-    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance
+    # Use global keyword to modify module-level variables
+    global feed_manager_instance, connection_manager_instance
+    global _traffic_signal_service_instance, _analytics_service_instance
     logger.info("Initializing application services...")
-    if connection_manager_instance is None:
-         try:
-              connection_manager_instance = ConnectionManager()
-              logger.info("WebSocket ConnectionManager initialized via app.services.")
-         except Exception as e:
-               logger.error(f"Failed to initialize ConnectionManager in app.services: {e}")
-               connection_manager_instance = None # Ensure it's None on failure
-               logger.info(f"WebSocket ConnectionManager initialization: Failed. Reason: {e}")
-         else:
-              logger.info("WebSocket ConnectionManager initialization: Successful.")
 
+    if connection_manager_instance is None:
+        try:
+            connection_manager_instance = ConnectionManager()
+            logger.info("WebSocket ConnectionManager initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize ConnectionManager: {e}", exc_info=True)
+            # connection_manager_instance remains None
 
     if feed_manager_instance is None:
         try:
             feed_manager_instance = FMClass(config=config)
-            # Inject connection manager if both initialized
-            if connection_manager_instance:
-                 feed_manager_instance.set_connection_manager(connection_manager_instance)
-            logger.info("FeedManager initialized via app.services.")
+            if connection_manager_instance: # Inject if available
+                feed_manager_instance.set_connection_manager(connection_manager_instance)
+            logger.info("FeedManager initialized.")
         except Exception as e:
-            logger.error(f"Failed to initialize FeedManager in app.services: {e}", exc_info=True)
-            feed_manager_instance = None  
-            logger.info(f"FeedManager initialization: Failed. Reason: {e}")
-        else:
-             logger.info("FeedManager initialization: Successful.")
-   
-    _traffic_signal_service_instance = TrafficSignalService(
-        config=config.get("traffic_signal_service", {}),
-        connection_manager=connection_manager_instance
-    )
-    _analytics_service_instance = AnalyticsService(
-        config=config.get("analytics_service", {}),
-        connection_manager=connection_manager_instance
-    )
-    logger.info("Application services initialized.")
+            logger.error(f"Failed to initialize FeedManager: {e}", exc_info=True)
+            # feed_manager_instance remains None
+
+    if _traffic_signal_service_instance is None:
+        try:
+            _traffic_signal_service_instance = TrafficSignalService(
+                config=config.get("traffic_signal_service", {}),
+                connection_manager=connection_manager_instance # Pass manager
+            )
+            logger.info("TrafficSignalService initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize TrafficSignalService: {e}", exc_info=True)
+
+    if _analytics_service_instance is None:
+        try:
+            _analytics_service_instance = AnalyticsService(
+                config=config.get("analytics_service", {}),
+                connection_manager=connection_manager_instance # Pass manager
+            )
+            logger.info("AnalyticsService initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
+
+    logger.info("Application services initialization attempt complete.")
+
 
 def get_feed_manager() -> FMClass:
-    if feed_manager_instance is None: raise RuntimeError("FeedManager not initialized.")
+    if feed_manager_instance is None:
+        raise RuntimeError("FeedManager not initialized.")
     return feed_manager_instance
 
+
 def get_connection_manager() -> ConnectionManager:
-     if connection_manager_instance is None:
-          raise RuntimeError("WebSocket ConnectionManager not initialized.")
-     return connection_manager_instance
+    if connection_manager_instance is None:
+        # This should ideally not happen if initialize_services is called at startup
+        raise RuntimeError("WebSocket ConnectionManager not initialized.")
+    return connection_manager_instance
+
 
 def get_traffic_signal_service() -> TrafficSignalService:
     if _traffic_signal_service_instance is None:
-        # This path should ideally not be taken if initialize_services is called at startup.
         logger.error("TrafficSignalService accessed before initialization!")
         raise RuntimeError("TrafficSignalService not initialized.")
     return _traffic_signal_service_instance
 
-def get_analytics_service() -> AnalyticsService: # New getter
+
+def get_analytics_service() -> AnalyticsService:
     if _analytics_service_instance is None:
         logger.error("AnalyticsService accessed before initialization!")
         raise RuntimeError("AnalyticsService not initialized.")
     return _analytics_service_instance
 
-async def shutdown_services(): # Make async for feed manager shutdown
-    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance
+
+async def shutdown_services():
+    # Use global keyword to modify module-level variables
+    global feed_manager_instance, connection_manager_instance
+    global _traffic_signal_service_instance, _analytics_service_instance
     logger.info("Shutting down application services...")
+
     if connection_manager_instance:
         try:
             logger.info("Disconnecting all WebSocket connections...")
             await connection_manager_instance.disconnect_all()
-            logger.info("Successfully disconnected all WebSocket connections.")
+            logger.info("WebSocket connections disconnected.")
         except Exception as e:
-            logger.error(f"Failed to disconnect all websockets: {e}")
-    else:
-        logger.info("WebSocket ConnectionManager not initialized, skipping disconnect.")
+            logger.error(f"Error disconnecting WebSockets: {e}", exc_info=True)
+    # connection_manager_instance = None # Clear instance after shutdown
 
     if feed_manager_instance:
         try:
-            logger.info("Requesting FeedManager shutdown from app.services...")
+            logger.info("Shutting down FeedManager...")
             await feed_manager_instance.shutdown()
-            logger.info("FeedManager shutdown completed successfully.")
+            logger.info("FeedManager shut down.")
         except Exception as e:
-            logger.error(f"Error during FeedManager shutdown: {e}")
-    else:
-        logger.info("FeedManager not initialized, skipping shutdown.")
+            logger.error(f"Error during FeedManager shutdown: {e}", exc_info=True)
+    # feed_manager_instance = None
 
     if _traffic_signal_service_instance:
-        await _traffic_signal_service_instance.close() # Call its close method
-        _traffic_signal_service_instance = None
-    
-    # No specific shutdown for AnalyticsService for now, unless it holds resources like DB connections directly
+        try:
+            logger.info("Closing TrafficSignalService...")
+            await _traffic_signal_service_instance.close()
+            logger.info("TrafficSignalService closed.")
+        except Exception as e:
+            logger.error(f"Error closing TrafficSignalService: {e}", exc_info=True)
+    # _traffic_signal_service_instance = None
+
     if _analytics_service_instance:
-        logger.info("AnalyticsService does not require explicit shutdown currently.")
-        _analytics_service_instance = None
-        
-    logger.info("Application services shut down.")
+        logger.info("AnalyticsService does not require explicit async shutdown.")
+        # _analytics_service_instance = None # Clear instance
+
+    logger.info("Application services shutdown process complete.")
+
 
 async def health_check() -> Dict[str, Any]:
     """Performs a health check on critical services."""
-    # Basic health check, can be expanded
-    # For FeedManager, you might check if the result reader task is alive
-    # For Database, you might do a simple query
-    # For external APIs (like traffic signal controller), you might ping them
-    fm_status = "FeedManager not initialized" 
-    fm_healthy = False
+    fm_status, fm_healthy = "FeedManager not initialized", False
     if feed_manager_instance:
-        fm_status = "FeedManager initialized"
-        # Add more detailed checks if needed, e.g., _feed_manager._result_reader_task.done() / .exception()
-        fm_healthy = feed_manager_instance._result_reader_task is not None and not feed_manager_instance._result_reader_task.done()
-        fm_status += f", ResultReader: {'Alive' if fm_healthy else 'Not Alive'}"
-        
-    # Add checks for other services like TSS, Analytics if they have health indicators
-    tss_status = "TrafficSignalService not initialized or no health check implemented."
-    as_status = "AnalyticsService not initialized or no health check implemented."
-    
+        fm_healthy = (feed_manager_instance._result_reader_task is not None and
+                      not feed_manager_instance._result_reader_task.done())
+        fm_status = f"FeedManager initialized, ResultReader: {'Alive' if fm_healthy else 'Not Alive'}"
+
+    cm_status = "Not Initialized"
+    active_ws_connections = 0
+    if connection_manager_instance:
+        cm_status = "Initialized"
+        active_ws_connections = len(connection_manager_instance.active_connections)
+
+    tss_status = "Not Initialized"
     if _traffic_signal_service_instance:
-        # Placeholder: a real TSS health check might try a benign API call
-        tss_status = "TrafficSignalService initialized."
+        tss_status = "Initialized" # Add more specific health check if available
 
+    as_status = "Not Initialized"
     if _analytics_service_instance:
-        as_status = "AnalyticsService initialized."
+        as_status = "Initialized" # Add more specific health check if available
 
+    overall_healthy = fm_healthy # Critical service
     return {
-        "status": "healthy" if fm_healthy else "degraded", # Overall status based on critical components
+        "status": "healthy" if overall_healthy else "degraded",
         "timestamp": datetime.utcnow().isoformat(),
         "services": {
             "feed_manager": {"status": fm_status, "healthy": fm_healthy},
-            "connection_manager": {"status": "Initialized" if connection_manager_instance else "Not Initialized", 
-                                   "active_connections": len(connection_manager_instance.active_connections) if connection_manager_instance else 0},
+            "connection_manager": {"status": cm_status, "active_connections": active_ws_connections},
             "traffic_signal_service": {"status": tss_status},
             "analytics_service": {"status": as_status}
-            # Add database health here
         }
     }

@@ -1,18 +1,19 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/websocket/connection_manager.py
 
-import asyncio
+# import asyncio # F401: Unused import
 import logging
 from typing import List, Dict, Any, Set, Optional
 from fastapi import WebSocket, WebSocketDisconnect, WebSocketState
 import json
 from datetime import datetime
-import firebase_admin # For auth checking in WS
+import firebase_admin
 from firebase_admin import auth
 
-from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification, GeneralNotification # Import new models
-# from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
+from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification, GeneralNotification
+# from app.dependencies import get_current_active_user_ws # Placeholder
 
 logger = logging.getLogger(__name__)
+
 
 class ActiveWebSocketConnection:
     def __init__(self, websocket: WebSocket, client_id: str, manager: 'ConnectionManager'):
@@ -30,44 +31,48 @@ class ActiveWebSocketConnection:
         await self.websocket.send_text(text)
 
     async def send_json_model(self, message: WebSocketMessage):
-        """Sends a Pydantic model as JSON over WebSocket."""
+        """Sends a Pydantic model as JSON over WebSocket if connected."""
         try:
             if self.websocket.client_state == WebSocketState.CONNECTED:
                 await self.websocket.send_json(message.model_dump(mode='json'))
             else:
-                logger.warning(f"Attempted to send to non-connected websocket: {self.client_id}, state: {self.websocket.client_state}")
-        except Exception as e: # Catch potential errors if socket is already closed
+                logger.warning(f"WS {self.client_id} not connected, state: {self.websocket.client_state}")
+        except Exception as e:
             logger.error(f"Error sending JSON model to {self.client_id}: {e}")
-            # Should trigger disconnect logic if this fails repeatedly
+            # Consider triggering disconnect logic here if send fails repeatedly
 
     async def close(self, code: int = 1000, reason: Optional[str] = None):
-        closed_by_this_call = False
-        try:
-            if self.websocket.client_state == WebSocketState.CONNECTED:
+        """Closes the WebSocket connection and ensures manager cleanup."""
+        closed_by_call = False
+        current_state = self.websocket.client_state
+        if current_state == WebSocketState.CONNECTED:
+            try:
                 await self.websocket.close(code=code, reason=reason)
-                closed_by_this_call = True
-                logger.debug(f"WebSocket {self.client_id} closed by close() method call.")
-        except Exception as e:
-            logger.warning(f"Exception during explicit close for {self.client_id}: {e}. State: {self.websocket.client_state}")
-        finally:
-            # Always ensure the manager removes the connection, even if already closed or error during close
-            self.manager.disconnect(self.client_id)
-            if closed_by_this_call:
-                 logger.info(f"ActiveWebSocketConnection {self.client_id} gracefully closed and disconnected.")
-            else:
-                 logger.info(f"ActiveWebSocketConnection {self.client_id} ensured disconnected by manager (was potentially already closed or error on close).")
+                closed_by_call = True
+                logger.debug(f"WebSocket {self.client_id} closed by close() call.")
+            except Exception as e:
+                logger.warning(f"Exception during explicit close for {self.client_id}: {e}. State: {current_state}")
+        # Ensure manager cleanup regardless of close success or if already closed
+        self.manager.disconnect(self.client_id) # This will pop it from active_connections
+        if closed_by_call:
+            logger.info(f"WS Connection {self.client_id} gracefully closed and disconnected.")
+        elif current_state != WebSocketState.DISCONNECTED : # Log if not already disconnected by other means
+            logger.info(f"WS Connection {self.client_id} ensured disconnected (was {current_state}).")
+
 
     async def handle_incoming_message(self, data_raw: Any):
-        """Handles incoming messages, parsing, authentication, and command dispatch."""
+        """Handles incoming messages: parsing, authentication, command dispatch."""
         try:
             if isinstance(data_raw, str):
                 data = json.loads(data_raw)
-            elif isinstance(data_raw, bytes): # Handle bytes if necessary
-                 data = json.loads(data_raw.decode('utf-8'))
-            else: # Assuming it's already a dict (e.g. from websocket.receive_json())
+            elif isinstance(data_raw, bytes):  # Handle bytes if necessary
+                data = json.loads(data_raw.decode('utf-8'))
+            # Assuming it's already a dict (e.g. from websocket.receive_json())
+            else:
                 data = data_raw
         except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON message from {self.client_id}: {data_raw}")
+            logger.error(
+                f"Failed to decode JSON message from {self.client_id}: {data_raw}")
             await self.send_json_model(
                 WebSocketMessage(
                     event_type=WebSocketMessageTypeEnum.ERROR,
@@ -79,7 +84,8 @@ class ActiveWebSocketConnection:
             )
             return
         except Exception as e:
-            logger.error(f"Error processing incoming message from {self.client_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error processing incoming message from {self.client_id}: {e}", exc_info=True)
             await self.send_json_model(
                 WebSocketMessage(
                     event_type=WebSocketMessageTypeEnum.ERROR,
@@ -95,8 +101,9 @@ class ActiveWebSocketConnection:
 
         try:
             message = WebSocketMessage(**data)
-        except Exception as e: # Pydantic validation error or other
-            logger.warning(f"Invalid WebSocketMessage structure from {self.client_id}: {data}. Error: {e}")
+        except Exception as e:  # Pydantic validation error or other
+            logger.warning(
+                f"Invalid WebSocketMessage structure from {self.client_id}: {data}. Error: {e}")
             await self.send_json_model(
                 WebSocketMessage(
                     event_type=WebSocketMessageTypeEnum.ERROR,
@@ -109,116 +116,86 @@ class ActiveWebSocketConnection:
             return
 
         if message.event_type == WebSocketMessageTypeEnum.AUTHENTICATE:
-            token = message.payload.get("token") if isinstance(message.payload, dict) else None
+            token = message.payload.get("token") if isinstance(
+                message.payload, dict) else None
             if token:
                 user = await self.manager._verify_firebase_token(token)
                 if user:
                     self.user_info = user
                     self.auth_pending = False
-                    logger.info(f"Client {self.client_id} authenticated successfully. UID: {user.get('uid')}")
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                            payload=GeneralNotification(message="Authentication successful.")
-                        )
-                    )
+                    logger.info(f"Client {self.client_id} authenticated. UID: {user.get('uid')}")
+                    await self.send_json_model(WebSocketMessage(
+                        event_type=WebSocketMessageTypeEnum.AUTH_SUCCESS, # Changed to specific type
+                        payload=GeneralNotification(message="Authentication successful.")
+                    ))
                 else:
                     logger.warning(f"Client {self.client_id} authentication failed.")
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            event_type=WebSocketMessageTypeEnum.ERROR,
-                            payload=ErrorNotification(
-                                code="AUTH_FAILED",
-                                message="Authentication failed. Invalid token."
-                            )
-                        )
-                    )
-                    # Optionally, close connection after failed auth attempt
-                    # await self.close(code=4001, reason="Authentication Failed")
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
-                        payload=ErrorNotification(
-                            code="AUTH_TOKEN_MISSING",
-                            message="Authentication token missing."
-                        )
-                    )
-                )
-            return
-
-        # All further messages require authentication
-        if self.auth_pending and not self.user_info:
-            logger.warning(f"Client {self.client_id} attempted action before authentication. Message: {message.event_type}")
-            await self.send_json_model(
-                WebSocketMessage(
+                    await self.send_json_model(WebSocketMessage(
+                        event_type=WebSocketMessageTypeEnum.AUTH_FAILURE, # Changed to specific type
+                        payload=ErrorNotification(code="AUTH_FAILED", message="Invalid token.")
+                    ))
+                    # Optionally close: await self.close(code=4001, reason="Auth Failed")
+            else: # No token provided
+                await self.send_json_model(WebSocketMessage(
                     event_type=WebSocketMessageTypeEnum.ERROR,
-                    payload=ErrorNotification(
-                        code="AUTH_REQUIRED",
-                        message="Authentication required before sending other messages."
-                    )
-                )
-            )
+                    payload=ErrorNotification(code="AUTH_TOKEN_MISSING", message="Auth token missing.")
+                ))
             return
 
-        # Handle other message types (subscriptions, commands, etc.)
+        # Check authentication for subsequent messages
+        if self.auth_pending and not self.user_info: # Should be self.user_info is None
+            logger.warning(f"Client {self.client_id} action before auth: {message.event_type}")
+            await self.send_json_model(WebSocketMessage(
+                event_type=WebSocketMessageTypeEnum.ERROR,
+                payload=ErrorNotification(code="AUTH_REQUIRED", message="Authentication required.")
+            ))
+            return
+
+        # Command handling based on message type
         if message.event_type == WebSocketMessageTypeEnum.SUBSCRIBE:
             topic = message.payload.get("topic") if isinstance(message.payload, dict) else None
             if topic and isinstance(topic, str):
                 self.subscriptions.add(topic)
-                logger.info(f"Client {self.client_id} subscribed to {topic}. Current subscriptions: {self.subscriptions}")
-                await self.send_json_model(
-                    WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        payload=GeneralNotification(message=f"Subscribed to {topic}")
-                    )
-                )
+                logger.info(f"Client {self.client_id} subscribed to {topic}. Subs: {self.subscriptions}")
+                await self.send_json_model(WebSocketMessage(
+                    event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
+                    payload=GeneralNotification(message=f"Subscribed to {topic}")
+                ))
             else:
-                 await self.send_json_model(
-                    WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
-                        payload=ErrorNotification(code="INVALID_SUBSCRIPTION_TOPIC", message="Invalid or missing topic for subscription.")
-                    )
-                )
-
+                await self.send_json_model(WebSocketMessage(
+                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    payload=ErrorNotification(code="INVALID_TOPIC", message="Invalid topic.")
+                ))
         elif message.event_type == WebSocketMessageTypeEnum.UNSUBSCRIBE:
             topic = message.payload.get("topic") if isinstance(message.payload, dict) else None
             if topic and isinstance(topic, str) and topic in self.subscriptions:
                 self.subscriptions.remove(topic)
-                logger.info(f"Client {self.client_id} unsubscribed from {topic}. Current subscriptions: {self.subscriptions}")
-                await self.send_json_model(
-                    WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        payload=GeneralNotification(message=f"Unsubscribed from {topic}")
-                    )
-                )
+                logger.info(f"Client {self.client_id} unsubscribed from {topic}. Subs: {self.subscriptions}")
+                await self.send_json_model(WebSocketMessage(
+                    event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
+                    payload=GeneralNotification(message=f"Unsubscribed from {topic}")
+                ))
             else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
-                        payload=ErrorNotification(code="INVALID_UNSUBSCRIPTION_TOPIC", message="Invalid, missing, or not subscribed topic for unsubscription.")
-                    )
-                )
-        
+                await self.send_json_model(WebSocketMessage(
+                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    payload=ErrorNotification(code="INVALID_TOPIC", message="Topic not found or invalid.")
+                ))
         elif message.event_type == WebSocketMessageTypeEnum.PING:
-            await self.send_json_model(
-                WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.PONG,
-                    payload={"timestamp": datetime.utcnow().isoformat()}
-                )
-            )
-
+            await self.send_json_model(WebSocketMessage(
+                event_type=WebSocketMessageTypeEnum.PONG,
+                payload={"timestamp": datetime.utcnow().isoformat()}
+            ))
         else:
             logger.warning(f"Unhandled message type from {self.client_id}: {message.event_type}")
-            await self.send_json_model(
-                 WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
-                    payload=ErrorNotification(code="UNHANDLED_MESSAGE_TYPE", message=f"Message type '{message.event_type}' not handled.")
-                )
-            )
+            await self.send_json_model(WebSocketMessage(
+                event_type=WebSocketMessageTypeEnum.ERROR,
+                payload=ErrorNotification(code="UNHANDLED_TYPE", message=f"Type '{message.event_type}' not handled.")
+            ))
+
 
 class ConnectionManager:
     """Manages active WebSocket connections."""
+
     def __init__(self):
         self.active_connections: Dict[str, ActiveWebSocketConnection] = {}
         logger.info("ConnectionManager initialized.")
@@ -228,108 +205,109 @@ class ConnectionManager:
         try:
             await connection.accept()
             self.active_connections[client_id] = connection
-            logger.info(f"Client {client_id} connected. Total connections: {len(self.active_connections)}")
-        except WebSocketDisconnect:
-            logger.warning(f"Client {client_id} disconnected before connection could be fully established.")
-            # Ensure no lingering connection object if accept fails
-            if client_id in self.active_connections: # Should not happen if accept is first
-                del self.active_connections[client_id]
-            # Optionally call connection.close() if it has resources to clean up even without full connect
-            # await connection.close() # This would trigger disconnect again, so be careful
+            logger.info(f"Client {client_id} connected. Total: {len(self.active_connections)}")
+        except WebSocketDisconnect: # This exception occurs if client disconnects during accept
+            logger.warning(f"Client {client_id} disconnected before full connection establishment.")
+            # No need to explicitly delete from active_connections, as it wasn't added or will be handled by disconnect
+        except Exception as e:
+            logger.error(f"Error during connect for {client_id}: {e}", exc_info=True)
+            # Ensure cleanup if accept fails partway
+            if client_id in self.active_connections: del self.active_connections[client_id]
+
 
     def disconnect(self, client_id: str):
-        connection = self.active_connections.pop(client_id, None)
-        if connection:
-            logger.info(f"Client {client_id} removed from ConnectionManager. Remaining connections: {len(self.active_connections)}")
-            # DO NOT call connection.close() here to avoid recursion if disconnect is called from connection.close()
+        """Removes a connection from the manager. Called by ActiveWebSocketConnection.close() or if error."""
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+            logger.info(f"Client {client_id} removed from ConnectionManager. Remaining: {len(self.active_connections)}")
         else:
-            logger.debug(f"Attempted to disconnect non-existent or already removed client: {client_id}")
+            logger.debug(f"Attempted to disconnect already removed/unknown client: {client_id}")
+
 
     async def _verify_firebase_token(self, token: str) -> Optional[Dict[str, Any]]:
-        if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
-            logger.error("Firebase Admin SDK default app not initialized. Cannot authenticate WebSocket user.")
+        # E713: Test for membership should be 'not in'
+        if firebase_admin._DEFAULT_APP_NAME not in firebase_admin._apps:
+            logger.error("Firebase Admin SDK default app not initialized for WebSocket auth.")
             return None
         try:
             decoded_token = auth.verify_id_token(token, check_revoked=True)
-            return decoded_token
-        except auth.RevokedIdTokenError:
-            logger.warning("WebSocket Auth: Token has been revoked.")
-        except auth.UserDisabledError:
-            logger.warning("WebSocket Auth: User account is disabled.")
-        except auth.InvalidIdTokenError as e:
-            logger.warning(f"WebSocket Auth: Invalid ID token: {e}")
-        except Exception as e:
-            logger.error(f"WebSocket Auth: Error verifying Firebase ID token: {e}", exc_info=True)
+            return decoded_token # Contains 'uid' and other user info
+        except auth.RevokedIdTokenError: logger.warning("WS Auth: Token revoked.")
+        except auth.UserDisabledError: logger.warning("WS Auth: User account disabled.")
+        except auth.InvalidIdTokenError as e: logger.warning(f"WS Auth: Invalid ID token: {e}")
+        except Exception as e: logger.error(f"WS Auth: Error verifying Firebase ID token: {e}", exc_info=True)
         return None
 
     async def handle_incoming_message(self, client_id: str, data_raw: Any):
-        # This method is called by the FastAPI endpoint
+        """Route incoming message to the appropriate ActiveWebSocketConnection instance."""
         connection = self.active_connections.get(client_id)
         if connection:
             await connection.handle_incoming_message(data_raw)
         else:
-            logger.warning(f"Received message for unknown or disconnected client {client_id}. Ignoring.")
+            logger.warning(f"Message for unknown/disconnected client {client_id}. Ignoring.")
 
     async def broadcast_message_model(self, message: WebSocketMessage, specific_topic: Optional[str] = None):
-        logger.debug(f"Broadcasting model (type: {message.event_type}, topic: {specific_topic or 'all'}) to {len(self.active_connections)} potential clients.")
-        
-        # Create a list of connections to iterate over, in case connections are modified during iteration
+        """Broadcasts a Pydantic model to relevant, connected, and authenticated clients."""
+        log_msg = f"Broadcasting model (type: {message.event_type}, topic: {specific_topic or 'all'})"
+        logger.debug(f"{log_msg} to {len(self.active_connections)} potential clients.")
+
+        # Iterate over a copy of connections for safe modification if a send fails and leads to disconnect
         connections_to_send_to = list(self.active_connections.values())
 
-        for connection in connections_to_send_to:
-            # Check if the connection is still valid/active before attempting to send
-            if connection.client_id not in self.active_connections:
-                logger.debug(f"Skipping broadcast to {connection.client_id} as it was disconnected during broadcast.")
+        for conn in connections_to_send_to:
+            if conn.client_id not in self.active_connections: # Check if still active
+                logger.debug(f"Skipping broadcast to {conn.client_id}: disconnected during broadcast.")
                 continue
 
+            # Determine if this connection should receive the message
             should_send = False
-            if specific_topic:
-                if specific_topic in connection.subscriptions:
+            if specific_topic: # Topic-specific message
+                if specific_topic in conn.subscriptions: should_send = True
+            else: # General broadcast (not topic-specific)
+                # Send general notifications/errors even if auth is pending for things like auth_failure
+                if not conn.auth_pending or message.event_type in [
+                    WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
+                    WebSocketMessageTypeEnum.ERROR_NOTIFICATION, # Allow error broadcasts
+                    WebSocketMessageTypeEnum.PONG, # Allow pongs
+                    WebSocketMessageTypeEnum.AUTH_FAILURE, # Allow auth failure messages
+                    # Consider if AUTH_SUCCESS should be broadcast or only personal
+                ]:
                     should_send = True
-            else: # Broadcast to all (potentially filtered by auth status)
-                if not connection.auth_pending or message.event_type in [WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, WebSocketMessageTypeEnum.ERROR, WebSocketMessageTypeEnum.PONG]:
-                    should_send = True
-            
+
             if should_send:
-                if connection.websocket.client_state == WebSocketState.CONNECTED:
-                    await connection.send_json_model(message)
-                else:
-                    logger.warning(f"Skipping broadcast to {connection.client_id}: WebSocket not connected. State: {connection.websocket.client_state}")
-                    # Consider triggering disconnect if consistently not connected, though send_json_model might handle it
-                    # or the main receive loop will catch disconnect.
+                await conn.send_json_model(message) # send_json_model handles check for connected state
+
 
     async def send_personal_message_model(self, client_id: str, message: WebSocketMessage):
+        """Sends a Pydantic model as JSON to a specific client."""
         connection = self.active_connections.get(client_id)
         if connection:
             await connection.send_json_model(message)
-            logger.debug(f"Sent personal model message (type: {message.event_type}) to client {client_id}")
+            logger.debug(f"Sent personal model (type: {message.event_type}) to client {client_id}")
         else:
-            logger.warning(f"Attempted to send personal model to unknown or non-connected client: {client_id}")
+            logger.warning(f"Attempted personal model to unknown/disconnected client: {client_id}")
 
     async def disconnect_all(self):
+        """Disconnects all active WebSocket connections."""
         logger.info(f"Initiating disconnect for all {len(self.active_connections)} active WebSocket connections...")
-        # Iterate over a copy of client_ids for safe removal
+        # Iterate over a copy of client_ids for safe removal from the dictionary
         client_ids_to_disconnect = list(self.active_connections.keys())
-        
         for client_id in client_ids_to_disconnect:
-            connection = self.active_connections.get(client_id) # Get an up-to-date reference
+            connection = self.active_connections.get(client_id)
             if connection:
                 logger.debug(f"Requesting close for connection {client_id} during disconnect_all.")
-                await connection.close(code=1001) # 1001: Going Away
-                # connection.close() will call manager.disconnect(client_id)
-            else:
-                logger.debug(f"Connection {client_id} already removed before explicit close in disconnect_all.")
-        
-        if not self.active_connections:
-            logger.info("All WebSocket connections have been closed and removed.")
-        else:
-            logger.warning(f"{len(self.active_connections)} connections still remain after disconnect_all. This might indicate an issue.")
-            # Forcing removal if any linger due to unforeseen issues with close not triggering disconnect
-            for client_id in list(self.active_connections.keys()):
-                 logger.warning(f"Forcibly removing lingering connection: {client_id}")
-                 self.disconnect(client_id)
+                await connection.close(code=1001, reason="Server shutting down") # 1001: Going Away
+        if not self.active_connections: # Check if all were removed by connection.close() -> manager.disconnect()
+            logger.info("All WebSocket connections have been closed and removed from manager.")
+        else: # Should ideally be empty
+            logger.warning(f"{len(self.active_connections)} connections linger post disconnect_all. Forcing removal.")
+            for client_id in list(self.active_connections.keys()): # Force remove any stragglers
+                logger.warning(f"Forcibly removing lingering connection: {client_id}")
+                self.disconnect(client_id)
+
 
     def get_connection_info(self, client_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves information about a specific connection."""
         connection = self.active_connections.get(client_id)
         if connection:
             return {
@@ -352,9 +330,11 @@ class ConnectionManager:
             try:
                 await websocket.send_json(data)
             except Exception as e:
-                 logger.error(f"Error sending personal json to {client_id}: {e}")
+                logger.error(
+                    f"Error sending personal json to {client_id}: {e}")
         else:
-            logger.warning(f"Attempted to send personal json to unknown or non-connected client: {client_id}")
+            logger.warning(
+                f"Attempted to send personal json to unknown or non-connected client: {client_id}")
 
     async def broadcast_json(self, data: dict):
         disconnected_clients: List[str] = []
@@ -363,7 +343,8 @@ class ConnectionManager:
                 try:
                     await websocket.send_json(data)
                 except Exception as e:
-                    logger.error(f"Error sending broadcast json to client {client_id}: {e}")
+                    logger.error(
+                        f"Error sending broadcast json to client {client_id}: {e}")
                     disconnected_clients.append(client_id)
             else:
                 disconnected_clients.append(client_id)

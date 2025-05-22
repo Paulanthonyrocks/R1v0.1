@@ -66,7 +66,7 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
     const aggregateData = (data: TrendDataPoint[], timeRange: 'day' | 'week' | 'month') => {
       if (timeRange === 'day') return data; // No aggregation for daily data
 
-      let interval: 'hour' | 'day' = timeRange === 'week' ? 'hour' : 'day';
+      const interval: 'hour' | 'day' = timeRange === 'week' ? 'hour' : 'day';
       const aggregatedData: TrendDataPoint[] = [];
       const groups: { [key: string]: TrendDataPoint[] } = {};
 

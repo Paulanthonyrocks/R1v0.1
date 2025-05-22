@@ -15,8 +15,8 @@ from .utils import (
     visualize_data,
     LicensePlatePreprocessor,
     DatabaseManager,
-    load_config, # Make sure load_config is exposed
-    merge_dicts # Expose if used elsewhere, maybe keep internal?
+    load_config,  # Make sure load_config is exposed
+    # merge_dicts # F401: Unused '.utils.merge_dicts'
 )
 
 logger = logging.getLogger(__name__)
@@ -35,5 +35,5 @@ __all__ = [
     "LicensePlatePreprocessor",
     "DatabaseManager",
     "load_config",
-    # "merge_dicts", # Only include if needed externally
+    # "merge_dicts", # Not included as it's commented out above
 ]

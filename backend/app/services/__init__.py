@@ -3,13 +3,13 @@
 import logging
 
 # Import the functions/classes you want to expose directly from the package level
-from .services import ( # Assuming your file is named services.py
+from .services import (
     initialize_services,
     shutdown_services,
     get_feed_manager,
     get_connection_manager,
-    feed_manager_instance, # Expose instance if needed directly (less common)
-    connection_manager_instance # Expose instance if needed directly (less common)
+    # feed_manager_instance, # F401: Unused import
+    # connection_manager_instance # F401: Unused import
 )
 # Optional: Import specific classes if they are needed elsewhere directly
 # from .feed_manager import FeedManager # If FeedManager class is in its own file

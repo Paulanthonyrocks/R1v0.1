@@ -34,6 +34,7 @@ MOCK_INCIDENTS = [
     },
 ]
 
+
 @router.get("/api/v1/incidents", summary="Get live incidents (real or mock)")
 async def get_incidents(fm: FeedManager = Depends(get_feed_manager)) -> List[dict]:
     """Return a list of incidents generated from real feed analytics if available, else mock data."""
@@ -63,4 +64,4 @@ async def get_incidents(fm: FeedManager = Depends(get_feed_manager)) -> List[dic
         # Log error if needed
         pass
     # Fallback to mock data
-    return MOCK_INCIDENTS 
+    return MOCK_INCIDENTS

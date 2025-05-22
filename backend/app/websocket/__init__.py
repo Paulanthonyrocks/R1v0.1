@@ -2,9 +2,10 @@
 
 import logging
 
-from .connection_manager import ConnectionManager # Ensure this line is correct
+from .connection_manager import ConnectionManager  #  Ensure this line is correct
 
 logger = logging.getLogger(__name__)
 logger.debug("app.websocket package initialized.")
 
 __all__ = ["ConnectionManager"]
+# W292 no newline at end of file - Adding newline
