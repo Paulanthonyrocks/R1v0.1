@@ -1,207 +1,186 @@
-Traffic Management Hub Implementation Plan
-Project Overview
-The Traffic Management Hub aims to provide a centralized system for monitoring, analyzing, and managing traffic flow in a designated area. The initial phase will focus on ingesting real-time traffic data, providing basic visualization, and offering initial tools for managing traffic signals.
-Goals:
+# Implementation Plan: Pavement Analysis Frontend (Next.js)
 
-Ingest real-time traffic data from various sources.
-Visualize traffic conditions on an interactive map.
-Provide a user interface for controlling traffic signals.
-Lay the foundation for future features like predictive analysis and route optimization.
+This document outlines the implementation plan for the frontend of the Pavement Analysis system, integrating with the Python backend via API endpoints.
 
-Immediate Next Steps & Key Features
-1. Data Ingestion Module
-Overview: Establish the pipeline for receiving and processing real-time traffic data.
-Tasks:
+## Technology Stack
 
-Identify and integrate with data sources (e.g., traffic sensors, cameras, third-party APIs).
-Set up data ingestion pipelines for real-time data streaming.
-Implement data validation and preprocessing to ensure data quality.
+*   **Framework:** Next.js (React)
+*   **Styling:** Tailwind CSS
+*   **Data Visualization:** Potentially Chart.js or Recharts for trend data (future)
+*   **API Communication:** Fetch API or Axios
+*   **State Management:** React Hooks (useState, useContext) for simpler cases, potentially a lightweight library like Zustand or Jotai if complexity grows.
 
-Technologies:
+## Project Structure (Proposed)
 
-Apache Kafka: For real-time data streaming and handling high-throughput data.
-MongoDB: For scalable storage of time-series traffic data.
-REST APIs or WebSockets: For ingesting data from external sources.
+```
+pavement_frontend/
+├── public/                 # Static assets
+│   └── ...
+├── src/
+│   ├── api/                # API utility functions
+│   │   └── index.js
+│   ├── components/         # Reusable React components
+│   │   ├── Layout.js
+│   │   ├── FileUpload.js
+│   │   ├── VideoPlayer.js
+│   │   ├── ImageGallery.js
+│   │   ├── AnalysisControls.js
+│   │   ├── SummaryReport.js
+│   │   └── LoadingSpinner.js
+│   ├── pages/              # Next.js pages (routes)
+│   │   ├── index.js        # Landing/Home page
+│   │   └── analysis.js     # Analysis results page
+│   ├── styles/             # Tailwind CSS configuration and global styles
+│   │   └── globals.css
+│   ├── lib/                # Utility functions (non-React)
+│   │   └── ...
+│   └── app/                # App Router directory (if using Next.js 13+/14 with App Router)
+│       └── ...
+├── tailwind.config.js
+├── postcss.config.js
+├── next.config.js
+├── package.json
+└── ...
+```
 
-Considerations:
+## Key Frontend Components and Functionality
 
-Ensure the system can handle high-volume, real-time data.
-Implement fault tolerance and data recovery mechanisms.
-Plan for scalability as data sources increase.
+### 1. File Upload Component (`components/FileUpload.js`)
 
-2. Real-Time Visualization
-Overview: Develop the frontend to display traffic data on an interactive map.
-Tasks:
+*   **Purpose:** Allow users to select video or image files/directories for analysis.
+*   **Features:**
+    *   Input field for file selection (`<input type="file">`).
+    *   Option to select single video or multiple images (handle directory upload if possible, or guide users to zip/upload one-by-one initially).
+    *   Display selected file names.
+    *   Button to initiate upload to the backend API.
+    *   Visual feedback during upload (loading indicator).
 
-Implement real-time updates on the map using WebSockets or long-polling.
-Display basic traffic conditions (e.g., color-coded roads based on congestion levels).
+### 2. Analysis Controls Component (`components/AnalysisControls.js`)
 
-Technologies:
+*   **Purpose:** Provide input fields and controls for backend parameters.
+*   **Features:**
+    *   Toggle switch for "Use Deep Learning" (`args.use_dl`).
+    *   Input field for "DL Model Path" (`args.model_path` - might be less user-friendly to expose directly, perhaps dropdown of available models on backend?).
+    *   Input field for "Frame Skip" (`args.frame_skip`).
+    *   Input field for "Calibration File Path" (`args.calib_file` - similar considerations as model path).
+    *   Input field for "Segment Area (m²)" (`args.segment_area`).
+    *   Input field/Interactive UI for "Region of Interest (ROI)" (`args.roi_points`):
+        *   Initially, a text input for the string format.
+        *   Future enhancement: An interactive image viewer where users can click/draw a polygon.
+    *   Button to trigger the analysis API call with the selected parameters.
 
-Leaflet or Mapbox GL JS: For rendering interactive maps.
-WebSockets (e.g., Socket.IO): For real-time data updates.
-React.js or Vue.js: For building a dynamic frontend.
+### 3. Video Player / Image Gallery with Overlay (`components/VideoPlayer.js`, `components/ImageGallery.js`)
 
-Considerations:
+*   **Purpose:** Display the processed frames from the backend, including visualization overlays.
+*   **Features:**
+    *   **Video:**
+        *   Standard HTML5 video player (`<video>`).
+        *   Overlay a `<canvas>` element on top of the video.
+        *   Draw bounding boxes, masks (if applicable), labels, and PCI score on the canvas for each frame, synchronized with video playback.
+        *   Potentially pre-render overlays or fetch overlay data per frame as video plays.
+    *   **Images:**
+        *   Display processed images in a gallery or slideshow format.
+        *   Each image already includes the overlays rendered by the backend.
+    *   Navigation controls (play/pause, seek for video; next/previous for images).
+    *   Display current frame ID and timestamp.
 
-Ensure smooth performance with real-time updates.
-Optimize for mobile and desktop views.
-Plan for future overlays (e.g., incident markers, live camera feeds).
+### 4. Summary Report Component (`components/SummaryReport.js`)
 
-Dependency: This module depends on the Data Ingestion Module to provide real-time traffic data.
-3. Traffic Signal Control Interface (Basic)
-Overview: Provide a basic user interface for controlling traffic signals (initially a dummy implementation).
-Tasks:
+*   **Purpose:** Display the tabular data generated by the backend report generator.
+*   **Features:**
+    *   Data table (`<table>` or a component library like TanStack Table).
+    *   Columns for 'frame\_id', 'timestamp', 'pci\_score', 'num\_distresses', 'distress\_details'.
+    *   Ability to sort and filter data (future).
+    *   Option to download the raw CSV report.
 
-Lay the groundwork for future integration with actual traffic signal systems.
+### 5. Loading Indicator (`components/LoadingSpinner.js`)
 
-Technologies:
+*   **Purpose:** Provide visual feedback during long-running processes (file upload, analysis).
+*   **Features:**
+    *   Simple spinner or progress bar.
+    *   Display text indicating the current stage (Uploading, Analyzing Frame X/Y).
 
-Frontend Framework: Same as the visualization module (e.g., React.js or Vue.js).
-Backend API: Use a framework like Node.js or Django for dummy endpoints.
-Security: Plan for future security measures (e.g., authentication, encryption).
+### 6. Layout Component (`components/Layout.js`)
 
-Considerations:
+*   **Purpose:** Define the basic page structure (header, main content area, footer - if needed).
+*   **Features:**
+    *   Consistent navigation (simple header for now).
+    *   Container for page content.
 
-Focus on UI/UX for ease of use by traffic operators.
-Ensure the API design is flexible for future real integrations.
-Document the dummy implementation for a smooth transition to real systems.
+### 7. API Utility Functions (`src/api/index.js`)
 
-Future Features (Beyond Immediate Steps)
-User Authentication and Authorization
-Overview: Implement a secure system for user login and managing user roles/permissions. This is crucial for controlling access to sensitive features like traffic signal control.
-Tasks:
+*   **Purpose:** Centralize API calls to the backend.
+*   **Functions:**
+    *   `uploadData(file, analysisParams)`: Sends file and parameters to the backend `/analyze` endpoint.
+    *   `getProcessedFrame(frameId)`: Fetches a specific processed image frame.
+    *   `getSummaryReport()`: Fetches the summary report data.
+    *   Potentially other endpoints for listing available models/calibration files if implemented on backend.
 
-Set up a user authentication service (e.g., Firebase Authentication, Auth0, or a custom solution).
-Implement user registration, login, and password recovery flows.
-Define user roles (e.g., admin, operator, viewer).
-Implement authorization checks to restrict access to specific features based on user roles.
-Secure API endpoints to require authentication and authorization.
+### 8. Pages (`src/pages/index.js`, `src/pages/analysis.js`)
 
-Technologies:
+*   **`index.js` (Home/Upload Page):**
+    *   Contains the `FileUpload` and `AnalysisControls` components.
+    *   Handles the workflow of selecting files, setting parameters, and triggering the analysis API.
+    *   Navigates the user to the `/analysis` page once analysis starts or completes (depending on backend API design).
+*   **`analysis.js` (Results Page):**
+    *   Fetches and displays analysis results.
+    *   Contains the `VideoPlayer`/`ImageGallery` and `SummaryReport` components.
+    *   Handles state for displaying different frames/images and managing the report data.
 
-Firebase Authentication or Auth0: For quick setup and robust security features.
-JWT (JSON Web Tokens): For secure token-based authentication.
-Backend Framework: For implementing authorization logic and securing endpoints.
+## Backend API Endpoints (Required)
 
-Considerations:
+The Python backend (`main_processor.py`) needs to be wrapped or adapted to expose API endpoints. A simple REST API using Flask or FastAPI would be suitable.
 
-Prioritize security, especially for features like traffic signal control.
-Ensure scalability for a growing user base.
-Consider multi-factor authentication for added security.
+*   **`POST /upload_and_analyze`:**
+    *   Receives file data (video or images) and analysis parameters (ROI, DL toggle, etc.).
+    *   Triggers the `main_orchestrator` process.
+    *   Returns a status update (e.g., analysis started, processing frame X) or initiates a long-polling/WebSocket connection for real-time updates.
+    *   Ideally, runs analysis in the background and returns an analysis job ID.
+*   **`GET /analysis_status/:job_id`:**
+    *   Check the progress/status of an analysis job.
+*   **`GET /processed_frames/:job_id/:frame_id`:**
+    *   Retrieves a specific processed image frame (with overlays) from the backend's output directory for a given job. Returns the image binary.
+*   **`GET /summary_report/:job_id`:**
+    *   Retrieves the summary report data (e.g., as JSON) for a given job.
 
-Real-Time Traffic Data Display
-Overview: Enhance the real-time visualization module from the immediate steps to display more detailed and dynamic traffic information on the map, potentially including advanced overlays and data types.
-Tasks:
+*(Note: Implementing robust background jobs and status tracking on the backend requires additional libraries/patterns like Celery, threading, or async processing, which are outside the scope of the current Python scripts but essential for a responsive UI).*
 
-Develop components to display various types of traffic data overlays (e.g., traffic flow lines with color coding, incident markers with tooltips, live camera feeds).
-Implement interactive tooltips and data pop-ups for map elements.
-Add filters for users to customize the data displayed (e.g., by time, type of incident).
+## Implementation Steps
 
-Technologies:
+1.  **Set up Next.js Project:** Create a new Next.js project with Tailwind CSS.
+2.  **Backend API Stub:** Create a basic Flask/FastAPI application with placeholder endpoints to simulate backend responses.
+3.  **Frontend Basic Structure:** Create the `Layout` component and the initial `index.js` and `analysis.js` pages. Set up basic navigation.
+4.  **File Upload Implementation:** Build the `FileUpload` component and connect it to a basic upload API endpoint stub.
+5.  **Analysis Controls Implementation:** Build the `AnalysisControls` component and capture input values.
+6.  **API Integration:** Implement the `src/api/index.js` functions to communicate with the backend endpoints.
+7.  **Trigger Analysis:** Modify the `index.js` page to send files and parameters to the backend when the analysis button is clicked. Handle navigation/state change.
+8.  **Display Processed Frames:**
+    *   If video, implement `VideoPlayer` with canvas overlay logic. This is complex due to synchronization. Start with fetching pre-rendered frames for simplicity.
+    *   If image directory, implement `ImageGallery` to display fetched processed images.
+    *   Modify the backend to save processed frames.
+    *   Modify `analysis.js` to fetch and display these frames using the new API endpoints.
+9.  **Display Summary Report:** Implement the `SummaryReport` component and fetch the report data from the backend API.
+10. **Loading/Status:** Integrate the `LoadingSpinner` and display status updates during the analysis process.
+11. **Refine UI/UX:** Improve styling with Tailwind, add error handling, and enhance user feedback.
+12. **Connect to Real Backend:** Once the backend API is implemented (wrapping the Python scripts), connect the frontend API calls to the actual backend.
+13. **Interactive ROI (Future):** If time permits, enhance the ROI input to be interactive.
+14. **Advanced Visualization (Future):** Implement charts for PCI trends over time if sequential data is processed.
 
-Mapbox GL JS: For advanced mapping features and 3D visualizations.
-D3.js: For custom data visualizations and overlays.
-WebRTC: For potential live camera feed integration.
+## Challenges
 
-Considerations:
+*   **Backend Integration:** Designing a robust API that can handle file uploads, long-running analysis, and efficiently serve processed frames and data.
+*   **Video Frame Synchronization:** Synchronizing video playback with dynamic drawing on a canvas overlay based on backend analysis results. Fetching individual processed frames might be more feasible initially.
+*   **Large Data Transfer:** Handling potentially large video files or directories of images, and transferring processed frame data back to the frontend.
+*   **Real-time Feedback:** Providing granular updates on the analysis progress to the user.
+*   **Error Handling:** Clearly communicating errors from both the frontend and backend to the user.
 
-Ensure the map remains responsive with multiple overlays.
-Optimize data fetching to prevent performance bottlenecks.
-Plan for accessibility and user-friendly interactions.
+## Success Criteria
 
-Advanced Analytics and Reporting
-Overview: Provide tools for analyzing historical traffic data and generating reports.
-Tasks:
+*   Users can upload pavement data (video/images) via the UI.
+*   Users can configure basic analysis parameters.
+*   The analysis process is successfully triggered on the backend via an API call.
+*   Processed frames with detected distress overlays are displayed to the user.
+*   The summary report (PCI, distress details) is displayed in a readable format.
+*   The UI provides feedback during processing.
 
-Implement data aggregation and analytics pipelines.
-Develop dashboards for visualizing traffic trends and patterns.
-Allow users to generate and export custom reports.
-
-Technologies:
-
-Apache Spark or Pandas: For data processing and analytics.
-Tableau or Power BI: For creating interactive dashboards.
-PostgreSQL: For querying and analyzing large datasets.
-
-Considerations:
-
-Ensure data privacy and compliance with regulations.
-Focus on actionable insights for traffic management decisions.
-
-Predictive Traffic Modeling
-Overview: Use machine learning to predict traffic congestion and suggest optimizations.
-Tasks:
-
-Collect and preprocess historical traffic data.
-Develop and train predictive models (e.g., time-series forecasting, regression).
-Integrate predictions into the visualization module.
-
-Technologies:
-
-TensorFlow or PyTorch: For building machine learning models.
-Apache Airflow: For scheduling and managing data pipelines.
-Redis: For caching predictions and reducing latency.
-
-Considerations:
-
-Ensure model accuracy and reliability.
-Plan for continuous model retraining with new data.
-
-Route Optimization Engine
-Overview: Provide optimized routing suggestions based on real-time and predicted traffic conditions.
-Tasks:
-
-Implement algorithms for calculating optimal routes.
-Integrate with the visualization module to display suggested routes.
-Allow users to input preferences (e.g., fastest, eco-friendly).
-
-Technologies:
-
-GraphHopper or OSRM (Open Source Routing Machine): For route calculation.
-Redis: For caching frequently requested routes.
-Node.js or Flask: For serving route optimization APIs.
-
-Considerations:
-
-Balance between route accuracy and computation time.
-Ensure scalability for handling multiple simultaneous requests.
-
-Integration with More Diverse Data Sources
-Overview: Expand the system to ingest data from additional sources (e.g., weather, social media, public transit).
-Tasks:
-
-Identify and integrate new data sources.
-Update the data ingestion module to handle diverse data formats.
-Enhance the visualization module to display new data types.
-
-Technologies:
-
-Apache NiFi: For managing complex data flows.
-REST APIs or WebSockets: For real-time data ingestion.
-MongoDB: For storing unstructured data.
-
-Considerations:
-
-Ensure data quality and consistency across sources.
-Plan for potential data privacy issues.
-
-Mobile Application Development
-Overview: Develop a mobile app to extend the hub's functionality to mobile users.
-Tasks:
-
-Design a mobile-friendly UI/UX.
-Implement core features (e.g., real-time traffic view, route optimization).
-Ensure seamless integration with the backend services.
-
-Technologies:
-
-React Native or Flutter: For cross-platform mobile development.
-Firebase: For real-time database and authentication.
-Mapbox SDK: For mobile map integration.
-
-Considerations:
-
-Optimize for performance on mobile devices.
-Ensure offline functionality for critical features.
-
+This plan provides a roadmap for building the frontend. The order of steps allows for progressive development and testing, starting with basic functionality and adding complexity.
