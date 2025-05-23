@@ -133,3 +133,13 @@ vis_options_default:
 # --- Interface / Worker Communication ---
 interface:
   camera_warmup_time: 0.5 # Seconds to wait after initializing camera source
+
+# --- Pavement Analysis Configuration ---
+pavement_analysis:
+  camera_calibration:
+    calibration_file: ./data/calibration_params.npz
+  ml_model:
+    model_path: ./models/pavement/pavement_model.pt
+  storage:
+    image_output_dir: ./data/pavement_images
+    report_output_dir: ./data/pavement_reports

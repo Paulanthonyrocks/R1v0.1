@@ -25,7 +25,8 @@ from app.routers import (
     alerts, 
     video, 
     incidents,
-    personalized_routes
+    personalized_routes,
+    pavement
 )
 from . import api
 # Initializers/Getters - Import config initializer now
