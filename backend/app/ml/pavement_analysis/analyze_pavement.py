@@ -8,8 +8,8 @@ from typing import List, Dict, Any
 import os
 from datetime import datetime
 
-from ..reporting.report_generator import generate_analysis_report
-from ..models.pavement import PavementAnalysisResponse, PavementDistress, Measurement, DistressType
+from .reporting.report_generator import generate_analysis_report
+from ...models.pavement import PavementAnalysisResponse, PavementDistress, Measurement, DistressType
 from .utils.camera_calibration import load_calibration_params, undistort_image, get_pixel_to_mm_ratio
 from .utils.image_preprocessing import preprocess_image, apply_roi
 from .detection_modules.ml_detector import load_ml_model, detect_distresses_ml

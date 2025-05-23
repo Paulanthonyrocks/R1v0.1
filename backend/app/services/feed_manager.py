@@ -307,18 +307,18 @@ class FeedManager:
                  congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / congestion_thresh)))), 1) 
              elif speed_limit_kpi > 0 and running_feeds > 0: 
                  congestion_index = round(max(0, min(100, 100 * (1 - (avg_speed_kpi / speed_limit_kpi)))), 1) 
-            
-            metrics_payload = GlobalRealtimeMetrics(
-                metrics_source="FeedManagerGlobalKPIs",
-                congestion_index=congestion_index,
-                average_speed_kmh=avg_speed_kpi,
-                active_incidents_count=active_incidents_kpi, 
-                feed_statuses={
-                    FeedOperationalStatusEnum.RUNNING.value: running_feeds,
-                    FeedOperationalStatusEnum.ERROR.value: error_feeds,
-                    FeedOperationalStatusEnum.STOPPED.value: idle_feeds 
-                }
-            )
+             
+             metrics_payload = GlobalRealtimeMetrics(
+                 metrics_source="FeedManagerGlobalKPIs",
+                 congestion_index=congestion_index,
+                 average_speed_kmh=avg_speed_kpi,
+                 active_incidents_count=active_incidents_kpi, 
+                 feed_statuses={
+                     FeedOperationalStatusEnum.RUNNING.value: running_feeds,
+                     FeedOperationalStatusEnum.ERROR.value: error_feeds,
+                     FeedOperationalStatusEnum.STOPPED.value: idle_feeds 
+                 }
+             )
         
         message = WebSocketMessage(
             event_type=WebSocketMessageTypeEnum.GLOBAL_REALTIME_METRICS_UPDATE,
@@ -753,7 +753,7 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
 
-    def _update_registry_status(self, entry, feed_id: str):
+    async def _update_registry_status(self, entry, feed_id: str):
         """Update registry status based on process state, called after process joins."""
         # This method is called when a process has finished (either normally or with error)
         # Lock should be acquired by caller if modifying shared state

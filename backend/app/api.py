@@ -10,7 +10,7 @@ from app.models.traffic import TrafficData, LocationModel # Added LocationModel 
 
 from app.dependencies import get_current_active_user, get_tss
 from app.services.traffic_signal_service import TrafficSignalService, TrafficSignalControlError
-
+from app.services.feed_manager import FeedManager
 from app.services.services import get_feed_manager
 from app.database import get_database_manager
 
