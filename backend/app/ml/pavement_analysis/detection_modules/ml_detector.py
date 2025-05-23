@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 import torch
 import torchvision
+import numpy as np
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)

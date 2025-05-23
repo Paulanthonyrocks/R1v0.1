@@ -4,8 +4,12 @@ import logging
 import time
 import numpy as np
 import queue
+from typing import Dict, Optional, Set, Tuple, Union, TYPE_CHECKING, Any
+import multiprocessing
 from multiprocessing import Queue as MPQueue, Event as MPEvent, Value
-from typing import Dict, Optional, Set, Tuple, Union # Ensure Tuple and Union are imported
+
+if TYPE_CHECKING:
+    import numpy as np
 from pathlib import Path
 
 try:
@@ -47,10 +51,20 @@ except ImportError as e:
 
 # --- Process Video Function ---
 def process_video(
-    video_path: str, frame_queue: MPQueue, stop_event: MPEvent, alerts_queue: MPQueue,
-    config: Dict, feed_id: str, confidence_threshold: float, proximity_threshold: int,
-    track_timeout: int, vis_options: Set[str], reduce_frame_rate_event: MPEvent,
-    global_fps: Value, db_queue: Optional[MPQueue] = None, error_queue: Optional[MPQueue] = None,
+    video_path: str,
+    frame_queue: "multiprocessing.Queue[Tuple[str, int, 'np.ndarray', Dict, Dict, Dict]]",
+    stop_event: Any,  # multiprocessing.Event
+    alerts_queue: "multiprocessing.Queue[Dict]",
+    config: Dict,
+    feed_id: str,
+    confidence_threshold: float,
+    proximity_threshold: int,
+    track_timeout: int,
+    vis_options: Set[str],
+    reduce_frame_rate_event: Any,  # multiprocessing.Event
+    global_fps: Any,  # multiprocessing.Value
+    db_queue: Optional["multiprocessing.Queue[Dict]"] = None,
+    error_queue: Optional["multiprocessing.Queue[str]"] = None
 ) -> None:
     # Configure logging specific to this process
     log_level_str = config.get('logging', {}).get('level', 'INFO').upper()
