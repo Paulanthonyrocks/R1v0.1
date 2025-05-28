@@ -9,7 +9,6 @@ from firebase_admin import auth
 from .database import get_database_manager
 from .services import (
     get_feed_manager, 
-    get_connection_manager, 
     get_traffic_signal_service, 
     get_analytics_service,
     get_personalized_routing_service,
