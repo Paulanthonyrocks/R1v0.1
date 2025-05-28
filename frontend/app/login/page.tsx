@@ -95,6 +95,12 @@ const LoginPage: React.FC = () => {
             {loading ? 'Logging In...' : 'Login'}
           </button>
         </form>
+        <p className="text-center text-sm mt-4">
+          Don&apos;t have an account?{' '}
+          <a href="/signup" className="text-primary hover:underline">
+            Sign up
+          </a>
+        </p>
       </div>
     </div>
   );
