@@ -11,6 +11,8 @@ node_modules/
 # Secrets (NEVER commit secrets!)
 secrets.txt
 .env
+.env.local
+backend/configs/firebase/service-account-key.json
 
 # Large data files (consider Git LFS if necessary)
 *.dat

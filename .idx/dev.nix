@@ -54,19 +54,8 @@
 
   idx.extensions = [
     # ... (keep all your extensions) ...
-    "amazonwebservices.amazon-q-vscode"
-    "Angular.ng-template"
-    "anysphere.pyright"
-    "bradlc.vscode-tailwindcss"
-    "cweijan.dbclient-jdbc"
-    "cweijan.vscode-mysql-client2"
-    "dbaeumer.vscode-eslint"
-    "eamodio.gitlens"
-    "EditorConfig.EditorConfig"
     "esbenp.prettier-vscode"
     "GitHub.vscode-pull-request-github"
-    "golang.go"
-    "ms-azuretools.vscode-docker"
     "ms-pyright.pyright"
     "ms-python.debugpy"
     "ms-python.python"
@@ -76,18 +65,6 @@
     "ms-toolsai.vscode-jupyter-cell-tags"
     "ms-toolsai.vscode-jupyter-slideshow"
     "ms-vscode.js-debug"
-    "PKief.material-icon-theme"
-    "rangav.vscode-thunder-client"
-    "redhat.java"
-    "redhat.vscode-yaml"
-    "rust-lang.rust-analyzer"
-    "saoudrizwan.claude-dev"
-    "vscjava.vscode-gradle"
-    "vscjava.vscode-java-debug"
-    "vscjava.vscode-java-dependency"
-    "vscjava.vscode-java-pack"
-    "vscjava.vscode-java-test"
-    "vscjava.vscode-maven"
    ]; # End of idx.extensions
 
   idx.previews = {
@@ -137,7 +114,7 @@
       # Install frontend dependencies
       npm-install = "cd frontend && npm install";
       # Install ONLY Python dependencies NOT managed by Nix
-      pip-install = "cd backend && pip install --no-cache-dir -r requirements.txt";
+      pip-install = "cd backend && pip install --no-cache-dir -r firebase_requirements.txt";
     }; # end onCreate
 
     # Commands to run every time the workspace starts
