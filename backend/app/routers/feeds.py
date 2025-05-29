@@ -24,6 +24,7 @@ class FeedCreateResponse(BaseModel):
     id: str
     status: str = "starting"
     message: str
+    initial_status: Optional[str] = None
 
 class StandardResponse(BaseModel):
     success: bool = True
@@ -35,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import JSONResponse
 
 # Import Dependencies
-from app.dependencies import get_feed_manager, get_current_active_user
+from app.dependencies import get_feed_manager, get_current_active_user, get_current_active_user_optional
 # Import Services
 from app.services.feed_manager import FeedManager, FeedNotFoundError, FeedOperationError, ResourceLimitError
 import logging
@@ -49,13 +50,13 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=List[FeedStatusData],
+    response_model=List[FeedStatus],
     summary="Get Status of All Feeds",
     description="Retrieves the current status, source, FPS, and potential errors for all known feeds.",
 )
 async def get_feeds_status(
     fm: FeedManager = Depends(get_feed_manager)
-) -> List[FeedStatusData]:
+) -> List[FeedStatus]:
     """
     Endpoint to get the status of all registered feeds.
     """
@@ -95,7 +96,7 @@ async def add_and_start_feed(
         return FeedCreateResponse(
             feed_id=feed_id, 
             message=f"Feed '{request.name}' added. Start attempt: {'successful' if start_success else 'failed'}.",
-            initial_status=current_status.status if current_status else FeedOperationalStatusEnum.ERROR
+            initial_status=current_status.status if current_status else "error"
         )
     except ResourceLimitError as e:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
@@ -107,7 +108,7 @@ async def add_and_start_feed(
 
 @router.post(
     "/{feed_id}/start",
-    response_model=FeedStatusData,
+    response_model=FeedStatus,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start an Existing Stopped Feed",
 )
@@ -115,7 +116,7 @@ async def start_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_active_user)
-) -> FeedStatusData:
+) -> FeedStatus:
     """
     Endpoint to start a feed that is currently stopped. Requires authentication.
     """
@@ -144,14 +145,14 @@ async def start_feed(
 
 @router.post(
     "/{feed_id}/stop",
-    response_model=FeedStatusData,
+    response_model=FeedStatus,
     summary="Stop a Running Feed",
 )
 async def stop_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_active_user)
-) -> FeedStatusData:
+) -> FeedStatus:
     """
     Endpoint to stop a feed that is currently running or starting. Requires authentication.
     """
@@ -247,12 +248,12 @@ async def delete_feed(
             pass # Let it return 204 if not found by remove_feed
     return # No content on success
 
-@router.get("/{feed_id}", response_model=FeedStatusData, summary="Get Status of a Specific Feed")
+@router.get("/{feed_id}", response_model=FeedStatus, summary="Get Status of a Specific Feed")
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: Optional[dict] = Depends(get_current_active_user_optional) # Optional auth
-) -> FeedStatusData:
+) -> FeedStatus:
     """Endpoint to get the current status of a specific feed."""
     # if current_user:
     #     logger.info(f"User {current_user.get('email')} requesting status for feed {feed_id}")
