@@ -100,7 +100,7 @@ class FeedManager:
         if sample_path_str:
             resolved_path = Path(sample_path_str) # Assuming load_config resolved it
             if resolved_path.exists():
-                feed_id = self._generate_feed_id(str(resolved_path), "Sample")
+                feed_id = self._generate_feed_id(str(resolved_path), "Sample Video")
                 # Add to registry with 'stopped' status initially
                 self.process_registry[feed_id] = {
                     'process': None, 'result_queue': None, 'stop_event': None,
@@ -108,7 +108,11 @@ class FeedManager:
                     'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
                     'is_sample_feed': True, # Mark as sample feed
                     'is_looped_feed': True,
-                    'config_info': FeedConfigInfo(source=str(resolved_path), name_hint="Sample Video", is_sample=True, is_looped=True) # Store config info
+                    'config_info': FeedConfigInfo(
+                        name="Sample Video", 
+                        source_type="video_file", 
+                        source_identifier=str(resolved_path)
+                    )
                 }
                 self._sample_feed_id = feed_id # Store the sample feed ID
                 logger.info(f"Initialized sample feed '{feed_id}' as {FeedOperationalStatusEnum.STOPPED}.")
@@ -165,9 +169,21 @@ class FeedManager:
                             logger.warning(f"Invalid status string '{op_status}' for feed {feed_id}, defaulting to ERROR")
                             op_status = FeedOperationalStatusEnum.ERROR
 
+                    config_info_entry = entry.get('config_info')
+                    if not isinstance(config_info_entry, FeedConfigInfo):
+                        source_val = entry.get('source', 'Unknown Source')
+                        # Attempt to infer name and source_type for fallback
+                        name_val = Path(source_val).name if Path(source_val).is_file() or '/' in source_val or '\\\\' in source_val else "Unknown Feed Name"
+                        source_type_val = "video_file" if Path(source_val).suffix else "unknown" # Basic inference
+                        config_info_entry = FeedConfigInfo(
+                            name=name_val,
+                            source_type=source_type_val,
+                            source_identifier=source_val
+                        )
+                    
                     status_data = FeedStatusData(
                         feed_id=feed_id,
-                        config=entry.get('config_info', FeedConfigInfo(source=entry['source'])), # Use stored or default config_info
+                        config=config_info_entry,
                         status=op_status,
                         current_fps=entry['timer'].get_fps('loop_total')
                         if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
@@ -207,9 +223,20 @@ class FeedManager:
                 except ValueError:
                     op_status = FeedOperationalStatusEnum.ERROR
 
+            config_info_entry = entry.get('config_info')
+            if not isinstance(config_info_entry, FeedConfigInfo):
+                source_val = entry.get('source', 'Unknown Source')
+                name_val = Path(source_val).name if Path(source_val).is_file() or '/' in source_val or '\\\\' in source_val else "Unknown Feed Name"
+                source_type_val = "video_file" if Path(source_val).suffix else "unknown"
+                config_info_entry = FeedConfigInfo(
+                    name=name_val,
+                    source_type=source_type_val,
+                    source_identifier=source_val
+                )
+
             feed_status_data = FeedStatusData(
                 feed_id=feed_id,
-                config=entry.get('config_info', FeedConfigInfo(source=entry['source'])),
+                config=config_info_entry,
                 status=op_status,
                 current_fps=entry['timer'].get_fps('loop_total')
                 if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING

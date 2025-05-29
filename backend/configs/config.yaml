@@ -143,3 +143,9 @@ pavement_analysis:
   storage:
     image_output_dir: ./data/pavement_images
     report_output_dir: ./data/pavement_reports
+
+# --- Firebase Admin SDK Configuration ---
+firebase_admin:
+  service_account_key_path: backend/configs/firebase/service-account-key.json
+  # You need to place your Firebase service account key JSON file at this location
+  # This file can be downloaded from Firebase Console -> Project Settings -> Service Accounts

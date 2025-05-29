@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 EXTERNAL_CONTROLLER_API_URL = "http://localhost:8082/mock/signals"
 
+class TrafficSignalControlError(Exception):
+    """Custom exception for traffic signal control errors."""
+    pass
+
 class TrafficSignalService:
     def __init__(self, config: Dict[str, Any], connection_manager: ConnectionManager):
         self.config = config
@@ -41,7 +45,7 @@ class TrafficSignalService:
                     signal_id=signal_id,
                     location_description=sig_conf.get("location_description", "Unknown Location"),
                     current_phase=SignalPhaseEnum.UNKNOWN,
-                    operational_status=SignalOperationalStatusEnum.OPERATIONAL,
+                    operational_status=SignalOperationalStatusEnum.operational,
                     last_updated=datetime.utcnow()
                 )
         logger.info(f"Initialized {len(self._signal_states)} mock signals.")
@@ -97,7 +101,7 @@ class TrafficSignalService:
                 current_signal_state = self._signal_states[signal_id]
                 current_signal_state.current_phase = phase
                 current_signal_state.last_updated = datetime.utcnow()
-                current_signal_state.operational_status = SignalOperationalStatusEnum.OPERATIONAL
+                current_signal_state.operational_status = SignalOperationalStatusEnum.operational
                 
                 await self._broadcast_signal_state_update(signal_id, current_signal_state)
                 
@@ -119,14 +123,14 @@ class TrafficSignalService:
         except httpx.HTTPStatusError as e:
             logger.error(f"External API error setting phase for {signal_id}: {e.response.status_code} - {e.response.text}")
             if signal_id in self._signal_states:
-                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.ERROR
+                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.error
                 self._signal_states[signal_id].last_updated = datetime.utcnow()
                 await self._broadcast_signal_state_update(signal_id, self._signal_states[signal_id])
             return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ERROR, message=f"External API error: {e.response.status_code}", timestamp=datetime.utcnow())
         except httpx.RequestError as e:
             logger.error(f"Request error setting phase for {signal_id}: {e}")
             if signal_id in self._signal_states:
-                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.ERROR
+                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.error
                 self._signal_states[signal_id].last_updated = datetime.utcnow()
                 await self._broadcast_signal_state_update(signal_id, self._signal_states[signal_id])
             return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ERROR, message="Request error", timestamp=datetime.utcnow())

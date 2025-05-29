@@ -1,83 +1,79 @@
 import logging
 from pathlib import Path
 import torch
-import torchvision
+from ultralytics import YOLO
 import numpy as np
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = Path(__file__).parent.parent.parent.parent.parent / "models" / "pavement"
-CLASSES = ['longitudinal_crack', 'transverse_crack', 'alligator_crack', 'pothole', 'rutting']
+MODEL_PATH = Path(__file__).parent.parent.parent.parent.parent / "models" / "yolov8n.pt"
+# Map YOLOv8 classes to our pavement distress types where possible
+YOLO_TO_DISTRESS_MAP = {
+    'crack': 'longitudinal_crack',  # Default to longitudinal for general cracks
+    'pothole': 'pothole',
+    'road damage': 'rutting'  # Map general road damage to rutting
+}
 
-def load_ml_model(model_path: str = None) -> torch.nn.Module:
+def load_ml_model(model_path: str = None) -> YOLO:
     """
-    Load the ML model for pavement distress detection
+    Load the YOLOv8 model for object detection
     Args:
         model_path: Optional path to model weights. If None, uses default path
     Returns:
-        Loaded PyTorch model
+        Loaded YOLO model
     """
     global model
     try:
         if model_path is None:
-            model_path = "./models/pavement/pavement_model.pt"
+            model_path = str(MODEL_PATH)
             
-        logger.info(f"Loading ML model from {model_path}")
-        model = torch.load(model_path)
-        model.eval()
+        logger.info(f"Loading YOLOv8 model from {model_path}")
+        model = YOLO(model_path)
         return model
     except Exception as e:
-        logger.error(f"Error loading ML model: {str(e)}")
+        logger.error(f"Error loading YOLOv8 model: {str(e)}")
         raise
 
-def detect_distresses_ml(image: np.ndarray, model: torch.nn.Module) -> List[Dict[str, Any]]:
+def detect_distresses_ml(image: np.ndarray, model: YOLO) -> List[Dict[str, Any]]:
     """
-    Detect pavement distresses using ML model
+    Detect pavement distresses using YOLOv8 model
     Args:
         image: Input image as numpy array
-        model: Loaded ML model
+        model: Loaded YOLO model
     Returns:
         List of detected distresses with their locations and confidence scores
     """
     try:
-        # Convert image to tensor and normalize
-        transform = torchvision.transforms.Compose([
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
-        ])
+        # Run inference
+        results = model(image, conf=0.25)  # Lower confidence threshold for testing
         
-        input_tensor = transform(image).unsqueeze(0)
-        
-        with torch.no_grad():
-            predictions = model(input_tensor)
-            
-        # Process predictions into standard format
         detections = []
-        for pred in predictions[0]:
-            bbox = pred[:4].tolist()
-            conf = float(pred[4])
-            class_idx = int(pred[5])
+        for r in results[0]:  # Process first image's results
+            bbox = r.boxes
+            cls = int(bbox.cls[0])
+            conf = float(bbox.conf[0])
+            xyxy = bbox.xyxy[0].tolist()  # Get box coordinates in (x1, y1, x2, y2) format
             
-            if conf > 0.5:  # Confidence threshold
-                detection = {
-                    'type': CLASSES[class_idx],
-                    'bbox': {
-                        'x1': bbox[0],
-                        'y1': bbox[1],
-                        'x2': bbox[2],
-                        'y2': bbox[3]
-                    },
-                    'confidence': conf,
-                    'measurements': {}  # To be filled by measurement modules
-                }
-                detections.append(detection)
+            # Get class name and map it to our distress types
+            class_name = model.names[cls].lower()
+            distress_type = YOLO_TO_DISTRESS_MAP.get(class_name, 'unknown_distress')
+            
+            detection = {
+                'type': distress_type,
+                'bbox': {
+                    'x1': xyxy[0],
+                    'y1': xyxy[1],
+                    'x2': xyxy[2],
+                    'y2': xyxy[3]
+                },
+                'confidence': conf,
+                'measurements': {}  # To be filled by measurement modules
+            }
+            detections.append(detection)
                 
         return detections
         
     except Exception as e:
-        logger.error(f"Error during ML detection: {str(e)}")
+        logger.error(f"Error during YOLOv8 detection: {str(e)}")
         raise
