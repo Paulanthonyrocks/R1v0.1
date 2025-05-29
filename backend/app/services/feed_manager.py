@@ -106,8 +106,7 @@ class FeedManager:
                     'process': None, 'result_queue': None, 'stop_event': None,
                     'reduce_fps_event': None, 'status': FeedOperationalStatusEnum.STOPPED, 'source': str(resolved_path),
                     'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
-                    'is_sample_feed': True, # Mark as sample feed
-                    'is_looped_feed': True,
+                    'is_sample_feed': True, # Mark as sample feed                    'is_looped_feed': True,
                     'config_info': FeedConfigInfo(
                         name="Sample Video", 
                         source_type="video_file", 
@@ -169,6 +168,7 @@ class FeedManager:
                             logger.warning(f"Invalid status string '{op_status}' for feed {feed_id}, defaulting to ERROR")
                             op_status = FeedOperationalStatusEnum.ERROR
 
+<<<<<<< HEAD
                     config_info_entry = entry.get('config_info')
                     if not isinstance(config_info_entry, FeedConfigInfo):
                         source_val = entry.get('source', 'Unknown Source')
@@ -184,6 +184,11 @@ class FeedManager:
                     status_data = FeedStatusData(
                         feed_id=feed_id,
                         config=config_info_entry,
+=======
+                    status_data = FeedStatusData(
+                        feed_id=feed_id,
+                        config=entry.get('config_info', FeedConfigInfo(source=entry['source'])), # Use stored or default config_info
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                         status=op_status,
                         current_fps=entry['timer'].get_fps('loop_total')
                         if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
@@ -223,6 +228,7 @@ class FeedManager:
                 except ValueError:
                     op_status = FeedOperationalStatusEnum.ERROR
 
+<<<<<<< HEAD
             config_info_entry = entry.get('config_info')
             if not isinstance(config_info_entry, FeedConfigInfo):
                 source_val = entry.get('source', 'Unknown Source')
@@ -237,6 +243,11 @@ class FeedManager:
             feed_status_data = FeedStatusData(
                 feed_id=feed_id,
                 config=config_info_entry,
+=======
+            feed_status_data = FeedStatusData(
+                feed_id=feed_id,
+                config=entry.get('config_info', FeedConfigInfo(source=entry['source'])),
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                 status=op_status,
                 current_fps=entry['timer'].get_fps('loop_total')
                 if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING

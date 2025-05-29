@@ -3,7 +3,6 @@
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
 import firebase_admin
 from firebase_admin import auth, credentials
 
@@ -81,6 +80,7 @@ async def get_event_service_api() -> EventService:
 # Scheme for API key header
 auth_scheme = HTTPBearer()
 
+<<<<<<< HEAD
 # from .auth.auth_dev import DUMMY_TOKENS # Commenting out dummy token logic
 
 async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> dict:
@@ -93,6 +93,20 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
         # Consider moving Firebase app initialization to main.py or a config module.
         # For now, we will log an error and raise an exception.
         # logger.error("Firebase Admin SDK default app not initialized.")
+=======
+async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> dict:
+    """
+    Dependency to get the current active user by verifying Firebase ID token.
+    Extracts token from 'Authorization: Bearer <token>' header.
+    """
+    if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
+        # This might happen if Firebase Admin SDK failed to initialize
+        # Or if it was initialized with a custom app name not stored in _DEFAULT_APP_NAME
+        # Log an error and raise an internal server error or a specific HTTPException
+        # For simplicity, raising a generic 503 Service Unavailable if Firebase app isn't ready.
+        # In a production system, this should be monitored closely.
+        # logger.error("Firebase Admin SDK default app not initialized. Cannot authenticate user.")
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Firebase authentication service not available.",
@@ -101,6 +115,7 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
     if not token or not token.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
+<<<<<<< HEAD
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -116,12 +131,32 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked. Please reauthenticate.",
+=======
+            detail="Not authenticated or bearer token missing",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        # Verify the ID token while checking if the token is revoked by passing check_revoked=True.
+        decoded_token = auth.verify_id_token(token.credentials, check_revoked=True)
+        # You can add additional checks here, e.g., check user roles from the token if they are set as custom claims
+        # For example: if not decoded_token.get("admin"): raise HTTPException(status_code=403, detail="Not authorized")
+        return decoded_token
+    except auth.RevokedIdTokenError:
+        # Token has been revoked. Inform the user to reauthenticate.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked, please re-authenticate.",
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.UserDisabledError:
         # Token belongs to a disabled user account.
         raise HTTPException(
+<<<<<<< HEAD
             status_code=status.HTTP_401_UNAUTHORIZED,
+=======
+            status_code=status.HTTP_403_FORBIDDEN,
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
             detail="User account is disabled.",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -140,6 +175,7 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
             detail=f"Could not validate credentials: {e}",
         )
 
+<<<<<<< HEAD
     # Commenting out the DUMMY_TOKENS logic as Firebase auth is preferred for production
     # user_data = DUMMY_TOKENS.get(token.credentials)
     # if not user_data:
@@ -150,6 +186,8 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
     #     )
     # return user_data
 
+=======
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
 async def get_current_active_user_optional(token: HTTPAuthorizationCredentials = Depends(auth_scheme, use_cache=False)) -> Optional[dict]:
     """
     Dependency to get the current user if authenticated, otherwise None.
@@ -175,6 +213,7 @@ async def get_current_active_user_optional(token: HTTPAuthorizationCredentials =
         # logger.error(f"Unexpected error verifying Firebase ID token for optional user: {e}", exc_info=True)
         return None
 
+<<<<<<< HEAD
 security = HTTPBearer()
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
@@ -212,6 +251,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+=======
+>>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
 # You might also need get_connection_manager if used as a dependency
 # async def get_cm():
 #     cm = get_connection_manager()

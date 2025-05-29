@@ -140,8 +140,7 @@ pavement_analysis:
     calibration_file: ./data/calibration_params.npz
   ml_model:
     model_path: ./models/pavement/pavement_model.pt
-  storage:
-    image_output_dir: ./data/pavement_images
+  storage:    image_output_dir: ./data/pavement_images
     report_output_dir: ./data/pavement_reports
 
 # --- Firebase Admin SDK Configuration ---

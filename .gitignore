@@ -14,5 +14,10 @@ secrets.txt
 .env.local
 backend/configs/firebase/service-account-key.json
 
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
 # Large data files (consider Git LFS if necessary)
 *.dat
