@@ -1,13 +1,13 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import firebase_admin
 from firebase_admin import auth
 
 from .database import get_database_manager
-from .services import (
+from .services.services import (
     get_feed_manager, 
     get_traffic_signal_service, 
     get_analytics_service,
@@ -137,6 +137,31 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not validate credentials: {e}",
         )
+
+async def get_current_active_user_optional(token: HTTPAuthorizationCredentials = Depends(auth_scheme, use_cache=False)) -> Optional[dict]:
+    """
+    Dependency to get the current user if authenticated, otherwise None.
+    Does not raise HTTPException for missing or invalid tokens, returns None instead.
+    """
+    if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
+        # Log this issue but don't block unauthenticated access if that's intended
+        # logger.error("Firebase Admin SDK default app not initialized. Cannot authenticate optional user.")
+        return None # Or raise 503 if Firebase is critical even for optional auth paths
+
+    if not token or not token.credentials:
+        return None # No token provided, so no user
+    
+    try:
+        # Verify the ID token
+        decoded_token = auth.verify_id_token(token.credentials, check_revoked=True)
+        return decoded_token
+    except (auth.RevokedIdTokenError, auth.UserDisabledError, auth.InvalidIdTokenError):
+        # Token is invalid, revoked, or user is disabled; treat as anonymous
+        return None
+    except Exception:
+        # Unexpected error during token verification; treat as anonymous
+        # logger.error(f"Unexpected error verifying Firebase ID token for optional user: {e}", exc_info=True)
+        return None
 
 # You might also need get_connection_manager if used as a dependency
 # async def get_cm():

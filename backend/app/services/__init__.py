@@ -10,6 +10,10 @@ from .services import ( # Assuming your file is named services.py
     get_connection_manager,
     get_route_optimization_service,
     get_traffic_signal_service,
+    get_analytics_service,
+    get_personalized_routing_service,
+    get_weather_service,
+    get_event_service,
     feed_manager_instance, # Expose instance if needed directly (less common)
     connection_manager_instance # Expose instance if needed directly (less common)
 )
@@ -28,6 +32,10 @@ __all__ = [
     "get_connection_manager",
     "get_route_optimization_service",
     "get_traffic_signal_service",
+    "get_analytics_service",
+    "get_personalized_routing_service",
+    "get_weather_service",
+    "get_event_service",
     # Add class names here if you want them included in '*' import
     # "FeedManager",
 ]

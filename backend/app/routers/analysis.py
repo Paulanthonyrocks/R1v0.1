@@ -15,13 +15,13 @@ class TrendDataPoint(BaseModel):
     high_density_lanes: Optional[int] = None
 
 class LocationPredictionRequest(BaseModel):
-    location: LocationModel
+    location: traffic.LocationModel
     prediction_time: Optional[datetime] = None
     prediction_window_hours: Optional[int] = Field(default=24, ge=1, le=168)
     include_historical_context: Optional[bool] = Field(default=True)
     
 class PredictionResponse(BaseModel):
-    location: LocationModel
+    location: traffic.LocationModel
     prediction_time: datetime
     incident_likelihood: float = Field(..., ge=0, le=1)
     confidence_score: float = Field(..., ge=0, le=1)
@@ -36,7 +36,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 # Models
-from app.models.traffic import AggregatedTrafficTrend, LocationModel, TrafficData, IncidentReport # Added TrafficData, IncidentReport
+from app.models import traffic # Changed import style
 from app.models.signals import SignalState # If analysis needs signal state
 
 # Dependencies
@@ -54,18 +54,18 @@ class TrendQuery(BaseModel):
     aggregation_interval_minutes: Optional[int] = Field(60, ge=5) # e.g., 60 for hourly
 
 class AnomalyDetectionRequest(BaseModel):
-    traffic_data_points: List[TrafficData]
+    traffic_data_points: List[traffic.TrafficData]
     # Optional: context for detection like historical_period_to_compare
 
 class IncidentPredictionRequest(BaseModel):
-    location: LocationModel
+    location: traffic.LocationModel
     prediction_time: Optional[datetime] = None
     # Optional: specific conditions to simulate for prediction
 
 @router.get(
     "/trends",
     # response_model=List[AggregatedTrafficTrend], # Keep old one for now, or make a new endpoint
-    response_model=AggregatedTrafficTrend, # Changed to single for generate_trend_summary
+    response_model=traffic.AggregatedTrafficTrend, # Changed to traffic.AggregatedTrafficTrend
     summary="Get Historical Trend Data or Generate Summary",
     # description="Retrieves aggregated traffic trend data or generates a new summary.",
     dependencies=[Depends(get_current_active_user)] # Protects the whole endpoint set
@@ -82,7 +82,7 @@ async def get_analysis_trends(
     start_date: datetime = Query(..., description="Start date for trend summary (ISO 8601 format)"),
     end_date: datetime = Query(..., description="End date for trend summary (ISO 8601 format)"),
     analytics_svc: AnalyticsService = Depends(get_as)
-) -> AggregatedTrafficTrend:
+) -> traffic.AggregatedTrafficTrend:
     """
     Placeholder: Generates a traffic trend summary for a given region and time period.
     The old functionality of querying pre-aggregated trends from DB can be a separate endpoint or refined.
@@ -94,7 +94,7 @@ async def get_analysis_trends(
 
 @router.post(
     "/detect-anomalies", 
-    response_model=List[IncidentReport],
+    response_model=List[traffic.IncidentReport],
     summary="Detect Traffic Anomalies",
     description="Processes a list of traffic data points to detect anomalies and potential incidents.",
     dependencies=[Depends(get_current_active_user)]
@@ -102,7 +102,7 @@ async def get_analysis_trends(
 async def detect_anomalies(
     request_data: AnomalyDetectionRequest = Body(...),
     analytics_svc: AnalyticsService = Depends(get_as)
-) -> List[IncidentReport]:
+) -> List[traffic.IncidentReport]:
     incidents = await analytics_svc.detect_traffic_anomalies(request_data.traffic_data_points)
     # Optionally, these incidents could be saved to a database here or by the service.
     return incidents
