@@ -4,6 +4,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import logging
 
+from app.models.traffic import LocationModel
+
 logger = logging.getLogger(__name__)
 
 class TrendDataPoint(BaseModel):
@@ -15,13 +17,13 @@ class TrendDataPoint(BaseModel):
     high_density_lanes: Optional[int] = None
 
 class LocationPredictionRequest(BaseModel):
-    location: traffic.LocationModel
+    location: LocationModel
     prediction_time: Optional[datetime] = None
     prediction_window_hours: Optional[int] = Field(default=24, ge=1, le=168)
     include_historical_context: Optional[bool] = Field(default=True)
     
 class PredictionResponse(BaseModel):
-    location: traffic.LocationModel
+    location: LocationModel
     prediction_time: datetime
     incident_likelihood: float = Field(..., ge=0, le=1)
     confidence_score: float = Field(..., ge=0, le=1)
