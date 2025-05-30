@@ -1,25 +1,24 @@
-# .idx/dev.nix
 {pkgs}: {
-  channel = "stable-24.05";
-  
-# .idx/dev.nix
-{pkgs}: {
-  channel = "stable-24.05";
-  
+  channel = "stable-24.05"; # Using a recent stable channel
+
   packages = [
     pkgs.nodejs_20
     pkgs.tesseract
-    # Add the base OpenCV library here if needed system-wide,
-    pkgs.opencv4
+    pkgs.opencv4 # System OpenCV library
     pkgs.docker-compose
     pkgs.sudo
 
     # Define the Python environment with packages managed by Nix
     (pkgs.python311.withPackages (ps: [
-      # --- Core FastAPI ---
+      # --- Core FastAPI & Web ---
       ps.fastapi
       ps.uvicorn
       ps.python-multipart
+      ps.httpx # For async HTTP calls
+      ps.python-jose # Includes cryptography
+      ps.passlib   # For password hashing
+      ps.bcrypt    # Often used with passlib for bcrypt support
+      ps.pydantic  # Explicitly include for version consistency
 
       # --- Configuration & Utilities ---
       ps.pyyaml
@@ -33,23 +32,29 @@
 
       # --- Database ---
       ps.pymongo
+      ps.redis # Python client for Redis
 
       # --- ML/CV Dependencies (Managed by Nix where possible) ---
       ps.pytorch
       ps.torchvision
       ps.torchaudio
-      # ultralytics removed - will be installed via pip
-      ps.opencv4 # <--- Python bindings for OpenCV provided by Nix
+      # ultralytics will be installed via pip (see requirements.txt)
+      ps.opencv4 # Python bindings for OpenCV
       ps.scipy
-      # filterpy removed - will be installed via pip
+      # filterpy will be installed via pip (see requirements.txt)
+      ps.tensorflow-cpu # CPU-only version of TensorFlow
+      ps.scikitlearn
+      ps.scikit-image
+      ps.pandas
+      ps.aiohttp # For async HTTP requests
 
       # --- OCR Dependencies ---
       ps.pillow
       ps.pytesseract
-      ps.google-generativeai # <--- Managed by Nix
+      ps.google-generativeai
 
       # --- Utilities ---
-      ps.pip # Needed for installing extra requirements from requirements.txt
+      ps.pip # Needed for installing requirements from requirements.txt
       # ps.wheel # Usually not needed unless building wheels directly
       # ps.setuptools # Usually pulled in as a dependency if needed
 
@@ -57,130 +62,29 @@
   ]; # End of packages
 
   idx.extensions = [
-    # ... (keep all your extensions) ...
-    "amazonwebservices.amazon-q-vscode"
-    "Angular.ng-template"
-    "anysphere.pyright"
-    "bradlc.vscode-tailwindcss"
-    "cweijan.dbclient-jdbc"
-    "cweijan.vscode-mysql-client2"
-    "dbaeumer.vscode-eslint"
-    "eamodio.gitlens"
-    "EditorConfig.EditorConfig"
-    "esbenp.prettier-vscode"
-    "GitHub.vscode-pull-request-github"
-    "golang.go"
-    "ms-azuretools.vscode-docker"
-    "ms-pyright.pyright"
-    "ms-python.debugpy"
-    "ms-python.python"
-    "ms-toolsai.jupyter"
-    "ms-toolsai.jupyter-keymap"
-    "ms-toolsai.jupyter-renderers"
-    "ms-toolsai.vscode-jupyter-cell-tags"
-    "ms-toolsai.vscode-jupyter-slideshow"
-    "ms-vscode.js-debug"
-    "PKief.material-icon-theme"
-    "rangav.vscode-thunder-client"
-    "redhat.java"
-    "redhat.vscode-yaml"
-    "rust-lang.rust-analyzer"
-    "saoudrizwan.claude-dev"
-    "vscjava.vscode-gradle"
-    "vscjava.vscode-java-debug"
-    "vscjava.vscode-java-dependency"
-    "vscjava.vscode-java-pack"
-    "vscjava.vscode-java-test"
-    "vscjava.vscode-maven"
-   ]; # End of idx.extensions
-
-  idx.previews = {
-    enable = true;
-    pkgs.tesseract
-    # Add the base OpenCV library here if needed system-wide,
-    pkgs.opencv4
-    pkgs.docker-compose
-    pkgs.sudo
-
-    # Define the Python environment with packages managed by Nix
-    (pkgs.python311.withPackages (ps: [
-      # --- Core FastAPI ---
-      ps.fastapi
-      ps.uvicorn
-      ps.python-multipart
-
-      # --- Configuration & Utilities ---
-      ps.pyyaml
-      ps.psutil
-      ps.numpy
-      ps.tenacity
-      ps.aiofiles
-
-      # --- Kafka ---
-      ps.kafka-python
-
-      # --- Database ---
-      ps.pymongo
-
-      # --- ML/CV Dependencies (Managed by Nix where possible) ---
-      ps.pytorch
-      ps.torchvision
-      ps.torchaudio
-      # ultralytics removed - will be installed via pip
-      ps.opencv4 # <--- Python bindings for OpenCV provided by Nix
-      ps.scipy
-      # filterpy removed - will be installed via pip
-
-      # --- OCR Dependencies ---
-      ps.pillow
-      ps.pytesseract
-      ps.google-generativeai # <--- Managed by Nix
-
-      # --- Utilities ---
-      ps.pip # Needed for installing extra requirements from requirements.txt
-      # ps.wheel # Usually not needed unless building wheels directly
-      # ps.setuptools # Usually pulled in as a dependency if needed
-
-    ])) # End of python311.withPackages
-  ]; # End of packages
-
-  idx.extensions = [
-    # ... (keep all your extensions) ...
-    "esbenp.prettier-vscode"
-    "GitHub.vscode-pull-request-github"
-    "ms-pyright.pyright"
-    "ms-python.debugpy"
-    "ms-python.python"
-    "ms-toolsai.jupyter"
-    "ms-toolsai.jupyter-keymap"
-    "ms-toolsai.jupyter-renderers"
-    "ms-toolsai.vscode-jupyter-cell-tags"
-    "ms-toolsai.vscode-jupyter-slideshow"
+    "esbenp.prettier-vscode",
+    "GitHub.vscode-pull-request-github",
+    "ms-pyright.pyright",
+    "ms-python.debugpy",
+    "ms-python.python",
+    "ms-toolsai.jupyter",
+    "ms-toolsai.jupyter-keymap",
+    "ms-toolsai.jupyter-renderers",
+    "ms-toolsai.vscode-jupyter-cell-tags",
+    "ms-toolsai.vscode-jupyter-slideshow",
     "ms-vscode.js-debug"
    ]; # End of idx.extensions
 
   idx.previews = {
     enable = true;
     previews = {
-
       backend = {
-        # Use absolute path for python from the Nix env for clarity
-        # command = ["python", "-m", "uvicorn", ...] might be more robust
         command = [
           "/bin/sh"
           "-c"
           "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 9002 --reload"
         ];
         manager = "web";
-        # Ensure the backend waits for the pip install potentially
-        # startupProbe = { # Optional: Add a probe if startup takes long after install
-        #  httpGet = {
-        #    path = "/docs"; # Or some health check endpoint
-        #    port = 9002;
-        #  };
-        #  initialDelaySeconds = 15; # Wait after pip install might finish
-        #  periodSeconds = 5;
-        #};
       }; # end backend preview
 
       frontend = {
@@ -191,82 +95,28 @@
         ];
         manager = "web";
         env = {
-          # This assumes the backend is accessible via localhost from the frontend container
-          NEXT_PUBLIC_API_URL = "localhost:9002";
-
-      backend = {
-        # Use absolute path for python from the Nix env for clarity
-        # command = ["python", "-m", "uvicorn", ...] might be more robust
-        command = [
-          "/bin/sh"
-          "-c"
-          "cd backend && uvicorn app.main:app --host 0.0.0.0 --port 9002 --reload"
-        ];
-        manager = "web";
-        # Ensure the backend waits for the pip install potentially
-        # startupProbe = { # Optional: Add a probe if startup takes long after install
-        #  httpGet = {
-        #    path = "/docs"; # Or some health check endpoint
-        #    port = 9002;
-        #  };
-        #  initialDelaySeconds = 15; # Wait after pip install might finish
-        #  periodSeconds = 5;
-        #};
-      }; # end backend preview
-
-      frontend = {
-        command = [
-          "/bin/sh"
-          "-c"
-          "cd frontend && npm run dev -- --port 3000 --hostname 0.0.0.0"
-        ];
-        manager = "web";
-        env = {
-          # This assumes the backend is accessible via localhost from the frontend container
           NEXT_PUBLIC_API_URL = "localhost:9002";
         };
       }; # end frontend preview
-
-      }; # end frontend preview
-
     };
   }; # end idx.previews
-  }; # end idx.previews
 
   # Workspace lifecycle hooks
   idx.workspace = {
-    # Commands to run once when the workspace is created or rebuilt
     onCreate = {
-      # Install frontend dependencies
       npm-install = "cd frontend && npm install";
-      # Install ONLY Python dependencies NOT managed by Nix
-      pip-install = "cd backend && pip install --no-cache-dir -r requirements.txt";
+      # Install Python dependencies NOT managed by Nix from both requirement files
+      pip-installs = ''
+        cd backend && \
+        echo "Installing packages from requirements.txt and firebase_requirements.txt via pip..." && \
+        pip install --no-cache-dir -r firebase_requirements.txt && \
+        echo "Pip installations complete."
+      '';
     }; # end onCreate
 
-    # Commands to run every time the workspace starts
     onStart = {
       log-start = "echo Nix environment ready. Starting previews...";
-      # Check files again
-      check-files = "ls -l frontend/package.json backend/app/main.py backend/requirements.txt || true";
-    }; # end onStart
-  }; # End of idx.workspace
-
-} # End of main function
-  # Workspace lifecycle hooks
-  idx.workspace = {
-    # Commands to run once when the workspace is created or rebuilt
-    onCreate = {
-      # Install frontend dependencies
-      npm-install = "cd frontend && npm install";
-      # Install ONLY Python dependencies NOT managed by Nix
-      pip-install = "cd backend && pip install --no-cache-dir -r firebase_requirements.txt";
-    }; # end onCreate
-
-    # Commands to run every time the workspace starts
-    onStart = {
-      log-start = "echo Nix environment ready. Starting previews...";
-      # Check files again
-      check-files = "ls -l frontend/package.json backend/app/main.py backend/requirements.txt || true";
+      check-files = "ls -l frontend/package.json backend/app/main.py backend/firebase_requirements.txt || true";
     }; # end onStart
   }; # End of idx.workspace
 

@@ -154,27 +154,17 @@ class FeedManager:
 
     async def get_all_statuses(self) -> List[FeedStatusData]:
         """Retrieves the status of all feeds."""
+        statuses = []
         async with self._lock:
-            statuses = []
             for feed_id, entry in self.process_registry.items():
                 try:
-                    # Construct FeedStatusData directly
-                    # Assuming 'status' in entry is already FeedOperationalStatusEnum or string equivalent
                     op_status = entry['status']
-                    if isinstance(op_status, str):
-                        try:
-                            op_status = FeedOperationalStatusEnum(op_status.lower())
-                        except ValueError:
-                            logger.warning(f"Invalid status string '{op_status}' for feed {feed_id}, defaulting to ERROR")
-                            op_status = FeedOperationalStatusEnum.ERROR
-
-<<<<<<< HEAD
                     config_info_entry = entry.get('config_info')
                     if not isinstance(config_info_entry, FeedConfigInfo):
                         source_val = entry.get('source', 'Unknown Source')
                         # Attempt to infer name and source_type for fallback
-                        name_val = Path(source_val).name if Path(source_val).is_file() or '/' in source_val or '\\\\' in source_val else "Unknown Feed Name"
-                        source_type_val = "video_file" if Path(source_val).suffix else "unknown" # Basic inference
+                        name_val = Path(source_val).name if Path(source_val).is_file() or '/' in source_val or '\\' in source_val else "Unknown Feed Name"
+                        source_type_val = "video_file" if Path(source_val).suffix else "unknown"
                         config_info_entry = FeedConfigInfo(
                             name=name_val,
                             source_type=source_type_val,
@@ -184,18 +174,12 @@ class FeedManager:
                     status_data = FeedStatusData(
                         feed_id=feed_id,
                         config=config_info_entry,
-=======
-                    status_data = FeedStatusData(
-                        feed_id=feed_id,
-                        config=entry.get('config_info', FeedConfigInfo(source=entry['source'])), # Use stored or default config_info
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                         status=op_status,
                         current_fps=entry['timer'].get_fps('loop_total')
                         if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
                         else None,
                         last_error=entry.get('error_message'),
-                        # Add other fields as available/necessary, e.g., uptime, processed_frames
-                        latest_metrics=entry.get('latest_metrics') # Assuming this is a dict of relevant metrics
+                        latest_metrics=entry.get('latest_metrics')
                     )
                     statuses.append(status_data)
                 except Exception as e:
@@ -203,20 +187,18 @@ class FeedManager:
                         f"Error creating FeedStatusData for feed '{feed_id}': {e}",
                         exc_info=True,
                     )
-                    # Consider how to handle errors (e.g., return a default status or skip)
-                    # For now, we skip to avoid crashing the entire request
 
         return statuses
 
-
     async def _broadcast_feed_update(self, feed_id: str):
         """Sends feed status update via WebSocket manager."""
-        if not self._connection_manager:
-            logger.debug(f"Skipping feed update broadcast for {feed_id}: ConnectionManager not available.")
-            return
+        try:
+            if not self._connection_manager:
+                logger.debug(f"Skipping feed update broadcast for {feed_id}: ConnectionManager not available.")
+                return
 
-        async with self._lock:
-            entry = self.process_registry.get(feed_id)
+            async with self._lock:
+                entry = self.process_registry.get(feed_id)
             if not entry:
                 logger.warning(f"Feed {feed_id} not found in registry for status update broadcast.")
                 return
@@ -227,27 +209,9 @@ class FeedManager:
                     op_status = FeedOperationalStatusEnum(op_status.lower())
                 except ValueError:
                     op_status = FeedOperationalStatusEnum.ERROR
-
-<<<<<<< HEAD
-            config_info_entry = entry.get('config_info')
-            if not isinstance(config_info_entry, FeedConfigInfo):
-                source_val = entry.get('source', 'Unknown Source')
-                name_val = Path(source_val).name if Path(source_val).is_file() or '/' in source_val or '\\\\' in source_val else "Unknown Feed Name"
-                source_type_val = "video_file" if Path(source_val).suffix else "unknown"
-                config_info_entry = FeedConfigInfo(
-                    name=name_val,
-                    source_type=source_type_val,
-                    source_identifier=source_val
-                )
-
-            feed_status_data = FeedStatusData(
-                feed_id=feed_id,
-                config=config_info_entry,
-=======
             feed_status_data = FeedStatusData(
                 feed_id=feed_id,
                 config=entry.get('config_info', FeedConfigInfo(source=entry['source'])),
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                 status=op_status,
                 current_fps=entry['timer'].get_fps('loop_total')
                 if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
@@ -255,20 +219,22 @@ class FeedManager:
                 last_error=entry.get('error_message'),
                 latest_metrics=entry.get('latest_metrics')
             )
-            
+
             ws_payload = FeedStatusUpdate(feed_data=feed_status_data)
             message = WebSocketMessage(
                 event_type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
                 payload=ws_payload
             )
             
-        # Broadcast to a specific topic for this feed
-        topic = f"feed:{feed_id}"
-        await self._connection_manager.broadcast_message_model(message, specific_topic=topic)
-        # Also broadcast a general version to a generic "feeds" topic for overview listeners
-        # This might be too noisy if many feeds update frequently. Consider if needed.
-        # await self._connection_manager.broadcast_message_model(message, specific_topic="feeds_all")
-        logger.debug(f"Broadcasted feed status update for {feed_id} to topic {topic}. Status: {op_status}")
+            # Broadcast to a specific topic for this feed
+            topic = f"feed:{feed_id}"
+            await self._connection_manager.broadcast_message_model(message, specific_topic=topic)
+            # Also broadcast a general version to a generic "feeds" topic for overview listeners
+            # This might be too noisy if many feeds update frequently. Consider if needed.
+            # await self._connection_manager.broadcast_message_model(message, specific_topic="feeds_all")
+            logger.debug(f"Broadcasted feed status update for {feed_id} to topic {topic}. Status: {op_status}")
+        except Exception as e:
+            logger.error(f"Error broadcasting feed update for feed '{feed_id}': {e}", exc_info=True)
 
     async def _broadcast_alert(self, feed_id: Optional[str], severity: AlertSeverityEnum, message_text: str, details: Optional[Dict[str, Any]] = None):
         """Sends a new alert via WebSocket manager."""
@@ -817,7 +783,7 @@ class FeedManager:
              pass
 
     async def _cleanup_process(self, feed_id: str):
-        #Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held.\"\"\"
+        #Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held.\"""
         # This method needs to be async if joining the process might block event loop
         # But process.join() itself is blocking. Running in executor?
         needs_sample_check = False # Flag to check sample feed after releasing lock

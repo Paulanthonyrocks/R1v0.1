@@ -1,6 +1,6 @@
 # backend/app/routers/alerts.py
 
-from fastapi import APIRouter, Query, HTTPException, status
+from fastapi import APIRouter, Query, HTTPException, status, Depends
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, validator
@@ -32,18 +32,14 @@ class AlertsResponse(BaseModel):
 async def get_alerts(
     severity: Optional[AlertSeverityEnum] = Query(None, description=f"Filter by severity level. Allowed: {', '.join(SEVERITY_LEVELS)}"),
     feed_id: Optional[str] = Query(None, description="Filter by specific Feed ID"),
-    search: Optional[str] = Query(None, description="Search term within alert messages (case-insensitive)"),    page: int = Query(1, ge=1, description="Page number for pagination"),
+    search: Optional[str] = Query(None, description="Search term within alert messages (case-insensitive)"),
+    page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
     current_user: dict = Depends(get_current_active_user)
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
 ) -> AlertsResponse:
     """
     Endpoint to fetch alerts with filtering and pagination. Requires authentication.
     """
-<<<<<<< HEAD
-=======
-    from app.dependencies import get_db
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
     db: DatabaseManager = await get_db()
 
     filters = {
