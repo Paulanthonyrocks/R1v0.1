@@ -44,8 +44,7 @@ class TrafficSignalService:
                 self._signal_states[signal_id] = SignalState(
                     signal_id=signal_id,
                     location_description=sig_conf.get("location_description", "Unknown Location"),
-                    current_phase=SignalPhaseEnum.UNKNOWN,
-                    operational_status=SignalOperationalStatusEnum.OPERATIONAL,
+                    current_phase=SignalPhaseEnum.UNKNOWN,                    operational_status=SignalOperationalStatusEnum.ONLINE,
                     last_updated=datetime.utcnow()
                 )
         logger.info(f"Initialized {len(self._signal_states)} mock signals.")
@@ -93,12 +92,12 @@ class TrafficSignalService:
             # response = await self._client.post(f"/{signal_id}/set_phase", json=command_payload)
             # response.raise_for_status()
             # api_response_data = response.json()
-            
-            # Mocking success for now
+              # Mocking success for now
             api_response_data = {"status": "accepted", "message": "Phase change command accepted by controller."}
-
+            
             if api_response_data.get("status") == "accepted":
-                current_signal_state = self._signal_states[signal_id]                current_signal_state.current_phase = phase
+                current_signal_state = self._signal_states[signal_id]
+                current_signal_state.current_phase = phase
                 current_signal_state.last_updated = datetime.utcnow()
                 current_signal_state.operational_status = SignalOperationalStatusEnum.ONLINE
                 

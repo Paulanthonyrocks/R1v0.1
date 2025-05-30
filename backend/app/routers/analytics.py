@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.services.services import get_feed_manager
 from app.services.feed_manager import FeedManager
 from app.models.websocket import GlobalRealtimeMetrics
+from app.dependencies import get_feed_manager, get_current_active_user
 from typing import Any
 import logging
 
@@ -15,10 +16,12 @@ logger = logging.getLogger(__name__)
     description="Returns the latest real-time analytics metrics for the dashboard, including congestion index, average speed, active incidents, and feed statuses."
 )
 async def get_realtime_analytics(
+    current_user: dict = Depends(get_current_active_user),
     fm: FeedManager = Depends(get_feed_manager)
 ) -> GlobalRealtimeMetrics:
     """
     Returns the latest global real-time analytics metrics for the dashboard.
+    Requires authentication.
     """
     try:
         # Replicate the logic from FeedManager._broadcast_kpi_update, but return the metrics directly
@@ -78,4 +81,12 @@ async def get_realtime_analytics(
         return metrics_payload
     except Exception as e:
         logger.error(f"Failed to compute real-time analytics: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to compute real-time analytics metrics.") 
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to compute real-time analytics metrics.")
+
+def calculate_congestion_index(feeds: list) -> float:
+    """Calculate global congestion index from all active feeds"""
+    if not feeds:
+        return 0.0
+    
+    congestion_values = [f.congestion_index for f in feeds if f.congestion_index is not None]
+    return sum(congestion_values) / len(congestion_values) if congestion_values else 0.0

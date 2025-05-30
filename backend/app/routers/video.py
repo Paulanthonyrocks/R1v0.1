@@ -1,15 +1,16 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pathlib import Path
 import logging
 from ..services.video_processor import VideoManager
+from app.dependencies import get_current_active_user
 import io
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get("/sample-video/stream")
-async def stream_video():
+async def stream_video(current_user: dict = Depends(get_current_active_user)):
     """Stream the sample video with real-time KPI extraction"""
     video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
     
@@ -50,7 +51,7 @@ async def stream_video():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sample-video/kpis")
-async def get_video_kpis():
+async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
     """Get the latest KPIs from the video feed without the video stream"""
     video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
     
@@ -66,4 +67,4 @@ async def get_video_kpis():
         raise HTTPException(status_code=404, detail="Sample video file not found")
     except Exception as e:
         logger.error(f"Error getting video KPIs: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))

@@ -137,8 +137,11 @@ async def ingest_traffic_data(data: TrafficData, current_user: dict = Depends(ge
     return {"message": "Traffic data ingested successfully", "data": mongo_data}
 
 @router.get("/v1/traffic-data")
-async def get_traffic_data(limit: int = Query(100, ge=1, le=1000)): # Added limit parameter
-    """Endpoint to retrieve traffic data for visualization."""
+async def get_traffic_data(
+    limit: int = Query(100, ge=1, le=1000),
+    current_user: dict = Depends(get_current_active_user)
+): # Added limit parameter
+    """Endpoint to retrieve traffic data for visualization. Requires authentication."""
     db_manager = get_database_manager()
     try:
         if db_manager.mongo_db: # Prioritize MongoDB
@@ -214,6 +217,21 @@ async def set_signal_phase(
     except Exception as e:
         # logger.error(f"Unexpected error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred while setting signal phase for {signal_id}.")
+
+@router.get("/v1/test-auth", summary="Test authentication")
+async def test_auth(current_user: dict = Depends(get_current_active_user)):
+    """
+    Test endpoint to verify authentication is working.
+    Returns user information if authentication is successful.
+    """
+    return {
+        "message": "Authentication successful",
+        "user": {
+            "uid": current_user.get("uid"),
+            "email": current_user.get("email"),
+            "name": current_user.get("name"),
+        }
+    }
 
 app = FastAPI()
 app.include_router(analytics_router, prefix="/v1/analytics")

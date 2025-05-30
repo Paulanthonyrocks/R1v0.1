@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from datetime import datetime, timedelta
 from typing import List
-from app.dependencies import get_feed_manager
+from app.dependencies import get_feed_manager, get_current_active_user
 from app.services.feed_manager import FeedManager
 
 router = APIRouter()
@@ -34,33 +34,27 @@ MOCK_INCIDENTS = [
     },
 ]
 
-@router.get("/api/v1/incidents", summary="Get live incidents (real or mock)")
-async def get_incidents(fm: FeedManager = Depends(get_feed_manager)) -> List[dict]:
-    """Return a list of incidents generated from real feed analytics if available, else mock data."""
-    # Try to get all feeds and their latest_metrics
+@router.get(
+    "/",
+    response_model=List[dict],
+    summary="Get Active Incidents",
+    description="Retrieves a list of active traffic incidents and their details"
+)
+async def get_incidents(
+    current_user: dict = Depends(get_current_active_user),
+    fm: FeedManager = Depends(get_feed_manager)
+) -> List[dict]:
+    """
+    Get all active incidents from the feed manager. Falls back to mock data if no live incidents.
+    Requires authentication.
+    """
     try:
-        feeds = await fm.get_all_feed_statuses() if hasattr(fm, 'get_all_feed_statuses') else []
-        incidents = []
-        for feed in feeds:
-            metrics = getattr(feed, 'latest_metrics', None)
-            if not metrics:
-                continue
-            # Example: If congestion_index > 0.7, create a congestion incident
-            congestion = metrics.get('congestion_index')
-            if congestion is not None and congestion > 0.7:
-                incidents.append({
-                    "id": f"congestion-{feed.feed_id}",
-                    "type": "congestion",
-                    "description": f"High congestion detected (index: {congestion:.2f})",
-                    "latitude": metrics.get('latitude', 37.7749),
-                    "longitude": metrics.get('longitude', -122.4194),
-                    "timestamp": datetime.utcnow().isoformat() + 'Z',
-                })
-            # Add more rules for other incident types as needed
-        if incidents:
-            return incidents
+        # Try to get real incidents from feed manager
+        incidents = await fm.get_active_incidents()
+        if not incidents:
+            # Fall back to mock data if no real incidents
+            return MOCK_INCIDENTS
+        return incidents
     except Exception as e:
-        # Log error if needed
-        pass
-    # Fallback to mock data
-    return MOCK_INCIDENTS 
+        # Log error and fall back to mock data
+        return MOCK_INCIDENTS

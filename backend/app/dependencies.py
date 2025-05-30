@@ -76,35 +76,36 @@ async def get_event_service_api() -> EventService:
         raise RuntimeError("EventService not initialized")
     return event_service
 
-# Scheme for API key header
-auth_scheme = HTTPBearer()
+# Initialize the authentication scheme
+auth_scheme = HTTPBearer(auto_error=False)
 
-async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> dict:
-    """
-    Authenticates a user via Firebase ID token.
-    Used for production.
-    """
+# Role-based access control constants
+ADMIN_ROLE = "admin"
+USER_ROLE = "user"
+SUPER_ADMIN_ROLE = "super_admin"
+
+def is_admin(user_data: dict) -> bool:
+    """Check if the user has admin role."""
+    return user_data.get("role") == ADMIN_ROLE or user_data.get("role") == SUPER_ADMIN_ROLE
+
+def is_super_admin(user_data: dict) -> bool:
+    """Check if the user has super admin role."""
+    return user_data.get("role") == SUPER_ADMIN_ROLE
+
+async def verify_firebase_token(token: str) -> Dict[str, Any]:
+    """Verify Firebase ID token and return decoded token data."""
     if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Firebase authentication service not available.",
         )
-
-    if not token or not token.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated or bearer token missing",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+    
     try:
-        # Verify the ID token while checking if the token is revoked
-        decoded_token = auth.verify_id_token(token.credentials, check_revoked=True)
-        return decoded_token
+        return auth.verify_id_token(token, check_revoked=True)
     except auth.RevokedIdTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has been revoked, please re-authenticate.",
+            detail="Token has been revoked.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.UserDisabledError:
@@ -116,30 +117,62 @@ async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(
     except auth.InvalidIdTokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {e}",
+            detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not validate credentials: {e}",
+            detail=f"Authentication error: {str(e)}",
         )
 
-async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Optional[dict]:
-    """
-    Dependency to get the current user if authenticated, otherwise None.
-    Does not raise HTTPException for missing or invalid tokens, returns None instead.
-    """
-    if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
-        return None
+async def get_current_user(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Dict[str, Any]:
+    """Get the current authenticated user's data."""
+    if not token or not token.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return await verify_firebase_token(token.credentials)
 
+async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> Dict[str, Any]:
+    """Get the current authenticated user's data and verify account is active."""
+    user_data = await get_current_user(token)
+    
+    if user_data.get("disabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is disabled",
+        )
+    
+    return user_data
+
+async def get_current_admin(user: Dict[str, Any] = Depends(get_current_active_user)) -> Dict[str, Any]:
+    """Get the current authenticated admin user's data."""
+    if not is_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return user
+
+async def get_current_super_admin(user: Dict[str, Any] = Depends(get_current_active_user)) -> Dict[str, Any]:
+    """Get the current authenticated super admin user's data."""
+    if not is_super_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin privileges required",
+        )
+    return user
+
+async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Optional[Dict[str, Any]]:
+    """Optionally get the current authenticated user's data."""
     if not token or not token.credentials:
         return None
     
     try:
-        decoded_token = auth.verify_id_token(token.credentials, check_revoked=True)
-        return decoded_token
-    except (auth.RevokedIdTokenError, auth.UserDisabledError, auth.InvalidIdTokenError):
-        return None
-    except Exception:
+        return await verify_firebase_token(token.credentials)
+    except HTTPException:
         return None

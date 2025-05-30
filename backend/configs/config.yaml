@@ -152,6 +152,6 @@ storage:
 
 # --- Firebase Configuration ---
 firebase_admin:
-  service_account_key_path: firebase/service-account-key.json # Relative to configs directory
+  service_account_key_path: firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true

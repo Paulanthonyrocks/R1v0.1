@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
 from typing import Optional, Dict, Any
 from app.services.weather_service import WeatherService
-from app.dependencies import get_weather_service_api
+from app.dependencies import get_weather_service_api, get_current_active_user
 
 router = APIRouter()
 
@@ -14,10 +14,17 @@ router = APIRouter()
 async def get_current_weather(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
-    weather_service: WeatherService = Depends(get_weather_service_api)
+    weather_service: WeatherService = Depends(get_weather_service_api),
+    current_user: dict = Depends(get_current_active_user)
 ):
     """Get current weather conditions"""
-    return await weather_service.get_current_weather(lat, lon)
+    try:
+        return await weather_service.get_current_weather(lat=lat, lon=lon)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching current weather: {str(e)}"
+        )
 
 @router.get(
     "/impact",
@@ -28,7 +35,14 @@ async def get_current_weather(
 async def get_weather_impact(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
-    weather_service: WeatherService = Depends(get_weather_service_api)
+    weather_service: WeatherService = Depends(get_weather_service_api),
+    current_user: dict = Depends(get_current_active_user)
 ):
     """Get weather impact assessment"""
-    return await weather_service.get_weather_impact(lat, lon)
+    try:
+        return await weather_service.get_weather_impact(lat=lat, lon=lon)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching weather impact assessment: {str(e)}"
+        )
