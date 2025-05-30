@@ -3,27 +3,24 @@ import httpx
 import logging
 from typing import Dict, Any, Optional, List
 from uuid import uuid4
-from datetime import datetime # Added import
-import asyncio # Added import
+from datetime import datetime
+import asyncio
 
 from app.models.signals import (
     SignalState, SignalPhaseEnum, SignalControlStatusEnum, 
     SignalOperationalStatusEnum, SignalControlCommandResponse
 )
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, SignalStateUpdate
-from app.websocket.connection_manager import ConnectionManager # For broadcasting
+from app.websocket.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
 EXTERNAL_CONTROLLER_API_URL = "http://localhost:8082/mock/signals"
 
-<<<<<<< HEAD
 class TrafficSignalControlError(Exception):
     """Custom exception for traffic signal control errors."""
     pass
 
-=======
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
 class TrafficSignalService:
     def __init__(self, config: Dict[str, Any], connection_manager: ConnectionManager):
         self.config = config
@@ -48,11 +45,7 @@ class TrafficSignalService:
                     signal_id=signal_id,
                     location_description=sig_conf.get("location_description", "Unknown Location"),
                     current_phase=SignalPhaseEnum.UNKNOWN,
-<<<<<<< HEAD
-                    operational_status=SignalOperationalStatusEnum.operational,
-=======
                     operational_status=SignalOperationalStatusEnum.OPERATIONAL,
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                     last_updated=datetime.utcnow()
                 )
         logger.info(f"Initialized {len(self._signal_states)} mock signals.")
@@ -105,14 +98,9 @@ class TrafficSignalService:
             api_response_data = {"status": "accepted", "message": "Phase change command accepted by controller."}
 
             if api_response_data.get("status") == "accepted":
-                current_signal_state = self._signal_states[signal_id]
-                current_signal_state.current_phase = phase
+                current_signal_state = self._signal_states[signal_id]                current_signal_state.current_phase = phase
                 current_signal_state.last_updated = datetime.utcnow()
-<<<<<<< HEAD
-                current_signal_state.operational_status = SignalOperationalStatusEnum.operational
-=======
-                current_signal_state.operational_status = SignalOperationalStatusEnum.OPERATIONAL
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
+                current_signal_state.operational_status = SignalOperationalStatusEnum.ONLINE
                 
                 await self._broadcast_signal_state_update(signal_id, current_signal_state)
                 
@@ -134,22 +122,14 @@ class TrafficSignalService:
         except httpx.HTTPStatusError as e:
             logger.error(f"External API error setting phase for {signal_id}: {e.response.status_code} - {e.response.text}")
             if signal_id in self._signal_states:
-<<<<<<< HEAD
-                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.error
-=======
                 self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.ERROR
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                 self._signal_states[signal_id].last_updated = datetime.utcnow()
                 await self._broadcast_signal_state_update(signal_id, self._signal_states[signal_id])
             return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ERROR, message=f"External API error: {e.response.status_code}", timestamp=datetime.utcnow())
         except httpx.RequestError as e:
             logger.error(f"Request error setting phase for {signal_id}: {e}")
             if signal_id in self._signal_states:
-<<<<<<< HEAD
-                self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.error
-=======
                 self._signal_states[signal_id].operational_status = SignalOperationalStatusEnum.ERROR
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
                 self._signal_states[signal_id].last_updated = datetime.utcnow()
                 await self._broadcast_signal_state_update(signal_id, self._signal_states[signal_id])
             return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ERROR, message="Request error", timestamp=datetime.utcnow())
@@ -159,4 +139,4 @@ class TrafficSignalService:
 
     async def close(self):
         await self._client.aclose()
-        logger.info("TrafficSignalService HTTP client closed.") 
+        logger.info("TrafficSignalService HTTP client closed.")

@@ -5,6 +5,12 @@
 fps: 30 # Target processing FPS (workers might adjust dynamically)
 speed_limit: 60 # Speed limit in km/h for 'speeding' classification
 
+# --- Firebase Configuration ---
+firebase_admin:
+  service_account_key_path: configs/firebase/service-account-key.json
+  project_id: gen-lang-client-0230118708
+  auth_enabled: true
+
 # --- Logging Configuration ---
 logging:
   level: INFO # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -138,13 +144,14 @@ interface:
 pavement_analysis:
   camera_calibration:
     calibration_file: ./data/calibration_params.npz
-  ml_model:
-    model_path: ./models/pavement/pavement_model.pt
-  storage:    image_output_dir: ./data/pavement_images
-    report_output_dir: ./data/pavement_reports
+ml_model:
+  model_path: ./models/pavement/pavement_model.pt
+storage:
+  image_output_dir: ./data/pavement_images
+  report_output_dir: ./data/pavement_reports
 
-# --- Firebase Admin SDK Configuration ---
+# --- Firebase Configuration ---
 firebase_admin:
-  service_account_key_path: backend/configs/firebase/service-account-key.json
-  # You need to place your Firebase service account key JSON file at this location
-  # This file can be downloaded from Firebase Console -> Project Settings -> Service Accounts
+  service_account_key_path: firebase/service-account-key.json # Relative to configs directory
+  project_id: gen-lang-client-0230118708
+  auth_enabled: true

@@ -2,46 +2,34 @@
 
 This document outlines the implementation plan for the frontend of the Pavement Analysis system, integrating with the Python backend via API endpoints.
 
-<<<<<<< HEAD
 ## Authentication Note (IMPORTANT)
 
-Authentication is currently DISABLED for development and testing. This is temporary to facilitate faster development and testing. Before deploying to production, authentication MUST be re-enabled. Required steps:
+Authentication is currently DISABLED for development and testing. This is temporary to facilitate faster development and testing. All endpoints in `/api/pavement`, `/api/stream`, and `/api/analysis` are publicly accessible. Before deploying to production, authentication MUST be re-enabled. Required steps:
 
 1. Set up Firebase project and enable Authentication
 2. Configure Firebase Admin SDK in backend:
    - Download service account key from Firebase Console
    - Place it at `backend/configs/firebase/service-account-key.json`
    - Update config.yaml with Firebase settings
-3. Re-enable authentication in all router endpoints
+3. Re-enable authentication in all router endpoints by:
+   - Implementing `get_current_user` in `dependencies.py`
+   - Adding `current_user = Depends(get_current_user)` to protected endpoints
 4. Implement proper user roles and permissions
 5. Add security headers and CORS configuration
 6. Test complete authentication flow with Firebase client SDK
 
 ## Technology Stack
 
-**Framework:** Next.js (React)
-**Styling:** Tailwind CSS
-**Data Visualization:** Potentially Chart.js or Recharts for trend data (future)
-**API Communication:** Fetch API or Axios
-**State Management:** React Hooks (useState, useContext) for simpler cases, potentially a lightweight library like Zustand or Jotai if complexity grows.
+- **Framework:** Next.js (React)
+- **Styling:** Tailwind CSS
+- **Data Visualization:** Chart.js or Recharts for trend data (future)
+- **API Communication:** Fetch API or Axios
+- **State Management:** React Hooks (useState, useContext) for simpler cases, potentially Zustand or Jotai if complexity grows
 
-## Project Structure (Proposed)
+## Project Structure
 
-```pavement_frontend/
-=======
-## Technology Stack
-
-*   **Framework:** Next.js (React)
-*   **Styling:** Tailwind CSS
-*   **Data Visualization:** Potentially Chart.js or Recharts for trend data (future)
-*   **API Communication:** Fetch API or Axios
-*   **State Management:** React Hooks (useState, useContext) for simpler cases, potentially a lightweight library like Zustand or Jotai if complexity grows.
-
-## Project Structure (Proposed)
-
-```
+```text
 pavement_frontend/
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
 ├── public/                 # Static assets
 │   └── ...
 ├── src/
@@ -75,260 +63,138 @@ pavement_frontend/
 
 ### 1. File Upload Component (`components/FileUpload.js`)
 
-<<<<<<< HEAD
-- **Purpose:** Allow users to select video or image files/directories for analysis.
+- **Purpose:** Allow users to select video or image files/directories for analysis
 - **Features:**
-    - Input field for file selection (`<input type="file">`).
-    - Option to select single video or multiple images (handle directory upload if possible, or guide users to zip/upload one-by-one initially).
-    - Display selected file names.
-    - Button to initiate upload to the backend API.
-    - Visual feedback during upload (loading indicator).
+  - Input field for file selection (`<input type="file">`)
+  - Option to select single video or multiple images
+  - Display selected file names
+  - Button to initiate upload to the backend API
+  - Visual feedback during upload (loading indicator)
 
 ### 2. Analysis Controls Component (`components/AnalysisControls.js`)
 
-- **Purpose:** Provide input fields and controls for backend parameters.
+- **Purpose:** Provide input fields and controls for backend parameters
 - **Features:**
-    - Toggle switch for "Use Deep Learning" (`args.use_dl`).
-    - Input field for "DL Model Path" (`args.model_path` - might be less user-friendly to expose directly, perhaps dropdown of available models on backend?).
-    - Input field for "Frame Skip" (`args.frame_skip`).
-    - Input field for "Calibration File Path" (`args.calib_file` - similar considerations as model path).
-    - Input field for "Segment Area (m²)" (`args.segment_area`).
-    - Input field/Interactive UI for "Region of Interest (ROI)" (`args.roi_points`):
-        - Initially, a text input for the string format.
-        - Future enhancement: An interactive image viewer where users can click/draw a polygon.
-    - Button to trigger the analysis API call with the selected parameters.
+  - Toggle switch for "Use Deep Learning" (`args.use_dl`)
+  - Input field for "DL Model Path" (`args.model_path`)
+  - Input field for "Frame Skip" (`args.frame_skip`)
+  - Input field for "Calibration File Path" (`args.calib_file`)
+  - Input field for "Segment Area (m²)" (`args.segment_area`)
+  - Input field/Interactive UI for "Region of Interest (ROI)" (`args.roi_points`)
+  - Button to trigger the analysis API call with selected parameters
 
-### 3. Video Player / Image Gallery with Overlay (`components/VideoPlayer.js`, `components/ImageGallery.js`)
+### 3. Video Player / Image Gallery with Overlay
 
-- **Purpose:** Display the processed frames from the backend, including visualization overlays.
+- **Purpose:** Display processed frames from the backend with visualization overlays
 - **Features:**
-    - **Video:**
-        - Standard HTML5 video player (`<video>`).
-        - Overlay a `<canvas>` element on top of the video.
-        - Draw bounding boxes, masks (if applicable), labels, and PCI score on the canvas for each frame, synchronized with video playback.
-        - Potentially pre-render overlays or fetch overlay data per frame as video plays.
-    - **Images:**
-        - Display processed images in a gallery or slideshow format.
-        - Each image already includes the overlays rendered by the backend.
-    - Navigation controls (play/pause, seek for video; next/previous for images).
-    - Display current frame ID and timestamp.
+  - **Video:**
+    - Standard HTML5 video player (`<video>`)
+    - Overlay a `<canvas>` element on top of the video
+    - Draw bounding boxes, masks, labels, and PCI score on canvas
+    - Pre-render overlays or fetch per frame as video plays
+  - **Images:**
+    - Display processed images in a gallery or slideshow format
+    - Each image includes rendered overlays from backend
+  - Navigation controls (play/pause, seek for video; next/previous for images)
+  - Display current frame ID and timestamp
 
 ### 4. Summary Report Component (`components/SummaryReport.js`)
 
-- **Purpose:** Display the tabular data generated by the backend report generator.
+- **Purpose:** Display tabular data from backend report generator
 - **Features:**
-    - Data table (`<table>` or a component library like TanStack Table).
-    - Columns for 'frame\\_id', 'timestamp', 'pci\\_score', 'num\\_distresses', 'distress\\_details'.
-    - Ability to sort and filter data (future).
-    - Option to download the raw CSV report.
+  - Data table component
+  - Columns for essential metrics
+  - Sorting and filtering capabilities (future)
+  - Option to download raw CSV report
 
 ### 5. Loading Indicator (`components/LoadingSpinner.js`)
 
-- **Purpose:** Provide visual feedback during long-running processes (file upload, analysis).
+- **Purpose:** Provide visual feedback during long-running processes
 - **Features:**
-    - Simple spinner or progress bar.
-    - Display text indicating the current stage (Uploading, Analyzing Frame X/Y).
+  - Spinner or progress bar component
+  - Status text showing current process stage
 
 ### 6. Layout Component (`components/Layout.js`)
 
-- **Purpose:** Define the basic page structure (header, main content area, footer - if needed).
+- **Purpose:** Define the basic page structure
 - **Features:**
-    - Consistent navigation (simple header for now).
-    - Container for page content.
+  - Consistent navigation header
+  - Container for page content
 
 ### 7. API Utility Functions (`src/api/index.js`)
 
-- **Purpose:** Centralize API calls to the backend.
+- **Purpose:** Centralize API calls to the backend
 - **Functions:**
-    - `uploadData(file, analysisParams)`: Sends file and parameters to the backend `/analyze` endpoint.
-    - `getProcessedFrame(frameId)`: Fetches a specific processed image frame.
-    - `getSummaryReport()`: Fetches the summary report data.
-    - Potentially other endpoints for listing available models/calibration files if implemented on backend.
+  - `uploadData(file, analysisParams)`: Sends data to `/analyze` endpoint
+  - `getProcessedFrame(frameId)`: Fetches processed image frame
+  - `getSummaryReport()`: Fetches summary report data
+  - Endpoints for models/calibration files
 
-### 8. Pages (`src/pages/index.js`, `src/pages/analysis.js`)
+### 8. Pages
 
 - **`index.js` (Home/Upload Page):**
-    - Contains the `FileUpload` and `AnalysisControls` components.
-    - Handles the workflow of selecting files, setting parameters, and triggering the analysis API.
-    - Navigates the user to the `/analysis` page once analysis starts or completes (depending on backend API design).
+  - Contains upload and analysis control components
+  - Handles file selection and parameter workflow
+  - Navigates to analysis page on start
 - **`analysis.js` (Results Page):**
-    - Fetches and displays analysis results.
-    - Contains the `VideoPlayer`/`ImageGallery` and `SummaryReport` components.
-    - Handles state for displaying different frames/images and managing the report data.
-=======
-*   **Purpose:** Allow users to select video or image files/directories for analysis.
-*   **Features:**
-    *   Input field for file selection (`<input type="file">`).
-    *   Option to select single video or multiple images (handle directory upload if possible, or guide users to zip/upload one-by-one initially).
-    *   Display selected file names.
-    *   Button to initiate upload to the backend API.
-    *   Visual feedback during upload (loading indicator).
-
-### 2. Analysis Controls Component (`components/AnalysisControls.js`)
-
-*   **Purpose:** Provide input fields and controls for backend parameters.
-*   **Features:**
-    *   Toggle switch for "Use Deep Learning" (`args.use_dl`).
-    *   Input field for "DL Model Path" (`args.model_path` - might be less user-friendly to expose directly, perhaps dropdown of available models on backend?).
-    *   Input field for "Frame Skip" (`args.frame_skip`).
-    *   Input field for "Calibration File Path" (`args.calib_file` - similar considerations as model path).
-    *   Input field for "Segment Area (m²)" (`args.segment_area`).
-    *   Input field/Interactive UI for "Region of Interest (ROI)" (`args.roi_points`):
-        *   Initially, a text input for the string format.
-        *   Future enhancement: An interactive image viewer where users can click/draw a polygon.
-    *   Button to trigger the analysis API call with the selected parameters.
-
-### 3. Video Player / Image Gallery with Overlay (`components/VideoPlayer.js`, `components/ImageGallery.js`)
-
-*   **Purpose:** Display the processed frames from the backend, including visualization overlays.
-*   **Features:**
-    *   **Video:**
-        *   Standard HTML5 video player (`<video>`).
-        *   Overlay a `<canvas>` element on top of the video.
-        *   Draw bounding boxes, masks (if applicable), labels, and PCI score on the canvas for each frame, synchronized with video playback.
-        *   Potentially pre-render overlays or fetch overlay data per frame as video plays.
-    *   **Images:**
-        *   Display processed images in a gallery or slideshow format.
-        *   Each image already includes the overlays rendered by the backend.
-    *   Navigation controls (play/pause, seek for video; next/previous for images).
-    *   Display current frame ID and timestamp.
-
-### 4. Summary Report Component (`components/SummaryReport.js`)
-
-*   **Purpose:** Display the tabular data generated by the backend report generator.
-*   **Features:**
-    *   Data table (`<table>` or a component library like TanStack Table).
-    *   Columns for 'frame\_id', 'timestamp', 'pci\_score', 'num\_distresses', 'distress\_details'.
-    *   Ability to sort and filter data (future).
-    *   Option to download the raw CSV report.
-
-### 5. Loading Indicator (`components/LoadingSpinner.js`)
-
-*   **Purpose:** Provide visual feedback during long-running processes (file upload, analysis).
-*   **Features:**
-    *   Simple spinner or progress bar.
-    *   Display text indicating the current stage (Uploading, Analyzing Frame X/Y).
-
-### 6. Layout Component (`components/Layout.js`)
-
-*   **Purpose:** Define the basic page structure (header, main content area, footer - if needed).
-*   **Features:**
-    *   Consistent navigation (simple header for now).
-    *   Container for page content.
-
-### 7. API Utility Functions (`src/api/index.js`)
-
-*   **Purpose:** Centralize API calls to the backend.
-*   **Functions:**
-    *   `uploadData(file, analysisParams)`: Sends file and parameters to the backend `/analyze` endpoint.
-    *   `getProcessedFrame(frameId)`: Fetches a specific processed image frame.
-    *   `getSummaryReport()`: Fetches the summary report data.
-    *   Potentially other endpoints for listing available models/calibration files if implemented on backend.
-
-### 8. Pages (`src/pages/index.js`, `src/pages/analysis.js`)
-
-*   **`index.js` (Home/Upload Page):**
-    *   Contains the `FileUpload` and `AnalysisControls` components.
-    *   Handles the workflow of selecting files, setting parameters, and triggering the analysis API.
-    *   Navigates the user to the `/analysis` page once analysis starts or completes (depending on backend API design).
-*   **`analysis.js` (Results Page):**
-    *   Fetches and displays analysis results.
-    *   Contains the `VideoPlayer`/`ImageGallery` and `SummaryReport` components.
-    *   Handles state for displaying different frames/images and managing the report data.
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
+  - Fetches and displays analysis results
+  - Contains video/image and report components
+  - Manages frame and report data state
 
 ## Backend API Endpoints (Required)
 
-The Python backend (`main_processor.py`) needs to be wrapped or adapted to expose API endpoints. A simple REST API using Flask or FastAPI would be suitable.
+```typescript
+// POST /upload_and_analyze
+interface AnalysisRequest {
+  file: File;
+  parameters: AnalysisParameters;
+}
 
-<<<<<<< HEAD
-- **`POST /upload_and_analyze`:**
-    - Receives file data (video or images) and analysis parameters (ROI, DL toggle, etc.).
-    - Triggers the `main_orchestrator` process.
-    - Returns a status update (e.g., analysis started, processing frame X) or initiates a long-polling/WebSocket connection for real-time updates.
-    - Ideally, runs analysis in the background and returns an analysis job ID.
-- **`GET /analysis_status/:job_id`:**
-    - Check the progress/status of an analysis job.
-- **`GET /processed_frames/:job_id/:frame_id`:**
-    - Retrieves a specific processed image frame (with overlays) from the backend\'s output directory for a given job. Returns the image binary.
-- **`GET /summary_report/:job_id`:**
-    - Retrieves the summary report data (e.g., as JSON) for a given job.
-=======
-*   **`POST /upload_and_analyze`:**
-    *   Receives file data (video or images) and analysis parameters (ROI, DL toggle, etc.).
-    *   Triggers the `main_orchestrator` process.
-    *   Returns a status update (e.g., analysis started, processing frame X) or initiates a long-polling/WebSocket connection for real-time updates.
-    *   Ideally, runs analysis in the background and returns an analysis job ID.
-*   **`GET /analysis_status/:job_id`:**
-    *   Check the progress/status of an analysis job.
-*   **`GET /processed_frames/:job_id/:frame_id`:**
-    *   Retrieves a specific processed image frame (with overlays) from the backend's output directory for a given job. Returns the image binary.
-*   **`GET /summary_report/:job_id`:**
-    *   Retrieves the summary report data (e.g., as JSON) for a given job.
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
+// GET /analysis_status/:job_id
+interface StatusResponse {
+  status: 'processing' | 'complete' | 'error';
+  progress: number;
+  message: string;
+}
 
-*(Note: Implementing robust background jobs and status tracking on the backend requires additional libraries/patterns like Celery, threading, or async processing, which are outside the scope of the current Python scripts but essential for a responsive UI).*
+// GET /processed_frames/:job_id/:frame_id
+// Returns image binary
+
+// GET /summary_report/:job_id
+interface SummaryReport {
+  metrics: Array<MetricData>;
+  statistics: Statistics;
+}
+```
 
 ## Implementation Steps
 
-1.  **Set up Next.js Project:** Create a new Next.js project with Tailwind CSS.
-2.  **Backend API Stub:** Create a basic Flask/FastAPI application with placeholder endpoints to simulate backend responses.
-3.  **Frontend Basic Structure:** Create the `Layout` component and the initial `index.js` and `analysis.js` pages. Set up basic navigation.
-4.  **File Upload Implementation:** Build the `FileUpload` component and connect it to a basic upload API endpoint stub.
-5.  **Analysis Controls Implementation:** Build the `AnalysisControls` component and capture input values.
-6.  **API Integration:** Implement the `src/api/index.js` functions to communicate with the backend endpoints.
-7.  **Trigger Analysis:** Modify the `index.js` page to send files and parameters to the backend when the analysis button is clicked. Handle navigation/state change.
-8.  **Display Processed Frames:**
-<<<<<<< HEAD
-    - If video, implement `VideoPlayer` with canvas overlay logic. This is complex due to synchronization. Start with fetching pre-rendered frames for simplicity.
-    - If image directory, implement `ImageGallery` to display fetched processed images.
-    - Modify the backend to save processed frames.
-    - Modify `analysis.js` to fetch and display these frames using the new API endpoints.
-=======
-    *   If video, implement `VideoPlayer` with canvas overlay logic. This is complex due to synchronization. Start with fetching pre-rendered frames for simplicity.
-    *   If image directory, implement `ImageGallery` to display fetched processed images.
-    *   Modify the backend to save processed frames.
-    *   Modify `analysis.js` to fetch and display these frames using the new API endpoints.
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
-9.  **Display Summary Report:** Implement the `SummaryReport` component and fetch the report data from the backend API.
-10. **Loading/Status:** Integrate the `LoadingSpinner` and display status updates during the analysis process.
-11. **Refine UI/UX:** Improve styling with Tailwind, add error handling, and enhance user feedback.
-12. **Connect to Real Backend:** Once the backend API is implemented (wrapping the Python scripts), connect the frontend API calls to the actual backend.
-13. **Interactive ROI (Future):** If time permits, enhance the ROI input to be interactive.
-14. **Advanced Visualization (Future):** Implement charts for PCI trends over time if sequential data is processed.
+1. Set up Next.js Project with Tailwind CSS
+2. Create basic Flask/FastAPI application with placeholder endpoints
+3. Create basic layout and navigation structure
+4. Implement file upload component and API endpoint
+5. Build analysis controls component
+6. Implement API utility functions
+7. Connect file upload and analysis workflow
+8. Build video player and image gallery components
+9. Implement summary report component
+10. Add loading indicators and error handling
+11. Refine UI/UX with proper styling
+12. Connect to the actual backend implementation
 
 ## Challenges
 
-<<<<<<< HEAD
-- **Backend Integration:** Designing a robust API that can handle file uploads, long-running analysis, and efficiently serve processed frames and data.
-- **Video Frame Synchronization:** Synchronizing video playback with dynamic drawing on a canvas overlay based on backend analysis results. Fetching individual processed frames might be more feasible initially.
-- **Large Data Transfer:** Handling potentially large video files or directories of images, and transferring processed frame data back to the frontend.
-- **Real-time Feedback:** Providing granular updates on the analysis progress to the user.
-- **Error Handling:** Clearly communicating errors from both the frontend and backend to the user.
+- **Backend Integration:** Designing a robust API for file uploads and analysis
+- **Video Frame Synchronization:** Syncing video playback with overlay data
+- **Large Data Transfer:** Handling large video files and images efficiently
+- **Real-time Feedback:** Providing granular updates on progress
+- **Error Handling:** Clear communication of all errors
 
 ## Success Criteria
 
-- Users can upload pavement data (video/images) via the UI.
-- Users can configure basic analysis parameters.
-- The analysis process is successfully triggered on the backend via an API call.
-- Processed frames with detected distress overlays are displayed to the user.
-- The summary report (PCI, distress details) is displayed in a readable format.
-- The UI provides feedback during processing.
-=======
-*   **Backend Integration:** Designing a robust API that can handle file uploads, long-running analysis, and efficiently serve processed frames and data.
-*   **Video Frame Synchronization:** Synchronizing video playback with dynamic drawing on a canvas overlay based on backend analysis results. Fetching individual processed frames might be more feasible initially.
-*   **Large Data Transfer:** Handling potentially large video files or directories of images, and transferring processed frame data back to the frontend.
-*   **Real-time Feedback:** Providing granular updates on the analysis progress to the user.
-*   **Error Handling:** Clearly communicating errors from both the frontend and backend to the user.
-
-## Success Criteria
-
-*   Users can upload pavement data (video/images) via the UI.
-*   Users can configure basic analysis parameters.
-*   The analysis process is successfully triggered on the backend via an API call.
-*   Processed frames with detected distress overlays are displayed to the user.
-*   The summary report (PCI, distress details) is displayed in a readable format.
-*   The UI provides feedback during processing.
->>>>>>> 842672b3021dd5bce5734aa0d0c3de99ba171936
-
-This plan provides a roadmap for building the frontend. The order of steps allows for progressive development and testing, starting with basic functionality and adding complexity.
+- Users can upload pavement data (video/images) via the UI
+- Users can configure basic analysis parameters
+- Analysis process triggers successfully via API
+- Processed frames display with overlays
+- Summary report displays in a readable format
+- UI provides clear feedback during processing

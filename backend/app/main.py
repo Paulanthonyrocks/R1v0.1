@@ -47,6 +47,18 @@ app = FastAPI(
     description="API for managing traffic analysis feeds, data, and real-time updates.",
 )
 
+# --- Initialize Firebase ---
+def initialize_firebase():
+    config = get_current_config()
+    if config.get("firebase", {}).get("auth_enabled", False):
+        try:
+            cred = credentials.Certificate(config["firebase"]["service_account_path"])
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Firebase: {e}")
+            raise
+
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -87,19 +99,30 @@ async def startup_event():
     if loaded_config is None:
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         # This should ideally stop the application from starting or be handled based on app requirements
-        raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
-
-    # 2. Initialize Firebase Admin SDK (before Database and Services that might use it)
+        raise RuntimeError("Configuration loading failed, cannot proceed with startup.")    # 2. Initialize Firebase Admin SDK (before Database and Services that might use it)
     try:
         firebase_config = loaded_config.get("firebase_admin", {})
-        service_account_path = firebase_config.get("service_account_key_path", "backend/configs/firebase-service-account.json")
         
-        # Resolve the path relative to the project root if it's a relative path in config
-        # Assuming project root is parent of backend directory where config.yaml is located
-        # config_file_path_obj from above is backend/configs/config.yaml
-        # So, config_file_path_obj.parent.parent is the project root.
-        project_root = Path(__file__).parent.parent # This is backend/
-        resolved_service_account_path = project_root.parent / service_account_path 
+        if not firebase_config.get("auth_enabled", False):
+            logger.info("Firebase authentication is disabled in config.")
+            return
+
+        service_account_path = firebase_config.get("service_account_key_path")
+        if not service_account_path:
+            logger.warning("Firebase service account path not configured. Authentication will be disabled.")
+            return
+
+        # Get the config directory path
+        config_dir = Path(__file__).parent.parent / "configs"
+        key_path = config_dir / service_account_path.lstrip("configs/")
+
+        if not key_path.exists():
+            logger.error(f"Firebase service account key not found at: {key_path}")
+            raise RuntimeError(f"Firebase service account key not found: {key_path}")
+            
+        cred = credentials.Certificate(str(key_path))
+        firebase_admin.initialize_app(cred)
+        logger.info("Firebase Admin SDK initialized successfully")
         # If service_account_path is absolute, project_root.parent / service_account_path might not be what you want.
         # A better approach for paths in config is to make them relative to config file or always absolute.
         # For now, let's assume service_account_path in config is relative to project root or absolute.
@@ -141,17 +164,20 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
         # Decide if this should halt startup
-        # raise RuntimeError(f"Service Initialization Failed: {e}") from e
-
-    # 5. Initialize Prediction Scheduler - Ensure this runs in the event loop
+        # raise RuntimeError(f"Service Initialization Failed: {e}") from e    # 5. Initialize Prediction Scheduler - Ensure this runs in the event loop
     try:
         loop = asyncio.get_running_loop()
-        # If PredictionScheduler is a long-running task, consider using create_task or similar
-        loop.create_task(PredictionScheduler().start())  # Assuming start() is the method to run the scheduler
-        logger.info("Prediction scheduler initialized and started.")
+        analytics_service = get_analytics_service()
+        if analytics_service:
+            # Initialize scheduler with required analytics_service
+            scheduler = PredictionScheduler(analytics_service)
+            loop.create_task(scheduler.start())  # Assuming start() is the method to run the scheduler
+            logger.info("Prediction scheduler initialized and started.")
+        else:
+            logger.warning("Analytics service not available, skipping prediction scheduler initialization")
     except Exception as e:
         logger.error(f"Failed to initialize Prediction Scheduler: {e}", exc_info=True)
-        # Decide on recovery or shutdown strategy
+        # Non-critical error, continue startup
 
     logger.info("--- Startup complete ---")
 
