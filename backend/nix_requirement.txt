@@ -1,2 +1,5 @@
 # Firebase Admin
 firebase-admin>=5.0.0
+
+ultralytics>=8.0.0
+filterpy>=1.4.5

@@ -35,10 +35,8 @@ let
     ps.pytorch      # Core PyTorch library
     ps.torchvision  # For computer vision tasks with PyTorch
     ps.torchaudio   # For audio tasks with PyTorch
-    ps.ultralytics  # YOLO models
     ps.opencv4      # Python bindings for OpenCV (equivalent to opencv-python)
     ps.scipy
-    ps.filterpy     # FilterPy library
     ps.tensorflow-cpu # CPU-only version of TensorFlow
     ps.scikitlearn  # Scikit-learn
     ps.scikit-image # Scikit-image
