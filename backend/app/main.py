@@ -86,20 +86,20 @@ async def startup_event():
     # 1. Initialize Configuration (Using imported initializer)
     try:
         # Define path relative to main.py's parent's parent -> backend/configs/config.yaml
-        config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml" # kept parent.parent because config.yaml is not in the app dir
+        config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
         # Logging is now configured within initialize_config
     except Exception as e:
         # Error is logged within initialize_config, just raise critical failure
-        # Use specific error type if defined, e.g. ConfigError
         logger.critical(f"CRITICAL FAILURE during config initialization: {e}", exc_info=True)
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
 
     # Check if config was loaded, if not, we cannot proceed with Firebase init that depends on it.
     if loaded_config is None:
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
-        # This should ideally stop the application from starting or be handled based on app requirements
-        raise RuntimeError("Configuration loading failed, cannot proceed with startup.")    # 2. Initialize Firebase Admin SDK (before Database and Services that might use it)
+        raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
+
+    # 2. Initialize Firebase Admin SDK
     try:
         firebase_config = loaded_config.get("firebase_admin", {})
         
@@ -118,31 +118,14 @@ async def startup_event():
 
         if not key_path.exists():
             logger.error(f"Firebase service account key not found at: {key_path}")
-            raise RuntimeError(f"Firebase service account key not found: {key_path}")
-            
-        cred = credentials.Certificate(str(key_path))
-        firebase_admin.initialize_app(cred)
-        logger.info("Firebase Admin SDK initialized successfully")
-        # If service_account_path is absolute, project_root.parent / service_account_path might not be what you want.
-        # A better approach for paths in config is to make them relative to config file or always absolute.
-        # For now, let's assume service_account_path in config is relative to project root or absolute.
-        # If it's relative to backend/configs, then
-        # Let's refine path resolution: Assume path in config is relative to project root (one level above backend dir)
-        # The current __file__ is backend/app/main.py
-        # project_root for firebase key should be where manage.py or similar top-level script is.
-        # Let's assume config.yaml is in backend/configs/ and service_account_key_path is relative to that dir or absolute.
-        
-        key_path = Path(service_account_path)
+            return
+
         if not key_path.is_absolute():
-            # If relative, assume it's relative to the config directory (backend/configs)
             config_dir = Path(__file__).parent.parent / "configs"
             key_path = config_dir / service_account_path
 
         if not key_path.exists():
             logger.error(f"Firebase service account key not found at: {key_path.resolve()}")
-            # Decide if this is critical. For now, log error and continue, 
-            # but auth-dependent routes will fail.
-            # raise RuntimeError(f"Firebase service account key not found: {key_path.resolve()}")
         else:
             cred = credentials.Certificate(str(key_path.resolve()))
             firebase_admin.initialize_app(cred)
@@ -150,34 +133,31 @@ async def startup_event():
 
     except Exception as e:
         logger.error(f"Firebase Admin SDK Initialization Failed: {e}", exc_info=True)
-        # Depending on policy, might raise RuntimeError here
 
-    # 3. Initialize Database (Pass the loaded config)
+    # 3. Initialize Database
     try:
         initialize_database(loaded_config)
     except Exception as e:
         raise RuntimeError(f"Database Initialization Failed: {e}") from e
 
-    # 4. Initialize Services (Pass the loaded config)
+    # 4. Initialize Services
     try:
         initialize_services(loaded_config)
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
-        # Decide if this should halt startup
-        # raise RuntimeError(f"Service Initialization Failed: {e}") from e    # 5. Initialize Prediction Scheduler - Ensure this runs in the event loop
+
+    # 5. Initialize Prediction Scheduler
     try:
-        loop = asyncio.get_running_loop()
         analytics_service = get_analytics_service()
         if analytics_service:
-            # Initialize scheduler with required analytics_service
             scheduler = PredictionScheduler(analytics_service)
-            loop.create_task(scheduler.start())  # Assuming start() is the method to run the scheduler
-            logger.info("Prediction scheduler initialized and started.")
+            await scheduler.start()  # Use the new async start() method
+            app.state.prediction_scheduler = scheduler  # Store in app state for cleanup
+            logger.info("Prediction scheduler initialized and started")
         else:
             logger.warning("Analytics service not available, skipping prediction scheduler initialization")
     except Exception as e:
         logger.error(f"Failed to initialize Prediction Scheduler: {e}", exc_info=True)
-        # Non-critical error, continue startup
 
     logger.info("--- Startup complete ---")
 
@@ -185,11 +165,15 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
+    
+    # Stop prediction scheduler if it exists
+    if hasattr(app.state, "prediction_scheduler"):
+        await app.state.prediction_scheduler.stop()
+        logger.info("Prediction scheduler stopped")
+    
+    # Handle other shutdown tasks
     await shutdown_services()  # Handles services + WS connections
     close_database()
-    # if firebase_admin.get_app(): # Check if default app exists
-    #     firebase_admin.delete_app(firebase_admin.get_app())
-    #     logger.info("Firebase Admin SDK app deleted.")
     logger.info("--- Shutdown complete ---")
 
 # Global scheduler instance

@@ -13,6 +13,7 @@ secrets.txt
 .env
 .env.local
 backend/configs/firebase/service-account-key.json
+backend/data
 .vscode
 
 # Python cache files

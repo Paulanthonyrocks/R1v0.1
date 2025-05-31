@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 
 from app.services.analytics_service import AnalyticsService
@@ -16,6 +16,7 @@ class PredictionScheduler:
         self.prediction_interval = timedelta(minutes=prediction_interval_minutes)
         self.is_running = False
         self.monitored_locations = []
+        self.task = None
         self._load_monitored_locations()
 
     def _load_monitored_locations(self):
@@ -81,6 +82,22 @@ class PredictionScheduler:
                 logger.error(f"Error in prediction scheduler: {e}")
                 await asyncio.sleep(60)  # Wait a minute before retrying
 
-    def stop(self):
+    async def start(self):
+        """Start the prediction scheduler"""
+        if self.task is None:
+            self.task = asyncio.create_task(self.run())
+            logger.info("Prediction scheduler started")
+        else:
+            logger.warning("Prediction scheduler already running")
+
+    async def stop(self):
         """Stop the prediction scheduler"""
         self.is_running = False
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            self.task = None
+            logger.info("Prediction scheduler stopped")

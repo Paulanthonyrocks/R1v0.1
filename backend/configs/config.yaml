@@ -149,9 +149,3 @@ ml_model:
 storage:
   image_output_dir: ./data/pavement_images
   report_output_dir: ./data/pavement_reports
-
-# --- Firebase Configuration ---
-firebase_admin:
-  service_account_key_path: firebase/service-account-key.json
-  project_id: gen-lang-client-0230118708
-  auth_enabled: true

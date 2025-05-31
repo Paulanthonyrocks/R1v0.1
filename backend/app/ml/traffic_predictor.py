@@ -2,9 +2,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
-from tensorflow import keras
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
@@ -22,14 +19,13 @@ class TrafficPredictor:
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""
         try:
-            self.model = Sequential([
-                LSTM(64, return_sequences=True, input_shape=(self.sequence_length, 5)),
-                Dropout(0.2),
-                LSTM(32),
-                Dropout(0.2),
-                Dense(16, activation='relu'),
-                Dense(1, activation='sigmoid')  # Predict incident likelihood (0-1)
-            ])
+            self.model = tf.keras.Sequential()
+            self.model.add(tf.keras.layers.LSTM(64, return_sequences=True, input_shape=(self.sequence_length, 5)))
+            self.model.add(tf.keras.layers.Dropout(0.2))
+            self.model.add(tf.keras.layers.LSTM(32))
+            self.model.add(tf.keras.layers.Dropout(0.2))
+            self.model.add(tf.keras.layers.Dense(16, activation='relu'))
+            self.model.add(tf.keras.layers.Dense(1, activation='sigmoid'))  # Predict incident likelihood (0-1)
             self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
             logger.info("Traffic prediction model initialized successfully")
         except Exception as e:
