@@ -37,7 +37,6 @@ let
     ps.torchaudio   # For audio tasks with PyTorch
     ps.opencv4      # Python bindings for OpenCV (equivalent to opencv-python)
     ps.scipy
-    ps.tensorflow-cpu # CPU-only version of TensorFlow
     ps.scikitlearn  # Scikit-learn
     ps.scikit-image # Scikit-image
     ps.pandas       # Data manipulation
