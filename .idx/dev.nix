@@ -3,8 +3,8 @@
 {pkgs}:
 
 let
-  # Define the Python environment with ALL necessary packages managed by Nix
-  # This makes the environment fully declarative and reproducible.
+  # Define the Python environment with ALL necessary packages managed by Nix,
+  # EXCEPT for 'firebase-admin' which will be installed via pip.
   pythonEnvironment = pkgs.python311.withPackages (ps: [
     # --- Core FastAPI & Web ---
     ps.fastapi
@@ -29,16 +29,16 @@ let
     # --- Database & Caching ---
     ps.pymongo     # For MongoDB support
     ps.redis       # Python client for Redis
-    ps.firebase-admin # For Firebase Admin SDK
+  
 
     # --- ML/CV Dependencies ---
     ps.pytorch      # Core PyTorch library
     ps.torchvision  # For computer vision tasks with PyTorch
     ps.torchaudio   # For audio tasks with PyTorch
-    ps.ultralytics  # YOLO models (now managed by Nix!)
+    ps.ultralytics  # YOLO models
     ps.opencv4      # Python bindings for OpenCV (equivalent to opencv-python)
     ps.scipy
-    ps.filterpy     # FilterPy library (now managed by Nix!)
+    ps.filterpy     # FilterPy library
     ps.tensorflow-cpu # CPU-only version of TensorFlow
     ps.scikitlearn  # Scikit-learn
     ps.scikit-image # Scikit-image
@@ -51,7 +51,7 @@ let
 
     # --- Additional Utilities ---
     ps.aiohttp      # For async HTTP requests
-    # ps.pip # Not strictly needed if all deps are Nix-managed, but harmless to keep for interactive use if desired
+    ps.pip          # Keep pip, as it's needed for firebase-admin
   ]);
 
 in
@@ -114,14 +114,19 @@ in
   idx.workspace = {
     onCreate = {
       npm-install = "cd frontend && npm install";
-      # The 'pip-installs' step has been removed as all Python dependencies
-      # are now declaratively managed by Nix within the 'pythonEnvironment'.
+      # Re-enabled 'pip-installs' specifically for firebase-admin
+      pip-installs = ''
+        cd backend && \
+        echo "Installing packages from requirements.txt via pip..." && \
+        ${pythonEnvironment}/bin/pip install --no-cache-dir -r nix_requirements.txt && \
+        echo "Pip installations complete."
+      '';
     }; # end onCreate
 
     onStart = {
       log-start = "echo Nix environment ready. Starting previews...";
-      # Verify critical files exist; backend/requirements.txt is no longer needed
-      check-files = "ls -l frontend/package.json backend/app/main.py || true";
+      # Verify critical files exist, including requirements.txt
+      check-files = "ls -l frontend/package.json backend/app/main.py backend/nix_requirements.txt || true";
     }; # end onStart
   }; # End of idx.workspace
 

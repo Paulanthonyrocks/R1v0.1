@@ -46,8 +46,7 @@ google-generativeai>=0.3.0
 pymongo>=4.0.0 # For MongoDB support
 kafka-python>=2.0.0 # For Kafka messaging support
 
-# Firebase Admin
-firebase-admin>=5.0.0
+
 
 # Additional Dependencies
 aiohttp>=3.8.0  # For async HTTP requests

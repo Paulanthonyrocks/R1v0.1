@@ -1,7 +1,2 @@
-# ML/CV Dependencies (to be installed via pip as per dev.nix comments or preference)
-ultralytics>=8.0.0
-filterpy>=1.4.5
-
-# Add any other packages here that are not (or should not be) managed by Nix.
-# For example, if you need a very specific version of a package not in Nixpkgs,
-# or a package that has complex build requirements not easily handled by Nix for your use case.
+# Firebase Admin
+firebase-admin>=5.0.0
