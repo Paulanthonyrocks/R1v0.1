@@ -2,7 +2,7 @@
 "use client";
 // /home/user/R1v0.1/frontend/app/anomalies/page.tsx
 "use client";
-import React, { useState, useRef, useMemo, useEffect } from 'react'; // Added useEffect
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react'; // Added useCallback
 import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
 import dynamic from 'next/dynamic';
@@ -14,9 +14,10 @@ import axios from 'axios'; // Keep axios for mutations
 import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
 import { UserRole } from '@/types/user'; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
-import { AlertData } from '@/lib/types'; // Assuming AlertData is here
+import { AlertData, Anomaly, LocationTuple } from '@/lib/types'; // Import Anomaly and LocationTuple from lib/types
+import AnomalyDetailModal from '@/components/anomalies/AnomalyDetailModal'; // Anomaly types removed from this import
+import ToastContainer, { ToastMessage } from '@/components/ui/ToastContainer';
 
-type LocationTuple = [number, number];
 
 // Modified AnomalyMapProps to include onMarkerClick and activeAnomalyId
 interface AnomalyMapProps {
@@ -36,7 +37,7 @@ const DynamicallyLoadedAnomalyMap = dynamic<AnomalyMapProps>(
   {
     ssr: false,
     loading: () => (
-      <div className="h-[400px] w-full bg-gray-700 rounded overflow-hidden flex items-center justify-center text-gray-400">
+      <div className="h-[400px] w-full bg-card rounded overflow-hidden flex items-center justify-center text-muted-foreground">
         Loading map...
       </div>
     ),
@@ -47,22 +48,8 @@ const AnomalyMap: React.FC<AnomalyMapProps> = ({ anomalies, onMarkerClick, activ
   return <DynamicallyLoadedAnomalyMap anomalies={anomalies} onMarkerClick={onMarkerClick} activeAnomalyId={activeAnomalyId} />;
 };
 
-interface Anomaly {
-  id: number;
-  type: string;
-  severity: "low" | "medium" | "high";
-  description: string;
-  timestamp: string;
-  location: LocationTuple;
-  resolved: boolean;
-  // Add any other relevant fields for the detailed view
-  details?: string; // Example: More detailed text
-  reportedBy?: string;
-  source?: 'api' | 'websocket'; // Optional: to differentiate if needed later
-}
-export type { Anomaly };
-
 // Helper to map AlertData from hook to local Anomaly type
+// Anomaly and LocationTuple types are now imported from AnomalyDetailModal.tsx
 const mapAlertDataToAnomaly = (alert: AlertData, existingAnomalies: Anomaly[] = []): Anomaly | null => {
   // Try to find if this alert (by message and timestamp proximity, or ideally a unique ID from details)
   // corresponds to an already known anomaly from API to preserve its 'resolved' status or DB ID.
@@ -117,59 +104,11 @@ const ALL_SEVERITIES = "all";
 type SeverityFilter = "low" | "medium" | "high" | typeof ALL_SEVERITIES;
 type SortOrder = "newest" | "oldest";
 
-interface ToastMessage {
-  id: number;
-  message: string;
-  type: 'success' | 'error';
-}
-const ToastContainer: React.FC<{ toasts: ToastMessage[], removeToast: (id: number) => void }> = ({ toasts, removeToast }) => {
-  if (!toasts.length) return null;
-  return (
-    <div className="fixed bottom-4 right-4 z-[100] space-y-2">
-      {toasts.map(toast => (
-        <div
-          key={toast.id}
-          className={`p-3 rounded-md shadow-lg text-white ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
-          onClick={() => removeToast(toast.id)}
-        >
-          {toast.message}
-        </div>
-      ))}
-    </div>
-  );
-};
+// ToastMessage type is now imported from ToastContainer.tsx
+// ToastContainer component is now imported
 
-// --- Anomaly Detail Modal ---
-const AnomalyDetailModal: React.FC<{ anomaly: Anomaly | null; onClose: () => void }> = ({ anomaly, onClose }) => {
-  if (!anomaly) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-      <div className="bg-matrix-panel p-6 rounded-lg shadow-xl max-w-lg w-full text-matrix border border-matrix-border">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold uppercase">{anomaly.type} - Details</h2>
-          <MatrixButton onClick={onClose} color="gray" size="small">Close</MatrixButton>
-        </div>
-        <div className="space-y-2 text-sm">
-          <p><span className="font-semibold">ID:</span> {anomaly.id}</p>
-          <p><span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-             anomaly.severity === "high" ? "text-red-400" :
-             anomaly.severity === "medium" ? "text-orange-400" :
-             "text-green-400"
-          }`}>{anomaly.severity}</span></p>
-          <p><span className="font-semibold">Description:</span> {anomaly.description}</p>
-          <p><span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}</p>
-          <p><span className="font-semibold">Location:</span> Lat: {anomaly.location[0].toFixed(5)}, Lon: {anomaly.location[1].toFixed(5)}</p>
-          {anomaly.resolved && <p className="font-semibold text-gray-500">Status: Resolved</p>}
-          {anomaly.details && <p><span className="font-semibold">Additional Details:</span> {anomaly.details}</p>}
-          {anomaly.reportedBy && <p><span className="font-semibold">Reported By:</span> {anomaly.reportedBy}</p>}
-        </div>
-        {/* Add action buttons here if needed, e.g., for assignment or further resolution steps */}
-      </div>
-    </div>
-  );
-};
-// --- End Anomaly Detail Modal ---
+// AnomalyDetailModal component is now imported
+// Anomaly and LocationTuple types are now imported from AnomalyDetailModal.tsx
 
 
 // const fetcher = (url: string) => axios.get(url).then((res: AxiosResponse<Anomaly[]>) => res.data); // SWR fetcher removed
@@ -289,31 +228,29 @@ const AnomaliesPage = () => {
       addToast("Failed to dismiss anomaly.", "error");
       setAllAnomalies(originalAnomalies); // Revert on error
       // if WebSocket doesn't reflect this specific state change.
-    } catch (err) {
-      addToast("Failed to resolve anomaly.", "error");
-      // Revert optimistic update on error
-      setAllAnomalies(prev => prev.map(anomaly =>
-        anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly // Assuming it was false before
-      ));
-      console.error("Failed to resolve anomaly", err);
+    // } catch (err) { // This catch seems to be a duplicate or misplaced part of the original handleResolve
+    //   addToast("Failed to resolve anomaly.", "error");
+    //   // Revert optimistic update on error
+    //   setAllAnomalies(prev => prev.map(anomaly =>
+    //     anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly // Assuming it was false before
+    //   ));
+    //   console.error("Failed to resolve anomaly", err);
     }
   };
-  const handleDismiss = async (anomalyId: number) => {
-    const originalAnomalies = [...allAnomalies]; // Store for potential revert
-    // Optimistic UI update (local state)
-    setAllAnomalies(prev => prev.filter(anomaly => anomaly.id !== anomalyId));
-    try {
-      await axios.delete(`/api/anomalies/${anomalyId}`);
-      addToast("Anomaly dismissed.", "success");
-      // No SWR mutate.
-    } catch (err) {
-      addToast("Failed to dismiss anomaly.", "error");
-      setAllAnomalies(originalAnomalies); // Revert on error
-      console.error("Failed to dismiss anomaly", err);
-    }
-  };
+  // const handleDismiss = async (anomalyId: number) => { // Removing duplicate
+  //   const originalAnomalies = [...allAnomalies];
+  //   setAllAnomalies(prev => prev.filter(anomaly => anomaly.id !== anomalyId));
+  //   try {
+  //     await axios.delete(`/api/anomalies/${anomalyId}`); // This uses /api/anomalies path
+  //     addToast("Anomaly dismissed.", "success");
+  //   } catch (err) {
+  //     addToast("Failed to dismiss anomaly.", "error");
+  //     setAllAnomalies(originalAnomalies);
+  //     console.error("Failed to dismiss anomaly", err);
+  //   }
+  // };
 
-  const handleMarkerClick = (anomalyId: number) => {
+  const handleMarkerClick = useCallback((anomalyId: number) => {
     setHighlightedAnomalyId(anomalyId);
     const cardElement = cardRefs.current[anomalyId];
     if (cardElement) {
@@ -324,7 +261,7 @@ const AnomaliesPage = () => {
     // Optionally, also open the modal:
     // const anomaly = allAnomalies.find(a => a.id === anomalyId);
     // if (anomaly) setSelectedAnomalyForModal(anomaly);
-  };
+  }, []); // cardRefs.current is stable, setHighlightedAnomalyId is stable from useState
 
   const handleCardClick = (anomaly: Anomaly) => {
     setSelectedAnomalyForModal(anomaly);
@@ -407,11 +344,11 @@ const AnomaliesPage = () => {
                     <div className="flex flex-col">
                       <p className="text-sm mb-1">
                         <span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-                           anomaly.severity === "high" ? "text-red-400" :
-                           anomaly.severity === "medium" ? "text-orange-400" :
-                           "text-green-400"
+                           anomaly.severity === "high" ? "text-destructive" :
+                           anomaly.severity === "medium" ? "text-yellow-500" :
+                           "text-green-500"
                         }`}>{anomaly.severity}</span>
-                        {anomaly.resolved && <span className="ml-2 text-gray-500">(Resolved)</span>}
+                        {anomaly.resolved && <span className="ml-2 text-muted-foreground">(Resolved)</span>}
                       </p>
                       <p className="text-sm">
                         <span className="font-semibold">Description:</span> {anomaly.description}
