@@ -101,3 +101,44 @@ class TrafficDataCache:
         )
         
         return congestion_count / len(data)
+
+    def get_all_location_summaries(self) -> List[Dict[str, Any]]:
+        """
+        Retrieves the latest data summary for all tracked locations.
+        A "summary" here means the most recent data point's key metrics.
+        """
+        summaries = []
+        now = datetime.now() # For context if needed, though not directly used in "latest" logic below
+
+        for location_key, data_points in self.location_data.items():
+            if not data_points:
+                continue
+
+            # Assume the last data point is the most recent one
+            # For robustness, one might sort by timestamp: `latest_point = sorted(data_points, key=lambda x: x['timestamp'])[-1]`
+            # But given how data is added and cleaned, the last one is likely the most recent.
+            latest_point = data_points[-1]
+
+            try:
+                lat_str, lon_str = location_key.split(',')
+                latitude = float(lat_str)
+                longitude = float(lon_str)
+            except ValueError:
+                logger.warning(f"Could not parse location_key: {location_key}. Skipping this entry.")
+                continue
+
+            summary = {
+                'id': location_key, # Using the stringified lat,lon as a unique ID for the node
+                'name': f"Node at ({latitude:.4f}, {longitude:.4f})", # Generic name
+                'latitude': latitude,
+                'longitude': longitude,
+                'timestamp': latest_point.get('timestamp'),
+                'vehicle_count': latest_point.get('vehicle_count'),
+                'average_speed': latest_point.get('average_speed'),
+                'congestion_score': latest_point.get('congestion_score'),
+                # Add any other relevant metrics from latest_point directly
+                **latest_point # Include all other fields from the latest data point
+            }
+            summaries.append(summary)
+
+        return summaries

@@ -184,3 +184,43 @@ class AnalyticsService:
         )
         topic = f"predictions:{abs(hash((location.latitude, location.longitude)))}"
         await self._connection_manager.broadcast_message_model(message, specific_topic=topic)
+
+    async def get_all_location_congestion_data(self) -> List[Dict[str, Any]]:
+        """
+        Retrieves the latest congestion data summary for all tracked locations/nodes.
+        This data is intended for displaying node-based congestion on the frontend.
+        """
+        logger.info("Fetching all location congestion data summaries from cache.")
+
+        # Data from TrafficDataCache.get_all_location_summaries() is expected to be a list of dicts,
+        # each with 'id', 'name', 'latitude', 'longitude', 'timestamp',
+        # 'vehicle_count', 'average_speed', 'congestion_score', etc.
+        cached_summaries = self._data_cache.get_all_location_summaries()
+
+        # The structure from get_all_location_summaries is already quite good.
+        # We might perform additional transformations here if needed to perfectly match
+        # a Pydantic response model, e.g., ensuring all required fields exist or
+        # computing derived values. For now, assume it's largely compatible.
+
+        # Example of ensuring required fields or adding defaults if not present in all summaries:
+        processed_data = []
+        for summary in cached_summaries:
+            node_data = {
+                'id': summary.get('id', f"{summary.get('latitude',0)},{summary.get('longitude',0)}"), # Fallback ID
+                'name': summary.get('name', 'Unknown Node'),
+                'latitude': summary.get('latitude'),
+                'longitude': summary.get('longitude'),
+                'congestion_score': summary.get('congestion_score'), # Might be None
+                'vehicle_count': summary.get('vehicle_count'),       # Might be None
+                'average_speed': summary.get('average_speed'),       # Might be None
+                'timestamp': summary.get('timestamp', datetime.now(timezone.utc).isoformat()) # Ensure timestamp
+                # Add other fields from summary if they are part of the defined NodeCongestionData model
+            }
+            # Filter out entries that couldn't get essential data like lat/lon
+            if node_data['latitude'] is not None and node_data['longitude'] is not None:
+                processed_data.append(node_data)
+            else:
+                logger.warning(f"Skipping node summary due to missing lat/lon: {summary.get('id')}")
+
+        logger.info(f"Retrieved {len(processed_data)} node congestion summaries.")
+        return processed_data

@@ -112,6 +112,23 @@ export interface MatrixButtonProps {
  backgroundColor?: string;
  children?: React.ReactNode;
 }
+// --- Backend Data Shape Types ---
+export interface BackendCongestionNodeData {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  congestion_score?: number | null; // Optional as per Pydantic model
+  vehicle_count?: number | null;   // Optional
+  average_speed?: number | null;  // Optional
+  timestamp: string; // ISO datetime string
+}
+
+export interface AllNodesCongestionResponse {
+  nodes: BackendCongestionNodeData[];
+}
+
+
 // --- Hook Return Types ---
 export interface RealtimeData {
   isConnected: boolean;
