@@ -18,15 +18,19 @@ class TestAgentCore(unittest.TestCase):
 
         # Configure async methods on mocks to be awaitable if they are called with await
         # For sync methods called from async, MagicMock is fine.
-        self.mock_prediction_scheduler._predict_and_notify = AsyncMock(return_value=None) # AsyncMock for async method
+        self.mock_prediction_scheduler._predict_and_notify = AsyncMock(return_value=None)
+        self.mock_prediction_scheduler.set_priority_locations = AsyncMock() # Make set_priority_locations an AsyncMock
 
-        self.mock_personalized_routing_service.proactively_suggest_route = AsyncMock(return_value="Sample suggestion") # AsyncMock
+        self.mock_personalized_routing_service.proactively_suggest_route = AsyncMock(return_value="Sample suggestion")
 
-        # Configure sync methods for AnalyticsService
-        self.mock_kpi_summary = {"overall_congestion_level": "LOW", "active_feeds_count": 2}
-        self.mock_alert_summary = {"critical_alert_count": 1, "types": ["test_alert"]}
-        self.mock_analytics_service.get_current_system_kpis_summary.return_value = self.mock_kpi_summary
-        self.mock_analytics_service.get_critical_alert_summary.return_value = self.mock_alert_summary
+        # Configure AnalyticsService mocks
+        self.mock_kpi_summary_default = {"overall_congestion_level": "LOW", "active_monitored_locations": 2, "average_speed_kmh": 60, "total_vehicle_flow_estimate": 1000}
+        self.mock_alert_summary_default = {"critical_unack_alert_count": 0, "recent_critical_types": []}
+
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = self.mock_kpi_summary_default
+        self.mock_analytics_service.get_critical_alert_summary = AsyncMock(return_value=self.mock_alert_summary_default) # Make this AsyncMock
+        self.mock_analytics_service.broadcast_operational_alert = AsyncMock() # Make this AsyncMock
+
 
         self.agent_core = AgentCore(
             prediction_scheduler=self.mock_prediction_scheduler,
@@ -60,86 +64,94 @@ class TestAgentCore(unittest.TestCase):
 
         await self.agent_core.run_decision_cycle(sample_user_id=sample_user_id)
 
-        # Verify PredictionScheduler calls
-        self.mock_prediction_scheduler._load_monitored_locations.assert_called_once()
+        # Verify PredictionScheduler calls (these are removed from AgentCore's direct responsibility)
+        # self.mock_prediction_scheduler._load_monitored_locations.assert_called_once()
+        # self.assertEqual(self.mock_prediction_scheduler._predict_and_notify.call_count, len(locations_to_monitor))
 
-        # Check that _predict_and_notify was called for each location
-        expected_predict_calls = [call(loc) for loc in locations_to_monitor]
-        self.mock_prediction_scheduler._predict_and_notify.assert_has_calls(expected_predict_calls, any_order=True)
-        self.assertEqual(self.mock_prediction_scheduler._predict_and_notify.call_count, len(locations_to_monitor))
+        # Verify set_priority_locations is called
+        self.mock_prediction_scheduler.set_priority_locations.assert_awaited_once()
+        # We can check the argument type or structure if needed, e.g., isinstance(args[0], list)
 
         # Verify PersonalizedRoutingService calls
         self.mock_personalized_routing_service.proactively_suggest_route.assert_awaited_once_with(sample_user_id)
 
         # Verify AnalyticsService calls
         self.mock_analytics_service.get_current_system_kpis_summary.assert_called_once()
-        self.mock_analytics_service.get_critical_alert_summary.assert_called_once()
+        self.mock_analytics_service.get_critical_alert_summary.assert_awaited_once() # Now async
 
-        # Verify logging calls (using the patched logger for the AgentCore instance)
+        # Verify logging calls
         mock_agent_logger.info.assert_any_call("Starting AgentCore decision cycle...")
-        mock_agent_logger.info.assert_any_call("Loading monitored locations for prediction...")
-        mock_agent_logger.info.assert_any_call(f"PredictionScheduler will monitor {len(locations_to_monitor)} locations.")
-        # ... (other existing log checks for prediction and routing phases) ...
-        mock_agent_logger.info.assert_any_call(f"Proactive route suggestion for user {sample_user_id}: Sample suggestion") # Directly use mock return
+        # mock_agent_logger.info.assert_any_call("Loading monitored locations for prediction...") # Removed
+        # ... (other prediction phase logs removed) ...
+        mock_agent_logger.info.assert_any_call(f"Proactive route suggestion for user {sample_user_id}: Sample suggestion")
 
-        # Check new logging for KPI and alert summaries
-        mock_agent_logger.info.assert_any_call(f"Current System KPIs: {json.dumps(self.mock_kpi_summary, indent=2)}")
-        mock_agent_logger.info.assert_any_call(f"Critical Alert Summary: {json.dumps(self.mock_alert_summary, indent=2)}")
+        mock_agent_logger.info.assert_any_call(f"AgentCore received System KPIs: {json.dumps(self.mock_kpi_summary_default, indent=2)}")
+        mock_agent_logger.info.assert_any_call(f"AgentCore received Critical Alert Summary: {json.dumps(self.mock_alert_summary_default, indent=2)}")
 
         # Check for system status summary log
-        # This checks if a log message CONTAINS the expected substring.
-        # We construct part of the expected log string to check against.
-        expected_summary_log_part = "System Status Summary:"
-        expected_congestion_log_part = f"Overall Congestion: {self.mock_kpi_summary.get('overall_congestion_level', 'N/A')}"
+        expected_summary_log_part = "System Status Summary (for AgentCore decision):"
+        self.assertTrue(any(expected_summary_log_part in call_arg[0][0] for call_arg in mock_agent_logger.info.call_args_list))
 
-        found_summary_log = False
-        found_congestion_log_in_summary = False
-        for call_arg in mock_agent_logger.info.call_args_list:
-            log_message = call_arg[0][0] # call_arg is a tuple ((message, ...), {})
-            if expected_summary_log_part in log_message:
-                found_summary_log = True
-                if expected_congestion_log_part in log_message: # Check if the specific part is in the summary log
-                    found_congestion_log_in_summary = True
-                break
-        self.assertTrue(found_summary_log, "System Status Summary log not found.")
-        self.assertTrue(found_congestion_log_in_summary, "Congestion level not found in System Status Summary log.")
-
-        # Check for suggested global action log
-        # Based on default mock_kpi_summary (LOW congestion) and mock_alert_summary (1 critical alert)
-        # The condition `system_kpis.get('overall_congestion_level') == "HIGH" or alert_summary.get('critical_alert_count', 0) > 1`
-        # might be false if critical_alert_count is 1. Let's adjust mock_alert_summary for one test path.
-        self.mock_analytics_service.get_critical_alert_summary.return_value = {"critical_alert_count": 0} # Ensure normal ops
-
-        # Re-run the specific part of the cycle or the whole cycle if state is not an issue.
-        # For this test, we'll assume the logger calls are cumulative from the single run.
-        # If we re-ran, logger calls would be asserted again.
-        # Based on updated mock (0 critical alerts, LOW congestion):
-        mock_agent_logger.info.assert_any_call("AgentCore Suggestion: System operating within normal parameters. Continue monitoring.")
-
-        # Test the other path for suggestion
-        self.mock_analytics_service.get_critical_alert_summary.return_value = {"critical_alert_count": 3} # Trigger operator review
-        # Need to re-run the decision making part or check based on how AgentCore is structured.
-        # For simplicity, if we assume the same run_decision_cycle call, the logger would have multiple suggestions.
-        # A better test would isolate this. For now, let's assume the test is structured to check one path.
-        # To test the other path properly, we'd need a separate test or more complex logic.
-        # Let's refine the test to capture the *last* relevant suggestion log.
-
-        # To test the "operator review" path:
-        # Re-configure mocks for this specific scenario
-        self.mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
-        self.mock_analytics_service.get_critical_alert_summary.return_value = {"critical_alert_count": 0} # or > 1
-
-        # If run_decision_cycle was called again here, we could check the new log.
-        # Since it's one run, we check if *any* call matches the "operator review"
-        # This part of the test needs careful thought on how to assert alternative conditional logging paths
-        # without re-running or making the test overly complex.
-        # For now, the previous assertion for "normal parameters" is based on the initial mock setup.
-        # We'll rely on code coverage for the other path or a separate test.
+        # Default mocks should result in "no operational alert issued"
+        self.mock_analytics_service.broadcast_operational_alert.assert_not_awaited()
+        mock_agent_logger.info.assert_any_call("AgentCore action: System status within acceptable parameters, no new global operational alert issued by AgentCore.")
 
         mock_agent_logger.info.assert_any_call("AgentCore decision cycle completed.")
 
+    @patch('app.core.agent_core.logger')
+    async def test_run_decision_cycle_triggers_high_congestion_alert(self, mock_agent_logger):
+        # Scenario: High congestion, no critical alerts
+        high_congestion_kpis = {"overall_congestion_level": "HIGH", "average_speed_kmh": 30, "total_vehicle_flow_estimate": 2000, "active_monitored_locations": 5}
+        no_critical_alerts = {"critical_unack_alert_count": 0, "recent_critical_types": []}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+        self.mock_analytics_service.get_critical_alert_summary.return_value = no_critical_alerts
 
-    @patch('app.core.agent_core.logger') # Patch the logger used by AgentCore instance
+        await self.agent_core.run_decision_cycle()
+
+        self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
+            title="High System Congestion",
+            message_text=ANY, # Or construct the exact expected message
+            severity="warning"
+        )
+        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Congestion', Severity: warning")
+        self.mock_prediction_scheduler.set_priority_locations.assert_awaited_once() # Still called
+
+    @patch('app.core.agent_core.logger')
+    async def test_run_decision_cycle_triggers_critical_alerts_alert(self, mock_agent_logger):
+        # Scenario: Low congestion, multiple critical alerts
+        low_congestion_kpis = {"overall_congestion_level": "LOW", "average_speed_kmh": 60, "total_vehicle_flow_estimate": 1000, "active_monitored_locations": 3}
+        many_critical_alerts = {"critical_unack_alert_count": 3, "recent_critical_types": ["typeA", "typeB"]}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = low_congestion_kpis
+        self.mock_analytics_service.get_critical_alert_summary.return_value = many_critical_alerts
+
+        await self.agent_core.run_decision_cycle()
+
+        self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
+            title="Critical Alerts Active",
+            message_text=ANY,
+            severity="warning"
+        )
+        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'Critical Alerts Active', Severity: warning")
+
+    @patch('app.core.agent_core.logger')
+    async def test_run_decision_cycle_triggers_high_congestion_and_critical_alerts(self, mock_agent_logger):
+        # Scenario: High congestion AND critical alerts
+        high_congestion_kpis = {"overall_congestion_level": "HIGH", "average_speed_kmh": 25, "total_vehicle_flow_estimate": 2500, "active_monitored_locations": 6}
+        some_critical_alerts = {"critical_unack_alert_count": 1, "recent_critical_types": ["typeC"]} # CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION is 0
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+        self.mock_analytics_service.get_critical_alert_summary.return_value = some_critical_alerts
+
+        await self.agent_core.run_decision_cycle()
+
+        self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
+            title="High System Load & Critical Alerts",
+            message_text=ANY,
+            severity="error"
+        )
+        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Load & Critical Alerts', Severity: error")
+
+
+    @patch('app.core.agent_core.logger')
     async def test_run_decision_cycle_no_locations(self, mock_agent_logger):
         sample_user_id = "test_user_no_loc"
 
@@ -158,11 +170,11 @@ class TestAgentCore(unittest.TestCase):
         self.mock_personalized_routing_service.proactively_suggest_route.assert_awaited_once_with(sample_user_id)
         # Analytics service calls should still happen
         self.mock_analytics_service.get_current_system_kpis_summary.assert_called_once()
-        self.mock_analytics_service.get_critical_alert_summary.assert_called_once()
+        self.mock_analytics_service.get_critical_alert_summary.assert_awaited_once() # Now async
         mock_agent_logger.info.assert_any_call("AgentCore decision cycle completed.")
 
 
-    @patch('app.core.agent_core.logger') # Patch the logger used by AgentCore instance
+    @patch('app.core.agent_core.logger')
     async def test_run_decision_cycle_routing_suggestion_is_none(self, mock_agent_logger):
         sample_user_id = "test_user_no_suggestion"
 
@@ -182,7 +194,7 @@ class TestAgentCore(unittest.TestCase):
         mock_agent_logger.info.assert_any_call(f"No proactive route suggestion generated for user {sample_user_id}.")
         # Analytics service calls should still happen
         self.mock_analytics_service.get_current_system_kpis_summary.assert_called_once()
-        self.mock_analytics_service.get_critical_alert_summary.assert_called_once()
+        self.mock_analytics_service.get_critical_alert_summary.assert_awaited_once() # Now async
 
 
 # Wrapper for async tests

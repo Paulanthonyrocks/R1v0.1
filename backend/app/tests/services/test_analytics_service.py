@@ -1,12 +1,16 @@
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock # Added AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock
 import asyncio
-from datetime import datetime, timezone, timedelta # Added timedelta
+from datetime import datetime, timezone, timedelta
+import numpy as np # For np.mean in tests
 
 from app.services.analytics_service import AnalyticsService
 from app.ml.data_cache import TrafficDataCache
+from app.utils.utils import DatabaseManager # Import DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
-from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, NodeCongestionUpdatePayload # Added WS Models
+from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, NodeCongestionUpdatePayload, GeneralNotification
+from app.models.alerts import AlertSeverityEnum
+
 
 class TestAnalyticsService(unittest.TestCase):
 
@@ -14,21 +18,19 @@ class TestAnalyticsService(unittest.TestCase):
         self.mock_config = {
             "analytics_service": {
                 "data_retention_hours": 24,
-                "node_congestion_broadcast_interval": 0.1 # Short interval for testing loop
+                "node_congestion_broadcast_interval": 0.1
             }
         }
-        # ConnectionManager methods like broadcast_message_model are async
         self.mock_connection_manager = AsyncMock(spec=ConnectionManager)
+        self.mock_db_manager = AsyncMock(spec=DatabaseManager) # Mock DatabaseManager
 
         self.analytics_service = AnalyticsService(
             config=self.mock_config,
-            connection_manager=self.mock_connection_manager
+            connection_manager=self.mock_connection_manager,
+            database_manager=self.mock_db_manager # Pass mock_db_manager
         )
-        # Mock _data_cache on the instance
         self.analytics_service._data_cache = MagicMock(spec=TrafficDataCache)
-        # Ensure data_cache.location_data.keys().__len__() works for KPI summary test
-        self.analytics_service._data_cache.location_data = MagicMock()
-        self.analytics_service._data_cache.location_data.keys().__len__.return_value = 3 # Mock active feeds
+        # No need to mock location_data.keys().__len__ if get_all_location_summaries is mocked properly
 
 
     async def test_get_all_location_congestion_data_success(self):
@@ -125,29 +127,85 @@ class TestAnalyticsService(unittest.TestCase):
         self.assertEqual(result[0]['id'], 'valid_node')
         self.analytics_service._data_cache.get_all_location_summaries.assert_called_once()
 
-    def test_get_current_system_kpis_summary(self):
-        # This method is synchronous and currently returns hardcoded data
-        # We also mocked the __len__ for active_feeds_count in setUp
-        expected_kpis = {
-            "overall_congestion_level": "MEDIUM",
-            "total_vehicle_flow_rate_hourly": 1575,
-            "active_feeds_count": 3, # From mock in setUp
-            "average_incident_response_time_minutes": None,
-            "system_stability_indicator": "STABLE"
-        }
+    def test_get_current_system_kpis_summary_with_data(self):
+        mock_cache_summaries = [
+            {'congestion_score': 20.0, 'average_speed': 60.0, 'vehicle_count': 50},
+            {'congestion_score': 80.0, 'average_speed': 20.0, 'vehicle_count': 100},
+            {'congestion_score': 50.0, 'average_speed': 40.0, 'vehicle_count': 70},
+        ]
+        self.analytics_service._data_cache.get_all_location_summaries.return_value = mock_cache_summaries
+
         kpis = self.analytics_service.get_current_system_kpis_summary()
+
+        self.assertEqual(kpis['active_monitored_locations'], 3)
+        self.assertEqual(kpis['total_vehicle_flow_estimate'], 220) # 50 + 100 + 70
+        self.assertAlmostEqual(kpis['average_speed_kmh'], round(np.mean([60,20,40]),1) ) # (60+20+40)/3 = 40
+        avg_congestion = np.mean([20,80,50]) # (20+80+50)/3 = 50
+        self.assertEqual(kpis['overall_congestion_level'], "MEDIUM") # 50 is MEDIUM
+        self.analytics_service._data_cache.get_all_location_summaries.assert_called_once()
+
+    def test_get_current_system_kpis_summary_empty_cache(self):
+        self.analytics_service._data_cache.get_all_location_summaries.return_value = []
+        kpis = self.analytics_service.get_current_system_kpis_summary()
+        expected_kpis = {
+            "overall_congestion_level": "UNKNOWN",
+            "average_speed_kmh": 0.0,
+            "total_vehicle_flow_estimate": 0,
+            "active_monitored_locations": 0,
+            "system_stability_indicator": "NO_DATA"
+        }
         self.assertEqual(kpis, expected_kpis)
 
-    def test_get_critical_alert_summary(self):
-        # This method is synchronous and currently returns hardcoded data
-        expected_summary = {
-            "critical_alert_count": 2,
-            "most_common_critical_types": ["major_collision", "stopped_vehicle_on_highway"],
-            "recent_critical_locations": ["Main St & 1st Ave", "HWY 101 Exit 4B"],
-            "oldest_unresolved_critical_alert_age_hours": 3.5
+    async def test_get_critical_alert_summary_with_alerts(self):
+        self.mock_db_manager.count_alerts_filtered = AsyncMock(return_value=2)
+        mock_alert_list = [
+            {'message': 'Critical Incident A', 'details': json.dumps({'incident_type': 'Collision'})},
+            {'message': 'High Severity Issue B', 'details': json.dumps({'incident_type': 'Obstruction'})},
+        ]
+        self.mock_db_manager.get_alerts_filtered = AsyncMock(return_value=mock_alert_list)
+
+        summary = await self.analytics_service.get_critical_alert_summary()
+
+        expected_filters = {
+            "severity_in": [AlertSeverityEnum.CRITICAL.value, AlertSeverityEnum.ERROR.value],
+            "acknowledged": False
         }
-        summary = self.analytics_service.get_critical_alert_summary()
-        self.assertEqual(summary, expected_summary)
+        self.mock_db_manager.count_alerts_filtered.assert_awaited_once_with(filters=expected_filters)
+        self.mock_db_manager.get_alerts_filtered.assert_awaited_once_with(filters=expected_filters, limit=3, offset=0)
+
+        self.assertEqual(summary['critical_unack_alert_count'], 2)
+        self.assertIn("Collision: Critical Incident A", summary['recent_critical_types'])
+        self.assertIn("Obstruction: High Severity Issue B", summary['recent_critical_types'])
+
+    async def test_get_critical_alert_summary_no_alerts(self):
+        self.mock_db_manager.count_alerts_filtered = AsyncMock(return_value=0)
+        self.mock_db_manager.get_alerts_filtered = AsyncMock(return_value=[])
+
+        summary = await self.analytics_service.get_critical_alert_summary()
+
+        self.assertEqual(summary['critical_unack_alert_count'], 0)
+        self.assertEqual(summary['recent_critical_types'], [])
+
+    async def test_broadcast_operational_alert(self):
+        title = "Test Operational Alert"
+        message_text = "This is a test alert message from AgentCore."
+        severity = "warning"
+
+        await self.analytics_service.broadcast_operational_alert(title, message_text, severity)
+
+        self.mock_connection_manager.broadcast_message_model.assert_awaited_once()
+        args, kwargs = self.mock_connection_manager.broadcast_message_model.call_args
+
+        sent_message: WebSocketMessage = args[0]
+        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.GENERAL_NOTIFICATION)
+        self.assertIsInstance(sent_message.payload, GeneralNotification)
+        self.assertEqual(sent_message.payload.message_type, "operational_alert_by_agent")
+        self.assertEqual(sent_message.payload.title, title)
+        self.assertEqual(sent_message.payload.message, message_text)
+        self.assertEqual(sent_message.payload.severity, severity)
+
+        self.assertEqual(kwargs.get('specific_topic'), "operational_alerts")
+
 
     async def test_broadcast_node_congestion_updates_direct_call(self):
         mock_node_data_list = [
@@ -222,6 +280,9 @@ def async_test(f):
 TestAnalyticsService.test_get_all_location_congestion_data_success = async_test(TestAnalyticsService.test_get_all_location_congestion_data_success)
 TestAnalyticsService.test_get_all_location_congestion_data_empty_cache = async_test(TestAnalyticsService.test_get_all_location_congestion_data_empty_cache)
 TestAnalyticsService.test_get_all_location_congestion_data_missing_lat_lon_in_summary = async_test(TestAnalyticsService.test_get_all_location_congestion_data_missing_lat_lon_in_summary)
+TestAnalyticsService.test_get_critical_alert_summary_with_alerts = async_test(TestAnalyticsService.test_get_critical_alert_summary_with_alerts)
+TestAnalyticsService.test_get_critical_alert_summary_no_alerts = async_test(TestAnalyticsService.test_get_critical_alert_summary_no_alerts)
+TestAnalyticsService.test_broadcast_operational_alert = async_test(TestAnalyticsService.test_broadcast_operational_alert)
 TestAnalyticsService.test_broadcast_node_congestion_updates_direct_call = async_test(TestAnalyticsService.test_broadcast_node_congestion_updates_direct_call)
 TestAnalyticsService.test_broadcast_node_congestion_updates_no_data = async_test(TestAnalyticsService.test_broadcast_node_congestion_updates_no_data)
 TestAnalyticsService.test_node_congestion_broadcast_loop = async_test(TestAnalyticsService.test_node_congestion_broadcast_loop)
