@@ -80,7 +80,8 @@ describe('AnomaliesPage', () => {
     // The ID mapping in mapAlertDataToAnomaly might be an issue here if it's not just parseInt.
     // For mockAlerts[0].id = '1', parseInt('1',10) is 1.
     await waitFor(() => {
-      expect(mockedAxios.patch).toHaveBeenCalledWith('/api/anomalies/1', { resolved: true });
+      // Verify the new endpoint and request body
+      expect(mockedAxios.patch).toHaveBeenCalledWith('/api/alerts/1/acknowledge', { acknowledged: true });
     });
 
     // Check for optimistic UI update (e.g., "(Resolved)" text appears)
@@ -109,7 +110,8 @@ describe('AnomaliesPage', () => {
     fireEvent.click(dismissButtons[0]); // Click dismiss for the first anomaly
 
     await waitFor(() => {
-      expect(mockedAxios.delete).toHaveBeenCalledWith('/api/anomalies/1');
+      // Verify the new endpoint
+      expect(mockedAxios.delete).toHaveBeenCalledWith('/api/alerts/1');
     });
 
     // Check for optimistic UI update (item removed)
@@ -122,9 +124,14 @@ describe('AnomaliesPage', () => {
   });
 
   it('should display loading state when isReady is false', () => {
+    const currentMockValue = mockUseRealtimeUpdates();
     mockUseRealtimeUpdates.mockReturnValue({
-      ...mockUseRealtimeUpdates(),
-      alerts: [],
+      ...currentMockValue,
+      alerts: [], // Provide default or empty alerts
+      kpis: currentMockValue.kpis, // Preserve other state parts
+      feeds: currentMockValue.feeds,
+      nodeCongestionData: currentMockValue.nodeCongestionData,
+      error: currentMockValue.error,
       isConnected: true,
       isReady: false, // Simulate not ready
       startWebSocket: mockStartWebSocket,
@@ -135,13 +142,17 @@ describe('AnomaliesPage', () => {
 
   it('should display error state when wsError is present', () => {
     const errorMessage = "WebSocket connection failed";
+    const currentMockValue = mockUseRealtimeUpdates();
     mockUseRealtimeUpdates.mockReturnValue({
-      ...mockUseRealtimeUpdates(),
+      ...currentMockValue,
       alerts: [],
+      kpis: currentMockValue.kpis,
+      feeds: currentMockValue.feeds,
+      nodeCongestionData: currentMockValue.nodeCongestionData,
       isConnected: false,
-      isReady: true, // Could be true but still have an error
+      isReady: true,
       startWebSocket: mockStartWebSocket,
-      error: { message: errorMessage } as any, // Simulate error
+      error: { message: errorMessage } as any,
     });
     render(<AnomaliesPage />);
     expect(screen.getByText(`Error connecting to real-time updates: ${errorMessage}. Please try again later.`)).toBeInTheDocument();
