@@ -1,10 +1,10 @@
 // lib/hooks.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-    FeedStatusData, KpiData, AlertData,
-} from '@/lib/types'; // Remove KpiUpdatePayload as it is unused
+    FeedStatusData, KpiData, AlertData, BackendCongestionNodeData, // Added BackendCongestionNodeData
+} from '@/lib/types';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws'; // Ensure this is ws://localhost:9002/ws if backend is on 9002
 const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
 const MAX_RECONNECT_DELAY_MS = 30000; // Max delay 30s
 const MAX_RECONNECT_ATTEMPTS = 6;     // Max attempts before stopping
@@ -14,10 +14,11 @@ type RealtimeData = {
     feeds: FeedStatusData[];
     kpis: KpiData | null;
     alerts: AlertData[];
+    nodeCongestionData: BackendCongestionNodeData[]; // Added nodeCongestionData
     error: string | null;
- isReady: boolean;
+    isReady: boolean;
     setInitialFeeds: (feeds: FeedStatusData[]) => void;
-    setInitialKpis: (kpis: KpiData) => void;
+    setInitialKpis: (kpis: KpiData) => void; // Keep if SWR is used for initial KPI load
     setInitialAlerts: (alerts: AlertData[]) => void;
     startWebSocket: () => void;
     getStreamInfo: (streamId: string) => { status: string; liveUrl: string | null } | undefined;
@@ -31,10 +32,17 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
   const reconnectAttempts = useRef(0); // Track attempts
   const lastPingRef = useRef<number>(0);
 
+  // Add WebSocketMessageTypeEnum if not already globally available or imported from a shared types location
+  // For this example, assuming it might be defined or imported elsewhere, or we define it here.
+  // Let's assume it's available via an import if this hook is part of a larger system.
+  // If not, it would need to be defined or imported, e.g.:
+  // import { WebSocketMessageTypeEnum } from '@/lib/types'; // if it were moved there
+
   const [isConnected, setIsConnected] = useState(false);
   const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]); // Added state for node congestion
   const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const readyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -78,11 +86,17 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
 
     ws.onmessage = (event) => {
         // (Message handling logic - unchanged from previous correct version)
- try {
- const message = JSON.parse(event.data);
+        // Assuming WebSocketMessageTypeEnum is available, e.g. imported or defined above
+        // For example:
+        // enum WebSocketMessageTypeEnum { ... ALERT_STATUS_UPDATE = "alert_status_update", ... }
+
+        try {
+            const message = JSON.parse(event.data as string);
+            // Ensure message.type is compared against defined enum values if using TypeScript enums
+            // For string comparison as used in backend:
             switch (message.type) {
- case 'initial_data':
- setFeeds(message.data.feeds);
+                case 'initial_data': // Assuming 'initial_data' is a string literal type
+                    setFeeds(message.data.feeds);
  setKpis(message.data.kpis);
  setAlerts(message.data.alerts);
  setIsReady(true);
@@ -121,22 +135,48 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
  break;
  case 'stream_update':
                   const streamUpdateData = message.data as { streamId: string; info: { status: string; liveUrl: string | null } };
- setStreamInfoMap(prevStreamInfoMap => ({
- ...prevStreamInfoMap,
- [streamUpdateData.streamId]: streamUpdateData.info,
- }));
- break;
- case 'error':
- setError(message.data.message);
- console.error('WebSocket Error from Server:', message.data.message);
- break;
- case 'ping':
- ws.send(JSON.stringify({ type: 'pong' }));
- lastPingRef.current = Date.now();
- break;
- default:
- console.warn('Unknown message type:', message.type);
- break;
+                    setStreamInfoMap(prevStreamInfoMap => ({
+                        ...prevStreamInfoMap,
+                        [streamUpdateData.streamId]: streamUpdateData.info,
+                    }));
+                    break;
+                case 'alert_status_update': // Matches backend WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE
+                    const statusUpdatePayload = message.payload as { alert_id: string | number; status: string; timestamp: string };
+                    setAlerts(prevAlerts => {
+                        const alertIdToUpdate = String(statusUpdatePayload.alert_id);
+                        if (statusUpdatePayload.status === "dismissed") {
+                            return prevAlerts.filter(alert => String(alert.id) !== alertIdToUpdate);
+                        }
+                        return prevAlerts.map(alert => {
+                            if (String(alert.id) === alertIdToUpdate) {
+                                return {
+                                    ...alert,
+                                    acknowledged: statusUpdatePayload.status === "acknowledged",
+                                };
+                            }
+                            return alert;
+                        });
+                    });
+                    break;
+                case 'node_congestion_update': // Matches backend WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE
+                    // Assuming message.payload is NodeCongestionUpdatePayload { nodes: BackendCongestionNodeData[] }
+                    if (message.payload && Array.isArray(message.payload.nodes)) {
+                        setNodeCongestionData(message.payload.nodes);
+                    } else {
+                        console.warn('Received node_congestion_update without valid nodes payload:', message.payload);
+                    }
+                    break;
+                case 'error': // Assuming 'error' is a string literal type
+                    setError(message.data.message); // Ensure message.data exists and has message
+                    console.error('WebSocket Error from Server:', message.data?.message || message.payload?.message || 'Unknown server error');
+                    break;
+                case 'ping': // Assuming 'ping' is a string literal type
+                    ws.send(JSON.stringify({ type: 'pong' }));
+                    lastPingRef.current = Date.now();
+                    break;
+                default:
+                    console.warn('Unknown message type:', message.type);
+                    break;
             }
 
         } catch (e) {
@@ -263,8 +303,9 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
     feeds,
     kpis,
     alerts,
+    nodeCongestionData, // Return nodeCongestionData
     error,
- isReady,
+    isReady,
     setInitialFeeds,
     setInitialKpis,
     setInitialAlerts,

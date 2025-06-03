@@ -96,16 +96,19 @@ const mapAlertDataToAnomaly = (alert: AlertData, existingAnomalies: Anomaly[] = 
 
 
   return {
-    id: anomalyId, // This might conflict if API uses sequential numbers and WS uses strings.
+    id: anomalyId,
     type: alert.type || 'Unknown Event',
-    severity: alert.severity === 'info' ? 'low' : alert.severity, // Map 'info' to 'low'
+    // Ensure severity mapping handles all cases, especially if AlertData.severity has more options than Anomaly.severity
+    severity: (alert.severity === 'info' || alert.severity === 'Anomaly' || alert.severity === 'Warning' || alert.severity === 'Critical' || alert.severity === 'ERROR')
+              ? (alert.severity === 'info' ? 'low' : alert.severity.toLowerCase() as "low" | "medium" | "high")
+              : 'low', // Default for unexpected severity values
     description: alert.message,
-    timestamp: alert.timestamp,
+    timestamp: typeof alert.timestamp === 'string' ? alert.timestamp : alert.timestamp.toISOString(),
     location: locationTuple,
-    resolved: false, // New alerts from WebSocket are initially unresolved
+    resolved: !!alert.acknowledged, // Set 'resolved' based on 'acknowledged' status from WebSocket/AlertData
     details: alert.details ? JSON.stringify(alert.details) : undefined,
     reportedBy: alert.details?.reportedBy || 'System',
-    source: 'websocket',
+    source: 'websocket', // Or determine based on how data is fetched/merged if API data is also used
   };
 };
 
@@ -256,10 +259,35 @@ const AnomaliesPage = () => {
       anomaly.id === anomalyId ? { ...anomaly, resolved: true } : anomaly
     ));
     try {
-      await axios.patch(`/api/anomalies/${anomalyId}`, { resolved: true });
-      addToast("Anomaly resolved successfully!", "success");
-      // No SWR mutate needed. WebSocket might eventually send updated state if backend pushes.
-      // Or, if API is source of truth for 'resolved' state, a refetch mechanism might be needed
+      // Use the new endpoint and request body structure
+      await axios.patch(`/api/alerts/${anomalyId}/acknowledge`, { acknowledged: true });
+      addToast("Anomaly acknowledged successfully!", "success");
+      // UI is optimistically updated. WebSocket broadcast from backend will confirm to other clients.
+      // If this client needs to be sure it has the absolute latest from DB (e.g. other fields changed by backend),
+      // then a refetch or specific update from a WS message confirming the PATCH would be needed.
+      // For now, optimistic update + WS broadcast to others is the flow.
+    } catch (err) {
+      addToast("Failed to acknowledge anomaly.", "error");
+      // Revert optimistic update on error
+      setAllAnomalies(prev => prev.map(anomaly =>
+        anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly // Assuming it was false before
+      ));
+      console.error("Failed to acknowledge anomaly", err);
+    }
+  };
+  const handleDismiss = async (anomalyId: number) => {
+    const originalAnomalies = [...allAnomalies]; // Store for potential revert
+    // Optimistic UI update (local state)
+    setAllAnomalies(prev => prev.filter(anomaly => anomaly.id !== anomalyId));
+    try {
+      // Use the new endpoint
+      await axios.delete(`/api/alerts/${anomalyId}`);
+      addToast("Anomaly dismissed successfully.", "success");
+      // No SWR mutate. UI is optimistically updated.
+      // WebSocket broadcast from backend will inform other clients.
+    } catch (err) {
+      addToast("Failed to dismiss anomaly.", "error");
+      setAllAnomalies(originalAnomalies); // Revert on error
       // if WebSocket doesn't reflect this specific state change.
     } catch (err) {
       addToast("Failed to resolve anomaly.", "error");

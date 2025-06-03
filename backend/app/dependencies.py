@@ -14,7 +14,8 @@ from .services.services import (
     get_personalized_routing_service,
     get_route_optimization_service,
     get_weather_service,
-    get_event_service
+    get_event_service,
+    get_websocket_connection_manager # Assuming this will be added to services.py
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService
@@ -23,6 +24,7 @@ from .services.route_optimization_service import RouteOptimizationService
 from .services.personalized_routing_service import PersonalizedRoutingService
 from .services.weather_service import WeatherService
 from .services.event_service import EventService
+from app.websocket.connection_manager import ConnectionManager # Import for type hint
 
 async def get_db():
     """Dependency to get the database manager instance."""
@@ -176,3 +178,17 @@ async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCred
         return await verify_firebase_token(token.credentials)
     except HTTPException:
         return None
+
+async def get_connection_manager() -> ConnectionManager:
+    """Dependency to get the WebSocket ConnectionManager instance."""
+    # This assumes get_websocket_connection_manager() is defined in app.services.services
+    # and returns the singleton ConnectionManager instance.
+    manager = get_websocket_connection_manager()
+    if manager is None:
+        # This case should ideally not happen if ConnectionManager is a critical service
+        # and initialized properly in main.py or via services.py
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WebSocket connection manager not available."
+        )
+    return manager

@@ -879,6 +879,54 @@ class DatabaseManager:
             return False
         except Exception as e: logger.error(f"Unexpected error ack alert {alert_id}: {e}", exc_info=True); raise DatabaseError(f"Unexpected ack alert: {e}") from e
 
+    @db_write_retry_decorator
+    def delete_alert(self, alert_id: int) -> bool:
+        sql = "DELETE FROM alerts WHERE id = ?"
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (alert_id,))
+                    conn.commit() # Explicit commit for DELETE
+                    if cursor.rowcount > 0:
+                        logger.info(f"Alert ID {alert_id} deleted successfully.")
+                        return True
+                    else:
+                        logger.warning(f"Alert ID {alert_id} not found for deletion.")
+                        return False
+        except RetryError as e:
+            logger.error(f"DB delete_alert failed retries for ID {alert_id}: {e}.")
+            return False
+        except sqlite3.Error as e:
+            logger.error(f"DB error deleting alert ID {alert_id}: {e}", exc_info=True)
+            if not isinstance(e, sqlite3.OperationalError): # Don't automatically raise for operational errors handled by retry
+                raise DatabaseError(f"Failed to delete alert ID {alert_id}: {e}") from e
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error deleting alert ID {alert_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error deleting alert ID {alert_id}: {e}") from e
+
+    def get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
+        sql = "SELECT id, timestamp, severity, feed_id, message, details, acknowledged FROM alerts WHERE id = ?"
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, (alert_id,))
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                else:
+                    logger.info(f"Alert ID {alert_id} not found.")
+                    return None
+        except sqlite3.Error as e:
+            logger.error(f"DB error fetching alert ID {alert_id}: {e}", exc_info=True)
+            # Depending on policy, you might want to raise DatabaseError here or just return None
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching alert ID {alert_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error fetching alert ID {alert_id}: {e}") from e
+
+
     @retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception)) # Generic retry for Mongo
     def save_raw_traffic_data_mongo(self, data: Dict) -> bool:
         if not self.mongo_db:

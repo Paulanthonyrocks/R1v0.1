@@ -21,7 +21,9 @@ export interface AlertData {
   feed_id?: string | null;
   message: string;
   description?: string;
-  location?: string;
+  location?: string; // This is a simple string; backend might send structured location in details.
+  acknowledged?: boolean; // For WebSocket updates on acknowledgement status
+  details?: Record<string, any>; // To capture full details from WebSocket if needed
 }
 
 export interface TrendDataPoint {
@@ -32,11 +34,14 @@ export interface TrendDataPoint {
 }
 
 export interface KpiData {
-  avg_speed: number;
-  congestion_index: number;
-  active_incidents: number;
-  feed_status_counts: { running: number; error: number; idle: number };
-  total_flow?: number;
+  average_speed_kmh?: number | null; // Aligned with backend GlobalRealtimeMetrics, made optional to match backend
+  congestion_index?: number | null;  // Aligned with backend GlobalRealtimeMetrics, made optional
+  active_incidents_count?: number | null; // Aligned with backend GlobalRealtimeMetrics, made optional
+  feed_statuses?: { [key: string]: number } | null; // Aligned with backend, e.g. { "running": N, "error": M, "stopped": P }
+  total_flow?: number | null; // Already present and matches, made optional
+  // Add any other fields from GlobalRealtimeMetrics if needed by the frontend kpis object
+  timestamp?: string | Date; // GlobalRealtimeMetrics has a timestamp
+  metrics_source?: string | null; // GlobalRealtimeMetrics has this
 }
 
 export interface StatCardData {
@@ -135,6 +140,7 @@ export interface RealtimeData {
   feeds: FeedStatusData[];
   kpis: KpiData | null;
   alerts: AlertData[];
+  nodeCongestionData?: BackendCongestionNodeData[]; // Added for WebSocket node congestion updates
   error: string | null;
 }
 

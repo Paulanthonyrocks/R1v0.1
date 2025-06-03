@@ -5,14 +5,14 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import useSWR from 'swr';
+// import useSWR from 'swr'; // Removed useSWR
 // Removed WebSocketClient import, will be handled by the hook
 import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+// const fetcher = (url: string) => fetch(url).then(res => res.json()); // Removed fetcher, no longer needed by SWR
 
 const MetricCard = ({ title, value, unit, color, children }: { title: string, value: React.ReactNode, unit?: string, color?: string, children?: React.ReactNode }) => (
   <div className={`bg-gray-800 p-4 rounded shadow text-center flex flex-col items-center justify-center min-w-[140px]`}>
@@ -26,11 +26,9 @@ const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
-  // Fetch real-time analytics every 5 seconds (can be kept for potentially different data)
-  const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
-
-  // Use the realtime updates hook
+  // Use the realtime updates hook - This is now the primary source for KPIs
   const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
+  // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   useEffect(() => {
     // Start WebSocket connection on component mount
@@ -63,10 +61,29 @@ const DashboardPage: React.FC = () => {
 
         {/* Real-time Analytics Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <MetricCard title="Congestion Index" value={metrics?.congestion_index ?? kpis?.avg_congestion_index ?? '--'} unit="%" color={metrics ? getCongestionColor(metrics.congestion_index) : (kpis ? getCongestionColor(kpis.avg_congestion_index ?? 0) : '')} />
-          <MetricCard title="Average Speed" value={metrics?.average_speed_kmh ?? kpis?.avg_speed_kmh ?? '--'} unit="km/h" color={metrics ? getSpeedColor(metrics.average_speed_kmh) : (kpis ? getSpeedColor(kpis.avg_speed_kmh ?? 0): '')} />
-          <MetricCard title="Active Incidents" value={metrics?.active_incidents_count ?? kpis?.total_active_incidents ?? '--'} color={metrics ? getIncidentColor(metrics.active_incidents_count) : (kpis ? getIncidentColor(kpis.total_active_incidents ?? 0) : '')} />
-          <MetricCard title="Total Flow" value={kpis?.total_flow ?? '--'} unit="vehicles/hr" />
+          <MetricCard
+            title="Congestion Index"
+            value={kpis?.congestion_index ?? '--'}
+            unit="%"
+            color={kpis?.congestion_index ? getCongestionColor(kpis.congestion_index) : 'text-gray-400'}
+          />
+          <MetricCard
+            title="Average Speed"
+            value={kpis?.average_speed_kmh ?? '--'}
+            unit="km/h"
+            color={kpis?.average_speed_kmh ? getSpeedColor(kpis.average_speed_kmh) : 'text-gray-400'}
+          />
+          <MetricCard
+            title="Active Incidents"
+            value={kpis?.active_incidents_count ?? '--'}
+            color={kpis?.active_incidents_count ? getIncidentColor(kpis.active_incidents_count) : 'text-gray-400'}
+          />
+          <MetricCard
+            title="Total Flow"
+            value={kpis?.total_flow ?? '--'}
+            unit="vehicles/hr"
+            color={kpis?.total_flow ? undefined : 'text-gray-400'} // No specific color logic for flow, default if no value
+          />
         </div>
 
         {/* Placeholder for video stream */}
