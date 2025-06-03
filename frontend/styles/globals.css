@@ -545,3 +545,74 @@
         display: none;
     }
 }
+
+/* --- Reduced Motion Preferences --- */
+@media (prefers-reduced-motion: reduce) {
+  /* Disable animations */
+  .matrix-code,
+  .pulse,
+  .float,
+  .road-animation::after,
+  .demo-cell::after,
+  .demo-graph-line,
+  .data-node,
+  .demo-stat {
+    animation: none !important;
+  }
+
+  /* For elements animated by matrixFall, adjust their static state */
+  .matrix-code {
+    opacity: 0.05 !important; /* Static, subtle visibility */
+    transform: none !important; /* Remove any transform from animation */
+  }
+
+  /* For elements that use float, ensure they are not offset */
+  .float {
+    transform: none !important;
+  }
+
+  /* For roadScan, hide the element if animation is its primary purpose */
+  .road-animation::after {
+    display: none !important;
+  }
+
+  /* Disable transitions */
+  .scroll-transition,
+  .feature-underline,
+  .matrix-input,
+  .matrix-button,
+  .matrix-glow-card,
+  .matrix-link,
+  .matrix-progress-bar__fill { /* Added progress bar fill */
+    transition: none !important;
+  }
+
+  /* Ensure scroll-transition elements are immediately visible */
+  .scroll-transition {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+
+  /* Ensure feature-underline is fully visible if it's part of a static state */
+  .matrix-glow-card:hover .feature-underline, /* If hover is still desired without transition */
+  .feature-underline { /* Or make it always full width if appropriate */
+    width: 100% !important; /* Assuming it should be visible */
+  }
+
+  /* Remove hover effects that rely on transition for .matrix-glow-card */
+  .matrix-glow-card:hover {
+    box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2), /* Static shadow from non-hover state */
+                0 0 2px 1px hsla(var(--matrix), 0.2);
+  }
+
+  /* Remove hover effects for inputs and buttons that rely on transition */
+  .matrix-input:hover,
+  .matrix-button:hover {
+    border-color: hsl(var(--input)); /* Revert to base border color */
+    box-shadow: 0 0 1px hsla(var(--matrix), 0.2); /* Revert to base box shadow */
+  }
+   .matrix-button:hover { /* Specific for button if its hover is different */
+    background-color: hsl(var(--primary)); /* Revert to base background */
+    border-color: hsl(var(--primary));
+  }
+}
