@@ -2,10 +2,14 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 import random
-import asyncio # Added asyncio
+import asyncio
+import numpy as np # For calculations in KPI summary
+from typing import List, Optional, Dict, Any, Union # Added Union
+from datetime import datetime, timedelta, timezone
+import random
 
 from app.models.traffic import TrafficData, AggregatedTrafficTrend, IncidentReport, IncidentTypeEnum, IncidentSeverityEnum, LocationModel
-from app.models.alerts import Alert, AlertSeverityEnum
+from app.models.alerts import Alert, AlertSeverityEnum # Keep AlertSeverityEnum
 # Updated import for websocket models
 from app.models.websocket import (
     WebSocketMessage,
@@ -18,13 +22,15 @@ from app.models.websocket import (
 from app.websocket.connection_manager import ConnectionManager
 from app.ml.traffic_predictor import TrafficPredictor
 from app.ml.data_cache import TrafficDataCache
+from app.utils.utils import DatabaseManager # Added DatabaseManager import
 
 logger = logging.getLogger(__name__)
 
 class AnalyticsService:
-    def __init__(self, config: Dict[str, Any], connection_manager: ConnectionManager):
+    def __init__(self, config: Dict[str, Any], connection_manager: ConnectionManager, database_manager: DatabaseManager): # Added database_manager
         self.config = config.get("analytics_service", {})
         self._connection_manager = connection_manager
+        self._db_manager = database_manager # Store DatabaseManager instance
         
         # Initialize ML components
         self._traffic_predictor = TrafficPredictor(self.config)
@@ -37,7 +43,7 @@ class AnalyticsService:
         self._node_congestion_task: Optional[asyncio.Task] = None
         self._stop_node_congestion_event: Optional[asyncio.Event] = None
 
-        logger.info("AnalyticsService initialized with ML components and background task setup.")
+        logger.info("AnalyticsService initialized with ML components, DatabaseManager, and background task setup.")
         
     def _update_traffic_data(self, data_point: TrafficData):
         """Update both recent data cache and trigger prediction updates"""
@@ -330,31 +336,119 @@ class AnalyticsService:
 
     def get_current_system_kpis_summary(self) -> Dict[str, Any]:
         """
-        Returns a synchronous summary of system-wide KPIs.
-        For this subtask, it returns hardcoded data.
+        Returns a synchronous summary of system-wide KPIs based on cached data.
         """
-        # TODO: Replace with actual KPI aggregation logic from data cache or other sources.
-        logger.debug("AnalyticsService: Generating hardcoded system KPI summary.")
+        logger.debug("AnalyticsService: Generating current system KPI summary from data cache.")
+        summaries = self._data_cache.get_all_location_summaries()
+
+        if not summaries:
+            return {
+                "overall_congestion_level": "UNKNOWN",
+                "average_speed_kmh": 0.0,
+                "total_vehicle_flow_estimate": 0, # Represents current snapshot count, not rate yet
+                "active_monitored_locations": 0,
+                "system_stability_indicator": "NO_DATA"
+            }
+
+        all_congestion_scores = [s['congestion_score'] for s in summaries if s.get('congestion_score') is not None]
+        all_speeds = [s['average_speed'] for s in summaries if s.get('average_speed') is not None]
+        total_vehicles_snapshot = sum(s.get('vehicle_count', 0) for s in summaries if s.get('vehicle_count') is not None)
+
+        avg_congestion_score = np.mean(all_congestion_scores) if all_congestion_scores else 0.0
+        avg_speed = np.mean(all_speeds) if all_speeds else 0.0
+
+        congestion_str = "UNKNOWN"
+        if avg_congestion_score < 30:
+            congestion_str = "LOW"
+        elif avg_congestion_score <= 70:
+            congestion_str = "MEDIUM"
+        else:
+            congestion_str = "HIGH"
+
         return {
-            "overall_congestion_level": "MEDIUM", # Example: "LOW", "MEDIUM", "HIGH"
-            "total_vehicle_flow_rate_hourly": 1575, # Example: vehicles per hour
-            "active_feeds_count": self._data_cache.location_data.keys().__len__(), # Example: count of active feeds
-            "average_incident_response_time_minutes": None, # Example: 15.5 (if tracked)
-            "system_stability_indicator": "STABLE" # Example: "STABLE", "DEGRADED"
+            "overall_congestion_level": congestion_str,
+            "average_speed_kmh": round(avg_speed, 1),
+            "total_vehicle_flow_estimate": total_vehicles_snapshot, # This is a sum of current counts, not a rate yet
+            "active_monitored_locations": len(summaries),
+            "system_stability_indicator": "STABLE" # Placeholder, could be based on error rates etc.
         }
 
-    def get_critical_alert_summary(self) -> Dict[str, Any]:
+    async def get_critical_alert_summary(self) -> Dict[str, Any]: # Made async
         """
-        Returns a synchronous summary of critical alerts.
-        For this subtask, it returns hardcoded data.
+        Returns a summary of critical and high-severity, unacknowledged alerts from the database.
         """
-        # TODO: Replace with actual alert fetching and summarization logic from a database or alert manager.
-        logger.debug("AnalyticsService: Generating hardcoded critical alert summary.")
-        # This would typically involve querying the alert database (e.g., via DatabaseManager)
-        # for alerts with 'CRITICAL' or 'HIGH' severity that are recent or active.
-        return {
-            "critical_alert_count": 2,
-            "most_common_critical_types": ["major_collision", "stopped_vehicle_on_highway"],
-            "recent_critical_locations": ["Main St & 1st Ave", "HWY 101 Exit 4B"],
-            "oldest_unresolved_critical_alert_age_hours": 3.5 # Example
+        logger.debug("AnalyticsService: Fetching critical alert summary from database.")
+        filters = {
+            "severity_in": [AlertSeverityEnum.CRITICAL.value, AlertSeverityEnum.ERROR.value], # Assuming ERROR maps to high severity
+            "acknowledged": False
         }
+
+        try:
+            # These calls are now to async methods in DatabaseManager
+            critical_alerts_count = await self._db_manager.count_alerts_filtered(filters=filters)
+            recent_critical_alerts_data = await self._db_manager.get_alerts_filtered(filters=filters, limit=3, offset=0)
+
+            # Extract messages (as types) and potentially locations if available in 'details'
+            recent_critical_types = []
+            for alert_dict in recent_critical_alerts_data:
+                # Assuming alert_dict is a dict from DB, not Pydantic model yet
+                msg_summary = alert_dict.get('message', 'Unknown Type')[:50] # Truncate for summary
+                if alert_dict.get('details') and isinstance(alert_dict['details'], str):
+                    try:
+                        details_dict = json.loads(alert_dict['details'])
+                        if details_dict.get('incident_type'):
+                            msg_summary = f"{details_dict['incident_type']}: {msg_summary}"
+                    except json.JSONDecodeError:
+                        pass # Keep msg_summary as is
+                recent_critical_types.append(msg_summary)
+
+            # Find oldest unresolved critical alert (optional, could be intensive)
+            # For now, returning placeholder for this
+            oldest_unresolved_age_hours = None
+
+            return {
+                "critical_unack_alert_count": critical_alerts_count,
+                "recent_critical_types": recent_critical_types,
+                "oldest_unresolved_critical_alert_age_hours": oldest_unresolved_age_hours
+            }
+        except Exception as e:
+            logger.error(f"Error fetching critical alert summary: {e}", exc_info=True)
+            return { # Return default/error structure
+                "critical_unack_alert_count": 0,
+                "recent_critical_types": [],
+                "oldest_unresolved_critical_alert_age_hours": None,
+                "error": str(e)
+            }
+
+    async def broadcast_operational_alert(
+        self,
+        title: str,
+        message_text: str, # Renamed from 'message' to avoid conflict with WebSocketMessage model
+        severity: str # e.g., "info", "warning", "error"
+    ):
+        """
+        Broadcasts an operational alert generated by the AgentCore or other system logic.
+        Uses GeneralNotification payload type.
+        """
+        if not self._connection_manager:
+            logger.warning("ConnectionManager not available in AnalyticsService. Cannot broadcast operational alert.")
+            return
+
+        # Validate severity if possible (e.g., against an enum or list of allowed values)
+        # For now, assume severity is a string like "info", "warning", "error"
+
+        payload = GeneralNotification(
+            message_type="operational_alert_by_agent", # Custom type for client-side differentiation
+            title=title,
+            message=message_text,
+            severity=severity.lower() # Ensure lowercase if frontend expects it
+        )
+        ws_message = WebSocketMessage(
+            event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, # Use existing enum for general purpose notifications
+            payload=payload
+        )
+        try:
+            await self._connection_manager.broadcast_message_model(ws_message, specific_topic="operational_alerts")
+            logger.info(f"Broadcasted operational alert: '{title}' - Severity: {severity}")
+        except Exception as e:
+            logger.error(f"Failed to broadcast operational alert: {e}", exc_info=True)

@@ -1,5 +1,6 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/utils/utils.py
 
+import asyncio # Added for to_thread
 import sys
 import cv2
 import psutil
@@ -844,6 +845,117 @@ class DatabaseManager:
                 cursor.execute(q,params); return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e: logger.error(f"DB error get_alerts_filtered: {e}", exc_info=True); return []
 
+    def _execute_get_alerts_filtered(self, filters: Dict, limit: int, offset: int) -> List[Dict]:
+        # Internal synchronous method for get_alerts_filtered
+        base_q = "SELECT id, timestamp, severity, feed_id, message, details, acknowledged FROM alerts WHERE 1=1"
+        params = []
+        conds = []
+
+        allowed_exact_match = {"feed_id"} # acknowledged and severity are handled separately
+
+        if filters.get("acknowledged") is not None: # Handles True or False
+            conds.append(f"acknowledged = ?")
+            params.append(1 if filters["acknowledged"] else 0)
+
+        if filters.get("severity"): # Single severity
+            conds.append(f"severity = ?")
+            params.append(filters["severity"])
+
+        if filters.get("severity_in") and isinstance(filters["severity_in"], list) and len(filters["severity_in"]) > 0:
+            placeholders = ", ".join("?" for _ in filters["severity_in"])
+            conds.append(f"severity IN ({placeholders})")
+            params.extend(filters["severity_in"])
+
+        for k, v in filters.items():
+            if k in allowed_exact_match and v is not None:
+                conds.append(f"{k} = ?")
+                params.append(v)
+            elif k == "search" and isinstance(v, str) and v.strip():
+                conds.append("message LIKE ?")
+                params.append(f"%{v.strip()}%")
+            elif k == "start_time" and isinstance(v, (int, float)):
+                conds.append("timestamp >= ?")
+                params.append(v)
+            elif k == "end_time" and isinstance(v, (int, float)):
+                conds.append("timestamp <= ?")
+                params.append(v)
+
+        if conds:
+            base_q += " AND " + " AND ".join(conds)
+
+        query = f"{base_q} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    async def get_alerts_filtered(self, filters: Dict, limit: int = 100, offset: int = 0) -> List[Dict]:
+        try:
+            # Run the synchronous DB operation in a separate thread
+            return await asyncio.to_thread(self._execute_get_alerts_filtered, filters, limit, offset)
+        except sqlite3.Error as e:
+            logger.error(f"DB error get_alerts_filtered: {e}", exc_info=True)
+            return []
+        except Exception as e: # Catch any other unexpected errors from the thread
+            logger.error(f"Unexpected error in get_alerts_filtered via thread: {e}", exc_info=True)
+            return []
+
+    def _execute_count_alerts_filtered(self, filters: Dict) -> int:
+        # Internal synchronous method for count_alerts_filtered
+        base_q = "SELECT COUNT(*) FROM alerts WHERE 1=1"
+        params = []
+        conds = []
+
+        allowed_exact_match = {"feed_id"}
+
+        if filters.get("acknowledged") is not None:
+            conds.append(f"acknowledged = ?")
+            params.append(1 if filters["acknowledged"] else 0)
+
+        if filters.get("severity"):
+            conds.append(f"severity = ?")
+            params.append(filters["severity"])
+
+        if filters.get("severity_in") and isinstance(filters["severity_in"], list) and len(filters["severity_in"]) > 0:
+            placeholders = ", ".join("?" for _ in filters["severity_in"])
+            conds.append(f"severity IN ({placeholders})")
+            params.extend(filters["severity_in"])
+
+        for k, v in filters.items():
+            if k in allowed_exact_match and v is not None:
+                conds.append(f"{k} = ?")
+                params.append(v)
+            elif k == "search" and isinstance(v, str) and v.strip():
+                conds.append("message LIKE ?")
+                params.append(f"%{v.strip()}%")
+            elif k == "start_time" and isinstance(v, (int, float)):
+                conds.append("timestamp >= ?")
+                params.append(v)
+            elif k == "end_time" and isinstance(v, (int, float)):
+                conds.append("timestamp <= ?")
+                params.append(v)
+
+        if conds:
+            base_q += " AND " + " AND ".join(conds)
+
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(base_q, params)
+            count_result = cursor.fetchone()
+            return count_result[0] if count_result else 0
+
+    async def count_alerts_filtered(self, filters: Dict) -> int:
+        try:
+            return await asyncio.to_thread(self._execute_count_alerts_filtered, filters)
+        except sqlite3.Error as e:
+            logger.error(f"DB error count_alerts_filtered: {e}", exc_info=True)
+            return 0
+        except Exception as e:
+            logger.error(f"Unexpected error in count_alerts_filtered via thread: {e}", exc_info=True)
+            return 0
+
     @db_write_retry_decorator
     def save_alert(self, severity: str, feed_id: str, message: str, details: Optional[str]=None) -> bool:
         if severity not in ('INFO','WARNING','CRITICAL'): logger.error(f"Invalid alert sev: {severity}"); return False
@@ -861,71 +973,82 @@ class DatabaseManager:
             return False
         except Exception as e: logger.error(f"Unexpected error saving alert: {e}", exc_info=True); raise DatabaseError(f"Unexpected save alert: {e}") from e
 
-    @db_write_retry_decorator
-    def acknowledge_alert(self, alert_id: int, acknowledge: bool = True) -> bool:
-        sql="UPDATE alerts SET acknowledged = ? WHERE id = ?"
+    # Applying retry decorator to the async wrapper.
+    # If the underlying sync method raises an OperationalError, it will be caught by the wrapper's
+    # exception handling, and then the retry decorator on the async method will handle retrying the to_thread call.
+    @retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(4), retry=retry_if_exception_type(sqlite3.OperationalError))
+    async def acknowledge_alert(self, alert_id: int, acknowledge: bool = True) -> bool:
         try:
-            ack_val = 1 if acknowledge else 0
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    cursor=conn.cursor(); cursor.execute(sql,(ack_val,alert_id)); conn.commit() # Explicit commit for UPDATE
-                    if cursor.rowcount==0: logger.warning(f"Alert ID {alert_id} not found for ack."); return False
-            logger.info(f"Alert ID {alert_id} ack status set to {acknowledge}.")
-            return True
-        except RetryError as e: logger.error(f"DB acknowledge_alert failed retries: {e}."); return False
-        except sqlite3.Error as e:
-            logger.error(f"DB error ack alert {alert_id}: {e}", exc_info=True)
+            return await asyncio.to_thread(self._execute_acknowledge_alert, alert_id, acknowledge)
+        except sqlite3.Error as e: # Catch errors from the thread
+            logger.error(f"DB error ack alert {alert_id} (async wrapper): {e}", exc_info=True)
             if not isinstance(e, sqlite3.OperationalError): raise DatabaseError(f"Failed ack alert: {e}") from e
-            return False
-        except Exception as e: logger.error(f"Unexpected error ack alert {alert_id}: {e}", exc_info=True); raise DatabaseError(f"Unexpected ack alert: {e}") from e
+            return False # Should be caught by retry if OperationalError
+        except Exception as e:
+            logger.error(f"Unexpected error ack alert {alert_id} (async wrapper): {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected ack alert: {e}") from e
 
-    @db_write_retry_decorator
-    def delete_alert(self, alert_id: int) -> bool:
-        sql = "DELETE FROM alerts WHERE id = ?"
+    def _execute_acknowledge_alert(self, alert_id: int, acknowledge: bool) -> bool:
+        # Internal synchronous method
+        sql="UPDATE alerts SET acknowledged = ? WHERE id = ?"
+        ack_val = 1 if acknowledge else 0
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                cursor=conn.cursor(); cursor.execute(sql,(ack_val,alert_id)); conn.commit()
+                if cursor.rowcount==0:
+                    logger.warning(f"Alert ID {alert_id} not found for ack."); return False
+        logger.info(f"Alert ID {alert_id} ack status set to {acknowledge}.")
+        return True
+
+    @retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(4), retry=retry_if_exception_type(sqlite3.OperationalError))
+    async def delete_alert(self, alert_id: int) -> bool:
         try:
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(sql, (alert_id,))
-                    conn.commit() # Explicit commit for DELETE
-                    if cursor.rowcount > 0:
-                        logger.info(f"Alert ID {alert_id} deleted successfully.")
-                        return True
-                    else:
-                        logger.warning(f"Alert ID {alert_id} not found for deletion.")
-                        return False
-        except RetryError as e:
-            logger.error(f"DB delete_alert failed retries for ID {alert_id}: {e}.")
-            return False
+            return await asyncio.to_thread(self._execute_delete_alert, alert_id)
         except sqlite3.Error as e:
-            logger.error(f"DB error deleting alert ID {alert_id}: {e}", exc_info=True)
-            if not isinstance(e, sqlite3.OperationalError): # Don't automatically raise for operational errors handled by retry
-                raise DatabaseError(f"Failed to delete alert ID {alert_id}: {e}") from e
+            logger.error(f"DB error deleting alert ID {alert_id} (async wrapper): {e}", exc_info=True)
+            if not isinstance(e, sqlite3.OperationalError): raise DatabaseError(f"Failed to delete alert ID {alert_id}: {e}") from e
             return False
         except Exception as e:
-            logger.error(f"Unexpected error deleting alert ID {alert_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error deleting alert ID {alert_id} (async wrapper): {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error deleting alert ID {alert_id}: {e}") from e
 
-    def get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
-        sql = "SELECT id, timestamp, severity, feed_id, message, details, acknowledged FROM alerts WHERE id = ?"
-        try:
+    def _execute_delete_alert(self, alert_id: int) -> bool:
+        # Internal synchronous method
+        sql = "DELETE FROM alerts WHERE id = ?"
+        with self.lock:
             with self._get_sqlite_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(sql, (alert_id,))
-                row = cursor.fetchone()
-                if row:
-                    return dict(row)
+                conn.commit()
+                if cursor.rowcount > 0:
+                    logger.info(f"Alert ID {alert_id} deleted successfully.")
+                    return True
                 else:
-                    logger.info(f"Alert ID {alert_id} not found.")
-                    return None
+                    logger.warning(f"Alert ID {alert_id} not found for deletion.")
+                    return False
+
+    async def get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
+        try:
+            return await asyncio.to_thread(self._execute_get_alert_by_id, alert_id)
         except sqlite3.Error as e:
-            logger.error(f"DB error fetching alert ID {alert_id}: {e}", exc_info=True)
-            # Depending on policy, you might want to raise DatabaseError here or just return None
+            logger.error(f"DB error fetching alert ID {alert_id} (async wrapper): {e}", exc_info=True)
             return None
         except Exception as e:
-            logger.error(f"Unexpected error fetching alert ID {alert_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error fetching alert ID {alert_id} (async wrapper): {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error fetching alert ID {alert_id}: {e}") from e
 
+    def _execute_get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
+        # Internal synchronous method
+        sql = "SELECT id, timestamp, severity, feed_id, message, details, acknowledged FROM alerts WHERE id = ?"
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (alert_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            else:
+                logger.info(f"Alert ID {alert_id} not found.")
+                return None
 
     @retry(wait=wait_exponential(multiplier=0.2,min=0.2,max=3), stop=stop_after_attempt(3), retry=retry_if_exception_type(Exception)) # Generic retry for Mongo
     def save_raw_traffic_data_mongo(self, data: Dict) -> bool:

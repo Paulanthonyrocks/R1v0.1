@@ -7,6 +7,7 @@ import enum
 class LocationModel(BaseModel):
     latitude: float = Field(..., example=34.0522, description="Latitude coordinate")
     longitude: float = Field(..., example=-118.2437, description="Longitude coordinate")
+    name: Optional[str] = Field(None, example="Downtown Intersection", description="Optional display name for the location")
 
 class TrafficData(BaseModel):
     timestamp: datetime = Field(..., description="Timestamp of the data point, preferably UTC", example="2024-01-01T12:00:00Z")

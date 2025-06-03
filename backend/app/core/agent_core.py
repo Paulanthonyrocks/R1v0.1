@@ -33,27 +33,41 @@ class AgentCore:
         """
         logger.info("Starting AgentCore decision cycle...")
 
-        # --- Prediction Phase ---
-        logger.info("Loading monitored locations for prediction...")
-        # _load_monitored_locations is synchronous and modifies scheduler's internal state
-        self.prediction_scheduler._load_monitored_locations()
+        # --- System Status Assessment & Priority Location Setting ---
+        self.logger.info("Fetching system KPI summary for AgentCore decision making...")
+        system_kpis: Dict[str, Any] = self.analytics_service.get_current_system_kpis_summary()
+        self.logger.info(f"AgentCore received System KPIs: {json.dumps(system_kpis, indent=2)}")
 
-        if not self.prediction_scheduler.monitored_locations:
-            logger.warning("No monitored locations loaded by PredictionScheduler. Skipping prediction notifications.")
+        self.logger.info("Fetching critical alert summary for AgentCore decision making...")
+        alert_summary: Dict[str, Any] = await self.analytics_service.get_critical_alert_summary()
+        self.logger.info(f"AgentCore received Critical Alert Summary: {json.dumps(alert_summary, indent=2)}")
+
+        # Placeholder: AgentCore determines priority locations based on KPIs/alerts
+        # In a future step, this would come from analyzing detailed KPI/congestion data
+        sample_priority_locations = [
+            LocationModel(latitude=34.0522, longitude=-118.2437, name="Downtown LA"),
+            LocationModel(latitude=40.7128, longitude=-74.0060, name="NYC Center"),
+            LocationModel(latitude=37.7749, longitude=-122.4194, name="SF Critical Junction") # Example
+        ]
+
+        # Example condition: only set priorities if system is highly congested or many critical alerts
+        current_congestion = system_kpis.get("overall_congestion_level", "UNKNOWN")
+        critical_alerts_count = alert_summary.get("critical_unack_alert_count", 0)
+
+        # For demonstration, let's always set some priority locations, or base it on a simple condition
+        # if current_congestion == "HIGH" or critical_alerts_count > 0:
+        if True: # For now, always set sample priorities to demonstrate the mechanism
+            await self.prediction_scheduler.set_priority_locations(sample_priority_locations)
+            priority_location_names = [loc.name for loc in sample_priority_locations if loc.name]
+            self.logger.info(f"AgentCore instructed PredictionScheduler to prioritize locations: {priority_location_names if priority_location_names else 'unnamed locations'}")
         else:
-            logger.info(f"PredictionScheduler will monitor {len(self.prediction_scheduler.monitored_locations)} locations.")
-            # For this cycle, let's predict for all dynamically selected locations.
-            # In a real scenario, this might be triggered by specific events or schedules.
-            prediction_tasks = []
-            for location in self.prediction_scheduler.monitored_locations:
-                logger.info(f"Initiating prediction and notification for location: ({location.latitude}, {location.longitude})")
-                prediction_tasks.append(
-                    self.prediction_scheduler._predict_and_notify(location)
-                )
-            await asyncio.gather(*prediction_tasks)
-            logger.info("Prediction and notification phase completed for monitored locations.")
+            # Optionally, tell scheduler to clear priorities if conditions don't warrant them,
+            # or let it fall back to its default logic if no new priorities are set.
+            # await self.prediction_scheduler.set_priority_locations([]) # Example of clearing
+            self.logger.info("AgentCore: Conditions do not require specific priority locations for PredictionScheduler.")
 
-        # --- Personalized Routing Phase ---
+
+        # --- Personalized Routing Phase (can remain, as it's user-specific) ---
         logger.info(f"Attempting to generate proactive route suggestion for user: {sample_user_id}...")
         try:
             suggestion = await self.personalized_routing_service.proactively_suggest_route(sample_user_id)
@@ -64,32 +78,72 @@ class AgentCore:
         except Exception as e:
             logger.error(f"Error during proactive route suggestion for user {sample_user_id}: {e}")
 
-        # --- System Status Assessment & Global Action ---
-        self.logger.info("Fetching system KPI summary...")
-        system_kpis: Dict[str, Any] = self.analytics_service.get_current_system_kpis_summary()
-        self.logger.info(f"Current System KPIs: {json.dumps(system_kpis, indent=2)}")
-
-        self.logger.info("Fetching critical alert summary...")
-        alert_summary: Dict[str, Any] = self.analytics_service.get_critical_alert_summary()
-        self.logger.info(f"Critical Alert Summary: {json.dumps(alert_summary, indent=2)}")
+        # --- System Status Assessment & Global Action (Operational Alerting) ---
+        # This part was already added in the previous step and uses the fetched system_kpis and alert_summary
 
         system_status_summary_log = (
-            f"System Status Summary:\n"
+            f"System Status Summary (for AgentCore decision):\n" # Clarified log source
             f"  Overall Congestion: {system_kpis.get('overall_congestion_level', 'N/A')}\n"
-            f"  Total Vehicle Flow Rate (hourly): {system_kpis.get('total_vehicle_flow_rate_hourly', 'N/A')}\n"
-            f"  Active Feeds: {system_kpis.get('active_feeds_count', 'N/A')}\n"
+            f"  Average Speed: {system_kpis.get('average_speed_kmh', 'N/A')} km/h\n"
+            f"  Total Vehicle Flow Estimate: {system_kpis.get('total_vehicle_flow_estimate', 'N/A')}\n"
+            f"  Active Monitored Locations: {system_kpis.get('active_monitored_locations', 'N/A')}\n"
             f"  System Stability: {system_kpis.get('system_stability_indicator', 'N/A')}\n"
-            f"  Critical Alerts: {alert_summary.get('critical_alert_count', 'N/A')}\n"
-            f"  Critical Alert Types: {', '.join(alert_summary.get('most_common_critical_types', []))}\n"
+            f"  Critical Unacknowledged Alerts: {alert_summary.get('critical_unack_alert_count', 'N/A')}\n"
+            f"  Recent Critical Alert Types: {', '.join(alert_summary.get('recent_critical_types', []))}\n"
         )
         self.logger.info(system_status_summary_log)
 
-        # Placeholder for more complex decision logic based on KPIs and alerts
-        if system_kpis.get('overall_congestion_level') == "HIGH" or alert_summary.get('critical_alert_count', 0) > 1:
-            self.logger.info("AgentCore Suggestion: System parameters indicate potential need for operator review or automated intervention scaling.")
-        else:
-            self.logger.info("AgentCore Suggestion: System operating within normal parameters. Continue monitoring.")
+        # Threshold checking logic for operational alerts
+        CONGESTION_THRESHOLD_FOR_ALERT = "HIGH"
+        CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION = 0 # Alert if HIGH congestion AND >0 critical
+        CRITICAL_ALERT_COUNT_THRESHOLD_STANDALONE = 2 # Alert if >2 critical alerts, regardless of congestion
 
+        trigger_operational_alert = False
+        operational_alert_title = ""
+        operational_alert_message = ""
+        operational_alert_severity = "info"
+
+        current_congestion_level = system_kpis.get("overall_congestion_level", "UNKNOWN")
+        critical_alerts_count_val = alert_summary.get("critical_unack_alert_count", 0)
+
+        if current_congestion_level == CONGESTION_THRESHOLD_FOR_ALERT and \
+           critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION:
+            trigger_operational_alert = True
+            operational_alert_title = "High System Load & Critical Alerts"
+            operational_alert_message = (
+                f"System is experiencing HIGH congestion (Avg Speed: {system_kpis.get('average_speed_kmh')} km/h, "
+                f"Flow Estimate: {system_kpis.get('total_vehicle_flow_estimate')}). "
+                f"Additionally, there are {critical_alerts_count_val} critical unacknowledged alert(s). "
+                f"Recent types: {', '.join(alert_summary.get('recent_critical_types',[]))}. Operator review advised."
+            )
+            operational_alert_severity = "error"
+        elif current_congestion_level == CONGESTION_THRESHOLD_FOR_ALERT:
+            trigger_operational_alert = True
+            operational_alert_title = "High System Congestion"
+            operational_alert_message = (
+                f"System is experiencing HIGH congestion (Avg Speed: {system_kpis.get('average_speed_kmh')} km/h, "
+                f"Flow Estimate: {system_kpis.get('total_vehicle_flow_estimate')}). "
+                f"Operator review advised for traffic management."
+            )
+            operational_alert_severity = "warning"
+        elif critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_STANDALONE:
+            trigger_operational_alert = True
+            operational_alert_title = "Multiple Critical Alerts Active"
+            operational_alert_message = (
+                f"There are {critical_alerts_count_val} critical unacknowledged alert(s) active. "
+                f"Recent types: {', '.join(alert_summary.get('recent_critical_types',[]))}. Operator review advised."
+            )
+            operational_alert_severity = "warning"
+
+        if trigger_operational_alert:
+            await self.analytics_service.broadcast_operational_alert(
+                title=operational_alert_title,
+                message_text=operational_alert_message,
+                severity=operational_alert_severity
+            )
+            self.logger.info(f"AgentCore action: Issued OPERATIONAL ALERT. Title: '{operational_alert_title}', Severity: {operational_alert_severity}")
+        else:
+            self.logger.info("AgentCore action: System status within acceptable parameters, no new global operational alert issued by AgentCore.")
 
         logger.info("AgentCore decision cycle completed.")
 

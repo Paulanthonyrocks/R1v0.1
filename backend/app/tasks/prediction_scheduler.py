@@ -16,29 +16,57 @@ class PredictionScheduler:
         self.analytics_service = analytics_service
         self.prediction_interval = timedelta(minutes=prediction_interval_minutes)
         self.is_running = False
-        self.monitored_locations = []
+        self.monitored_locations: List[LocationModel] = [] # Type hint
         self.task = None
-        self._load_monitored_locations()
+        self._priority_locations: List[LocationModel] = []
+        self._priority_lock = asyncio.Lock()
+        self.logger = logger # Assign logger to instance for use in methods
+        # self._load_monitored_locations() # Remove sync call from __init__
 
-    def _load_monitored_locations(self):
-        """Load monitored locations from configuration"""
-        # TODO: Load from database or config
-        # For now, using sample locations and selecting a random subset
-        all_locations = [
-            LocationModel(latitude=34.0522, longitude=-118.2437),  # Los Angeles
-            LocationModel(latitude=40.7128, longitude=-74.0060),   # New York
-            LocationModel(latitude=41.8781, longitude=-87.6298),   # Chicago
-            LocationModel(latitude=37.7749, longitude=-122.4194), # San Francisco
-            LocationModel(latitude=33.7490, longitude=-84.3880)   # Atlanta
-        ]
-        if not all_locations: # Should not happen with hardcoded list but good practice
-            self.monitored_locations = []
-            return
+    async def set_priority_locations(self, locations: List[LocationModel]):
+        """
+        Allows AgentCore to set a list of priority locations for the next prediction cycle.
+        """
+        async with self._priority_lock:
+            self._priority_locations = locations.copy()
+            priority_info = [f"{loc.name} ({loc.latitude},{loc.longitude})" if loc.name else f"({loc.latitude},{loc.longitude})"
+                             for loc in self._priority_locations]
+            self.logger.info(f"PredictionScheduler received priority locations: {priority_info}")
 
-        # Select a random number of locations to monitor, at least 1
-        num_to_select = random.randint(1, len(all_locations))
-        self.monitored_locations = random.sample(all_locations, num_to_select)
-        logger.info(f"Dynamically selected {len(self.monitored_locations)} locations to monitor: {[f'({loc.latitude},{loc.longitude})' for loc in self.monitored_locations]}")
+    async def _load_monitored_locations(self):
+        """
+        Load monitored locations. Prioritizes locations set by AgentCore,
+        otherwise falls back to default/random selection.
+        This method is now async.
+        """
+        current_monitored_locations: List[LocationModel] = []
+        async with self._priority_lock:
+            if self._priority_locations:
+                current_monitored_locations = self._priority_locations.copy()
+                self._priority_locations = []  # Clear after use for this cycle
+                priority_names = [loc.name for loc in current_monitored_locations if loc.name]
+                self.logger.info(f"Using {len(current_monitored_locations)} priority locations for prediction: {priority_names if priority_names else [f'({loc.latitude},{loc.longitude})' for loc in current_monitored_locations]}")
+            else:
+                self.logger.info("No priority locations set, using default/random locations for prediction.")
+                # Existing logic for default/random selection
+                all_locations = [
+                    LocationModel(latitude=34.0522, longitude=-118.2437, name="Los Angeles Downtown"),
+                    LocationModel(latitude=40.7128, longitude=-74.0060, name="New York Times Square"),
+                    LocationModel(latitude=41.8781, longitude=-87.6298, name="Chicago The Loop"),
+                    LocationModel(latitude=37.7749, longitude=-122.4194, name="San Francisco Embarcadero"),
+                    LocationModel(latitude=33.7490, longitude=-84.3880, name="Atlanta Centennial Park")
+                ]
+                if not all_locations:
+                    self.monitored_locations = [] # Should be current_monitored_locations
+                    return # Exiting early if no locations defined
+
+                # Select a random number of locations to monitor, at least 1
+                num_to_select = random.randint(1, len(all_locations))
+                current_monitored_locations = random.sample(all_locations, num_to_select)
+                default_loc_info = [f"{loc.name if loc.name else ''} ({loc.latitude},{loc.longitude})" for loc in current_monitored_locations]
+                self.logger.info(f"Dynamically selected {len(current_monitored_locations)} default locations: {default_loc_info}")
+
+        self.monitored_locations = current_monitored_locations
 
 
     def determine_autonomous_actions(self, prediction: Dict[str, Any], location: LocationModel) -> str:
@@ -105,9 +133,17 @@ class PredictionScheduler:
         self.is_running = True
         while self.is_running:
             try:
-                # Make predictions for all monitored locations
-                for location in self.monitored_locations:
-                    await self._predict_and_notify(location)
+                await self._load_monitored_locations() # Load locations at the start of each cycle
+
+                if not self.monitored_locations:
+                    self.logger.warning("No locations loaded for prediction cycle. Sleeping before retry.")
+                else:
+                    # Make predictions for all monitored locations
+                    prediction_tasks = []
+                    for location in self.monitored_locations:
+                        prediction_tasks.append(self._predict_and_notify(location))
+                    await asyncio.gather(*prediction_tasks) # Run predictions concurrently
+                    self.logger.info(f"Completed prediction cycle for {len(self.monitored_locations)} locations.")
                 
                 # Wait for next interval
                 await asyncio.sleep(self.prediction_interval.total_seconds())
