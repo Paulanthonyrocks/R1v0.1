@@ -1,17 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 
-import { useUser, UserProvider } from "@/lib/auth/UserContext"; // Import UserProvider and useUser
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { UserProvider } from "@/lib/auth/UserContext"; // Import UserProvider
+import Nav from "@/components/layout/Nav"; // Import the new Nav component
 import "@/styles/globals.css";
 import { cn } from "@/lib/utils";
 
@@ -42,61 +36,5 @@ export default function RootLayout({
         </body>
       </UserProvider>
     </html>
-  );
-}
-
-function Nav() {
-  const { user } = useUser(); // Use the useUser hook
-
-  return (
-    <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg">
-      <div className="container mx-auto flex items-center justify-between flex-wrap">
-        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors">Route One</Link>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="text-foreground hover:text-primary focus:outline-none">
-              Menu
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {!user ? (
-              <DropdownMenuItem asChild>
-                <Link href="/login">Login</Link>
-              </DropdownMenuItem>
-            ) : (
-              <>
-                <DropdownMenuItem asChild>
-                  <Link href="/">Home</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/dashboard">Dashboard</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/anomalies">Anomalies</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/export">Export</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/grid">Grid</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/logs">Logs</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/nodes">Nodes</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/stream">Stream</Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/surveillance">Surveillance</Link>
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </nav>
   );
 }

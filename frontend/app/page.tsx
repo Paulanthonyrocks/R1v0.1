@@ -3,6 +3,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
+import FeaturesSection from '@/components/landing/FeaturesSection';
+import SolutionsSection from '@/components/landing/SolutionsSection';
 
 // Helper function for stat animation
 const animateValue = (
@@ -13,6 +15,17 @@ const animateValue = (
     suffix: string = '',
     setter?: React.Dispatch<React.SetStateAction<number>> // Specific type for number setters
 ) => {
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReducedMotion) {
+        if (setter) {
+            setter(end);
+        } else if (_element) {
+            _element.innerHTML = end + suffix;
+        }
+        return;
+    }
+
     let startTimestamp: number | null = null;
     const step = (timestamp: number) => {
         if (startTimestamp === null) startTimestamp = timestamp;
@@ -84,6 +97,11 @@ const RouteOnePage = () => {
         const orbsContainerForCleanup = floatingOrbsRef.current;   // Capture for cleanup
 
         const createMatrixRain = () => {
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                // Optionally, provide a scaled-down version or clear if previously rendered
+                if (matrixRainRef.current) matrixRainRef.current.innerHTML = '';
+                return;
+            }
             const container = matrixRainRef.current; // Use current for setup
             if (!(container instanceof HTMLElement)) return;
             container.innerHTML = ''; // Clear existing rain on resize
@@ -114,6 +132,11 @@ const RouteOnePage = () => {
         };
 
         const createFloatingOrbs = () => {
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                // Optionally, provide a scaled-down version or clear if previously rendered
+                if (floatingOrbsRef.current) floatingOrbsRef.current.innerHTML = '';
+                return;
+            }
             const container = floatingOrbsRef.current; // Use current for setup
             if (!(container instanceof HTMLElement)) return;
             container.innerHTML = '';
@@ -156,15 +179,24 @@ const RouteOnePage = () => {
 
     // Scroll Animations & Stats Animation
     useEffect(() => {
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
         const observerCallback = (entries: IntersectionObserverEntry[]) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     entry.target.classList.add('visible');
                     if (entry.target === statsSectionRef.current && statsAnimatedRef.current === false) {
-                        animateValue(null, 0, 42, 2000, '+', setStat1);
-                        animateValue(null, 0, 35, 2000, '%', setStat2);
-                        animateValue(null, 0, 28, 2000, '%', setStat3);
-                        animateValue(null, 0, 55, 2000, '%', setStat4);
+                        if (prefersReducedMotion) {
+                            setStat1(42);
+                            setStat2(35);
+                            setStat3(28);
+                            setStat4(55);
+                        } else {
+                            animateValue(null, 0, 42, 2000, '+', setStat1);
+                            animateValue(null, 0, 35, 2000, '%', setStat2);
+                            animateValue(null, 0, 28, 2000, '%', setStat3);
+                            animateValue(null, 0, 55, 2000, '%', setStat4);
+                        }
                         statsAnimatedRef.current = true;
                     }
                 }
@@ -204,26 +236,63 @@ const RouteOnePage = () => {
                 if (!statsSectionRef.current.classList.contains('visible')) { // Also add visible to stats section
                     statsSectionRef.current.classList.add('visible');
                 }
-                animateValue(null, 0, 42, 2000, '+', setStat1);
-                animateValue(null, 0, 35, 2000, '%', setStat2);
-                animateValue(null, 0, 28, 2000, '%', setStat3);
-                animateValue(null, 0, 55, 2000, '%', setStat4);
+                if (prefersReducedMotion) {
+                    setStat1(42);
+                    setStat2(35);
+                    setStat3(28);
+                    setStat4(55);
+                } else {
+                    animateValue(null, 0, 42, 2000, '+', setStat1);
+                    animateValue(null, 0, 35, 2000, '%', setStat2);
+                    animateValue(null, 0, 28, 2000, '%', setStat3);
+                    animateValue(null, 0, 55, 2000, '%', setStat4);
+                }
                 statsAnimatedRef.current = true;
             }
         };
 
-        handleScrollAnimation(); // Initial check on load
-        window.addEventListener('scroll', handleScrollAnimation);
+        // Initial check on load
+        // If reduced motion is preferred, set final stat values directly if section is visible
+        if (prefersReducedMotion && statsSectionRef.current && statsAnimatedRef.current === false &&
+            statsSectionRef.current.getBoundingClientRect().top <= (window.innerHeight || document.documentElement.clientHeight)) {
+            statsSectionRef.current.classList.add('visible'); // Ensure section is marked visible
+            setStat1(42);
+            setStat2(35);
+            setStat3(28);
+            setStat4(55);
+            statsAnimatedRef.current = true;
+        } else if (!prefersReducedMotion) { // Only run animation if not reduced motion
+             handleScrollAnimation();
+        } else { // Reduced motion but section not yet visible, still mark elements visible if they are
+            scrollElementsRef.current.forEach((el) => {
+                if (el instanceof HTMLElement && el.getBoundingClientRect().top <= (window.innerHeight || document.documentElement.clientHeight)) {
+                    if (!el.classList.contains('visible')) {
+                       el.classList.add('visible');
+                    }
+                }
+            });
+            if (statsSectionRef.current && statsSectionRef.current.getBoundingClientRect().top <= (window.innerHeight || document.documentElement.clientHeight)) {
+                if (!statsSectionRef.current.classList.contains('visible')) {
+                    statsSectionRef.current.classList.add('visible');
+                }
+            }
+        }
+
+
+        if (!prefersReducedMotion) { // Only add scroll listener if animations are active
+            window.addEventListener('scroll', handleScrollAnimation);
+        }
 
         // Capture the elements that were actually observed for cleanup
         const observedElementsForCleanup = [...elementsToObserve];
 
         return () => {
             observedElementsForCleanup.forEach(el => {
-                 // No need to check instanceof HTMLElement here, as elementsToObserve only contains HTMLElements
                 observer.unobserve(el);
             });
-            window.removeEventListener('scroll', handleScrollAnimation);
+            if (!prefersReducedMotion) {
+                window.removeEventListener('scroll', handleScrollAnimation);
+            }
         };
     }, [setStat1, setStat2, setStat3, setStat4]); // Dependencies for ESLint
 
@@ -287,230 +356,11 @@ const RouteOnePage = () => {
 
                 <div className="section-divider"></div> {/* Styled in CSS with --primary */}
 
-                {/* Features Section: Uses bg-background and .matrix-glow-card */}
-                <section id="features" className="py-20 bg-background">
-                    <div className="container mx-auto px-4">
-                        <div ref={addToScrollRefs} className="text-center mb-16 scroll-transition">
-                            <h2 className="text-primary text-3xl md:text-4xl font-bold mb-4 matrix-glow">SMART TRAFFIC SOLUTIONS</h2>
-                            <p className="text-muted-foreground max-w-2xl mx-auto">
-                                Our platform integrates cutting-edge technologies to deliver unparalleled traffic management capabilities.
-                            </p>
-                        </div>
-
-                        <div className="feature-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                            {/* Feature Card Example */}
-                            <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition">
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-brain text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">AI-Powered Analytics</h3>
-                                <p className="text-muted-foreground mb-4">
-                                    Predictive algorithms analyze traffic patterns in real-time to anticipate and prevent congestion.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Real-time predictive modeling
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Up to 30% congestion foresight
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div> {/* Styled in CSS with primary color */}
-                            </div>
-
-                            <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition" style={{transitionDelay: '0.1s'}}>
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-map-marked-alt text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">Dynamic Routing</h3>
-                                <p className="text-muted-foreground mb-4">
-                                   Adjusts traffic light timing and suggests optimal routes based on current conditions.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Adaptive signal control
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Multi-modal route optimization
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div>
-                            </div>
-
-                            <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition" style={{transitionDelay: '0.2s'}}>
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-car-side text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">Vehicle-to-Infrastructure</h3>
-                                <p className="text-muted-foreground mb-4">
-                                    Seamless communication between vehicles and traffic systems for coordinated movement.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Real-time vehicle data integration
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Priority for emergency vehicles
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div>
-                            </div>
-
-                             <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition" style={{transitionDelay: '0.3s'}}>
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-chart-line text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">Real-Time Monitoring</h3>
-                                <p className="text-muted-foreground mb-4">
-                                    Comprehensive dashboard with live traffic data from sensors, cameras, and GPS sources.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> City-wide traffic visualization
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Incident detection alerts
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div>
-                            </div>
-                             <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition" style={{transitionDelay: '0.4s'}}>
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-cloud text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">Cloud-Based Platform</h3>
-                                <p className="text-muted-foreground mb-4">
-                                    Scalable infrastructure that grows with your city&lsquo;s needs, accessible from anywhere.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> 99.99% uptime SLA
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Multi-city deployment support
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div>
-                            </div>
-                            <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition" style={{transitionDelay: '0.5s'}}>
-                                <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
-                                    <i className="fas fa-shield-alt text-2xl text-primary"></i>
-                                </div>
-                                <h3 className="text-primary text-xl font-bold mb-3">Cybersecurity Focus</h3>
-                                <p className="text-muted-foreground mb-4">
-                                    Military-grade encryption protects critical infrastructure from digital threats.
-                                </p>
-                                <ul className="text-card-foreground text-sm space-y-2 mb-4">
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> FIPS 140-2 compliant
-                                    </li>
-                                    <li className="flex items-center">
-                                        <i className="fas fa-circle text-xs mr-2 text-primary"></i> Continuous threat monitoring
-                                    </li>
-                                </ul>
-                                <div className="feature-underline"></div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
+                <FeaturesSection addToScrollRefs={addToScrollRefs} />
 
                 <div className="section-divider"></div>
 
-                {/* Solutions Section: .parallax-bg utility. Container uses theme border/bg. */}
-                <section id="solutions" className="py-20 parallax-bg">
-                    <div className="container mx-auto px-4">
-                        <div ref={addToScrollRefs} className="border border-border bg-card/80 rounded-radius overflow-hidden scroll-transition">
-                            <div className="grid grid-cols-1 lg:grid-cols-2">
-                                {/* .smart-city-bg needs ::before stroke to use hsl(var(--matrix)) in globals.css */}
-                                <div className="p-12 bg-card smart-city-bg">
-                                    <h2 className="text-primary text-3xl font-bold mb-6 matrix-glow">YOUR CITY. SMARTER.</h2>
-                                    <p className="text-muted-foreground mb-8">
-                                        Route One transforms urban mobility with solutions tailored to your city&#39;s unique challenges.
-                                    </p>
-                                    <div className="space-y-6">
-                                        {/* Solution Items use theme colors */}
-                                        <div className="flex items-start">
-                                            <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-check text-primary"></i>
-                                            </div>
-                                            <div>
-                                                <h4 className="text-primary font-bold mb-1">Congestion Reduction</h4>
-                                                <p className="text-muted-foreground text-sm">
-                                                    Decrease traffic jams by up to 40% with our predictive algorithms.
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-start">
-                                            <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-check text-primary"></i>
-                                            </div>
-                                            <div>
-                                                <h4 className="text-primary font-bold mb-1">Emission Control</h4>
-                                                <p className="text-muted-foreground text-sm">
-                                                    Reduce vehicle idle time and lower carbon emissions significantly.
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-start">
-                                            <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-check text-primary"></i>
-                                            </div>
-                                            <div>
-                                                <h4 className="text-primary font-bold mb-1">Emergency Priority</h4>
-                                                <p className="text-muted-foreground text-sm">
-                                                    Clear paths automatically for first responders when seconds count.
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* .process-bg needs ::before/::after gradients to use hsl(var(--primary)) / hsla(var(--matrix), opacity) in globals.css */}
-                                <div className="bg-background/70 p-12 process-bg scanlines">
-                                    <div ref={addToScrollRefs} className="scroll-transition" style={{transitionDelay: '0.2s'}}>
-                                        <h3 className="text-primary text-2xl font-bold mb-6">IMPLEMENTATION PROCESS</h3>
-                                        <div className="space-y-8 relative z-10">
-                                            {/* Process Steps use theme colors */}
-                                            <div className="flex items-start">
-                                                <div className="border border-primary rounded-full w-12 h-12 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                    <span className="text-primary">1</span>
-                                                </div>
-                                                <div>
-                                                    <h4 className="text-primary font-bold mb-1">Assessment</h4>
-                                                    <p className="text-muted-foreground">
-                                                    Comprehensive analysis of your current traffic infrastructure.
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-start">
-                                                <div className="border border-primary rounded-full w-12 h-12 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                    <span className="text-primary">2</span>
-                                                </div>
-                                                <div>
-                                                    <h4 className="text-primary font-bold mb-1">Customization</h4>
-                                                    <p className="text-muted-foreground">
-                                                        Tailored solution design for your city&apos;s specific needs.
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-start">
-                                                <div className="border border-primary rounded-full w-12 h-12 flex items-center justify-center mt-1 mr-4 flex-shrink-0 float">
-                                                    <span className="text-primary">3</span>
-                                                </div>
-                                                <div>
-                                                    <h4 className="text-primary font-bold mb-1">Deployment</h4>
-                                                    <p className="text-muted-foreground">
-                                                        Seamless integration with minimal disruption to existing systems.
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
+                <SolutionsSection addToScrollRefs={addToScrollRefs} />
 
                 <div className="section-divider"></div>
 
