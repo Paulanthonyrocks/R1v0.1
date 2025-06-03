@@ -43,6 +43,7 @@ pytesseract>=0.3.10
 google-generativeai>=0.3.0
 
 # Database
+sqlalchemy
 pymongo>=4.0.0 # For MongoDB support
 kafka-python>=2.0.0 # For Kafka messaging support
 
