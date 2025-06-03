@@ -276,6 +276,7 @@ class FeedManager:
              all_speeds = [] 
              congestion_index = 0.0 
              active_incidents_kpi = 0 # Placeholder
+             total_flow_accumulator = 0 # Initialize total flow accumulator
 
              for entry in self.process_registry.values(): 
                  current_status_val = entry['status']
@@ -296,8 +297,13 @@ class FeedManager:
                  if current_status_enum == FeedOperationalStatusEnum.RUNNING: 
                      running_feeds += 1 
                      metrics = entry.get('latest_metrics') 
-                     if metrics and isinstance(metrics.get('avg_speed'), (int, float)): 
-                         all_speeds.append(float(metrics['avg_speed'])) 
+                     if metrics:
+                         if isinstance(metrics.get('avg_speed'), (int, float)):
+                             all_speeds.append(float(metrics['avg_speed']))
+                         # Accumulate total_flow from 'vehicle_count' in latest_metrics
+                         # This assumes 'vehicle_count' represents the flow for the interval for that feed
+                         if isinstance(metrics.get('vehicle_count'), (int, float)):
+                             total_flow_accumulator += int(metrics['vehicle_count'])
                  elif current_status_enum == FeedOperationalStatusEnum.ERROR: 
                      error_feeds += 1 
                  elif current_status_enum == FeedOperationalStatusEnum.STOPPED: 
@@ -316,7 +322,8 @@ class FeedManager:
                  metrics_source="FeedManagerGlobalKPIs",
                  congestion_index=congestion_index,
                  average_speed_kmh=avg_speed_kpi,
-                 active_incidents_count=active_incidents_kpi, 
+                 active_incidents_count=active_incidents_kpi, # Remains placeholder
+                 total_flow=total_flow_accumulator, # Add accumulated total flow
                  feed_statuses={
                      FeedOperationalStatusEnum.RUNNING.value: running_feeds,
                      FeedOperationalStatusEnum.ERROR.value: error_feeds,

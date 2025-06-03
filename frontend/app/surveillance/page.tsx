@@ -1,75 +1,78 @@
 'use client';
 
-import MatrixCard from '@/components/MatrixCard';
-import { useState } from 'react';
-import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
-import { UserRole } from '@/lib/auth/roles'; // Import UserRole
-import useSWR from 'swr';
+import React, { useEffect } from 'react'; // Removed useState, MatrixCard, useSWR
+import AuthGuard from '@/components/auth/AuthGuard';
+import { UserRole } from '@/lib/auth/roles';
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
+import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed component
+import { FeedStatusData } from '@/lib/types'; // To type the feed items
 
-const Loading = () => (
-  <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50 top-16">
-    <div className="animate-pulse text-matrix text-2xl">Loading...</div>
+const LoadingMessage = ({ text }: { text: string }) => (
+  <div className="flex justify-center items-center h-64">
+    <p className="text-matrix text-xl animate-pulse">{text}</p>
   </div>
 );
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-const AlertBadge = ({ congestion, incidents }: { congestion: number, incidents: number }) => {
-  if (incidents > 0 || congestion > 70) return <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">Alert</span>;
-  if (congestion > 40) return <span className="bg-yellow-400 text-black text-xs font-bold px-2 py-1 rounded">Warning</span>;
-  return <span className="bg-green-500 text-white text-xs font-bold px-2 py-1 rounded">OK</span>;
-};
-
 const SurveillancePage = () => {
-  const [loading,] = useState(false);
-  const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
-  // In a real application, you would likely fetch data here and set loading based on that.
+  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
 
-  const cameraFeeds = [
-    { id: 1, name: 'Camera 1', url: '/api/v1/sample-video' },
-    { id: 2, name: 'Camera 2', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 3, name: 'Camera 3', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 4, name: 'Camera 4', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 5, name: 'Camera 5', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 6, name: 'Camera 6', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 7, name: 'Camera 7', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 8, name: 'Camera 8', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-    { id: 9, name: 'Camera 9', url: 'https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4' },
-  ];
+  useEffect(() => {
+    // Start WebSocket connection on component mount
+    if (!isConnected) { // Optionally check if already connected if hook supports it
+        console.log("SurveillancePage: Attempting to start WebSocket connection.");
+        startWebSocket();
+    }
+    // No explicit cleanup needed here as the hook manages its own lifecycle
+  }, [startWebSocket, isConnected]);
 
-  if (loading) {
-    return <Loading />;
+  if (!isReady || !isConnected) {
+    return (
+        <AuthGuard requiredRole={UserRole.AGENCY}>
+            <div className="p-4 w-full relative">
+                <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">SURVEILLANCE</h1>
+                <LoadingMessage text="Connecting to surveillance system..." />
+            </div>
+        </AuthGuard>
+    );
   }
 
   return (
     <AuthGuard requiredRole={UserRole.AGENCY}>
       <div className="p-4 w-full relative">
-        <h1 className="text-2xl font-bold mb-4 uppercase">SURVEILLANCE</h1>
+        <h1 className="text-2xl font-bold mb-6 uppercase text-matrix">SURVEILLANCE FEEDS</h1>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 ">
-          {cameraFeeds.map((camera) => (
-            <MatrixCard key={camera.id} className="p-4 flex flex-col" title="Camera Feed">
-              <h2 className="text-lg font-bold mb-2">{camera.name}</h2>
-              <div className="flex-grow relative">
-                <video
-                  className="w-full h-full object-cover"
-                  controls
-                  src={camera.url}
-                />
-                <div className="absolute top-2 right-2">
-                  {/* Analytics-based alert badge */}
-                  <AlertBadge congestion={metrics?.congestion_index ?? 0} incidents={metrics?.active_incidents_count ?? 0} />
-                </div>
-                {/* Placeholder for controls */}
-                <div className="absolute bottom-2 right-2">Controls</div>
-              </div>
-            </MatrixCard>
-          ))}
-        </div>
+        {feeds.length === 0 ? (
+          <div className="flex justify-center items-center h-64">
+            <p className="text-matrix-muted text-lg">No surveillance feeds available at the moment.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {feeds.map((feed: FeedStatusData) => (
+              <SurveillanceFeed
+                key={feed.id}
+                id={feed.id}
+                name={feed.name ?? `Feed ${feed.id}`} // Use name or fallback to ID-based name
+                // The `node` prop for SurveillanceFeed was for a display string like "#TC-142".
+                // `FeedStatusData` doesn't have a direct `node` field.
+                // Using `feed.source` or a constructed string as a placeholder.
+                node={`Source: ${feed.source}`}
+                // The SurveillanceFeed component itself handles the video source via `feed.source`
+                // and also uses the `status` from `FeedStatusData` internally if designed so.
+                // For this refactor, we ensure `SurveillanceFeed` gets the full `feed` object
+                // or individual props as needed. `SurveillanceFeedProps` expects `id`, `name`, `node`.
+                // The actual video URL is derived from `feed.source` within `SurveillanceFeed` component.
+                // We pass `feed.status` and `feed.fps` if `SurveillanceFeed` is updated to use them.
+                // For now, sticking to what `SurveillanceFeedProps` strictly defines, plus `feed` itself.
+                status={feed.status} // Pass status if SurveillanceFeed can use it
+                fps={feed.fps}       // Pass FPS if SurveillanceFeed can use it
+                source={feed.source} // Pass source for video URL construction within SurveillanceFeed
+              />
+            ))}
+          </div>
+        )}
       </div>
     </AuthGuard>
   );
 };
-
 
 export default SurveillancePage;

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random # Added random for dynamic location selection
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import json
@@ -22,12 +23,37 @@ class PredictionScheduler:
     def _load_monitored_locations(self):
         """Load monitored locations from configuration"""
         # TODO: Load from database or config
-        # For now, using sample locations
-        self.monitored_locations = [
+        # For now, using sample locations and selecting a random subset
+        all_locations = [
             LocationModel(latitude=34.0522, longitude=-118.2437),  # Los Angeles
             LocationModel(latitude=40.7128, longitude=-74.0060),   # New York
             LocationModel(latitude=41.8781, longitude=-87.6298),   # Chicago
+            LocationModel(latitude=37.7749, longitude=-122.4194), # San Francisco
+            LocationModel(latitude=33.7490, longitude=-84.3880)   # Atlanta
         ]
+        if not all_locations: # Should not happen with hardcoded list but good practice
+            self.monitored_locations = []
+            return
+
+        # Select a random number of locations to monitor, at least 1
+        num_to_select = random.randint(1, len(all_locations))
+        self.monitored_locations = random.sample(all_locations, num_to_select)
+        logger.info(f"Dynamically selected {len(self.monitored_locations)} locations to monitor: {[f'({loc.latitude},{loc.longitude})' for loc in self.monitored_locations]}")
+
+
+    def determine_autonomous_actions(self, prediction: Dict[str, Any], location: LocationModel) -> str:
+        """
+        Determines autonomous actions based on the prediction.
+        For now, this method logs the prediction and returns a placeholder action.
+        """
+        action_details = (
+            f"Log: High incident likelihood of {prediction['likelihood_score_percent']}% "
+            f"at location ({location.latitude}, {location.longitude}). "
+            "Placeholder action: Consider adjusting traffic signals and dispatching resources."
+        )
+        logger.info(f"Determined autonomous action: {action_details}")
+        return action_details
+
 
     async def _predict_and_notify(self, location: LocationModel):
         """Make prediction for a location and notify if high likelihood of incidents"""
@@ -39,16 +65,21 @@ class PredictionScheduler:
                 prediction_time=prediction_time
             )
 
-            # If high likelihood, notify
-            if prediction["likelihood_score_percent"] > 70:
+            # If high likelihood, determine actions and notify
+            if prediction["likelihood_score_percent"] > 70: # Threshold for high likelihood
+                action_taken = self.determine_autonomous_actions(prediction, location)
+
+                notification_details = {
+                    "location": location.model_dump(),
+                    "prediction_time": prediction_time.isoformat(),
+                    "likelihood_percent": prediction["likelihood_score_percent"],
+                    "recommendations": prediction.get("recommendations", []),
+                    "autonomous_action": action_taken
+                }
+
                 notification = GeneralNotification(
-                    message=f"High likelihood of traffic incident predicted",
-                    details={
-                        "location": location.model_dump(),
-                        "prediction_time": prediction_time.isoformat(),
-                        "likelihood": prediction["likelihood_score_percent"],
-                        "recommendations": prediction.get("recommendations", [])
-                    }
+                    message=f"High likelihood of traffic incident predicted. Action initiated.",
+                    details=notification_details
                 )
                 
                 message = WebSocketMessage(
@@ -58,11 +89,13 @@ class PredictionScheduler:
 
                 # Use analytics service's connection manager to broadcast
                 if self.analytics_service._connection_manager:
+                    # Creating a unique topic per location for targeted messages
                     location_hash = abs(hash((location.latitude, location.longitude)))
                     await self.analytics_service._connection_manager.broadcast_message_model(
-                        message, 
+                        message,
                         specific_topic=f"predictions:{location_hash}"
                     )
+                    logger.info(f"Sent high likelihood notification for location {location.latitude},{location.longitude} with action: {action_taken}")
 
         except Exception as e:
             logger.error(f"Error making prediction for location {location}: {e}")

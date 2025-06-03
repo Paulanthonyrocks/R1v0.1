@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from collections import Counter, defaultdict # Added for proactive suggestions
 from sqlalchemy import create_engine, Column, String, DateTime, JSON, Float, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -138,6 +139,81 @@ class PersonalizedRoutingService:
             raise
         finally:
             session.close()
+
+    def _get_most_frequent_destination(self, user_id: str, limit: int = 20) -> Optional[Dict[str, Any]]:
+        """
+        Identifies the most frequent destination for a user from their route history.
+        """
+        session = self.Session()
+        try:
+            history_records = (
+                session.query(RouteHistoryModel.end_location)
+                .filter(RouteHistoryModel.user_id == user_id)
+                .order_by(RouteHistoryModel.start_time.desc())
+                .limit(limit)
+                .all()
+            )
+
+            if not history_records:
+                return None
+
+            # Convert location dicts to frozenset of items to make them hashable for Counter
+            # Assuming end_location is a dictionary like {'latitude': ..., 'longitude': ...}
+            destinations = [
+                frozenset(record.end_location.items()) if isinstance(record.end_location, dict) else str(record.end_location)
+                for record in history_records
+            ]
+
+            if not destinations:
+                return None
+
+            most_common_dest_tuple, count = Counter(destinations).most_common(1)[0]
+
+            # Require a minimum frequency to consider it "common"
+            if count > 1 or (count == 1 and len(destinations) == 1) : # If only one route, it's common by default
+                # Convert frozenset back to dict
+                if isinstance(most_common_dest_tuple, frozenset):
+                    return dict(most_common_dest_tuple)
+                else: # Fallback for non-dict locations, though current model implies dict
+                    # This path is less likely if end_location is always a JSON dict
+                    # Attempt to parse if it's a stringified dict, otherwise use as is
+                    try:
+                        # This is a simple attempt; complex string structures might fail
+                        import json
+                        return json.loads(most_common_dest_tuple)
+                    except (json.JSONDecodeError, TypeError):
+                        # If it's not a dict-like string, we can't reliably reconstruct the location object
+                        # For now, we'll log a warning and skip suggesting for this case.
+                        logger.warning(f"Could not reconstruct destination for user {user_id}: {most_common_dest_tuple}")
+                        return None
+            return None
+        except Exception as e:
+            logger.error(f"Error getting most frequent destination for user {user_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    async def proactively_suggest_route(self, user_id: str) -> Optional[str]:
+        """
+        Proactively suggests a route to the user based on their most common destination.
+        For now, simulates this by logging a placeholder suggestion.
+        """
+        most_common_destination = self._get_most_frequent_destination(user_id)
+
+        if most_common_destination:
+            # For simplicity, using stringified coordinates as destination name
+            # In a real app, we might resolve coordinates to a place name
+            dest_name = f"({most_common_destination.get('latitude')}, {most_common_destination.get('longitude')})"
+
+            suggestion = (
+                f"Proactive suggestion: Traffic looks reasonable on your usual route to {dest_name}. "
+                "Consider leaving soon for a smooth commute!"
+            )
+            logger.info(f"Proactive suggestion for user {user_id}: {suggestion}")
+            return suggestion
+        else:
+            logger.info(f"No common destination found for user {user_id} to make a proactive suggestion.")
+            return None
 
     async def get_user_profile(self, user_id: str) -> UserRoutingProfile:
         """Get user routing profile"""
