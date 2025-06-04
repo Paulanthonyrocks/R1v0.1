@@ -8,7 +8,7 @@ import { StatCardProps } from '@/lib/types';
 
 const StatCard = React.memo(({ title, value, change, changeText, icon: Icon, valueColor = "text-primary", changeColor }: StatCardProps) => {
     const isPositive = change.startsWith('+');
-    const defaultChangeColor = isPositive ? "text-green-500" : "text-amber-500"; // Keep status distinct
+    const defaultChangeColor = isPositive ? "text-primary" : "text-warning"; // Use theme colors
 
     return (
         // Relies on parent grid gap, added hover effect
