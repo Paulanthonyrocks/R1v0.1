@@ -21,7 +21,16 @@ class PredictionScheduler:
         self._priority_locations: List[LocationModel] = []
         self._priority_lock = asyncio.Lock()
         self.logger = logger # Assign logger to instance for use in methods
+
+        # For accuracy-based location selection
+        self._location_accuracy_cache: Dict[str, Dict[str, Any]] = {} # Stores summary from AnalyticsService
+        self._accuracy_cache_ttl = timedelta(minutes=60) # How long to trust cached accuracy data
+        self._last_accuracy_cache_refresh: Optional[datetime] = None
         # self._load_monitored_locations() # Remove sync call from __init__
+
+    def _get_location_key(self, location: LocationModel) -> str:
+        """Helper to create a consistent dictionary key for a location."""
+        return f"{location.latitude:.4f}_{location.longitude:.4f}"
 
     async def set_priority_locations(self, locations: List[LocationModel]):
         """
@@ -47,8 +56,10 @@ class PredictionScheduler:
                 priority_names = [loc.name for loc in current_monitored_locations if loc.name]
                 self.logger.info(f"Using {len(current_monitored_locations)} priority locations for prediction: {priority_names if priority_names else [f'({loc.latitude},{loc.longitude})' for loc in current_monitored_locations]}")
             else:
-                self.logger.info("No priority locations set, using default/random locations for prediction.")
-                # Existing logic for default/random selection
+                self.logger.info("No priority locations set. Attempting to select locations based on prediction accuracy.")
+
+                # Define the pool of locations the scheduler can choose from.
+                # In a real system, this might come from a database or configuration.
                 all_locations = [
                     LocationModel(latitude=34.0522, longitude=-118.2437, name="Los Angeles Downtown"),
                     LocationModel(latitude=40.7128, longitude=-74.0060, name="New York Times Square"),
@@ -57,14 +68,72 @@ class PredictionScheduler:
                     LocationModel(latitude=33.7490, longitude=-84.3880, name="Atlanta Centennial Park")
                 ]
                 if not all_locations:
-                    self.monitored_locations = [] # Should be current_monitored_locations
-                    return # Exiting early if no locations defined
+                    self.monitored_locations = []
+                    return
 
-                # Select a random number of locations to monitor, at least 1
-                num_to_select = random.randint(1, len(all_locations))
-                current_monitored_locations = random.sample(all_locations, num_to_select)
-                default_loc_info = [f"{loc.name if loc.name else ''} ({loc.latitude},{loc.longitude})" for loc in current_monitored_locations]
-                self.logger.info(f"Dynamically selected {len(current_monitored_locations)} default locations: {default_loc_info}")
+                # Refresh accuracy cache if stale
+                now = datetime.now()
+                if self._last_accuracy_cache_refresh is None or (now - self._last_accuracy_cache_refresh > self._accuracy_cache_ttl):
+                    self.logger.info("Prediction accuracy cache is stale or empty. Refreshing...")
+                    temp_cache = {}
+                    for loc in all_locations:
+                        try:
+                            # Query for last 7 days of predictions for this specific location
+                            summary = await self.analytics_service.get_prediction_outcome_summary(
+                                location_latitude=loc.latitude,
+                                location_longitude=loc.longitude,
+                                time_since=now - timedelta(days=7)
+                                # Using default radius from get_prediction_outcome_summary
+                            )
+                            if summary and not summary.get("error"):
+                                temp_cache[self._get_location_key(loc)] = summary
+                                self.logger.debug(f"Fetched accuracy for {loc.name or self._get_location_key(loc)}: {summary.get('accuracy_metrics', {}).get('incident_hit_rate', 'N/A')}")
+                            else:
+                                self.logger.warning(f"Could not fetch valid accuracy summary for {loc.name or self._get_location_key(loc)}. Error: {summary.get('error')}")
+                        except Exception as e_fetch:
+                            self.logger.error(f"Exception fetching accuracy for {loc.name or self._get_location_key(loc)}: {e_fetch}", exc_info=True)
+                    self._location_accuracy_cache = temp_cache
+                    self._last_accuracy_cache_refresh = now
+                    self.logger.info(f"Prediction accuracy cache refreshed. Total entries: {len(self._location_accuracy_cache)}")
+
+                # Select locations using weights from accuracy cache
+                weights = []
+                for loc in all_locations:
+                    loc_key = self._get_location_key(loc)
+                    accuracy_data = self._location_accuracy_cache.get(loc_key)
+                    weight = 0.5  # Default neutral weight
+
+                    if accuracy_data:
+                        hit_rate = accuracy_data.get("accuracy_metrics", {}).get("incident_hit_rate", 0.5)
+                        total_verified = accuracy_data.get("total_verified_predictions", 0)
+
+                        if total_verified < 5: # Not enough data, give it a moderate chance
+                            weight = 0.75
+                        else:
+                            # Amplify hit_rate: square it to make higher values more dominant
+                            # Ensure some minimum weight if hit_rate is 0, to allow it to be picked eventually.
+                            weight = (hit_rate * hit_rate) if hit_rate > 0.05 else 0.1
+                    else:
+                        # No accuracy data for this location, give it a higher chance to gather data
+                        weight = 0.8
+
+                    weights.append(weight)
+                    self.logger.debug(f"Location: {loc.name or loc_key}, HitRate: {accuracy_data.get('accuracy_metrics', {}).get('incident_hit_rate', 'N/A') if accuracy_data else 'N/A'}, Weight: {weight:.2f}")
+
+                if not any(w > 0 for w in weights): # Ensure there's some weight to pick from
+                    self.logger.warning("All location weights are zero. Falling back to uniform random sampling.")
+                    weights = [1.0] * len(all_locations) # Equal weights
+
+                num_to_select = random.randint(1, max(1, len(all_locations) // 2)) # Select up to half, but at least 1
+
+                # Normalize weights to sum to 1 if random.choices requires it (it doesn't, but good for understanding)
+                # total_weight = sum(weights)
+                # normalized_weights = [w / total_weight for w in weights] if total_weight > 0 else [1/len(weights)]*len(weights)
+
+                current_monitored_locations = random.choices(all_locations, weights=weights, k=num_to_select)
+
+                selected_loc_info = [f"{loc.name if loc.name else self._get_location_key(loc)} (W:{weights[all_locations.index(loc)]:.2f})" for loc in current_monitored_locations]
+                self.logger.info(f"Dynamically selected {len(current_monitored_locations)} locations based on accuracy weights: {selected_loc_info}")
 
         self.monitored_locations = current_monitored_locations
 
@@ -94,8 +163,33 @@ class PredictionScheduler:
             )
 
             # If high likelihood, determine actions and notify
-            if prediction["likelihood_score_percent"] > 70: # Threshold for high likelihood
+            # Also log this significant prediction
+            likelihood_threshold = 70 # Configurable threshold
+            if prediction.get("likelihood_score_percent", 0) > likelihood_threshold:
                 action_taken = self.determine_autonomous_actions(prediction, location)
+
+                # Log the prediction
+                log_data = {
+                    "location_name": location.name,
+                    "location_latitude": location.latitude,
+                    "location_longitude": location.longitude,
+                    "predicted_event_start_time": prediction_time, # This is when the predicted event window starts
+                    "predicted_event_end_time": prediction_time + timedelta(hours=1), # Assuming a 1-hour prediction window
+                    "prediction_type": "incident_likelihood",
+                    "predicted_value": prediction, # Store the full prediction dictionary
+                    "source_of_prediction": "PredictionScheduler_HighLikelihood",
+                    "kpi_snapshot_at_prediction": None # Placeholder for now
+                    # outcome_verified and related fields will be updated later by a different process
+                }
+                try:
+                    log_id = await self.analytics_service.record_prediction_log(log_data)
+                    if log_id:
+                        self.logger.info(f"Successfully recorded high-likelihood prediction (ID: {log_id}) for location {location.name or (location.latitude, location.longitude)}.")
+                    else:
+                        self.logger.warning(f"Failed to record high-likelihood prediction for location {location.name or (location.latitude, location.longitude)}.")
+                except Exception as e_log:
+                    self.logger.error(f"Error calling record_prediction_log: {e_log}", exc_info=True)
+
 
                 notification_details = {
                     "location": location.model_dump(),

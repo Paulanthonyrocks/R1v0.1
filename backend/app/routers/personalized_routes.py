@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
+from pydantic import BaseModel, Field # Added for SuggestionFeedbackRequest
 
 from app.models.routing import (
     PersonalizedRouteRequest,
@@ -16,6 +17,14 @@ from app.dependencies import (
 )
 
 router = APIRouter()
+
+# Pydantic model for suggestion feedback request body
+class SuggestionFeedbackRequest(BaseModel):
+    suggestion_id: str
+    interaction_status: str  # e.g., "accepted", "rejected", "ignored", "modified"
+    feedback_text: Optional[str] = None
+    rating: Optional[int] = Field(None, ge=1, le=5, description="User rating for the suggestion, 1-5")
+
 
 @router.post(
     "/personalized",
@@ -114,4 +123,48 @@ async def get_route_history(
         raise HTTPException(
             status_code=500,
             detail=f"Error getting route history: {str(e)}"
+        )
+
+@router.post(
+    "/suggestions/feedback",
+    summary="Record Feedback on Proactive Suggestion",
+    description="Allows users to submit feedback (acceptance, rejection, rating, text) on a proactive route suggestion they received.",
+    status_code=200 # Default, can be overridden
+)
+async def record_suggestion_feedback_endpoint(
+    feedback_data: SuggestionFeedbackRequest = Body(...),
+    current_user: Dict = Depends(get_current_active_user),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service)
+):
+    """
+    Records feedback for a given proactive suggestion.
+    """
+    try:
+        success = await routing_service.record_suggestion_feedback(
+            suggestion_id=feedback_data.suggestion_id,
+            user_id=current_user['uid'], # Use authenticated user's ID
+            interaction_status=feedback_data.interaction_status,
+            feedback_text=feedback_data.feedback_text,
+            rating=feedback_data.rating
+        )
+
+        if success:
+            return {"message": "Feedback recorded successfully"}
+        else:
+            # The service returns False for known issues like "not found" or "user mismatch"
+            raise HTTPException(
+                status_code=404, # Or 400 depending on specific failure reason if distinguishable
+                detail="Suggestion ID not found, user mismatch, or invalid data. Feedback not recorded."
+            )
+
+    except HTTPException as http_exc:
+        # Re-raise HTTPException directly to let FastAPI handle it
+        raise http_exc
+    except Exception as e:
+        # Catch any other unexpected errors from the service layer or elsewhere
+        # Log the error server-side for diagnosis
+        # logger.error(f"Unexpected error recording suggestion feedback: {e}", exc_info=True) # Assuming logger is available
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred while recording feedback: {str(e)}"
         )
