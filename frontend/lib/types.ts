@@ -9,7 +9,7 @@ export interface FeedStatusData {
   id: string;
   source: string;
   name?: string;
-  status: 'stopped' | 'running' | 'starting' | 'error';
+  status: 'stopped' | 'running' | 'starting' | 'error' | 'stopping'; // Added 'stopping'
   fps?: number | null;
   error_message?: string | null;
 }
@@ -86,9 +86,8 @@ export interface CongestionNodeProps {
   lastUpdated?: string;
 }
 
-export interface SurveillanceFeedProps extends Omit<FeedStatusData, 'source' | 'error_message'> {
-  name: string;
-  node: string;
+export interface SurveillanceFeedProps {
+  feed: FeedStatusData; // Primary prop is now the feed object
 }
 export interface LegendItemProps { color: string; text: string; }
 export interface PageLayoutProps { title?: string; children: React.ReactNode; className?: string; }
