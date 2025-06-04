@@ -361,7 +361,8 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
         # For the service calls, we want it to use a session that can be awaited.
         # The actual DB operations in helpers will use a direct session.
-        self.mock_db_manager_for_new_tests.get_session = MagicMock(return_value=get_mock_session())
+        # self.mock_db_manager_for_new_tests.get_session = MagicMock(return_value=get_mock_session()) # Replaced by AsyncContextManagerSession below
+        self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe = AsyncMock(return_value=[]) # Default to no incidents
 
 
         self.mock_connection_manager_for_new_tests = MagicMock(spec=ConnectionManager)
@@ -458,30 +459,69 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
     # 3. Test correlate_predictions_with_outcomes_no_incidents
     async def test_correlate_predictions_with_outcomes_no_incidents(self):
         async with self.mock_db_manager_for_new_tests.get_session() as session:
-            pred1 = await self._add_prediction_log(session, outcome_verified=False, predicted_event_end_time=datetime.utcnow() - timedelta(hours=3)) # Window passed
+            pred1 = await self._add_prediction_log(
+                session,
+                outcome_verified=False,
+                predicted_event_start_time=datetime.utcnow() - timedelta(hours=2), # e.g., predicted for 10-11 AM
+                predicted_event_end_time=datetime.utcnow() - timedelta(hours=1),
+                location_latitude=34.0522, location_longitude=-118.2437 # Specific location for call verification
+            )
 
-        # Patch _fetch_relevant_incidents to return empty list
-        self.analytics_service_db_test._fetch_relevant_incidents = AsyncMock(return_value=[])
+        # Configure DatabaseManager mock to return no incidents
+        self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe.return_value = []
 
-        await self.analytics_service_db_test.correlate_predictions_with_outcomes()
+        await self.analytics_service_db_test.correlate_predictions_with_outcomes(correlation_window_hours=2, lookback_hours=24)
+
+        # Verify DatabaseManager method was called correctly
+        self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe.assert_awaited_once_with(
+            latitude=34.0522,
+            longitude=-118.2437,
+            start_time=pred1.predicted_event_start_time - timedelta(hours=1), # correlation_window_hours / 2
+            end_time=pred1.predicted_event_end_time + timedelta(hours=1),   # correlation_window_hours / 2
+            vicinity_radius_km=1.0, # Default from correlate_predictions_with_outcomes
+            limit=10 # Default from _fetch_relevant_incidents
+        )
 
         async with self.mock_db_manager_for_new_tests.get_session() as session:
             updated_pred1 = await session.get(PredictionLogModel, pred1.id)
+            # Prediction window itself has passed, and correlation window has also passed
+            # (e.g., if predicted for 10-11AM, correlation search is 9AM-12PM. If current time is >12PM)
+            # This test assumes the window has passed for "no_event_detected"
+            # To make this certain, ensure predicted_event_end_time is far enough in the past.
+            # The original _add_prediction_log makes predicted_event_end_time = utcnow - 11h.
+            # Correlation window is +/- 1h. So search is -12h to -10h. This has passed.
             self.assertTrue(updated_pred1.outcome_verified)
             self.assertEqual(updated_pred1.actual_outcome_type, "no_event_detected")
 
     # 4. Test correlate_predictions_with_outcomes_with_incidents
     async def test_correlate_predictions_with_outcomes_with_incidents(self):
+        incident_time = datetime.utcnow()-timedelta(hours=1, minutes=30)
         async with self.mock_db_manager_for_new_tests.get_session() as session:
-            pred1 = await self._add_prediction_log(session, outcome_verified=False, predicted_event_start_time=datetime.utcnow()-timedelta(hours=2), predicted_event_end_time=datetime.utcnow()-timedelta(hours=1))
+            pred1 = await self._add_prediction_log(
+                session,
+                outcome_verified=False,
+                predicted_event_start_time=datetime.utcnow()-timedelta(hours=2), # e.g. 10:00
+                predicted_event_end_time=datetime.utcnow()-timedelta(hours=1),   # e.g. 11:00
+                location_latitude=34.0522,
+                location_longitude=-118.2437
+            )
 
-        mock_incident = IncidentReport(
-            id="incident1", timestamp=datetime.utcnow()-timedelta(hours=1, minutes=30), type=IncidentTypeEnum.ACCIDENT, severity=IncidentSeverityEnum.HIGH,
-            location=LocationModel(latitude=34.0522, longitude=-118.2437), description="Test accident"
+        mock_raw_incident_data = [
+            {
+                "id": "incident_db_1", "timestamp": incident_time, "type": "ACCIDENT", "severity": "HIGH",
+                "latitude": 34.0522, "longitude": -118.2437, "description": "Raw DB accident data", "source_feed_id": "feed123"
+            }
+        ]
+        self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe.return_value = mock_raw_incident_data
+
+        await self.analytics_service_db_test.correlate_predictions_with_outcomes(correlation_window_hours=2)
+
+        self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe.assert_awaited_once_with(
+            latitude=34.0522, longitude=-118.2437,
+            start_time=pred1.predicted_event_start_time - timedelta(hours=1),
+            end_time=pred1.predicted_event_end_time + timedelta(hours=1),
+            vicinity_radius_km=1.0, limit=10
         )
-        self.analytics_service_db_test._fetch_relevant_incidents = AsyncMock(return_value=[mock_incident])
-
-        await self.analytics_service_db_test.correlate_predictions_with_outcomes()
 
         async with self.mock_db_manager_for_new_tests.get_session() as session:
             updated_pred1 = await session.get(PredictionLogModel, pred1.id)
@@ -489,7 +529,12 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated_pred1.actual_outcome_type, "incident_occurred")
             self.assertIsNotNone(updated_pred1.actual_outcome_details)
             self.assertEqual(len(updated_pred1.actual_outcome_details["incidents"]), 1)
-            self.assertEqual(updated_pred1.actual_outcome_details["incidents"][0]["id"], "incident1")
+            # Check parsed data
+            parsed_incident_in_log = updated_pred1.actual_outcome_details["incidents"][0]
+            self.assertEqual(parsed_incident_in_log["id"], "incident_db_1")
+            self.assertEqual(parsed_incident_in_log["type"], IncidentTypeEnum.ACCIDENT.value) # Enums are stored by value
+            self.assertEqual(parsed_incident_in_log["severity"], IncidentSeverityEnum.HIGH.value)
+            self.assertEqual(parsed_incident_in_log["description"], "Raw DB accident data")
 
     # 5. Test correlate_predictions_with_outcomes_window_not_passed
     async def test_correlate_predictions_with_outcomes_window_not_passed(self):

@@ -606,45 +606,89 @@ class AnalyticsService:
         search_start_time: datetime,
         search_end_time: datetime,
         vicinity_radius_km: float = 1.0
-    ) -> List[IncidentReport]: # Assuming IncidentReport is the Pydantic model from app.models.traffic
+    ) -> List[IncidentReport]:
         """
-        Placeholder method to fetch incidents relevant to a prediction.
-        This should be implemented using DatabaseManager to query the incident table.
+        Fetches incidents from the database relevant to a given prediction's location and time window.
         """
-        logger.info(f"Attempting to fetch incidents for prediction {prediction_log_entry.id} "
-                    f"between {search_start_time} and {search_end_time} "
-                    f"within {vicinity_radius_km}km of "
-                    f"({prediction_log_entry.location_latitude}, {prediction_log_entry.location_longitude}).")
+        incident_reports: List[IncidentReport] = []
+        incidents_data: List[Dict[str, Any]] = []
 
-        # Mock implementation: Returns an empty list.
-        # TODO: Replace with actual DatabaseManager call, e.g.:
-        # incidents_data = await self._db_manager.get_incidents_in_vicinity_timeframe(
-        #     latitude=prediction_log_entry.location_latitude,
-        #     longitude=prediction_log_entry.location_longitude,
-        #     start_time=search_start_time,
-        #     end_time=search_end_time,
-        #     vicinity_radius_km=vicinity_radius_km
-        # )
-        # return [IncidentReport(**data) for data in incidents_data] # Assuming db_manager returns list of dicts
+        try:
+            logger.info(f"Fetching incidents for prediction {prediction_log_entry.id} "
+                        f"between {search_start_time} and {search_end_time} "
+                        f"within {vicinity_radius_km}km of "
+                        f"({prediction_log_entry.location_latitude}, {prediction_log_entry.location_longitude}).")
 
-        # For now, returning an empty list to simulate no incidents found.
-        # To test with found incidents, you could return a mock list:
-        # mock_incident_location = LocationModel(
-        #     latitude=prediction_log_entry.location_latitude,
-        #     longitude=prediction_log_entry.location_longitude,
-        #     name=prediction_log_entry.location_name
-        # )
-        # return [
-        #     IncidentReport(
-        #         id=str(uuid_pkg.uuid4()),
-        #         timestamp=prediction_log_entry.predicted_event_start_time + timedelta(minutes=10), # within window
-        #         type=IncidentTypeEnum.ACCIDENT,
-        #         severity=IncidentSeverityEnum.MEDIUM,
-        #         location=mock_incident_location,
-        #         description="Mocked accident for testing correlation."
-        #     )
-        # ]
-        return []
+            # Assume _db_manager.get_incidents_in_vicinity_timeframe exists and returns List[Dict[str,Any]]
+            # This method needs to be implemented in DatabaseManager.
+            incidents_data = await self._db_manager.get_incidents_in_vicinity_timeframe(
+                latitude=prediction_log_entry.location_latitude,
+                longitude=prediction_log_entry.location_longitude,
+                start_time=search_start_time,
+                end_time=search_end_time,
+                vicinity_radius_km=vicinity_radius_km,
+                limit=10 # Limiting to 10 incidents per prediction for correlation for now
+            )
+        except AttributeError:
+            logger.error(f"_db_manager.get_incidents_in_vicinity_timeframe method not found. "
+                         "This method needs to be implemented in DatabaseManager.")
+            return [] # Return empty list as we can't fetch data
+        except Exception as e:
+            logger.error(f"Database error fetching incidents for prediction {prediction_log_entry.id}: {e}", exc_info=True)
+            return [] # Return empty list on other DB errors
+
+        if not incidents_data:
+            logger.info(f"No incidents found in vicinity for prediction {prediction_log_entry.id}.")
+            return []
+
+        for incident_dict in incidents_data:
+            try:
+                location_data = {
+                    "latitude": incident_dict.get("latitude"),
+                    "longitude": incident_dict.get("longitude"),
+                    "name": incident_dict.get("location_name") # Assuming DB might provide a name
+                }
+
+                location_model: Optional[LocationModel] = None
+                if location_data["latitude"] is not None and location_data["longitude"] is not None:
+                    location_model = LocationModel(**location_data)
+                else:
+                    logger.warning(f"Incident data (id: {incident_dict.get('id')}) missing latitude/longitude. Skipping.")
+                    continue
+
+                # Robust Enum Conversion: Use .get with a default that maps to an "UNKNOWN" or default enum member
+                raw_type = incident_dict.get("type", "UNKNOWN").upper()
+                incident_type_enum = IncidentTypeEnum.UNKNOWN
+                try:
+                    incident_type_enum = IncidentTypeEnum[raw_type]
+                except KeyError:
+                    logger.warning(f"Unknown incident type '{raw_type}' for incident {incident_dict.get('id')}. Defaulting to UNKNOWN.")
+
+                raw_severity = incident_dict.get("severity", "UNKNOWN").upper()
+                incident_severity_enum = IncidentSeverityEnum.UNKNOWN
+                try:
+                    incident_severity_enum = IncidentSeverityEnum[raw_severity]
+                except KeyError:
+                    logger.warning(f"Unknown incident severity '{raw_severity}' for incident {incident_dict.get('id')}. Defaulting to UNKNOWN.")
+
+                incident_report = IncidentReport(
+                    id=str(incident_dict.get("id")), # Ensure ID is string
+                    timestamp=incident_dict.get("timestamp"), # Should be datetime from DB
+                    type=incident_type_enum,
+                    severity=incident_severity_enum,
+                    location=location_model,
+                    description=incident_dict.get("description"),
+                    source_feed_id=incident_dict.get("source_feed_id"),
+                    # status=IncidentStatusEnum(incident_dict.get("status", "UNKNOWN").upper()) # If status is included
+                )
+                incident_reports.append(incident_report)
+            except ValueError as ve: # Handles issues with Pydantic validation (e.g., wrong data types not caught above)
+                logger.error(f"Validation error parsing incident data into IncidentReport model: {ve}. Data: {incident_dict}")
+            except Exception as e_parse:
+                logger.error(f"Unexpected error parsing incident (id: {incident_dict.get('id')}): {e_parse}", exc_info=True)
+
+        logger.info(f"Successfully parsed {len(incident_reports)} incidents for prediction {prediction_log_entry.id}.")
+        return incident_reports
 
     async def correlate_predictions_with_outcomes(
         self,
