@@ -1,12 +1,14 @@
 import asyncio
 import logging
-from typing import Optional, Dict, Any # Added Dict, Any
+from typing import Optional, Dict, Any, List # Added List
 import json # For pretty printing dicts in logs
+from datetime import datetime, timedelta # Added datetime, timedelta
 
 from app.tasks.prediction_scheduler import PredictionScheduler
-from app.services.personalized_routing_service import PersonalizedRoutingService
-from app.services.analytics_service import AnalyticsService # Added AnalyticsService import
+from app.services.personalized_routing_service import PersonalizedRoutingService # CommonTravelPattern is defined here
+from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
+from app.models.websocket import UserSpecificConditionAlert # Updated model import
 
 logger = logging.getLogger(__name__)
 
@@ -101,50 +103,199 @@ class AgentCore:
         trigger_operational_alert = False
         operational_alert_title = ""
         operational_alert_message = ""
-        operational_alert_severity = "info"
+        operational_alert_severity = "info" # Default severity
+        suggested_actions_for_alert: List[str] = []
 
+        # Refined KPI extraction
         current_congestion_level = system_kpis.get("overall_congestion_level", "UNKNOWN")
+        avg_speed = system_kpis.get("average_speed_kmh", -1.0) # Use -1 to indicate unknown if not present
+        total_flow = system_kpis.get("total_vehicle_flow_estimate", -1)
         critical_alerts_count_val = alert_summary.get("critical_unack_alert_count", 0)
+        recent_critical_types = alert_summary.get('recent_critical_types', [])
 
-        if current_congestion_level == CONGESTION_THRESHOLD_FOR_ALERT and \
-           critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION:
-            trigger_operational_alert = True
-            operational_alert_title = "High System Load & Critical Alerts"
+        # More granular alert conditions and suggested actions
+        if current_congestion_level == "HIGH":
+            if avg_speed != -1 and avg_speed < 15: # Severe congestion if avg speed is very low
+                trigger_operational_alert = True
+                operational_alert_title = "Severe System Congestion"
+                operational_alert_message = (
+                    f"System is experiencing SEVERE congestion. Average speed critically low: {avg_speed} km/h. "
+                    f"Total vehicle flow estimate: {total_flow}. Immediate attention required."
+                )
+                operational_alert_severity = "critical"
+                suggested_actions_for_alert.extend([
+                    "Activate Stage 3 traffic management protocols.",
+                    "Consider widespread dynamic rerouting for affected corridors.",
+                    "Notify public transit authorities of major expected delays.",
+                    "Prepare for potential gridlock; monitor key intersections closely."
+                ])
+            else: # Standard HIGH congestion
+                trigger_operational_alert = True
+                operational_alert_title = "High System Congestion"
+                operational_alert_message = (
+                    f"System is experiencing HIGH congestion. Average speed: {avg_speed} km/h. "
+                    f"Total vehicle flow estimate: {total_flow}. Operator review advised."
+                )
+                operational_alert_severity = "error" # Upgraded from warning
+                suggested_actions_for_alert.extend([
+                    "Activate Stage 2 traffic management protocols.",
+                    "Identify and manage bottleneck areas.",
+                    "Increase signal cycle times on outbound routes if applicable.",
+                ])
+        elif current_congestion_level == "MEDIUM":
+            trigger_operational_alert = True # Alert even for medium if other factors exist or just to inform
+            operational_alert_title = "Moderate System Congestion"
             operational_alert_message = (
-                f"System is experiencing HIGH congestion (Avg Speed: {system_kpis.get('average_speed_kmh')} km/h, "
-                f"Flow Estimate: {system_kpis.get('total_vehicle_flow_estimate')}). "
-                f"Additionally, there are {critical_alerts_count_val} critical unacknowledged alert(s). "
-                f"Recent types: {', '.join(alert_summary.get('recent_critical_types',[]))}. Operator review advised."
-            )
-            operational_alert_severity = "error"
-        elif current_congestion_level == CONGESTION_THRESHOLD_FOR_ALERT:
-            trigger_operational_alert = True
-            operational_alert_title = "High System Congestion"
-            operational_alert_message = (
-                f"System is experiencing HIGH congestion (Avg Speed: {system_kpis.get('average_speed_kmh')} km/h, "
-                f"Flow Estimate: {system_kpis.get('total_vehicle_flow_estimate')}). "
-                f"Operator review advised for traffic management."
+                f"System is experiencing MODERATE congestion. Average speed: {avg_speed} km/h. "
+                f"Total vehicle flow estimate: {total_flow}. Monitoring situation."
             )
             operational_alert_severity = "warning"
-        elif critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_STANDALONE:
-            trigger_operational_alert = True
-            operational_alert_title = "Multiple Critical Alerts Active"
-            operational_alert_message = (
-                f"There are {critical_alerts_count_val} critical unacknowledged alert(s) active. "
-                f"Recent types: {', '.join(alert_summary.get('recent_critical_types',[]))}. Operator review advised."
-            )
-            operational_alert_severity = "warning"
+            suggested_actions_for_alert.extend([
+                "Monitor key corridors for escalating congestion.",
+                "Ensure all traffic monitoring systems are operational.",
+                "Be prepared to implement Stage 1 traffic management if conditions worsen."
+            ])
+
+        # Handle critical alerts separately, potentially adding to existing congestion alerts
+        if critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_STANDALONE: # e.g., threshold = 2
+            if not trigger_operational_alert: # If congestion didn't trigger an alert, this will be the primary
+                trigger_operational_alert = True
+                operational_alert_title = "Multiple Critical Alerts Active"
+                operational_alert_message = f"There are {critical_alerts_count_val} critical unacknowledged alert(s) active. "
+                operational_alert_severity = "error" # Higher than warning if many criticals
+            else: # Append to existing message
+                operational_alert_message += f" Additionally, {critical_alerts_count_val} critical alerts are active."
+
+            operational_alert_message += f" Recent types: {', '.join(recent_critical_types)}. Operator review advised."
+            suggested_actions_for_alert.append("Prioritize investigation of critical alerts.")
+            if any("ACCIDENT" in str(type_).upper() for type_ in recent_critical_types): # Check if any type string contains "ACCIDENT"
+                 suggested_actions_for_alert.append("Verify accident reports and dispatch emergency services if needed.")
+                 suggested_actions_for_alert.append("Assess impact of any accidents on traffic flow and adjust signal timings accordingly.")
+
+        # Fallback for very high number of critical alerts, even if congestion is low
+        elif critical_alerts_count_val > CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION and not trigger_operational_alert: # e.g. threshold = 0
+             trigger_operational_alert = True
+             operational_alert_title = "Notable Critical Alerts Active"
+             operational_alert_message = (
+                 f"There are {critical_alerts_count_val} critical unacknowledged alert(s) active. "
+                 f"Recent types: {', '.join(recent_critical_types)}. System congestion is currently {current_congestion_level}. Review advised."
+             )
+             operational_alert_severity = "warning"
+             suggested_actions_for_alert.append("Review critical alerts and assess potential impact.")
+
 
         if trigger_operational_alert:
+            # Ensure no duplicate suggested actions
+            unique_suggested_actions = sorted(list(set(suggested_actions_for_alert)))
+
             await self.analytics_service.broadcast_operational_alert(
                 title=operational_alert_title,
                 message_text=operational_alert_message,
-                severity=operational_alert_severity
+                severity=operational_alert_severity,
+                suggested_actions=unique_suggested_actions if unique_suggested_actions else None
             )
-            self.logger.info(f"AgentCore action: Issued OPERATIONAL ALERT. Title: '{operational_alert_title}', Severity: {operational_alert_severity}")
+            self.logger.info(f"AgentCore action: Issued OPERATIONAL ALERT. Title: '{operational_alert_title}', Severity: {operational_alert_severity}, Actions: {unique_suggested_actions}")
         else:
             self.logger.info("AgentCore action: System status within acceptable parameters, no new global operational alert issued by AgentCore.")
 
+        # --- User-Specific Proactive Notifications ---
+        self.logger.info("Starting user-specific proactive notification checks...")
+        sample_user_ids_for_proactive_alerts = ["user_agent_test_123", "another_sample_user_id"] # Example user IDs
+
+        current_time = datetime.now()
+        current_weekday = current_time.weekday() # Monday=0, Sunday=6
+
+        for user_id in sample_user_ids_for_proactive_alerts:
+            self.logger.info(f"Processing proactive notifications for user: {user_id}")
+            try:
+                common_patterns = await self.personalized_routing_service.get_user_common_travel_patterns(
+                    user_id=user_id, top_n=3
+                )
+
+                if not common_patterns:
+                    self.logger.info(f"No common travel patterns found for user {user_id}.")
+                    continue
+
+                for pattern in common_patterns:
+                    self.logger.debug(f"Checking pattern for user {user_id}: {pattern.pattern_id} - {pattern.time_of_day_group}")
+
+                    # Determine if pattern is relevant now
+                    is_relevant_now = False
+                    time_group_parts = pattern.time_of_day_group.split('_') # e.g., "morning_weekday"
+                    pattern_time = time_group_parts[0]
+                    pattern_day_type = time_group_parts[1] if len(time_group_parts) > 1 else "any" # any day type if not specified
+
+                    # Simple time matching logic
+                    current_hour = current_time.hour
+                    if pattern_time == "morning" and not (6 <= current_hour < 10): continue
+                    if pattern_time == "midday" and not (10 <= current_hour < 16): continue
+                    if pattern_time == "evening" and not (16 <= current_hour < 20): continue
+                    # Add more specific night checks if needed, e.g. night_early (20-24), night_late (0-6)
+
+                    # Day matching logic
+                    if pattern_day_type == "weekday" and not (0 <= current_weekday <= 4): continue # Monday to Friday
+                    if pattern_day_type == "weekend" and not (5 <= current_weekday <= 6): continue # Saturday, Sunday
+                    # Also check against pattern.days_of_week if more granularity is needed (e.g. pattern only on MWF)
+                    if not (current_weekday in pattern.days_of_week): # More precise check
+                         self.logger.debug(f"Pattern {pattern.pattern_id} for user {user_id} not active on day {current_weekday}. Active days: {pattern.days_of_week}")
+                         continue
+
+                    is_relevant_now = True # If all checks pass
+
+                    if is_relevant_now:
+                        self.logger.info(f"Pattern {pattern.pattern_id} is relevant now for user {user_id}.")
+
+                        # Simplified condition: If general system congestion is HIGH, issue a warning for this user's pattern
+                        if system_kpis.get("overall_congestion_level") in ["HIGH", "SEVERE"]:
+                            notification_title = "Potential Congestion on Your Usual Route"
+                            pattern_start_name = pattern.start_location_summary.get('name', 'your usual start area')
+                            pattern_end_name = pattern.end_location_summary.get('name', 'your usual destination')
+
+                            notification_message = (
+                                f"Hi {user_id}, general traffic congestion is currently {system_kpis.get('overall_congestion_level')}. "
+                                f"This might affect your usual travel from {pattern_start_name} to {pattern_end_name} "
+                                f"during this {pattern.time_of_day_group.replace('_', ' ')} period."
+                            )
+                            suggested_actions_list = [
+                                "Consider checking real-time traffic conditions before you leave.",
+                                "You might want to explore alternative routes or adjust your departure time."
+                            ]
+
+                            # Construct related_location from pattern's start_location_summary
+                            # Ensure that start_location_summary has 'latitude' and 'longitude'
+                            related_loc_data = pattern.start_location_summary
+                            related_location_model = None
+                            if 'latitude' in related_loc_data and 'longitude' in related_loc_data:
+                                try:
+                                   related_location_model = LocationModel(**related_loc_data)
+                                except Exception as loc_e:
+                                    self.logger.warning(f"Could not create LocationModel from pattern start_location_summary for user {user_id}: {loc_e}")
+
+                            # Use the new UserSpecificConditionAlert model
+                            user_alert_payload = UserSpecificConditionAlert(
+                                user_id=user_id,
+                                alert_type="predicted_congestion_on_usual_route", # Maps to old notification_type
+                                title=notification_title,
+                                message=notification_message,
+                                severity="warning", # Example severity
+                                suggested_actions=suggested_actions_list,
+                                route_context=related_location_model.model_dump() if related_location_model else None # Convert LocationModel to dict
+                            )
+
+                            await self.analytics_service.send_user_specific_alert( # Updated method name
+                                user_id=user_id,
+                                notification_model=user_alert_payload
+                            )
+                            self.logger.info(f"Sent user-specific congestion alert for user {user_id} regarding pattern {pattern.pattern_id}.")
+                        else:
+                            self.logger.info(f"System congestion not high enough to warrant proactive alert for user {user_id}, pattern {pattern.pattern_id}.")
+                    # else:
+                        # self.logger.debug(f"Pattern {pattern.pattern_id} for user {user_id} not relevant at current time/day.")
+
+            except Exception as e_user_notify:
+                self.logger.error(f"Error during user-specific notification processing for user {user_id}: {e_user_notify}", exc_info=True)
+
+        self.logger.info("User-specific proactive notification checks completed.")
         logger.info("AgentCore decision cycle completed.")
 
 # Example usage (for illustration, not part of the class itself)

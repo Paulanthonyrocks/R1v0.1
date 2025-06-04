@@ -5,9 +5,10 @@ import json # For checking log messages with JSON
 
 from app.core.agent_core import AgentCore
 from app.tasks.prediction_scheduler import PredictionScheduler
-from app.services.personalized_routing_service import PersonalizedRoutingService
-from app.services.analytics_service import AnalyticsService # Import AnalyticsService
+from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern # Import CommonTravelPattern
+from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
+from app.models.websocket import UserSpecificConditionAlert # Import for new tests
 
 class TestAgentCore(unittest.TestCase):
 
@@ -28,8 +29,12 @@ class TestAgentCore(unittest.TestCase):
         self.mock_alert_summary_default = {"critical_unack_alert_count": 0, "recent_critical_types": []}
 
         self.mock_analytics_service.get_current_system_kpis_summary.return_value = self.mock_kpi_summary_default
-        self.mock_analytics_service.get_critical_alert_summary = AsyncMock(return_value=self.mock_alert_summary_default) # Make this AsyncMock
-        self.mock_analytics_service.broadcast_operational_alert = AsyncMock() # Make this AsyncMock
+        self.mock_analytics_service.get_critical_alert_summary = AsyncMock(return_value=self.mock_alert_summary_default)
+        self.mock_analytics_service.broadcast_operational_alert = AsyncMock()
+        self.mock_analytics_service.send_user_specific_alert = AsyncMock() # For new tests
+
+        # Mock for PersonalizedRoutingService method used in user-specific alerts
+        self.mock_personalized_routing_service.get_user_common_travel_patterns = AsyncMock(return_value=[]) # Default to no patterns
 
 
         self.agent_core = AgentCore(
@@ -110,11 +115,16 @@ class TestAgentCore(unittest.TestCase):
 
         self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
             title="High System Congestion",
-            message_text=ANY, # Or construct the exact expected message
-            severity="warning"
+            message_text=ANY,
+            severity="error", # Severity was updated in AgentCore logic for HIGH congestion
+            suggested_actions=ANY
         )
-        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Congestion', Severity: warning")
-        self.mock_prediction_scheduler.set_priority_locations.assert_awaited_once() # Still called
+        # Log message now includes actions, so we might need to check for part of it or use ANY if actions are complex
+        self.assertTrue(any(
+            "AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Congestion', Severity: error" in log_call.args[0]
+            for log_call in mock_agent_logger.info.call_args_list
+        ))
+        self.mock_prediction_scheduler.set_priority_locations.assert_awaited_once()
 
     @patch('app.core.agent_core.logger')
     async def test_run_decision_cycle_triggers_critical_alerts_alert(self, mock_agent_logger):
@@ -126,12 +136,27 @@ class TestAgentCore(unittest.TestCase):
 
         await self.agent_core.run_decision_cycle()
 
+        # AgentCore logic for "Multiple Critical Alerts Active" (when it's the primary trigger) sets severity to "error"
+        # and "Notable Critical Alerts Active" sets to "warning".
+        # This test has 3 critical alerts, so it should be "Multiple Critical Alerts Active" -> "error"
+        expected_title = "Multiple Critical Alerts Active"
+        expected_severity = "error"
+        if low_congestion_kpis["overall_congestion_level"] != "UNKNOWN": # Check if it might combine with a low congestion message
+             # If a low/medium congestion alert was also triggered, title/severity might change
+             # For this test, assuming critical alerts are the dominant factor or only trigger.
+             pass
+
+
         self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
-            title="Critical Alerts Active",
+            title=expected_title,
             message_text=ANY,
-            severity="warning"
+            severity=expected_severity,
+            suggested_actions=ANY
         )
-        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'Critical Alerts Active', Severity: warning")
+        self.assertTrue(any(
+             f"AgentCore action: Issued OPERATIONAL ALERT. Title: '{expected_title}', Severity: {expected_severity}" in log_call.args[0]
+            for log_call in mock_agent_logger.info.call_args_list
+        ))
 
     @patch('app.core.agent_core.logger')
     async def test_run_decision_cycle_triggers_high_congestion_and_critical_alerts(self, mock_agent_logger):
@@ -144,11 +169,15 @@ class TestAgentCore(unittest.TestCase):
         await self.agent_core.run_decision_cycle()
 
         self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once_with(
-            title="High System Load & Critical Alerts",
+            title="High System Load & Critical Alerts", # This specific title is used when high congestion AND critical alerts occur
             message_text=ANY,
-            severity="error"
+            severity="error", # This combination results in "error"
+            suggested_actions=ANY
         )
-        mock_agent_logger.info.assert_any_call("AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Load & Critical Alerts', Severity: error")
+        self.assertTrue(any(
+            "AgentCore action: Issued OPERATIONAL ALERT. Title: 'High System Load & Critical Alerts', Severity: error" in log_call.args[0]
+            for log_call in mock_agent_logger.info.call_args_list
+        ))
 
 
     @patch('app.core.agent_core.logger')
@@ -213,6 +242,123 @@ def async_test(f):
 TestAgentCore.test_run_decision_cycle_happy_path = async_test(TestAgentCore.test_run_decision_cycle_happy_path)
 TestAgentCore.test_run_decision_cycle_no_locations = async_test(TestAgentCore.test_run_decision_cycle_no_locations)
 TestAgentCore.test_run_decision_cycle_routing_suggestion_is_none = async_test(TestAgentCore.test_run_decision_cycle_routing_suggestion_is_none)
+
+
+@patch('app.core.agent_core.logger')
+async def test_run_decision_cycle_operational_alert_with_specific_suggested_actions(self, mock_agent_logger):
+    # Scenario: Severe congestion based on very low speed
+    severe_congestion_kpis = {
+        "overall_congestion_level": "HIGH",
+        "average_speed_kmh": 10, # Very low speed -> SEVERE
+        "total_vehicle_flow_estimate": 3000
+    }
+    no_critical_alerts = {"critical_unack_alert_count": 0, "recent_critical_types": []}
+    self.mock_analytics_service.get_current_system_kpis_summary.return_value = severe_congestion_kpis
+    self.mock_analytics_service.get_critical_alert_summary.return_value = no_critical_alerts
+
+    await self.agent_core.run_decision_cycle()
+
+    self.mock_analytics_service.broadcast_operational_alert.assert_awaited_once()
+    args, kwargs = self.mock_analytics_service.broadcast_operational_alert.call_args
+
+    self.assertEqual(kwargs['title'], "Severe System Congestion")
+    self.assertEqual(kwargs['severity'], "critical")
+
+    expected_actions = [
+        "Activate Stage 3 traffic management protocols.",
+        "Consider widespread dynamic rerouting for affected corridors.",
+        "Notify public transit authorities of major expected delays.",
+        "Prepare for potential gridlock; monitor key intersections closely."
+    ]
+    self.assertIsInstance(kwargs['suggested_actions'], list)
+    self.assertEqual(set(kwargs['suggested_actions']), set(expected_actions))
+
+TestAgentCore.test_run_decision_cycle_operational_alert_with_specific_suggested_actions = async_test(test_run_decision_cycle_operational_alert_with_specific_suggested_actions)
+
+
+@patch('app.core.agent_core.logger')
+async def test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern(self, mock_agent_logger):
+    sample_user_id = "user_with_patterns_ congested"
+
+    # Mock common travel patterns
+    mock_loc_summary_start = {"latitude": 34.0, "longitude": -118.0, "name": "Home"}
+    mock_loc_summary_end = {"latitude": 34.1, "longitude": -118.1, "name": "Work"}
+    common_patterns = [
+        CommonTravelPattern(
+            pattern_id="p1", user_id=sample_user_id,
+            start_location_summary=mock_loc_summary_start,
+            end_location_summary=mock_loc_summary_end,
+            time_of_day_group="morning_weekday",
+            days_of_week=[0,1,2,3,4], # Mon-Fri
+            frequency_score=10.0
+        )
+    ]
+    self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = common_patterns
+
+    # Mock high system congestion
+    high_congestion_kpis = {"overall_congestion_level": "HIGH", "average_speed_kmh": 30}
+    self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+    self.mock_analytics_service.get_critical_alert_summary.return_value = self.mock_alert_summary_default # No critical alerts
+
+    # Mock current time to be Monday 8 AM (to match pattern)
+    with patch('app.core.agent_core.datetime') as mock_datetime:
+        mock_datetime.now.return_value = datetime(2023, 1, 2, 8, 0, 0) # A Monday 8 AM
+        mock_datetime.utcnow.return_value = datetime(2023, 1, 2, 8, 0, 0) # If utcnow is used
+
+        await self.agent_core.run_decision_cycle(sample_user_id=sample_user_id)
+
+    self.mock_analytics_service.send_user_specific_alert.assert_awaited_once()
+    args, kwargs = self.mock_analytics_service.send_user_specific_alert.call_args
+
+    self.assertEqual(kwargs['user_id'], sample_user_id)
+    notification_payload: UserSpecificConditionAlert = kwargs['notification_model']
+
+    self.assertIsInstance(notification_payload, UserSpecificConditionAlert)
+    self.assertEqual(notification_payload.user_id, sample_user_id)
+    self.assertEqual(notification_payload.alert_type, "predicted_congestion_on_usual_route")
+    self.assertEqual(notification_payload.severity, "warning")
+    self.assertIn("general traffic congestion is currently HIGH", notification_payload.message)
+    self.assertIn("Home", notification_payload.message) # From pattern start_location_summary.name
+    self.assertIn("Work", notification_payload.message) # From pattern end_location_summary.name
+    self.assertIsNotNone(notification_payload.suggested_actions)
+    self.assertTrue(len(notification_payload.suggested_actions) > 0)
+    self.assertIsNotNone(notification_payload.route_context)
+    self.assertEqual(notification_payload.route_context, mock_loc_summary_start) # Check if it's start_location_summary
+
+TestAgentCore.test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern = async_test(test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern)
+
+
+@patch('app.core.agent_core.logger')
+async def test_run_decision_cycle_no_user_specific_alert_if_low_congestion(self, mock_agent_logger):
+    sample_user_id = "user_low_congestion"
+    common_patterns = [CommonTravelPattern(pattern_id="p1", user_id=sample_user_id, start_location_summary={"name":"H"}, end_location_summary={"name":"W"}, time_of_day_group="morning_weekday", days_of_week=[0,1,2,3,4], frequency_score=5.0)]
+    self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = common_patterns
+
+    low_congestion_kpis = {"overall_congestion_level": "LOW"} # Low congestion
+    self.mock_analytics_service.get_current_system_kpis_summary.return_value = low_congestion_kpis
+
+    with patch('app.core.agent_core.datetime') as mock_datetime: # Match time for pattern relevance
+        mock_datetime.now.return_value = datetime(2023, 1, 2, 8, 0, 0)
+        await self.agent_core.run_decision_cycle(sample_user_id=sample_user_id)
+
+    self.mock_analytics_service.send_user_specific_alert.assert_not_awaited()
+
+TestAgentCore.test_run_decision_cycle_no_user_specific_alert_if_low_congestion = async_test(test_run_decision_cycle_no_user_specific_alert_if_low_congestion)
+
+@patch('app.core.agent_core.logger')
+async def test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns(self, mock_agent_logger):
+    sample_user_id = "user_no_patterns"
+    self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = [] # No patterns
+
+    high_congestion_kpis = {"overall_congestion_level": "HIGH"} # High congestion
+    self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+
+    await self.agent_core.run_decision_cycle(sample_user_id=sample_user_id)
+
+    self.mock_analytics_service.send_user_specific_alert.assert_not_awaited()
+
+TestAgentCore.test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns = async_test(test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns)
+
 
 if __name__ == '__main__':
     unittest.main()

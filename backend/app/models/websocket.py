@@ -6,6 +6,7 @@ import enum
 from app.models.alerts import Alert
 from app.models.signals import SignalState
 from app.models.feeds import FeedStatusData # For feed status updates
+from app.models.traffic import LocationModel # Added for UserSpecificNotification
 
 # --- Specific Payload Models ---
 class RealtimeMetricsUpdate(BaseModel):
@@ -37,6 +38,7 @@ class GeneralNotification(BaseModel):
     title: Optional[str] = Field(None, example="System Update")
     message: str = Field(..., example="System will undergo maintenance tonight from 2 AM to 3 AM UTC.")
     severity: str = Field(default="info", example="info|warning|error", description="Severity of the notification")
+    suggested_actions: Optional[List[str]] = Field(None, example=["Consider rerouting traffic.", "Dispatch emergency services."], description="Optional list of suggested actions related to the notification.")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 class ErrorNotification(BaseModel):
@@ -67,6 +69,16 @@ class NodeCongestionUpdateData(BaseModel):
 class NodeCongestionUpdatePayload(BaseModel):
     nodes: List[NodeCongestionUpdateData] = Field(..., description="List of node congestion data updates.")
 
+class UserSpecificConditionAlert(BaseModel): # Renamed and adjusted
+    user_id: str = Field(..., description="The ID of the user this notification is for.")
+    alert_type: str = Field(..., example="predicted_congestion_on_usual_route", description="Specific type of condition alert for the user.") # Renamed from notification_type
+    title: str = Field(..., example="Congestion Alert on Your Route to Work")
+    message: str = Field(..., example="Heads up! We're seeing unusual congestion on your typical route to work via Main St.")
+    severity: str = Field(default="info", example="info|warning|error", description="Severity of the user-specific alert.") # Added
+    suggested_actions: Optional[List[str]] = Field(None, example=["Consider leaving 15 minutes earlier.", "Check alternative routes."])
+    route_context: Optional[Dict[str, Any]] = Field(None, description="Optional details about the route or location relevant to this alert.") # Renamed from related_location and changed type
+    issued_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 # --- WebSocket Message Wrapper ---
 class WebSocketMessageTypeEnum(str, enum.Enum):
@@ -80,6 +92,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     PREDICTION_ALERT = "prediction_alert"  # New type for predictions
     ALERT_STATUS_UPDATE = "alert_status_update" # For acknowledged, dismissed alerts
     NODE_CONGESTION_UPDATE = "node_congestion_update" # For broadcasting node congestion data
+    USER_SPECIFIC_ALERT = "user_specific_alert" # Renamed from USER_SPECIFIC_NOTIFICATION
     # Add other specific event types as needed
     PONG = "pong" # For keep-alive
     AUTH_SUCCESS = "auth_success"
@@ -96,7 +109,8 @@ class WebSocketMessage(BaseModel):
         GeneralNotification, 
         ErrorNotification,
         AlertStatusUpdatePayload,
-        NodeCongestionUpdatePayload, # Added new payload type
+        NodeCongestionUpdatePayload,
+        UserSpecificConditionAlert, # Updated to new model name
         Dict[str, Any] # For simple payloads like pong or auth status
     ]
     client_id: Optional[str] = Field(None, description="Identifier for a specific client if the message is targeted, otherwise None for broadcast.")
