@@ -279,35 +279,38 @@
   }
 
 
-  /* --- Matrix Card Component Styles (Potentially redundant if using .matrix-glow-card or .simple-matrix-card) --- */
-  /* Consider removing if covered by above card styles or Shadcn mapping. This section had some conflicting variable names. */
-  /*
+  /* --- Matrix Card Component Styles --- */
   .matrix-card {
-    background-color: var(--matrix-panel); // This is hsl(var(--matrix-panel))
-    border: 1px solid var(--matrix-border-color); // This is hsl(var(--border))
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
     transition: transform 0.2s ease;
-    border-radius: var(--radius); // Use theme radius
-    padding: 1.5rem;
+    border-radius: var(--radius);
+    padding: 1.5rem; /* Default padding */
   }
-  .matrix-card--hover {
+
+  .matrix-card:hover {
     transform: translateY(-1px);
   }
-  .matrix-card--default { // This class seems unnecessary
-    transform: translateY(0);
-  }
+
   .matrix-card__title,
-  .matrix-card__icon {
-    // color: var(--matrix-card-color, var(--matrix-text)); // This custom var --matrix-card-color is not defined broadly
-    color: hsl(var(--foreground)); // Default to foreground
+  .matrix-card__icon { /* This class is mainly for color, icon size is handled in component */
+    color: hsl(var(--foreground)); /* Default to foreground */
   }
+
   .matrix-card__content {
     color: hsl(var(--muted-foreground));
   }
-  .matrix-card[data-color-override] { // This is a good pattern for overrides
-    // --matrix-card-color: var(--color-override); // Ensure --color-override is defined or used directly
-    color: var(--color-override-hsl, hsl(var(--primary))); // Example with HSL
+
+  /* For the colorOverride prop */
+  .matrix-card[data-color-override="true"] {
+    border-color: var(--color-override, hsl(var(--border))); /* Fallback to default border */
   }
-  */
+
+  .matrix-card[data-color-override="true"] .matrix-card__title,
+  .matrix-card[data-color-override="true"] .matrix-card__icon {
+     color: var(--color-override, hsl(var(--foreground))); /* Fallback to default foreground */
+  }
+  /* End Matrix Card Component Styles */
 
   /* --- Old styles from original HTML to be integrated or removed --- */
   /* These were very specific to the old HTML structure and might not be needed if using the new component classes */

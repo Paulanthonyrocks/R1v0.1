@@ -4,9 +4,10 @@ import React, { useState, useEffect } from 'react'; // Added useEffect
 // import useSWR from 'swr'; // Removed useSWR
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
-import CongestionNode from '@/components/dashboard/CongestionNode';
+// CongestionNode is now used within NodeCard
 import { BackendCongestionNodeData } from '@/lib/types'; // No longer need AllNodesCongestionResponse from SWR
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
+import NodeCard from '@/components/nodes/NodeCard'; // Import the new NodeCard component
 
 // const fetcher = async (url: string) => { ... }; // Removed fetcher
 
@@ -61,9 +62,9 @@ const NodesPage: React.FC = () => {
 
         {displayError && (
           <div className="flex justify-center items-center h-64">
-            <div className="bg-red-900 border border-red-700 text-red-100 p-4 rounded-md">
-              <p className="text-xl font-semibold">Error Connecting to Node Stream</p>
-              <p>{String(displayError)}</p>
+            <div className="bg-destructive text-destructive-foreground border border-destructive/50 p-4 rounded-md max-w-md w-full">
+              <p className="text-xl font-semibold mb-2">Error Connecting to Node Stream</p>
+              <p className="text-sm">{String(displayError.message || displayError)}</p>
             </div>
           </div>
         )}
@@ -79,20 +80,7 @@ const NodesPage: React.FC = () => {
         {!isLoading && !displayError && filteredNodes && filteredNodes.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {filteredNodes.map((node: BackendCongestionNodeData) => (
-              <div key={node.id} className="bg-matrix-panel p-3 rounded-lg border border-matrix-border-color shadow-md hover:shadow-matrix-green/30 transition-shadow">
-                <CongestionNode
-                  id={node.id}
-                  name={node.name}
-                  value={node.congestion_score ?? 0}
-                  lastUpdated={node.timestamp}
-                />
-                 {/* Optionally display more details from the node data */}
-                 <div className="mt-2 pt-2 border-t border-matrix-border-color/50 text-xs text-matrix-muted-text space-y-0.5">
-                    <p title={`Lat: ${node.latitude}, Lon: ${node.longitude}`}>Coords: {node.latitude.toFixed(3)}, {node.longitude.toFixed(3)}</p>
-                    {node.average_speed !== null && typeof node.average_speed !== 'undefined' && <p>Avg Speed: {node.average_speed.toFixed(1)} km/h</p>}
-                    {node.vehicle_count !== null && typeof node.vehicle_count !== 'undefined' && <p>Vehicles: {node.vehicle_count}</p>}
-                 </div>
-              </div>
+              <NodeCard key={node.id} node={node} />
             ))}
           </div>
         )}
