@@ -7,9 +7,9 @@ import { AnomalyItemProps, AlertData, SeverityLevel } from '@/lib/types'; // Imp
 const severityConfig: Record<SeverityLevel, { color: string; text: string }> = {
   Critical: { color: 'bg-destructive text-destructive-foreground', text: 'Critical' },
   ERROR: { color: 'bg-destructive text-destructive-foreground', text: 'Error' },
-  Warning: { color: 'bg-amber-500 text-black', text: 'Warning' },
-  Anomaly: { color: 'bg-purple-500 text-white', text: 'Anomaly' },
-  INFO: { color: 'bg-blue-500 text-white', text: 'Info' },
+  Warning: { color: 'bg-warning text-warning-foreground', text: 'Warning' },
+  Anomaly: { color: 'bg-accent-anomaly text-accent-anomaly-foreground', text: 'Anomaly' },
+  INFO: { color: 'bg-info text-info-foreground', text: 'Info' },
 };
 
 // Accept the full AlertData object as props

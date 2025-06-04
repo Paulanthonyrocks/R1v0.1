@@ -328,8 +328,17 @@ const AnomaliesPage = () => {
                 <div
                   key={anomaly.id}
                   ref={el => { cardRefs.current[anomaly.id] = el; }} // Assign ref for scrolling
-                  className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-matrix-green shadow-lg' : ''}`}
+                  className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-matrix-green shadow-lg' : ''} focus-visible:ring-2 focus-visible:ring-primary cursor-pointer`}
                   onClick={() => handleCardClick(anomaly)} // Open modal on card click
+                  onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleCardClick(anomaly);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View details for ${anomaly.type}: ${anomaly.description.substring(0, 50)}${anomaly.description.length > 50 ? '...' : ''}`}
                 >
                   <MatrixCard
                     title={anomaly.type}

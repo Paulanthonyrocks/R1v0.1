@@ -70,6 +70,14 @@
     /* --- Shadows --- */
     --shadow-color: 0 0% 0%;
     --shadow-intensity: 0.2;
+
+    /* Semantic Colors for Anomalies/Alerts */
+    --warning: 39 90% 50%; /* Deep Amber */
+    --warning-foreground: 0 0% 10%; /* Darker for contrast on amber, almost black */
+    --accent-anomaly: 270 70% 60%; /* Vibrant Purple */
+    --accent-anomaly-foreground: 0 0% 100%; /* White */
+    --info: 210 70% 55%; /* Noticeable Blue */
+    --info-foreground: 0 0% 100%; /* White */
   }
 
   /* --- Base Body Styles --- */

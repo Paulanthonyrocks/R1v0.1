@@ -7,6 +7,7 @@ import { auth } from '@/lib/firebase'; // Assuming you have a firebase.ts file e
 import { signInWithEmailAndPassword, } from 'firebase/auth';
 // FirebaseError should be imported from 'firebase/app' - Note: FirebaseError is typically imported from 'firebase/auth' or 'firebase/app'. Let's check the actual export location.
 import { FirebaseError } from 'firebase/app';
+import MatrixButton from '@/components/MatrixButton'; // Add this import
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -86,14 +87,14 @@ const LoginPage: React.FC = () => {
               required
             />
           </div>
-          {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-          <button
+          {error && <p className="text-destructive text-sm mb-4">{error}</p>}
+          <MatrixButton
             type="submit"
-            className="matrix-button w-full" // Using matrix-button for styling
+            className="w-full"
             disabled={loading}
           >
             {loading ? 'Logging In...' : 'Login'}
-          </button>
+          </MatrixButton>
         </form>
         <p className="text-center text-sm mt-4">
           Don&apos;t have an account?{' '}

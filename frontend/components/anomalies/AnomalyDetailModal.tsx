@@ -1,23 +1,7 @@
 // frontend/components/anomalies/AnomalyDetailModal.tsx
-import React from 'react';
-import MatrixButton from "@/components/MatrixButton"; // Assuming this path is correct
-
-// Define Anomaly type here or import from a central types file
-// For this task, let's assume it's moved here for now.
-export type LocationTuple = [number, number];
-
-export interface Anomaly {
-  id: number;
-  type: string;
-  severity: "low" | "medium" | "high";
-  description: string;
-  timestamp: string;
-  location: LocationTuple;
-  resolved: boolean;
-  details?: string;
-  reportedBy?: string;
-  source?: 'api' | 'websocket';
-}
+import React, { useEffect, useRef } from 'react';
+import MatrixButton from "@/components/MatrixButton";
+import { Anomaly } from '@/lib/types'; // Ensure Anomaly (and thus LocationTuple) is imported
 
 interface AnomalyDetailModalProps {
   anomaly: Anomaly | null;
@@ -27,20 +11,70 @@ interface AnomalyDetailModalProps {
 const AnomalyDetailModal: React.FC<AnomalyDetailModalProps> = ({ anomaly, onClose }) => {
   if (!anomaly) return null;
 
+  const modalTitleId = `anomaly-modal-title-${anomaly.id}`;
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (anomaly) {
+      previousFocusRef.current = document.activeElement as HTMLElement;
+      modalRef.current?.focus(); // Focus the modal container
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          onClose();
+        }
+        if (event.key === 'Tab') {
+          const focusableElements = modalRef.current?.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusableElements && focusableElements.length > 0) {
+            const firstElement = focusableElements[0] as HTMLElement;
+            const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
+
+            if (event.shiftKey) { // Shift + Tab
+              if (document.activeElement === firstElement) {
+                lastElement.focus();
+                event.preventDefault();
+              }
+            } else { // Tab
+              if (document.activeElement === lastElement) {
+                firstElement.focus();
+                event.preventDefault();
+              }
+            }
+          }
+        }
+      };
+
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        previousFocusRef.current?.focus(); // Restore focus on close
+      };
+    }
+  }, [anomaly, onClose]);
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-      <div className="bg-matrix-panel p-6 rounded-lg shadow-xl max-w-lg w-full text-matrix border border-matrix-border">
+      <div
+        ref={modalRef}
+        tabIndex={-1} // Make the modal container focusable
+        className="bg-matrix-panel p-6 rounded-lg shadow-xl max-w-lg w-full text-matrix border border-matrix-border focus:outline-none" // Added focus:outline-none for the container
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={modalTitleId}
+      >
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold uppercase">{anomaly.type} - Details</h2>
-          {/* Assuming MatrixButton can accept children or a text prop for 'Close' */}
+          <h2 id={modalTitleId} className="text-xl font-bold uppercase">{anomaly.type} - Details</h2>
           <MatrixButton onClick={onClose} className="bg-card hover:bg-card/80">Close</MatrixButton>
         </div>
         <div className="space-y-2 text-sm">
           <p><span className="font-semibold">ID:</span> {anomaly.id}</p>
           <p><span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-             anomaly.severity === "high" ? "text-destructive" : // Theme-aligned
-             anomaly.severity === "medium" ? "text-yellow-500" : // Theme-aligned (standard Tailwind orange/yellow)
-             "text-green-500" // Theme-aligned (standard Tailwind green)
+             anomaly.severity === "high" ? "text-destructive" :
+             anomaly.severity === "medium" ? "text-yellow-500" :
+             "text-green-500"
           }`}>{anomaly.severity}</span></p>
           <p><span className="font-semibold">Description:</span> {anomaly.description}</p>
           <p><span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}</p>

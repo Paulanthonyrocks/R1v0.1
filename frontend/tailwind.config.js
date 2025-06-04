@@ -58,6 +58,18 @@ const config = {
                     light: 'hsl(var(--matrix-light))',
                     dark: 'hsl(var(--matrix-dark))',
                 },
+                warning: { // New semantic color
+                  DEFAULT: "hsl(var(--warning))",
+                  foreground: "hsl(var(--warning-foreground))",
+                },
+                'accent-anomaly': { // New semantic color with hyphen
+                  DEFAULT: "hsl(var(--accent-anomaly))",
+                  foreground: "hsl(var(--accent-anomaly-foreground))",
+                },
+                info: { // New semantic color
+                  DEFAULT: "hsl(var(--info))",
+                  foreground: "hsl(var(--info-foreground))",
+                },
             },
             borderRadius: {
                 lg: "var(--radius)",

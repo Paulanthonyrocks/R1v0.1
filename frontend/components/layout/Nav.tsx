@@ -23,7 +23,7 @@ export default function Nav() {
         <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors">Route One</Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="text-foreground hover:text-primary focus:outline-none">
+            <button className="text-foreground hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 focus:ring-offset-background rounded">
               Menu
             </button>
           </DropdownMenuTrigger>
