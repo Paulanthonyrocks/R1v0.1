@@ -5,12 +5,14 @@ import json # For pretty printing dicts in logs
 from datetime import datetime, timedelta # Added datetime, timedelta
 
 from app.tasks.prediction_scheduler import PredictionScheduler
-from app.services.personalized_routing_service import PersonalizedRoutingService # CommonTravelPattern is defined here
+from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern # Ensure CommonTravelPattern is directly importable or accessed via service
 from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
-from app.models.websocket import UserSpecificConditionAlert # Updated model import
+from app.models.websocket import UserSpecificConditionAlert
 
 logger = logging.getLogger(__name__)
+
+PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD = 60 # Define constant
 
 class AgentCore:
     def __init__(
@@ -24,9 +26,48 @@ class AgentCore:
         """
         self.prediction_scheduler = prediction_scheduler
         self.personalized_routing_service = personalized_routing_service
-        self.analytics_service = analytics_service # Store analytics_service
-        self.logger = logger # Use the module-level logger, or assign one if passed
+        self.analytics_service = analytics_service
+        self.logger = logger
         logger.info("AgentCore initialized with PredictionScheduler, PersonalizedRoutingService, and AnalyticsService.")
+
+    async def _determine_next_travel_prediction_time(self, pattern: CommonTravelPattern, current_dt: datetime) -> Optional[datetime]:
+        """
+        Determines the next relevant future time to make a prediction for a given travel pattern.
+        Looks for the next occurrence of the pattern's time_of_day_group on a valid day_of_week,
+        at least 1 hour in the future.
+        """
+        self.logger.debug(f"Determining next travel time for pattern {pattern.pattern_id} (Time: {pattern.time_of_day_group}, Days: {pattern.days_of_week}) from current_dt: {current_dt}")
+
+        target_hour = -1
+        time_group = pattern.time_of_day_group.lower()
+        if "morning" in time_group: target_hour = 8 # Example: 8 AM
+        elif "midday" in time_group: target_hour = 12 # Example: 12 PM
+        elif "afternoon" in time_group: target_hour = 15 # Example: 3 PM
+        elif "evening" in time_group: target_hour = 17 # Example: 5 PM
+        elif "night" in time_group: target_hour = 21 # Example: 9 PM
+        else:
+            self.logger.warning(f"Unknown time_of_day_group '{pattern.time_of_day_group}' for pattern {pattern.pattern_id}. Cannot determine target hour.")
+            return None
+
+        current_date = current_dt.date()
+        for i in range(8): # Check today and next 7 days
+            next_date_to_check = current_date + timedelta(days=i)
+            if next_date_to_check.weekday() in pattern.days_of_week:
+                potential_prediction_dt = datetime(
+                    next_date_to_check.year,
+                    next_date_to_check.month,
+                    next_date_to_check.day,
+                    target_hour, 0, 0,
+                    tzinfo=current_dt.tzinfo # Preserve timezone if current_dt is aware
+                )
+
+                # Prediction must be for at least 1 hour in the future
+                if potential_prediction_dt > current_dt + timedelta(hours=1):
+                    self.logger.info(f"Determined next prediction time for pattern {pattern.pattern_id}: {potential_prediction_dt}")
+                    return potential_prediction_dt
+
+        self.logger.info(f"No suitable future prediction time found within 7 days for pattern {pattern.pattern_id}.")
+        return None
 
     async def run_decision_cycle(self, sample_user_id: str = "user_agent_test_123"):
         """
@@ -198,104 +239,98 @@ class AgentCore:
         else:
             self.logger.info("AgentCore action: System status within acceptable parameters, no new global operational alert issued by AgentCore.")
 
-        # --- User-Specific Proactive Notifications ---
-        self.logger.info("Starting user-specific proactive notification checks...")
-        sample_user_ids_for_proactive_alerts = ["user_agent_test_123", "another_sample_user_id"] # Example user IDs
+        # --- User-Specific Proactive Notifications (Predictive) ---
+        self.logger.info("Starting user-specific predictive alert checks...")
+        # sample_user_ids_for_proactive_alerts = ["user_agent_test_123", "another_sample_user_id"] # Example user IDs
+        # Use the sample_user_id passed to the method for focused testing, or expand later
+        sample_user_ids_for_proactive_alerts = [sample_user_id]
 
-        current_time = datetime.now()
-        current_weekday = current_time.weekday() # Monday=0, Sunday=6
+        current_time = datetime.now() # Consider timezone: datetime.now(timezone.utc)
 
         for user_id in sample_user_ids_for_proactive_alerts:
-            self.logger.info(f"Processing proactive notifications for user: {user_id}")
+            self.logger.info(f"Processing predictive alerts for user: {user_id}")
             try:
                 common_patterns = await self.personalized_routing_service.get_user_common_travel_patterns(
-                    user_id=user_id, top_n=3
+                    user_id=user_id, top_n=3 # Get top 3 patterns
                 )
 
                 if not common_patterns:
-                    self.logger.info(f"No common travel patterns found for user {user_id}.")
+                    self.logger.info(f"No common travel patterns found for user {user_id} to make predictions.")
                     continue
 
                 for pattern in common_patterns:
-                    self.logger.debug(f"Checking pattern for user {user_id}: {pattern.pattern_id} - {pattern.time_of_day_group}")
+                    self.logger.debug(f"Evaluating pattern for user {user_id}: ID {pattern.pattern_id}, To: {pattern.end_location_summary.get('name', 'Unknown Dest')}, Time Group: {pattern.time_of_day_group}")
 
-                    # Determine if pattern is relevant now
-                    is_relevant_now = False
-                    time_group_parts = pattern.time_of_day_group.split('_') # e.g., "morning_weekday"
-                    pattern_time = time_group_parts[0]
-                    pattern_day_type = time_group_parts[1] if len(time_group_parts) > 1 else "any" # any day type if not specified
+                    prediction_target_time = await self._determine_next_travel_prediction_time(pattern, current_time)
 
-                    # Simple time matching logic
-                    current_hour = current_time.hour
-                    if pattern_time == "morning" and not (6 <= current_hour < 10): continue
-                    if pattern_time == "midday" and not (10 <= current_hour < 16): continue
-                    if pattern_time == "evening" and not (16 <= current_hour < 20): continue
-                    # Add more specific night checks if needed, e.g. night_early (20-24), night_late (0-6)
+                    if not prediction_target_time:
+                        self.logger.debug(f"No suitable future prediction time for pattern {pattern.pattern_id} for user {user_id}.")
+                        continue
 
-                    # Day matching logic
-                    if pattern_day_type == "weekday" and not (0 <= current_weekday <= 4): continue # Monday to Friday
-                    if pattern_day_type == "weekend" and not (5 <= current_weekday <= 6): continue # Saturday, Sunday
-                    # Also check against pattern.days_of_week if more granularity is needed (e.g. pattern only on MWF)
-                    if not (current_weekday in pattern.days_of_week): # More precise check
-                         self.logger.debug(f"Pattern {pattern.pattern_id} for user {user_id} not active on day {current_weekday}. Active days: {pattern.days_of_week}")
-                         continue
+                    dest_summary = pattern.end_location_summary
+                    if not dest_summary or not isinstance(dest_summary.get("latitude"), (float, int)) or not isinstance(dest_summary.get("longitude"), (float, int)):
+                        self.logger.warning(f"Pattern {pattern.pattern_id} for user {user_id} has invalid destination summary: {dest_summary}. Skipping prediction.")
+                        continue
 
-                    is_relevant_now = True # If all checks pass
+                    destination_location_model = LocationModel(
+                        latitude=dest_summary["latitude"],
+                        longitude=dest_summary["longitude"],
+                        name=dest_summary.get("name")
+                    )
 
-                    if is_relevant_now:
-                        self.logger.info(f"Pattern {pattern.pattern_id} is relevant now for user {user_id}.")
+                    self.logger.info(f"Requesting incident likelihood prediction for user {user_id}, pattern {pattern.pattern_id} (dest: {destination_location_model.name}), target time: {prediction_target_time}")
+                    prediction_result = await self.analytics_service.predict_incident_likelihood(
+                        location=destination_location_model,
+                        prediction_time=prediction_target_time
+                    )
 
-                        # Simplified condition: If general system congestion is HIGH, issue a warning for this user's pattern
-                        if system_kpis.get("overall_congestion_level") in ["HIGH", "SEVERE"]:
-                            notification_title = "Potential Congestion on Your Usual Route"
-                            pattern_start_name = pattern.start_location_summary.get('name', 'your usual start area')
-                            pattern_end_name = pattern.end_location_summary.get('name', 'your usual destination')
+                    if prediction_result and prediction_result.get("likelihood_score_percent", 0) > PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD:
+                        score = prediction_result["likelihood_score_percent"]
+                        dest_name = destination_location_model.name or f"area around ({destination_location_model.latitude:.2f}, {destination_location_model.longitude:.2f})"
+                        time_formatted = prediction_target_time.strftime("%I:%M %p on %A, %b %d")
 
-                            notification_message = (
-                                f"Hi {user_id}, general traffic congestion is currently {system_kpis.get('overall_congestion_level')}. "
-                                f"This might affect your usual travel from {pattern_start_name} to {pattern_end_name} "
-                                f"during this {pattern.time_of_day_group.replace('_', ' ')} period."
-                            )
-                            suggested_actions_list = [
-                                "Consider checking real-time traffic conditions before you leave.",
-                                "You might want to explore alternative routes or adjust your departure time."
-                            ]
+                        title = f"Heads-up: Potential Disruption Near {dest_name}"
+                        message = (
+                            f"Hi {user_id}, we predict a {score:.0f}% chance of incidents or significant disruptions "
+                            f"near your common destination '{dest_name}' around {time_formatted}. "
+                            f"This is based on your travel pattern: from {pattern.start_location_summary.get('name', 'usual start')} "
+                            f"to {dest_name} during {pattern.time_of_day_group.replace('_', ' ')}."
+                        )
+                        actions = [
+                            "Check live traffic conditions closer to your travel time.",
+                            "Consider if alternative routes or departure times might be beneficial.",
+                            "Stay informed about local advisories."
+                        ]
 
-                            # Construct related_location from pattern's start_location_summary
-                            # Ensure that start_location_summary has 'latitude' and 'longitude'
-                            related_loc_data = pattern.start_location_summary
-                            related_location_model = None
-                            if 'latitude' in related_loc_data and 'longitude' in related_loc_data:
-                                try:
-                                   related_location_model = LocationModel(**related_loc_data)
-                                except Exception as loc_e:
-                                    self.logger.warning(f"Could not create LocationModel from pattern start_location_summary for user {user_id}: {loc_e}")
+                        alert_payload = UserSpecificConditionAlert(
+                            user_id=user_id,
+                            alert_type="predicted_disruption_on_common_route",
+                            title=title,
+                            message=message,
+                            severity="warning", # Or "info" depending on likelihood
+                            suggested_actions=actions,
+                            route_context={
+                                "pattern_id": pattern.pattern_id,
+                                "start_location_summary": pattern.start_location_summary,
+                                "end_location_summary": pattern.end_location_summary,
+                                "time_of_day_group": pattern.time_of_day_group,
+                                "predicted_for_time": prediction_target_time.isoformat(),
+                                "likelihood_score_percent": score
+                            }
+                        )
+                        await self.analytics_service.send_user_specific_alert(
+                            user_id=user_id,
+                            notification_model=alert_payload
+                        )
+                        self.logger.info(f"Sent predictive alert to user {user_id} for pattern {pattern.pattern_id} (destination: {dest_name}, score: {score}%).")
+                    else:
+                        self.logger.info(f"Likelihood for pattern {pattern.pattern_id} (user {user_id}, dest: {destination_location_model.name}) is "
+                                         f"{prediction_result.get('likelihood_score_percent', 'N/A')}%. No alert sent.")
 
-                            # Use the new UserSpecificConditionAlert model
-                            user_alert_payload = UserSpecificConditionAlert(
-                                user_id=user_id,
-                                alert_type="predicted_congestion_on_usual_route", # Maps to old notification_type
-                                title=notification_title,
-                                message=notification_message,
-                                severity="warning", # Example severity
-                                suggested_actions=suggested_actions_list,
-                                route_context=related_location_model.model_dump() if related_location_model else None # Convert LocationModel to dict
-                            )
+            except Exception as e_user_predict_notify:
+                self.logger.error(f"Error during predictive alert processing for user {user_id}: {e_user_predict_notify}", exc_info=True)
 
-                            await self.analytics_service.send_user_specific_alert( # Updated method name
-                                user_id=user_id,
-                                notification_model=user_alert_payload
-                            )
-                            self.logger.info(f"Sent user-specific congestion alert for user {user_id} regarding pattern {pattern.pattern_id}.")
-                        else:
-                            self.logger.info(f"System congestion not high enough to warrant proactive alert for user {user_id}, pattern {pattern.pattern_id}.")
-                    # else:
-                        # self.logger.debug(f"Pattern {pattern.pattern_id} for user {user_id} not relevant at current time/day.")
-
-            except Exception as e_user_notify:
-                self.logger.error(f"Error during user-specific notification processing for user {user_id}: {e_user_notify}", exc_info=True)
-
-        self.logger.info("User-specific proactive notification checks completed.")
+        self.logger.info("User-specific predictive alert checks completed.")
         logger.info("AgentCore decision cycle completed.")
 
 # Example usage (for illustration, not part of the class itself)

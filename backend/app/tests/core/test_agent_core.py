@@ -5,10 +5,11 @@ import json # For checking log messages with JSON
 
 from app.core.agent_core import AgentCore
 from app.tasks.prediction_scheduler import PredictionScheduler
-from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern # Import CommonTravelPattern
+from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern
 from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
-from app.models.websocket import UserSpecificConditionAlert # Import for new tests
+from app.models.websocket import UserSpecificConditionAlert
+from datetime import datetime, timedelta # Ensure datetime and timedelta are imported
 
 class TestAgentCore(unittest.TestCase):
 
@@ -31,7 +32,8 @@ class TestAgentCore(unittest.TestCase):
         self.mock_analytics_service.get_current_system_kpis_summary.return_value = self.mock_kpi_summary_default
         self.mock_analytics_service.get_critical_alert_summary = AsyncMock(return_value=self.mock_alert_summary_default)
         self.mock_analytics_service.broadcast_operational_alert = AsyncMock()
-        self.mock_analytics_service.send_user_specific_alert = AsyncMock() # For new tests
+        self.mock_analytics_service.send_user_specific_alert = AsyncMock()
+        self.mock_analytics_service.predict_incident_likelihood = AsyncMock() # Added for new predictive logic
 
         # Mock for PersonalizedRoutingService method used in user-specific alerts
         self.mock_personalized_routing_service.get_user_common_travel_patterns = AsyncMock(return_value=[]) # Default to no patterns
@@ -244,6 +246,73 @@ TestAgentCore.test_run_decision_cycle_no_locations = async_test(TestAgentCore.te
 TestAgentCore.test_run_decision_cycle_routing_suggestion_is_none = async_test(TestAgentCore.test_run_decision_cycle_routing_suggestion_is_none)
 
 
+# --- Tests for _determine_next_travel_prediction_time ---
+@patch('app.core.agent_core.datetime') # Mock datetime within the agent_core module where it's used by the method
+async def test_determine_next_travel_prediction_time_logic(self, mock_core_datetime_module): # mock_core_datetime_module is the mocked datetime in agent_core
+    # Scenario 1: Pattern is for "morning_weekday", current time is Sunday evening
+    current_time_sunday_eve = datetime(2023, 1, 1, 20, 0, 0) # Sunday
+    # mock_core_datetime_module.now.return_value = current_time_sunday_eve # Not needed if passing current_dt directly
+
+    pattern_mw = CommonTravelPattern(
+        pattern_id="p_mw", user_id="u1", start_location_summary={}, end_location_summary={},
+        time_of_day_group="morning_weekday", days_of_week=[0, 1, 2, 3, 4], frequency_score=1.0
+    )
+    expected_time_mw = datetime(2023, 1, 2, 8, 0, 0) # Next day (Monday) at 8 AM
+    result_mw = await self.agent_core._determine_next_travel_prediction_time(pattern_mw, current_time_sunday_eve)
+    self.assertEqual(result_mw, expected_time_mw)
+
+    # Scenario 2: Pattern is for "evening_weekday", current time is Monday morning
+    current_time_monday_morn = datetime(2023, 1, 2, 9, 0, 0) # Monday
+    pattern_ew = CommonTravelPattern(
+        pattern_id="p_ew", user_id="u1", start_location_summary={}, end_location_summary={},
+        time_of_day_group="evening_weekday", days_of_week=[0, 1, 2, 3, 4], frequency_score=1.0
+    )
+    expected_time_ew = datetime(2023, 1, 2, 17, 0, 0) # Same day (Monday) at 5 PM
+    result_ew = await self.agent_core._determine_next_travel_prediction_time(pattern_ew, current_time_monday_morn)
+    self.assertEqual(result_ew, expected_time_ew)
+
+    # Scenario 3: Pattern is "morning_weekday", current time is Monday midday (too close for today, should be next day)
+    current_time_monday_midday = datetime(2023, 1, 2, 12, 0, 0) # Monday noon
+    expected_time_tue_morn = datetime(2023, 1, 3, 8, 0, 0) # Tuesday 8 AM
+    result_tue_morn = await self.agent_core._determine_next_travel_prediction_time(pattern_mw, current_time_monday_midday)
+    self.assertEqual(result_tue_morn, expected_time_tue_morn)
+
+    # Scenario 4: Pattern is "weekend_afternoon", current time is Friday
+    current_time_friday_morn = datetime(2023, 1, 6, 10, 0, 0) # Friday
+    pattern_wea = CommonTravelPattern(
+        pattern_id="p_wea", user_id="u1", start_location_summary={}, end_location_summary={},
+        time_of_day_group="afternoon_weekend", days_of_week=[5, 6], frequency_score=1.0
+    )
+    expected_time_sat_aft = datetime(2023, 1, 7, 15, 0, 0) # Saturday 3 PM (target_hour for afternoon is 15)
+    result_sat_aft = await self.agent_core._determine_next_travel_prediction_time(pattern_wea, current_time_friday_morn)
+    self.assertEqual(result_sat_aft, expected_time_sat_aft)
+
+    # Scenario 5: Target prediction time is less than 1 hour in the future
+    current_time_just_before = datetime(2023, 1, 2, 7, 30, 0) # Monday 7:30 AM, pattern for Mon 8 AM
+    # Expected: Tuesday 8 AM, because Mon 8 AM is not > (Mon 7:30 AM + 1 hr)
+    expected_time_skip_today = datetime(2023, 1, 3, 8, 0, 0)
+    result_skip_today = await self.agent_core._determine_next_travel_prediction_time(pattern_mw, current_time_just_before)
+    self.assertEqual(result_skip_today, expected_time_skip_today)
+
+    # Scenario 6: No matching days in the next 7 days
+    pattern_no_match_days = CommonTravelPattern(
+        pattern_id="p_nomatch", user_id="u1", start_location_summary={}, end_location_summary={},
+        time_of_day_group="morning_weekday", days_of_week=[], frequency_score=1.0
+    )
+    result_no_match = await self.agent_core._determine_next_travel_prediction_time(pattern_no_match_days, current_time_sunday_eve)
+    self.assertIsNone(result_no_match)
+
+    # Scenario 7: Pattern is today, but target hour already passed
+    current_time_monday_eve = datetime(2023, 1, 2, 20, 0, 0) # Monday 8 PM
+    # Pattern for Monday morning (target hour 8 AM)
+    # Expected: Next Monday, Jan 9, 2023, 8 AM
+    expected_next_week_morn = datetime(2023, 1, 9, 8, 0, 0)
+    result_next_week_morn = await self.agent_core._determine_next_travel_prediction_time(pattern_mw, current_time_monday_eve)
+    self.assertEqual(result_next_week_morn, expected_next_week_morn)
+
+TestAgentCore.test_determine_next_travel_prediction_time_logic = async_test(test_determine_next_travel_prediction_time_logic)
+
+
 @patch('app.core.agent_core.logger')
 async def test_run_decision_cycle_operational_alert_with_specific_suggested_actions(self, mock_agent_logger):
     # Scenario: Severe congestion based on very low speed
@@ -276,60 +345,61 @@ async def test_run_decision_cycle_operational_alert_with_specific_suggested_acti
 TestAgentCore.test_run_decision_cycle_operational_alert_with_specific_suggested_actions = async_test(test_run_decision_cycle_operational_alert_with_specific_suggested_actions)
 
 
-@patch('app.core.agent_core.logger')
-async def test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern(self, mock_agent_logger):
-    sample_user_id = "user_with_patterns_ congested"
+# --- Tests for Predictive User-Specific Alerts ---
 
-    # Mock common travel patterns
+@patch('app.core.agent_core.logger')
+async def test_run_decision_cycle_sends_predictive_user_alert_high_likelihood(self, mock_agent_logger): # Renamed
+    sample_user_id = "user_predictive_alert"
     mock_loc_summary_start = {"latitude": 34.0, "longitude": -118.0, "name": "Home"}
     mock_loc_summary_end = {"latitude": 34.1, "longitude": -118.1, "name": "Work"}
-    common_patterns = [
-        CommonTravelPattern(
-            pattern_id="p1", user_id=sample_user_id,
-            start_location_summary=mock_loc_summary_start,
-            end_location_summary=mock_loc_summary_end,
-            time_of_day_group="morning_weekday",
-            days_of_week=[0,1,2,3,4], # Mon-Fri
-            frequency_score=10.0
-        )
-    ]
-    self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = common_patterns
+    test_pattern = CommonTravelPattern(
+        pattern_id="p_predict", user_id=sample_user_id,
+        start_location_summary=mock_loc_summary_start, end_location_summary=mock_loc_summary_end,
+        time_of_day_group="morning_weekday", days_of_week=[0,1,2,3,4], frequency_score=5.0
+    )
+    self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = [test_pattern]
 
-    # Mock high system congestion
-    high_congestion_kpis = {"overall_congestion_level": "HIGH", "average_speed_kmh": 30}
-    self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
-    self.mock_analytics_service.get_critical_alert_summary.return_value = self.mock_alert_summary_default # No critical alerts
+    # Mock _determine_next_travel_prediction_time to return a fixed future time
+    # Patching the instance method for this specific test
+    fixed_future_time = datetime.now() + timedelta(hours=3) # Ensure this is truly in the future for the test
+    # If AgentCore.datetime.now() is patched, ensure fixed_future_time is relative to that mocked 'now'
 
-    # Mock current time to be Monday 8 AM (to match pattern)
-    with patch('app.core.agent_core.datetime') as mock_datetime:
-        mock_datetime.now.return_value = datetime(2023, 1, 2, 8, 0, 0) # A Monday 8 AM
-        mock_datetime.utcnow.return_value = datetime(2023, 1, 2, 8, 0, 0) # If utcnow is used
+    with patch.object(self.agent_core, '_determine_next_travel_prediction_time', new_callable=AsyncMock) as mock_determine_time:
+        mock_determine_time.return_value = fixed_future_time
+
+        # Mock predict_incident_likelihood to return high likelihood
+        high_likelihood_prediction = {"likelihood_score_percent": 75, "details": "High chance of delays"}
+        self.mock_analytics_service.predict_incident_likelihood.return_value = high_likelihood_prediction
 
         await self.agent_core.run_decision_cycle(sample_user_id=sample_user_id)
 
-    self.mock_analytics_service.send_user_specific_alert.assert_awaited_once()
-    args, kwargs = self.mock_analytics_service.send_user_specific_alert.call_args
+        mock_determine_time.assert_awaited_once_with(test_pattern, ANY) # ANY for current_time
 
-    self.assertEqual(kwargs['user_id'], sample_user_id)
-    notification_payload: UserSpecificConditionAlert = kwargs['notification_model']
+        # Verify predict_incident_likelihood was called with the correct LocationModel for end_location
+        self.mock_analytics_service.predict_incident_likelihood.assert_awaited_once()
+        call_args_pred = self.mock_analytics_service.predict_incident_likelihood.call_args[1] # kwargs
+        self.assertIsInstance(call_args_pred['location'], LocationModel)
+        self.assertEqual(call_args_pred['location'].latitude, mock_loc_summary_end['latitude'])
+        self.assertEqual(call_args_pred['location'].longitude, mock_loc_summary_end['longitude'])
+        self.assertEqual(call_args_pred['prediction_time'], fixed_future_time)
 
-    self.assertIsInstance(notification_payload, UserSpecificConditionAlert)
-    self.assertEqual(notification_payload.user_id, sample_user_id)
-    self.assertEqual(notification_payload.alert_type, "predicted_congestion_on_usual_route")
-    self.assertEqual(notification_payload.severity, "warning")
-    self.assertIn("general traffic congestion is currently HIGH", notification_payload.message)
-    self.assertIn("Home", notification_payload.message) # From pattern start_location_summary.name
-    self.assertIn("Work", notification_payload.message) # From pattern end_location_summary.name
-    self.assertIsNotNone(notification_payload.suggested_actions)
-    self.assertTrue(len(notification_payload.suggested_actions) > 0)
-    self.assertIsNotNone(notification_payload.route_context)
-    self.assertEqual(notification_payload.route_context, mock_loc_summary_start) # Check if it's start_location_summary
+        self.mock_analytics_service.send_user_specific_alert.assert_awaited_once()
+        args, kwargs = self.mock_analytics_service.send_user_specific_alert.call_args
+        self.assertEqual(kwargs['user_id'], sample_user_id)
+        payload: UserSpecificConditionAlert = kwargs['notification_model']
+        self.assertEqual(payload.alert_type, "predicted_disruption_on_common_route")
+        self.assertEqual(payload.severity, "warning")
+        self.assertIn("75%", payload.message)
+        self.assertIn(mock_loc_summary_end["name"], payload.message)
+        self.assertIsNotNone(payload.route_context)
+        self.assertEqual(payload.route_context["pattern_id"], "p_predict")
+        self.assertEqual(payload.route_context["likelihood_score_percent"], 75)
 
-TestAgentCore.test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern = async_test(test_run_decision_cycle_sends_user_specific_alert_on_high_congestion_for_common_pattern)
+TestAgentCore.test_run_decision_cycle_sends_predictive_user_alert_high_likelihood = async_test(test_run_decision_cycle_sends_predictive_user_alert_high_likelihood)
 
 
 @patch('app.core.agent_core.logger')
-async def test_run_decision_cycle_no_user_specific_alert_if_low_congestion(self, mock_agent_logger):
+async def test_run_decision_cycle_no_predictive_user_alert_low_likelihood(self, mock_agent_logger): # Renamed
     sample_user_id = "user_low_congestion"
     common_patterns = [CommonTravelPattern(pattern_id="p1", user_id=sample_user_id, start_location_summary={"name":"H"}, end_location_summary={"name":"W"}, time_of_day_group="morning_weekday", days_of_week=[0,1,2,3,4], frequency_score=5.0)]
     self.mock_personalized_routing_service.get_user_common_travel_patterns.return_value = common_patterns
