@@ -1,101 +1,63 @@
-import React, { ButtonHTMLAttributes, CSSProperties } from 'react';
+// frontend/components/MatrixButton.tsx
+import React, { ButtonHTMLAttributes } from 'react';
+import { cn } from '@/lib/utils'; // Ensure this path is correct
 
 interface MatrixButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  backgroundColor?: string;
-  textColor?: string;
   size?: 'small' | 'medium' | 'large';
+  className?: string;
+  // Consider adding a 'variant' prop for different styles like 'outline', 'destructive' in the future
 }
 
 const MatrixButton: React.FC<MatrixButtonProps> = ({
   children,
-  backgroundColor = 'hsl(var(--matrix))',
-  textColor = 'hsl(var(--matrix-bg))',
+  className,
   size = 'medium',
   disabled,
-  style,
   ...props
 }) => {
-  let padding: string;
-  let fontSize: string;
-
-  switch (size) {
-    case 'small':
-      padding = '0.2rem 0.5rem';
-      fontSize = '0.8rem';
-      break;
-    case 'large':
-      padding = '0.8rem 1.5rem';
-      fontSize = '1.2rem';
-      break;
-    default:
-      padding = '0.5rem 1rem';
-      fontSize = '1rem';
-      break;
-  }
-
-  const buttonStyle: CSSProperties = {
-    backgroundColor: backgroundColor,
-    color: textColor,
-    padding: padding,
-    fontSize: fontSize,
-    border: '1px solid hsl(var(--matrix-border-color))',
-    borderRadius: '4px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontFamily: 'var(--font-mono)',
-    textTransform: 'uppercase',
-    fontWeight: '300',
-    transition: 'background-color 0.2s, border-color 0.2s',
-    ...style,
+  const sizeClasses = {
+    small: 'px-2 py-1 text-xs',         // Original: padding = '0.2rem 0.5rem'; fontSize = '0.8rem';
+    medium: 'px-4 py-2 text-sm',        // Original: padding = '0.5rem 1rem'; fontSize = '1rem'; (adjusted to common Tailwind text-sm)
+    large: 'px-6 py-3 text-base',       // Original: padding = '0.8rem 1.5rem'; fontSize = '1.2rem'; (adjusted to common Tailwind text-base)
   };
 
-  const hoverStyle: CSSProperties = {
-    backgroundColor: `hsl(var(--matrix-light))`,
-    borderColor: `hsl(var(--matrix-light))`,
-  };
+  // Base styles inspired by original inline styles and typical button requirements
+  // Also aligning with .matrix-button from globals.css where it makes sense (e.g., font, uppercase)
+  const baseStyle = cn(
+    "font-matrix", // Original: fontFamily: 'var(--font-mono)' -> Tailwind equivalent is font-matrix if defined
+    "uppercase",
+    "font-light", // Original: fontWeight: '300'
+    "rounded",    // Original: borderRadius: '4px' -> Tailwind 'rounded' is 0.25rem (4px)
+    "border",
+    "transition-colors duration-200", // Original: transition: 'background-color 0.2s, border-color 0.2s',
+    "focus:outline-none",
+    "disabled:cursor-not-allowed"
+  );
 
-  const focusStyle: CSSProperties = {
-    outline: 'none',
-    boxShadow: `0 0 0 2px hsl(var(--matrix-light))`,
-  };
-
-  const disabledStyle: CSSProperties = {
-    backgroundColor: `hsl(var(--matrix-muted-text))`,
-    borderColor: `hsl(var(--matrix-muted-text))`,
-    color: `hsl(var(--matrix-dark))`,
-    cursor: 'not-allowed',
-  };
+  // Default "Matrix" theme variant (Green button)
+  // Matches original defaults: backgroundColor = 'hsl(var(--matrix))', textColor = 'hsl(var(--matrix-bg))'
+  // Hover: backgroundColor = `hsl(var(--matrix-light))`, borderColor = `hsl(var(--matrix-light))`
+  // Focus: boxShadow = `0 0 0 2px hsl(var(--matrix-light))`
+  // Disabled: backgroundColor = `hsl(var(--matrix-muted-text))`, borderColor = `hsl(var(--matrix-muted-text))`, color = `hsl(var(--matrix-dark))`
+  const primaryMatrixVariant = cn(
+    "bg-primary border-primary text-primary-foreground", // Default state
+    "hover:bg-matrix-light hover:border-matrix-light hover:text-primary-foreground", // Hover state - text color remains primary-foreground
+    "focus:ring-2 focus:ring-offset-2 focus:ring-matrix-light focus:ring-offset-background", // Focus state - using offset for better visibility
+    "disabled:bg-muted disabled:border-muted disabled:text-muted-foreground" // Disabled state - using theme's muted colors
+  );
+  // Note: text-primary-foreground is often dark (like matrix-bg). matrix-light is a lighter green.
+  // If hover text should also change, add `hover:text-some-other-color`. Original JS didn't change text color on hover.
 
   return (
     <button
       {...props}
       disabled={disabled}
-      style={{
-        ...buttonStyle,
-        ...(disabled ? disabledStyle : {}),
-      }}
-      onMouseEnter={(e) => {
-        if (!disabled) {
-          Object.assign(e.currentTarget.style, hoverStyle);
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!disabled) {
-          Object.assign(e.currentTarget.style, {
-            backgroundColor: buttonStyle.backgroundColor,
-            borderColor: buttonStyle.borderColor,
-          });
-        }
-      }}
-      onFocus={(e) => {
-        if (!disabled) {
-          Object.assign(e.currentTarget.style, focusStyle);
-        }
-      }}
-      onBlur={(e) => {
-        if (!disabled) {
-          e.currentTarget.style.boxShadow = 'none';
-        }
-      }}
+      className={cn(
+        baseStyle,
+        primaryMatrixVariant, // Apply the default variant
+        sizeClasses[size],
+        className // Allows overriding via className prop
+      )}
     >
       {children}
     </button>

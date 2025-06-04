@@ -2,40 +2,48 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2 } from 'lucide-react';
 import { cn } from "@/lib/utils";
-import { SurveillanceFeedProps } from '@/lib/types'; // Import props type
-import { useRealtimeUpdates } from '@/lib/hook'; // Import the hook
+import type { SurveillanceFeedProps } from '@/lib/types'; // Will point to updated definition
+import { useRealtimeUpdates } from '@/lib/hook';
 
-const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) => {
-    const { feeds, sendMessage, isConnected } = useRealtimeUpdates();
-    const feed = feeds.find(f => f.id === id);
+const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
+    const { id, name: feedName, source, status, fps } = feed; // Destructure from the feed prop
+    const component_name = feedName ?? `Feed ${id}`; // Renamed to avoid conflict with 'name' prop if it existed
+    const component_node = `Source: ${source ?? 'N/A'}`; // Renamed to avoid conflict
+
+    const { sendMessage, isConnected } = useRealtimeUpdates();
+
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
+    const [videoErrorOccurred, setVideoErrorOccurred] = useState<boolean>(false);
+    const [isToggling, setIsToggling] = useState<boolean>(false);
 
     useEffect(() => {
-        // Set video URL based on feed status and source
-        if (feed?.status === 'running' && feed.source) {
-            // Assuming feed.source contains the stream URL or path
-            // If it's just an identifier, you might need to construct the URL
-            // e.g., setVideoUrl(`/api/stream/${feed.source}`);
-            setVideoUrl(feed.source);
+        setVideoErrorOccurred(false);
+        if (status === 'running' && source) {
+            setVideoUrl(source);
         } else {
-            // Set to null if not running or no source provided
-            setVideoUrl("/sample_traffic.mp4");
+            setVideoUrl(null);
         }
-    }, [feed]); // Re-run effect when feed data changes
+    }, [status, source]);
+
+    useEffect(() => {
+        if (status === 'running' || status === 'stopped' || status === 'error') {
+            setIsToggling(false);
+        } else if (status === 'starting' || status === 'stopping') {
+            setIsToggling(true);
+        }
+    }, [status]);
 
     const toggleFeed = () => {
-        if (!isConnected) {
-            console.warn('WebSocket is not connected. Cannot toggle feed.');
+        if (isToggling || !isConnected) {
+            console.warn('Toggle prevented:', { isToggling, isConnected, hasFeed: !!feed });
             return;
         }
-        if (!feed) {
-            console.warn('Feed data not found. Cannot toggle feed.');
-            return;
-        }
-        const newStatus = feed.status !== 'running';
-        const messageType = newStatus ? 'start_feed' : 'stop_feed';
+        setIsToggling(true);
+
+        const newTargetStatusRunning = status !== 'running' && status !== 'starting';
+        const messageType = newTargetStatusRunning ? 'start_feed' : 'stop_feed';
         sendMessage(messageType, { feed_id: id });
     };
 
@@ -43,39 +51,65 @@ const SurveillanceFeed = React.memo(({ name, node, id }: SurveillanceFeedProps) 
         <Card
             className={cn(
                 "matrix-glow-card overflow-hidden",
-                "transition-transform duration-300 hover:scale-[1.03] cursor-pointer", // Hover effect and cursor
+                "cursor-pointer"
             )}
-            onClick={toggleFeed} // Add click handler to the card
+            onClick={isToggling ? undefined : toggleFeed}
         >
             <div className="bg-black aspect-video flex items-center justify-center relative group">
-                {videoUrl ? (
-                    <video
-                        src={videoUrl}
-                        controls
-                        loop
-                        className="w-full h-full object-cover"
-                    />
-                ) : (
-                    <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
-                        <Eye className="text-matrix-dark text-4xl" />
+                {isToggling && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                        <Loader2 className="text-white animate-spin h-10 w-10" />
                     </div>
                 )}
-                {/* Status badge */}
+                {videoUrl && !videoErrorOccurred && !isToggling ? (
+                    <video
+                        key={videoUrl}
+                        src={videoUrl}
+                        controls
+                        muted
+                        autoPlay={status === 'running'}
+                        loop={status === 'running'}
+                        className="w-full h-full object-cover"
+                        onError={() => {
+                            console.warn(`Error loading video: ${videoUrl} for feed ID: ${id}`);
+                            setVideoErrorOccurred(true);
+                        }}
+                        onCanPlay={() => {
+                            if (videoErrorOccurred) {
+                                setVideoErrorOccurred(false);
+                            }
+                        }}
+                    />
+                ) : videoErrorOccurred && !isToggling ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-card">
+                        <AlertTriangle className="text-destructive text-3xl mb-1" />
+                        <p className="text-xs text-destructive text-center">Video feed unavailable</p>
+                    </div>
+                ) : !isToggling ? (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
+                        <Eye className="text-muted-foreground text-4xl" />
+                    </div>
+                ) : null}
+                {status === 'running' && typeof fps === 'number' && !isToggling && (
+                  <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-white backdrop-blur-sm">
+                    {fps} FPS
+                  </Badge>
+                )}
                 <Badge
-                    variant={feed?.status === 'running' ? "default" : "outline"}
+                    variant={status === 'running' ? "default" : "outline"}
                     className={cn(
                         "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5",
-                        feed?.status === 'running'
+                        status === 'running'
                             ? "bg-primary text-primary-foreground animate-matrix-pulse"
                             : "bg-muted text-muted-foreground",
                     )}
                 >
-                    {feed?.status === 'running' ? "LIVE" : "STOPPED"}
+                    {status === 'running' ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
             </div>
             <CardContent className="p-2">
-                <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors">{name}</h4>
-                <p className="text-[10px] text-muted-foreground truncate">{node}</p>
+                <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors">{component_name}</h4>
+                <p className="text-[10px] text-muted-foreground truncate">{component_node}</p>
             </CardContent>
         </Card>
     );

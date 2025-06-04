@@ -9,7 +9,7 @@ export interface FeedStatusData {
   id: string;
   source: string;
   name?: string;
-  status: 'stopped' | 'running' | 'starting' | 'error';
+  status: 'stopped' | 'running' | 'starting' | 'error' | 'stopping'; // Added 'stopping'
   fps?: number | null;
   error_message?: string | null;
 }
@@ -86,9 +86,8 @@ export interface CongestionNodeProps {
   lastUpdated?: string;
 }
 
-export interface SurveillanceFeedProps extends Omit<FeedStatusData, 'source' | 'error_message'> {
-  name: string;
-  node: string;
+export interface SurveillanceFeedProps {
+  feed: FeedStatusData; // Primary prop is now the feed object
 }
 export interface LegendItemProps { color: string; text: string; }
 export interface PageLayoutProps { title?: string; children: React.ReactNode; className?: string; }
@@ -135,6 +134,22 @@ export interface AllNodesCongestionResponse {
 
 
 // --- Hook Return Types ---
+// Anomaly Type (used by Anomalies page and components)
+export type LocationTuple = [number, number];
+
+export interface Anomaly {
+  id: number; // Can be string if WebSocket provides string IDs that can't be parsed to number
+  type: string;
+  severity: "low" | "medium" | "high"; // Consider if this needs to be broader based on AlertData.severity
+  description: string;
+  timestamp: string; // ISO string format recommended
+  location: LocationTuple;
+  resolved: boolean;
+  details?: string; // JSON string or specific object structure
+  reportedBy?: string;
+  source?: 'api' | 'websocket'; // To track origin if merging data
+}
+
 export interface RealtimeData {
   isConnected: boolean;
   feeds: FeedStatusData[];

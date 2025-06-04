@@ -5,22 +5,12 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-// import useSWR from 'swr'; // Removed useSWR
-// Removed WebSocketClient import, will be handled by the hook
 import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
-
-// const fetcher = (url: string) => fetch(url).then(res => res.json()); // Removed fetcher, no longer needed by SWR
-
-const MetricCard = ({ title, value, unit, color, children }: { title: string, value: React.ReactNode, unit?: string, color?: string, children?: React.ReactNode }) => (
-  <div className={`bg-gray-800 p-4 rounded shadow text-center flex flex-col items-center justify-center min-w-[140px]`}>
-    <div className="text-xs text-gray-400 uppercase mb-1">{title}</div>
-    <div className={`text-2xl font-bold mb-1 ${color ? color : ''}`}>{value}{unit && <span className="text-base font-normal ml-1">{unit}</span>}</div>
-    {children}
-  </div>
-);
+import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
+import { Activity, Zap, AlertTriangle, Users } from 'lucide-react'; // Import Lucide icons
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
@@ -54,42 +44,51 @@ const DashboardPage: React.FC = () => {
 
         {/* Navigation Links */}
         <nav className="mb-6 flex gap-4">
-          <a href="/preferences" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Preferences</a>
-          <a href="/history" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Route History</a>
-          <a href="/impacts" className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Weather & Events</a>
+          <a href="/preferences" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Preferences</a>
+          <a href="/history" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Route History</a>
+          <a href="/impacts" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Weather & Events</a>
         </nav>
 
         {/* Real-time Analytics Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <MetricCard
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <StatCard
             title="Congestion Index"
-            value={kpis?.congestion_index ?? '--'}
-            unit="%"
-            color={kpis?.congestion_index ? getCongestionColor(kpis.congestion_index) : 'text-gray-400'}
+            value={`${kpis?.congestion_index ?? '--'}%`}
+            icon={Activity}
+            valueColor={kpis?.congestion_index ? getCongestionColor(kpis.congestion_index) : 'text-muted-foreground'}
+            change="N/A"
+            changeText="Change data not available"
           />
-          <MetricCard
+          <StatCard
             title="Average Speed"
-            value={kpis?.average_speed_kmh ?? '--'}
-            unit="km/h"
-            color={kpis?.average_speed_kmh ? getSpeedColor(kpis.average_speed_kmh) : 'text-gray-400'}
+            value={`${kpis?.average_speed_kmh ?? '--'} km/h`}
+            icon={Zap}
+            valueColor={kpis?.average_speed_kmh ? getSpeedColor(kpis.average_speed_kmh) : 'text-muted-foreground'}
+            change="N/A"
+            changeText="Change data not available"
           />
-          <MetricCard
+          <StatCard
             title="Active Incidents"
-            value={kpis?.active_incidents_count ?? '--'}
-            color={kpis?.active_incidents_count ? getIncidentColor(kpis.active_incidents_count) : 'text-gray-400'}
+            value={`${kpis?.active_incidents_count ?? '--'}`}
+            icon={AlertTriangle}
+            valueColor={kpis?.active_incidents_count ? getIncidentColor(kpis.active_incidents_count) : 'text-muted-foreground'}
+            change="N/A"
+            changeText="Change data not available"
           />
-          <MetricCard
+          <StatCard
             title="Total Flow"
-            value={kpis?.total_flow ?? '--'}
-            unit="vehicles/hr"
-            color={kpis?.total_flow ? undefined : 'text-gray-400'} // No specific color logic for flow, default if no value
+            value={`${kpis?.total_flow ?? '--'} vehicles/hr`}
+            icon={Users}
+            valueColor={kpis?.total_flow ? undefined : 'text-muted-foreground'} // No specific color logic for flow, default if no value
+            change="N/A"
+            changeText="Change data not available"
           />
         </div>
 
         {/* Placeholder for video stream */}
-        <div className="mb-4 bg-gray-800 p-4 rounded">
+        <div className="mb-4 bg-card p-4 rounded">
           <h2 className="text-xl font-semibold mb-2">Video Feed (Sample)</h2>
-          <div className="w-full h-96 bg-gray-700 flex items-center justify-center text-gray-400 rounded">
+          <div className="w-full h-96 bg-background flex items-center justify-center text-muted-foreground rounded">
             <video
               src="/api/v1/sample-video"
               controls
@@ -100,10 +99,10 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* Live Alerts Section */}
-        <div className="mb-6 bg-gray-800 p-4 rounded">
+        <div className="mb-6 bg-card p-4 rounded">
           <h2 className="text-xl font-semibold mb-3">Live Alerts</h2>
-          {!isReady && <p className="text-gray-400">Connecting to live alerts...</p>}
-          {isReady && alerts.length === 0 && <p className="text-gray-400">No new alerts.</p>}
+          {!isReady && <p className="text-muted-foreground">Connecting to live alerts...</p>}
+          {isReady && alerts.length === 0 && <p className="text-muted-foreground">No new alerts.</p>}
           {isReady && alerts.length > 0 && (
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {alerts.slice(-10).reverse().map((alert) => (
@@ -121,13 +120,13 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* WebSocket debug/messages (optional, using debugMessages now) */}
-        <div className="bg-gray-800 p-4 rounded">
+        <div className="bg-card p-4 rounded">
           <h2 className="text-xl font-semibold mb-2">WebSocket Connection Status (Debug)</h2>
-          <div className="max-h-60 overflow-y-auto text-sm">
+          <div className="max-h-60 overflow-y-auto text-sm text-muted-foreground">
               {debugMessages.slice(-10).map((msg, index) => (
                   <p key={index} className="mb-1 break-all">{msg}</p>
               ))}
-              {debugMessages.length === 0 && <p className="text-gray-400">Monitoring connection...</p>}
+              {debugMessages.length === 0 && <p className="text-muted-foreground">Monitoring connection...</p>}
           </div>
         </div>
 
