@@ -73,7 +73,7 @@
     --background-start: var(--matrix-bg);
     --background-end: var(--matrix-bg);
     --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
-    --scanline-opacity: 0.04;
+    --scanline-opacity: 0.01; /* Adjusted from 0.04 to match noise opacity */
     --scanline-width: 0.5px;
 
     /* --- Transitions --- */

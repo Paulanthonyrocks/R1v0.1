@@ -75,9 +75,7 @@ const TrafficGridPage: React.FC = () => {
                 transform: `scale(${zoom})`,
                 transformOrigin: 'top left',
                 imageRendering: 'pixelated',
-                // @ts-ignore
                 msImageRendering: 'crisp-edges', // For IE/Edge
-                // @ts-ignore
                 mozImageRendering: 'crisp-edges', // For Firefox (older versions)
               }}
             >
