@@ -13,18 +13,23 @@
 @layer base {
   /* --- CSS Variable Definitions --- */
   :root {
-    /* --- Theme Variables (Matrix Theme Example) --- */
-    --matrix: 143 50% 55%; /* Primary Green HSL Value */
-    --matrix-light: 140 60% 60%; /* Lighter Green */
-    --matrix-dark: 140 70% 20%; /* Darker Green */
-    --matrix-bg: 0 0% 8%; /* Very Dark Background HSL Value */
-    --matrix-panel: 0 0% 14%; /* Slightly Lighter Panel Background */
-    --matrix-text: var(--matrix); /* Default text is primary green */
-    --matrix-border-color: 140 60% 40%; /* Border color HSL Value */
-    --matrix-muted-text: 140 40% 55%; /* Muted text HSL Value (adjusted contrast) */
+    /* --- Theme Variables (Nostalgic Traffic Control) --- */
+    /* Green background: #8CA17C -> hsl(93, 14%, 56%) */
+    /* Black foreground: #000000 -> hsl(0, 0%, 0%) */
+
+    --matrix-bg: 93 14% 56%; /* Muted pastel green */
+    --matrix-text: 0 0% 0%;   /* Black */
+
+    /* For 1-bit monochrome feel, related colors are either black or green */
+    --matrix: var(--matrix-text); /* Primary interactive elements are black */
+    --matrix-light: var(--matrix-text); /* Black */
+    --matrix-dark: var(--matrix-text);  /* Black */
+    --matrix-panel: var(--matrix-bg); /* Panels use the green background */
+    --matrix-border-color: var(--matrix-text); /* Borders are black */
+    --matrix-muted-text: var(--matrix-text); /* Muted text is black */
     
     /* --- Neon Blue (Example, ensure you define it if neon-text class is used) --- */
-    --neon-blue-hsl: 197 100% 50%; /* HSL for #00f7ff */
+    --neon-blue-hsl: 197 100% 50%; /* HSL for #00f7ff */ /* This can remain, not core to the theme */
 
 
     /* --- Font Definitions --- */
@@ -36,31 +41,38 @@
     --radius: 0.625rem;             /* Base border radius (approx 10px) */
 
     /* --- Shadcn Variable Mapping --- */
-    --background: var(--matrix-bg);
-    --foreground: var(--matrix-text);
-    --card: var(--matrix-panel);
-    --card-foreground: var(--matrix-text);
-    --popover: var(--matrix-panel);
-    --popover-foreground: var(--matrix-text);
-    --primary: var(--matrix);
-    --primary-foreground: var(--matrix-bg);
-    --secondary: var(--matrix-dark);
-    --secondary-foreground: var(--matrix-light);
-    --muted: var(--matrix-dark);
-    --muted-foreground: var(--matrix-muted-text);
-    --accent: var(--matrix-dark);
-    --accent-foreground: var(--matrix-light);
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 98%;
-    --border: var(--matrix-border-color);
-    --input: var(--matrix-border-color); /* Assuming input bg and border are related */
-    --ring: var(--matrix-light);
+    --background: var(--matrix-bg);            /* Green */
+    --foreground: var(--matrix-text);          /* Black */
+    --card: var(--matrix-bg);                  /* Card background is green */
+    --card-foreground: var(--matrix-text);     /* Card text is black */
+    --popover: var(--matrix-bg);               /* Popover background is green */
+    --popover-foreground: var(--matrix-text);  /* Popover text is black */
+
+    --primary: var(--matrix-text);             /* Primary elements (e.g. button bg) are black */
+    --primary-foreground: var(--matrix-bg);    /* Text on primary elements is green */
+
+    --secondary: var(--matrix-text);           /* Secondary elements are black */
+    --secondary-foreground: var(--matrix-bg);  /* Text on secondary elements is green */
+
+    --muted: var(--matrix-text);               /* Muted elements (often backgrounds) are black */
+    --muted-foreground: var(--matrix-text);    /* Muted text (e.g., card descriptions) is black for visibility on non-muted backgrounds */
+
+    --accent: var(--matrix-text);              /* Accent elements are black */
+    --accent-foreground: var(--matrix-bg);     /* Text on accent elements is green */
+
+    --destructive: 0 84% 60%; /* Default red - keep for destructive actions */
+    --destructive-foreground: 0 0% 98%; /* Default light text on red */
+
+    --border: var(--matrix-border-color);      /* Black */
+    --input: var(--matrix-border-color);       /* Input border is black */
+    --ring: var(--matrix-border-color);        /* Focus ring is black */
     /* --radius: var(--radius); /* This is fine, but since Shadcn's --radius is just 'radius', ensure Tailwind config matches if you use Shadcn's CLI */
     
     /* --- Colors for body background gradient & noise/scanlines --- */
-    --background-start: 0 0% 10%;
-    --background-end: 0 0% 5%;
-    --noise-opacity: 0.03;
+    /* For a solid green background, we can simplify these or make them subtle variations of green */
+    --background-start: var(--matrix-bg);
+    --background-end: var(--matrix-bg);
+    --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
     --scanline-opacity: 0.04;
     --scanline-width: 0.5px;
 
@@ -491,6 +503,13 @@
       font-size: 12px;
       color: hsl(var(--primary));
       animation: demoStatPulse 3s infinite;
+  }
+
+  /* Utility class for pixel drop shadow */
+  .pixel-drop-shadow {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    /* For text, text-shadow might be more appropriate, but spec asks for box-shadow */
+    /* text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); */
   }
 }
 
