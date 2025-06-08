@@ -4,6 +4,8 @@ import { UserRole } from "@/lib/auth/roles";
 import AuthGuard from "@/components/auth/AuthGuard";
 import MatrixCard from '@/components/MatrixCard';
 import { useState, useEffect } from 'react';
+import TrafficSignalIcon from '@/components/ui/TrafficSignalIcon'; // Import the new icon component
+import DitheredTrafficIndicator from '@/components/ui/DitheredTrafficIndicator'; // Import dither component
 
 interface GridItemData {
   id: number;
@@ -62,24 +64,36 @@ const TrafficGridPage: React.FC = () => {
             <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Grid View</h1>
 
             <div className="flex mb-4">
-              <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md mr-2" onClick={handleZoomIn}>Zoom In</button>
-              <button className="px-4 py-2 bg-matrix-panel text-matrix hover:bg-matrix-dark rounded-md" onClick={handleZoomOut}>Zoom Out</button>
+              {/* Updated to use theme consistent classes - similar to Button variant="default" but without all button.tsx features */}
+              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md mr-2 tracking-normal" onClick={handleZoomIn}>Zoom In</button>
+              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md tracking-normal" onClick={handleZoomOut}>Zoom Out</button>
             </div>
 
             <div
               className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-grow overflow-auto"
-              style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}
+              style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top left',
+                imageRendering: 'pixelated',
+                msImageRendering: 'crisp-edges', // For IE/Edge
+                mozImageRendering: 'crisp-edges', // For Firefox (older versions)
+              }}
             >
               {gridItems.map((item) => (
                 <div key={item.id} onClick={() => handleGridItemClick(item)} style={{ cursor: 'pointer' }}>
                   <MatrixCard
                     title={item.label}
                   >
-                    <div className="flex flex-col gap-2">
-                      <p className="text-matrix-muted-text">Traffic: {item.trafficFlow}</p>
-                      <p className="text-matrix-muted-text">Signal: {item.signalStatus}</p>
-                      <p className="text-matrix-muted-text">Incidents: {item.incidents}</p>
-                      <p className="text-matrix-muted-text">Node Health: {item.nodeHealth}%</p>
+                    <div className="flex flex-col gap-2 text-center"> {/* Added text-center to parent div */}
+                      <p className="text-matrix-muted-text pixel-drop-shadow uppercase font-bold tracking-normal flex items-center justify-center gap-2">
+                        Traffic: <DitheredTrafficIndicator flow={item.trafficFlow} width="24px" height="12px" /> {item.trafficFlow}
+                      </p>
+                      <p className="text-matrix-muted-text pixel-drop-shadow uppercase font-bold tracking-normal flex items-center justify-center gap-2">
+                        Signal: <TrafficSignalIcon status={item.signalStatus} /> {item.signalStatus}
+                      </p>
+                      {/* Incidents and Node Health are not explicitly "critical" in the same way, applying normal tracking and centering only for consistency for now */}
+                      <p className="text-matrix-muted-text pixel-drop-shadow tracking-normal">Incidents: {item.incidents}</p>
+                      <p className="text-matrix-muted-text pixel-drop-shadow tracking-normal">Node Health: {item.nodeHealth}%</p>
                     </div>
                   </MatrixCard>
                 </div>
