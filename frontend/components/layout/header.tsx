@@ -44,7 +44,7 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
             : <PanelLeftClose className="h-5 w-5 md:h-6 md:w-6" />
           }
         </Button>
-        <h2 className="text-lg md:text-xl font-semibold matrix-text-glow uppercase tracking-wide text-primary">
+        <h2 className="text-lg md:text-xl font-semibold matrix-text-glow uppercase tracking-normal text-primary"> {/* Changed tracking-wide to tracking-normal */}
           Route One
         </h2>
       </div>
@@ -58,13 +58,13 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
-                  <DropdownMenuItem onClick={() => setUserRole(UserRole.VIEWER)}>
+                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.VIEWER)}>
                     {UserRole.VIEWER}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setUserRole(UserRole.OPERATOR)}>
+                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.OPERATOR)}>
                     {UserRole.OPERATOR}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setUserRole(UserRole.ADMIN)}>
+                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.ADMIN)}>
                     {UserRole.ADMIN}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -81,33 +81,32 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
                 <DropdownMenuContent align="end">
                    {/* Navigation Links */}
                   {/* Replaced a tag with Link component for client-side navigation */}
-                  <DropdownMenuItem asChild>
- <Link href="/">
- Home</Link>
+                  <DropdownMenuItem className="tracking-normal" asChild>
+                    <Link href="/">Home</Link>
                   </DropdownMenuItem>
-                   <DropdownMenuItem asChild>
+                   <DropdownMenuItem className="tracking-normal" asChild>
                     <a href="/anomalies">Anomalies</a>
                   </DropdownMenuItem>
-                   <DropdownMenuItem asChild>
+                   <DropdownMenuItem className="tracking-normal" asChild>
                     <a href="/export">Export</a>
                   </DropdownMenuItem>
-                   <DropdownMenuItem asChild>
+                   <DropdownMenuItem className="tracking-normal" asChild>
                     <a href="/grid">Grid</a>
                   </DropdownMenuItem>
-                   <DropdownMenuItem asChild>
+                   <DropdownMenuItem className="tracking-normal" asChild>
                     <a href="/logs">Logs</a>
                   </DropdownMenuItem>
-                   <DropdownMenuItem asChild>
+                   <DropdownMenuItem className="tracking-normal" asChild>
                     <a href="/nodes">Nodes</a>
- </DropdownMenuItem>
+                  </DropdownMenuItem>
                   {/* Conditionally render Login link */}
- {!user ? (
-                    <DropdownMenuItem asChild>
+                  {!user ? (
+                    <DropdownMenuItem className="tracking-normal" asChild>
                       <Link href="/login">Login</Link>
                     </DropdownMenuItem>
                   ) : (
                     // Conditionally render Logout link if user is logged in
-                    <DropdownMenuItem onClick={async () => {
+                    <DropdownMenuItem className="tracking-normal" onClick={async () => {
                       if (auth) { // Check if auth is not null
  await signOut(auth as Auth); // Cast auth to Auth
                       }
@@ -118,7 +117,7 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Power className="h-4 w-4 md:h-5 md:w-5" />
+              <Power className="h-4 w-4 md:h-5 md:w-5 text-primary" /> {/* Added text-primary */}
       </div>
     </header>
   );

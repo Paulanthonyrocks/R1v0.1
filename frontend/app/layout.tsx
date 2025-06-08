@@ -30,7 +30,10 @@ export default function RootLayout({
           <ThemeProvider attribute="class">
             <Nav />
             <main
-              className={cn("flex-1 overflow-y-auto p-4 md:p-6 lg:p-8", pathname !== '/' && 'pt-16')}
+              className={cn(
+                "flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative content-area-scanlines",
+                pathname !== '/' && 'pt-16' // Apply top padding if not on the homepage (where Nav might be transparent or different)
+              )}
             >{children}</main>
           </ThemeProvider>
         </body>
