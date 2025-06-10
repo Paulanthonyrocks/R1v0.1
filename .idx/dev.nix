@@ -1,6 +1,32 @@
 {pkgs}:
 
 let
+  pythonOverlay = self: super: {
+    ultralytics = super.callPackage (import (pkgs.fetchFromGitHub {
+      owner = "NixOS";
+      repo = "nixpkgs";
+      rev = "20c7e42c35ff601f464782ca3042f53466db01e3"; # A recent commit with ultralytics
+      sha256 = "sha256-c41f6c1f34e5c610b8b3f39a2b4b4b6f6d8b0b8b4d4e4d4e4d4e4d4e4d4e4d4e"; # This needs to be updated to the actual hash of the fetched source
+    }) { pkgs = super; }) {};
+    filterpy = super.callPackage (pkgs.python3Packages.buildPythonPackage {
+      pname = "filterpy";
+      version = "1.4.5"; # Replace with the desired version
+      src = super.fetchPypi {
+        pname = "filterpy";
+        version = "1.4.5"; # Replace with the desired version
+        sha256 = "sha256-put_filterpy_sha256_here"; # Replace with the actual sha256 hash
+      };
+    }) {};
+    firebase-admin = super.callPackage (pkgs.python3Packages.buildPythonPackage {
+      pname = "firebase-admin";
+      version = "6.2.0"; # Replace with the desired version
+      src = super.fetchPypi {
+        pname = "firebase-admin";
+        version = "6.2.0"; # Replace with the desired version
+        sha256 = "sha256-put_firebase-admin_sha256_here"; # Replace with the actual sha256 hash
+      };
+    }) {};
+  };
   pythonPackages = ps: with ps; [
     fastapi
     uvicorn
@@ -19,10 +45,8 @@ let
     torch
     torchvision
     torchaudio
-    ultralytics
     opencv4  # opencv-python is opencv4 in nixpkgs
     scipy
-    filterpy
     tensorflow
     scikit-learn
     scikit-image
@@ -33,9 +57,8 @@ let
     sqlalchemy
     pymongo
     kafka-python
-    firebase-admin
     aiohttp
-    redis
+    redis # redis-py
   ];
 in
 {
@@ -43,7 +66,9 @@ in
 
   packages = [
     pkgs.nodejs_20
-    (pkgs.python311.withPackages pythonPackages)
+    (pkgs.python311.override {
+      packageOverrides = pythonOverlay;
+    }).withPackages pythonPackages
     pkgs.git
     pkgs.curl
   ];
