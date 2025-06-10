@@ -65,7 +65,7 @@ export default function Sidebar({ isCollapsed, className }: SidebarProps) {
 
           {/* Reports Section */}
           {!isCollapsed && (
-             <h3 className="px-3 mt-6 mb-2 text-xs uppercase text-muted-foreground tracking-wider font-semibold">
+             <h3 className="px-3 mt-6 mb-2 text-xs uppercase text-muted-foreground tracking-normal font-semibold"> {/* Changed tracking-wider to tracking-normal */}
                Reports
              </h3>
           )}
@@ -88,8 +88,8 @@ export default function Sidebar({ isCollapsed, className }: SidebarProps) {
           </div>
           {!isCollapsed && (
             <div className="overflow-hidden">
-              <p className="font-medium text-sm truncate text-foreground">Agent Smith</p>
-              <p className="text-xs text-muted-foreground truncate">System Admin</p>
+              <p className="font-medium text-sm truncate text-foreground tracking-normal">Agent Smith</p> {/* Added tracking-normal */}
+              <p className="text-xs text-muted-foreground truncate tracking-normal">System Admin</p> {/* Added tracking-normal */}
             </div>
           )}
         </div>
@@ -120,9 +120,9 @@ function SidebarItem({ href, icon: Icon, children, isCollapsed, active, badgeCou
       )}
     >
       <Icon className={cn("h-5 w-5 flex-shrink-0", isCollapsed ? "mx-auto" : "", active ? "text-primary" : "")} />
-      {!isCollapsed && <span className="flex-1 truncate">{children}</span>}
+      {!isCollapsed && <span className="flex-1 truncate tracking-normal">{children}</span>} {/* Added tracking-normal */}
       {!isCollapsed && badgeCount !== undefined && ( // Check for undefined explicitly
-         <Badge variant="default" className="ml-auto bg-primary text-primary-foreground h-5 px-1.5 text-xs font-semibold">
+         <Badge variant="default" className="ml-auto bg-primary text-primary-foreground h-5 px-1.5 text-xs font-semibold tracking-normal"> {/* Added tracking-normal to badge text */}
            {badgeCount}
          </Badge>
       )}
@@ -138,9 +138,9 @@ function SidebarItem({ href, icon: Icon, children, isCollapsed, active, badgeCou
         </Link>
       </TooltipTrigger>
       <TooltipContent side="right" className="flex items-center gap-4">
-        {String(children)}
+        <span className="tracking-normal">{String(children)}</span> {/* Added tracking-normal */}
         {badgeCount !== undefined && (
-           <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-xs font-semibold">
+           <Badge variant="secondary" className="ml-auto h-5 px-1.5 text-xs font-semibold tracking-normal"> {/* Added tracking-normal to badge text */}
              {badgeCount}
            </Badge>
         )}

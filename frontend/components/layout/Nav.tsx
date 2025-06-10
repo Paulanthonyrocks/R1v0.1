@@ -18,47 +18,47 @@ export default function Nav() {
   // const pathname = usePathname(); // Uncomment if Nav uses pathname directly
 
   return (
-    <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg">
+    <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg border-b border-primary">
       <div className="container mx-auto flex items-center justify-between flex-wrap">
-        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors">Route One</Link>
+        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors tracking-normal">Route One</Link> {/* Added tracking-normal */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="text-foreground hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 focus:ring-offset-background rounded">
+            <button className="text-foreground hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 focus:ring-offset-background rounded tracking-normal"> {/* Added tracking-normal */}
               Menu
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {!user ? (
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                 <Link href="/login">Login</Link>
               </DropdownMenuItem>
             ) : (
               <>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/">Home</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/dashboard">Dashboard</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/anomalies">Anomalies</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/export">Export</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/grid">Grid</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/logs">Logs</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/nodes">Nodes</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/stream">Stream</Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
                   <Link href="/surveillance">Surveillance</Link>
                 </DropdownMenuItem>
               </>

@@ -75,6 +75,7 @@
     --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
     --scanline-opacity: 0.01; /* Adjusted from 0.04 to match noise opacity */
     --scanline-width: 0.5px;
+    /* --content-scanline-opacity: 0.04; */ /* Removed as per refactor */
 
     /* --- Transitions --- */
     --transition-duration: 0.2s;
@@ -508,8 +509,30 @@
   /* Utility class for pixel drop shadow */
   .pixel-drop-shadow {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-    /* For text, text-shadow might be more appropriate, but spec asks for box-shadow */
-    /* text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); /* Added text shadow support */
+  }
+
+  /* Scanlines for specific content areas */
+  .content-area-scanlines {
+    position: relative;
+  }
+  .content-area-scanlines::before { /* Changed to ::before */
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: linear-gradient(
+        to bottom,
+        transparent 0%,
+        /* Uses global --scanline-opacity (0.01) and --matrix (black) */
+        hsla(var(--matrix), var(--scanline-opacity)) var(--scanline-width, 0.5px),
+        transparent var(--scanline-width, 0.5px)
+    );
+    background-size: 100% 3px; /* Updated background-size */
+    pointer-events: none;
+    z-index: 0; /* Updated z-index */
   }
 }
 
