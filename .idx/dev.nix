@@ -1,31 +1,66 @@
 {pkgs}:
 
+let
+  pythonPackages = ps: with ps; [
+    fastapi
+    uvicorn
+    python-multipart
+    httpx
+    python-jose
+    passlib
+    pydantic
+    pyyaml
+    psutil
+    numpy
+    tenacity
+    aiofiles
+    # ML/CV dependencies
+    # The following may need overlay or binary fetches if not in nixpkgs:
+    torch
+    torchvision
+    torchaudio
+    ultralytics
+    opencv4  # opencv-python is opencv4 in nixpkgs
+    scipy
+    filterpy
+    tensorflow
+    scikit-learn
+    scikit-image
+    pandas
+    pillow
+    pytesseract
+    google-generativeai  # Check availability; may need to fetch from PyPI
+    sqlalchemy
+    pymongo
+    kafka-python
+    firebase-admin
+    aiohttp
+    redis
+  ];
+in
 {
   channel = "stable-24.05";
 
-  # Keep only essential system packages - everything else goes in venvs
   packages = [
     pkgs.nodejs_20
-    pkgs.python311
+    (pkgs.python311.withPackages pythonPackages)
     pkgs.git
     pkgs.curl
   ];
 
-  # VS Code extensions
   idx.extensions = [
-    "esbenp.prettier-vscode"
-    "GitHub.vscode-pull-request-github"
-    "ms-pyright.pyright"
-    "ms-python.debugpy"
     "ms-python.python"
+    "ms-python.debugpy"
+    "ms-python.black-formatter"
+    "ms-pyright.pyright"
+    "ms-python.flake8"
     "ms-toolsai.jupyter"
+    "esbenp.prettier-vscode"
     "ms-vscode.js-debug"
     "ms-vscode.vscode-json"
-    "ms-python.flake8"
-    "ms-python.black-formatter"
+    "GitHub.vscode-pull-request-github"
   ];
 
-  # Preview configurations - both running from virtual environments
   idx.previews = {
     enable = true;
     previews = {
@@ -33,7 +68,7 @@
         command = [
           "/bin/sh"
           "-c"
-          "cd backend && source venv/bin/activate && python -m uvicorn app.main:app --host 0.0.0.0 --port 9002 --reload"
+          "cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 9002 --reload"
         ];
         manager = "web";
       };
@@ -52,38 +87,15 @@
     };
   };
 
-  # Workspace lifecycle - set up both environments on create
   idx.workspace = {
     onCreate = {
       setup-frontend = "cd frontend && npm install";
-      setup-backend = ''
-        cd backend && 
-        python -m venv venv && 
-        source venv/bin/activate && 
-        pip install --upgrade pip && 
-        pip install -r requirements.txt
-      '';
+      # No need to set up backend venv or pip install anymore!
     };
 
     onStart = {
       check-environments = ''
         echo "Checking environments..."
-        if [ ! -d "backend/venv" ]; then
-          echo "Backend venv missing - will be created on first run"
-        else
-          echo "Backend venv exists"
-          # Check if requirements.txt is newer than last install
-          cd backend
-          if [ -f "requirements.txt" ] && [ -f "venv/pyvenv.cfg" ]; then
-            if [ "requirements.txt" -nt "venv/pyvenv.cfg" ]; then
-              echo "requirements.txt updated - reinstalling packages..."
-              source venv/bin/activate && pip install -r requirements.txt
-            else
-              echo "Backend packages up to date"
-            fi
-          fi
-          cd ..
-        fi
         if [ ! -d "frontend/node_modules" ]; then
           echo "Frontend node_modules missing - run npm install"
         else
