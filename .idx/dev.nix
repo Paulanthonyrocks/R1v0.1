@@ -69,8 +69,10 @@ in
     (pkgs.python311.override {
       packageOverrides = pythonOverlay;
     }).withPackages pythonPackages
-    pkgs.git
-    pkgs.curl
+    pkgs.nodejs_20
+    (pkgs.python311.override {
+      packageOverrides = pythonOverlay;
+    })
   ];
 
   idx.extensions = [
