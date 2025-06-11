@@ -14,21 +14,24 @@ import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
 // The '_severity' parameter is kept for future extension where different icon images might be used.
 // Prefixing with an underscore signals to the linter that it's intentionally not used in the current function body.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const createSeverityIcon = (_severity: "low" | "medium" | "high") => {
-  // Placeholder: In a real implementation, you might choose different icon URLs based on _severity:
-  // let currentIconUrl = iconDefaultUrl.src;
-  // if (_severity === 'high') currentIconUrl = '/path/to/your/red-marker.png';
-  // else if (_severity === 'medium') currentIconUrl = '/path/to/your/orange-marker.png';
-  // etc.
+const createSeverityIcon = (_severity: "low" | "medium" | "high"): L.DivIcon => {
+  // For now, all severities use the same generic black 1-bit marker.
+  return new L.DivIcon({
+    html: `<div style="background-color: black; width: 12px; height: 12px; border-radius: 3px;"></div>`,
+    className: 'map-marker-1bit', // Optional: for further CSS if needed
+    iconSize: [12, 12],
+    iconAnchor: [6, 6], // Anchor to the center of the square
+    popupAnchor: [0, -6] // Adjust popup anchor if needed
+  });
+};
 
-  return new L.Icon({
-    iconUrl: iconDefaultUrl.src, // Use currentIconUrl if implementing different images
-    iconRetinaUrl: iconRetinaUrl.src,
-    shadowUrl: shadowUrl.src,
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
+const createActiveAnomalyIcon = (): L.DivIcon => {
+  return new L.DivIcon({
+    html: `<div style="background-color: black; width: 16px; height: 16px; border-radius: 4px; outline: 2px solid hsl(var(--matrix-bg));"></div>`, // Larger, with an outline using theme's green
+    className: 'map-marker-1bit-active',
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    popupAnchor: [0, -8]
   });
 };
 // --- End Custom Icons ---
@@ -63,20 +66,9 @@ const MapComponent = ({ anomalies, onMarkerClick, activeAnomalyId }: MapComponen
   const leafletMapRef = useRef<L.Map | null>(null); // Ref to store Leaflet map instance
   const mapId = useId(); // <--- Generate a unique ID for this component instance
 
-  // Effect to set default icon options (runs once)
-  useEffect(() => {
-    // This effect for default icon options should ideally run only once per application load,
-    // or be managed carefully if icons are dynamic globally.
-    // It's generally safe here if MapComponent is the primary map display.
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: iconRetinaUrl.src,
-      iconUrl: iconDefaultUrl.src,
-      shadowUrl: shadowUrl.src,
-    });
-  }, []); // Empty dependency array ensures this runs once after initial mount of this component instance
-
   // Effect to initialize and manage map lifecycle (runs when mapId or initial data changes)
   useEffect(() => {
+    // L.Icon.Default.mergeOptions removed as we are using L.DivIcon exclusively for these markers.
     if (mapRef.current && !leafletMapRef.current) {
       // Initialize the map if the container exists and map is not already initialized.
       // Use a default center/zoom if no anomalies are present initially.
@@ -106,10 +98,9 @@ const MapComponent = ({ anomalies, onMarkerClick, activeAnomalyId }: MapComponen
       anomalies.forEach(anomaly => {
         if (anomaly.location && Array.isArray(anomaly.location) && anomaly.location.length === 2) {
           const marker = L.marker([anomaly.location[0], anomaly.location[1]], {
-            // Use a different icon if the anomaly is active
             icon: activeAnomalyId === anomaly.id
-              ? L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', shadowUrl: shadowUrl.src, iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] }) // Example red icon for active
-              : createSeverityIcon(anomaly.severity), // Use your custom icon function for others
+              ? createActiveAnomalyIcon()
+              : createSeverityIcon(anomaly.severity),
 }).addTo(leafletMapRef.current!);
 
           // Add a popup

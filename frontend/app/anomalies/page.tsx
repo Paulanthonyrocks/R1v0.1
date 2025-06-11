@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
 import dynamic from 'next/dynamic';
 import MatrixButton from "@/components/MatrixButton";
+import { Check, X, AlertTriangle, Sigma, InfoIcon as LucideInfoIcon } from 'lucide-react'; // Import icons, aliased InfoIcon
 
 import axios from 'axios'; // Keep axios for mutations
 // import useSWR from 'swr'; // Remove SWR
@@ -28,7 +29,7 @@ interface AnomalyMapProps {
 
 const Loading = () => (
   <div className="fixed inset-0 bg-matrix-bg flex items-center justify-center z-50 top-16">
-    <div className="animate-pulse text-matrix text-2xl">Loading...</div>
+    <div className="animate-pulse text-matrix text-2xl tracking-normal">Loading...</div> {/* Added tracking-normal */}
   </div>
 );
 
@@ -37,7 +38,7 @@ const DynamicallyLoadedAnomalyMap = dynamic<AnomalyMapProps>(
   {
     ssr: false,
     loading: () => (
-      <div className="h-[400px] w-full bg-card rounded overflow-hidden flex items-center justify-center text-muted-foreground">
+      <div className="h-[400px] w-full bg-card rounded overflow-hidden flex items-center justify-center text-muted-foreground tracking-normal"> {/* Added tracking-normal */}
         Loading map...
       </div>
     ),
@@ -50,6 +51,16 @@ const AnomalyMap: React.FC<AnomalyMapProps> = ({ anomalies, onMarkerClick, activ
 
 // Helper to map AlertData from hook to local Anomaly type
 // Anomaly and LocationTuple types are now imported from AnomalyDetailModal.tsx
+
+// Severity to Icon mapping for anomaly cards (using "low", "medium", "high")
+// Note: Anomaly type from lib/types uses "low" | "medium" | "high" for severity.
+// The mapAlertDataToAnomaly function already maps various inputs to these.
+const cardSeverityIconConfig: Record<"low" | "medium" | "high", React.ElementType> = {
+  low: LucideInfoIcon, // Or CheckCircle2 if "low" means "good"
+  medium: Sigma, // Or AlertTriangle if "medium" implies warning
+  high: AlertTriangle, // Or Bomb / XOctagon for more critical "high"
+};
+
 const mapAlertDataToAnomaly = (alert: AlertData, existingAnomalies: Anomaly[] = []): Anomaly | null => {
   // Try to find if this alert (by message and timestamp proximity, or ideally a unique ID from details)
   // corresponds to an already known anomaly from API to preserve its 'resolved' status or DB ID.
@@ -278,17 +289,17 @@ const AnomaliesPage = () => {
         <ToastContainer toasts={toasts} removeToast={removeToast} />
         <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
 
-        <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Detected Anomalies</h1>
+        <h1 className="text-2xl font-bold mb-4 uppercase text-matrix tracking-normal">Detected Anomalies</h1> {/* Added tracking-normal */}
 
         {/* Filters and Sorting UI */}
         <div className="mb-6 flex flex-wrap items-center gap-4">
           <div>
-            <label htmlFor="severity-filter" className="text-matrix-muted mr-2">Severity:</label>
+            <label htmlFor="severity-filter" className="text-matrix-muted mr-2 tracking-normal">Severity:</label> {/* Added tracking-normal */}
             <select
               id="severity-filter"
               value={selectedSeverity}
               onChange={(e) => setSelectedSeverity(e.target.value as SeverityFilter)}
-              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
+              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-primary focus:border-primary" // Changed focus rings
             >
               <option value={ALL_SEVERITIES}>All</option>
               <option value="low">Low</option>
@@ -297,12 +308,12 @@ const AnomaliesPage = () => {
             </select>
           </div>
           <div>
-            <label htmlFor="sort-order" className="text-matrix-muted mr-2">Sort by:</label>
+            <label htmlFor="sort-order" className="text-matrix-muted mr-2 tracking-normal">Sort by:</label> {/* Added tracking-normal */}
             <select
               id="sort-order"
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-matrix-green focus:border-matrix-green"
+              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-primary focus:border-primary" // Changed focus rings
             >
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
@@ -328,7 +339,7 @@ const AnomaliesPage = () => {
                 <div
                   key={anomaly.id}
                   ref={el => { cardRefs.current[anomaly.id] = el; }} // Assign ref for scrolling
-                  className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-matrix-green shadow-lg' : ''} focus-visible:ring-2 focus-visible:ring-primary cursor-pointer`}
+                  className={`transition-all duration-300 rounded-lg ${highlightedAnomalyId === anomaly.id ? 'ring-2 ring-primary pixel-drop-shadow' : ''} focus-visible:ring-2 focus-visible:ring-primary cursor-pointer`} // Changed ring and shadow
                   onClick={() => handleCardClick(anomaly)} // Open modal on card click
                   onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -342,37 +353,30 @@ const AnomaliesPage = () => {
                 >
                   <MatrixCard
                     title={anomaly.type}
-                    colorOverride={anomaly.resolved ? "hsl(0, 0%, 50%)" : anomaly.severity === "high"
-                      ? "hsl(0, 100%, 50%)"
-                      : anomaly.severity === "medium"
-                        ? "hsl(39, 100%, 50%)"
-                        : "hsl(120, 100%, 35%)"
-                    }
+                    // colorOverride prop removed
                   >
                     {/* ... card content (same as before) ... */}
-                    <div className="flex flex-col">
-                      <p className="text-sm mb-1">
-                        <span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-                           anomaly.severity === "high" ? "text-destructive" :
-                           anomaly.severity === "medium" ? "text-yellow-500" :
-                           "text-green-500"
-                        }`}>{anomaly.severity}</span>
+                    <div className="flex flex-col gap-1"> {/* Added gap-1 for spacing */}
+                      <p className="text-sm mb-1 flex items-center tracking-normal"> {/* Added tracking-normal */}
+                        <span className="font-semibold">Severity:</span>
+                        {React.createElement(cardSeverityIconConfig[anomaly.severity] || Sigma, { className: "inline mx-1.5 h-4 w-4 text-primary" })} {/* Added icon */}
+                        <span className="capitalize font-bold text-primary">{anomaly.severity}</span>
                         {anomaly.resolved && <span className="ml-2 text-muted-foreground">(Resolved)</span>}
                       </p>
-                      <p className="text-sm">
+                      <p className="text-sm tracking-normal"> {/* Added tracking-normal */}
                         <span className="font-semibold">Description:</span> {anomaly.description}
                       </p>
-                      <p className="mt-2 text-xs text-matrix-muted-text">
+                      <p className="mt-2 text-xs text-matrix-muted-text tracking-normal"> {/* Added tracking-normal */}
                         <span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}
                       </p>
                       <div className="flex justify-end mt-2 space-x-2">
                         {!anomaly.resolved && (
-                         <MatrixButton onClick={(e) => { e.stopPropagation(); handleResolve(anomaly.id); }} color="green">
-                              Resolve
+                         <MatrixButton onClick={(e) => { e.stopPropagation(); handleResolve(anomaly.id); }}>
+                              <Check className="mr-1.5 h-4 w-4 text-primary-foreground" /> Resolve
                           </MatrixButton>
                         )}
-                        <MatrixButton onClick={(e) => { e.stopPropagation(); handleDismiss(anomaly.id); }} color="red">
-                          Dismiss
+                        <MatrixButton onClick={(e) => { e.stopPropagation(); handleDismiss(anomaly.id); }}>
+                          <X className="mr-1.5 h-4 w-4 text-primary-foreground" /> Dismiss
                         </MatrixButton>
                       </div>
                     </div>
@@ -382,7 +386,7 @@ const AnomaliesPage = () => {
             </div>
           </>
         ) : (
-          <div className="text-center text-matrix-muted py-10">
+          <div className="text-center text-matrix-muted py-10 tracking-normal"> {/* Added tracking-normal */}
             {allAnomalies.length === 0 ? "No anomalies detected." : "No anomalies match the current filters."}
           </div>
         )}

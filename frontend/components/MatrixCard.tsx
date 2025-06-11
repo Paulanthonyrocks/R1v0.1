@@ -25,7 +25,7 @@ const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className
             {icon}
           </div>
         )}
-        <h3 className="text-base matrix-card__title">
+        <h3 className="text-base matrix-card__title tracking-normal"> {/* Added tracking-normal */}
           {title}
         </h3>
       </div>

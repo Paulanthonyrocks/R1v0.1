@@ -1,7 +1,17 @@
 // frontend/components/anomalies/AnomalyDetailModal.tsx
 import React, { useEffect, useRef } from 'react';
 import MatrixButton from "@/components/MatrixButton";
-import { Anomaly } from '@/lib/types'; // Ensure Anomaly (and thus LocationTuple) is imported
+import { Anomaly, SeverityLevel } from '@/lib/types'; // Ensure Anomaly (and thus LocationTuple) is imported
+import { Bomb, XOctagon, AlertTriangle, Sigma, InfoIcon } from 'lucide-react'; // Import icons
+
+// Severity to Icon mapping (similar to AnomalyItem)
+const severityIconConfig: Record<SeverityLevel, React.ElementType> = {
+  Critical: Bomb,
+  ERROR: XOctagon,
+  Warning: AlertTriangle,
+  Anomaly: Sigma,
+  INFO: InfoIcon,
+};
 
 interface AnomalyDetailModalProps {
   anomaly: Anomaly | null;
@@ -60,28 +70,27 @@ const AnomalyDetailModal: React.FC<AnomalyDetailModalProps> = ({ anomaly, onClos
       <div
         ref={modalRef}
         tabIndex={-1} // Make the modal container focusable
-        className="bg-matrix-panel p-6 rounded-lg shadow-xl max-w-lg w-full text-matrix border border-matrix-border focus:outline-none" // Added focus:outline-none for the container
+        className="bg-matrix-panel p-6 rounded-lg pixel-drop-shadow max-w-lg w-full text-matrix border border-matrix-border focus:outline-none" // Replaced shadow-xl, Added focus:outline-none for the container
         role="dialog"
         aria-modal="true"
         aria-labelledby={modalTitleId}
       >
         <div className="flex justify-between items-center mb-4">
-          <h2 id={modalTitleId} className="text-xl font-bold uppercase">{anomaly.type} - Details</h2>
-          <MatrixButton onClick={onClose} className="bg-card hover:bg-card/80">Close</MatrixButton>
+          <h2 id={modalTitleId} className="text-xl font-bold uppercase tracking-normal">{anomaly.type} - Details</h2> {/* Added tracking-normal */}
+          <MatrixButton onClick={onClose}>Close</MatrixButton> {/* Removed custom className */}
         </div>
         <div className="space-y-2 text-sm">
-          <p><span className="font-semibold">ID:</span> {anomaly.id}</p>
-          <p><span className="font-semibold">Severity:</span> <span className={`capitalize font-bold ${
-             anomaly.severity === "high" ? "text-destructive" :
-             anomaly.severity === "medium" ? "text-yellow-500" :
-             "text-green-500"
-          }`}>{anomaly.severity}</span></p>
-          <p><span className="font-semibold">Description:</span> {anomaly.description}</p>
-          <p><span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}</p>
-          <p><span className="font-semibold">Location:</span> Lat: {anomaly.location[0].toFixed(5)}, Lon: {anomaly.location[1].toFixed(5)}</p>
-          {anomaly.resolved && <p className="font-semibold text-muted-foreground">Status: Resolved</p>}
-          {anomaly.details && <p><span className="font-semibold">Additional Details:</span> {anomaly.details}</p>}
-          {anomaly.reportedBy && <p><span className="font-semibold">Reported By:</span> {anomaly.reportedBy}</p>}
+          <p className="tracking-normal"><span className="font-semibold">ID:</span> {anomaly.id}</p> {/* Added tracking-normal */}
+          <p className="flex items-center tracking-normal"><span className="font-semibold">Severity:</span> {/* Added tracking-normal */}
+            {React.createElement(severityIconConfig[anomaly.severity] || Sigma, { className: "inline ml-1.5 mr-1 h-4 w-4 text-primary" })} {/* Added icon */}
+            <span className="capitalize font-bold text-primary">{anomaly.severity}</span>
+          </p>
+          <p className="tracking-normal"><span className="font-semibold">Description:</span> {anomaly.description}</p> {/* Added tracking-normal */}
+          <p className="tracking-normal"><span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}</p> {/* Added tracking-normal */}
+          <p className="tracking-normal"><span className="font-semibold">Location:</span> Lat: {anomaly.location[0].toFixed(5)}, Lon: {anomaly.location[1].toFixed(5)}</p> {/* Added tracking-normal */}
+          {anomaly.resolved && <p className="font-semibold text-muted-foreground tracking-normal">Status: Resolved</p>} {/* Added tracking-normal */}
+          {anomaly.details && <p className="tracking-normal"><span className="font-semibold">Additional Details:</span> {anomaly.details}</p>} {/* Added tracking-normal */}
+          {anomaly.reportedBy && <p className="tracking-normal"><span className="font-semibold">Reported By:</span> {anomaly.reportedBy}</p>} {/* Added tracking-normal */}
         </div>
       </div>
     </div>
