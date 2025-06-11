@@ -73,7 +73,7 @@
     --background-start: var(--matrix-bg);
     --background-end: var(--matrix-bg);
     --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
-    --scanline-opacity: 0.01; /* Adjusted from 0.04 to match noise opacity */
+    --scanline-opacity: 0.01; /* Global subtle scanlines, adjusted from 0.04 */
     --scanline-width: 0.5px;
     /* --content-scanline-opacity: 0.04; */ /* Removed as per refactor */
 
@@ -213,12 +213,20 @@
     box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
   }
   .matrix-input:disabled,
-  .matrix-button:disabled { /* Combined disabled */
-    background-color: hsl(var(--muted));
-    border-color: hsl(var(--muted));
-    color: hsl(var(--muted-foreground));
+  .matrix-button:disabled { /* Combined disabled styling, primarily for buttons now */
+    background-color: hsl(var(--muted)); /* Black background for disabled buttons */
+    border-color: hsl(var(--muted)); /* Black border */
+    color: hsl(var(--matrix-bg)); /* Green text for contrast on black bg */
     cursor: not-allowed;
     box-shadow: none;
+    opacity: 0.7; /* General opacity for disabled buttons */
+  }
+  /* Specific override for .matrix-input:disabled for better 1-bit experience */
+  .matrix-input:disabled {
+    background-color: hsl(var(--matrix-panel)); /* Green background */
+    border-color: hsl(var(--input)); /* Black border */
+    color: hsla(var(--matrix-text), 0.5); /* 50% transparent black text */
+    opacity: 1; /* Override opacity from combined rule if needed, or manage separately */
   }
   .matrix-input::placeholder {
       color: hsl(var(--muted-foreground));
