@@ -1,7 +1,12 @@
-{pkgs}:
+{ pkgs, ... }:
 
+let
+  # Poetry-to-Nix to build Python packages not in nixpkgs
+  poetry2nix = pkgs.callPackage (fetchTarball "https://github.com/nix-community/poetry2nix/archive/refs/tags/1.40.1.tar.gz") { };
+in
 {
-  channel = "stable-24.05"; # Using a recent stable channel
+  # Using a recent stable channel
+  channel = "stable-24.05";
 
   # Define all system-level packages needed in the environment
   packages = [
@@ -12,52 +17,61 @@
     pkgs.docker-compose
     pkgs.sudo
 
-    # --- Python Runtime ---
-    pkgs.python311
-    pkgs.python311Packages.pip
+    # --- Python Runtime and Packages ---
+    (pkgs.python311.withPackages (ps: with ps; [
+      pip
 
-    # --- Core FastAPI & Web ---
-    pkgs.python311Packages.fastapi
-    pkgs.python311Packages.uvicorn
-    pkgs.python311Packages.python-multipart
-    pkgs.python311Packages.httpx
-    pkgs.python311Packages.python-jose # Includes cryptography
-    pkgs.python311Packages.passlib    # For password hashing
-    pkgs.python311Packages.bcrypt     # Often used with passlib for bcrypt support
-    pkgs.python311Packages.pydantic
+      # --- Core FastAPI & Web ---
+      fastapi
+      uvicorn
+      python-multipart
+      httpx
+      python-jose # Includes cryptography
+      passlib    # For password hashing
+      bcrypt     # Often used with passlib for bcrypt support
+      pydantic
 
-    # --- Configuration & Utilities ---
-    pkgs.python311Packages.pyyaml
-    pkgs.python311Packages.psutil
-    pkgs.python311Packages.numpy
-    pkgs.python311Packages.tenacity
-    pkgs.python311Packages.aiofiles
-    pkgs.python311Packages.firebase-admin
+      # --- Configuration & Utilities ---
+      pyyaml
+      psutil
+      numpy
+      tenacity
+      aiofiles
 
-    # --- Kafka ---
-    pkgs.python311Packages.kafka-python
+      # --- Kafka ---
+      kafka-python
 
-    # --- Database & Caching ---
-    pkgs.python311Packages.pymongo     # For MongoDB support
-    pkgs.python311Packages.redis       # Python client for Redis
+      # --- Database & Caching ---
+      pymongo     # For MongoDB support
+      redis       # Python client for Redis
 
-    # --- ML/CV Dependencies ---
-    pkgs.python311Packages.pytorch      # Core PyTorch library
-    pkgs.python311Packages.torchvision  # For computer vision tasks with PyTorch
-    pkgs.python311Packages.torchaudio   # For audio tasks with PyTorch
-    pkgs.python311Packages.opencv4      # Python bindings for OpenCV (equivalent to opencv-python)
-    pkgs.python311Packages.scipy
-    pkgs.python311Packages.scikit-learn  # Scikit-learn
-    pkgs.python311Packages.scikit-image # Scikit-image
-    pkgs.python311Packages.pandas       # Data manipulation
+      # --- ML/CV Dependencies ---
+      pytorch      # Core PyTorch library
+      torchvision  # For computer vision tasks with PyTorch
+      torchaudio   # For audio tasks with PyTorch
+      opencv-python # Python bindings for OpenCV
+      scipy
+      scikit-learn  # Scikit-learn
+      scikit-image # Scikit-image
+      pandas       # Data manipulation
 
-    # --- OCR Dependencies ---
-    pkgs.python311Packages.pillow       # Python Imaging Library
-    pkgs.python311Packages.pytesseract  # Python wrapper for Tesseract
-    pkgs.python311Packages.google-generativeai # Google Generative AI client
+      # --- OCR Dependencies ---
+      pillow       # Python Imaging Library
+      pytesseract  # Python wrapper for Tesseract
 
-    # --- Additional Utilities ---
-    pkgs.python311Packages.aiohttp      # For async HTTP requests
+      # --- Additional Utilities ---
+      aiohttp      # For async HTTP requests
+    ] ++ [
+      # Packages from Pip using poetry2nix
+      (poetry2nix.buildPoetryApplication {
+        projectDir = ./backend; # Assuming pyproject.toml is in the backend directory
+        overrides = [
+          (poetry2nix.defaultPoetryOverrides.overridePythonAttrs (old: {
+            # Add any required overrides here if needed
+          }))
+        ];
+      })
+    ]))
   ];
 
   # VS Code extensions for Project IDX
@@ -80,6 +94,7 @@
     enable = true;
     previews = {
       backend = {
+        id = "backend";
         command = [
           "/bin/sh"
           "-c"
@@ -89,6 +104,7 @@
       }; # end backend preview
 
       frontend = {
+        id = "frontend";
         command = [
           "/bin/sh"
           "-c"
@@ -96,7 +112,8 @@
         ];
         manager = "web";
         env = {
-          NEXT_PUBLIC_API_URL = "localhost:9002"; # Ensure this matches the backend preview's accessible URL
+          # Correctly reference the backend preview URL
+          NEXT_PUBLIC_API_URL = ''${previews.backend.url}'';
         };
       }; # end frontend preview
     };
@@ -106,6 +123,7 @@
   idx.workspace = {
     onCreate = {
       npm-install = "cd frontend && npm install";
+      # pip-install-firebase is no longer needed
     }; # end onCreate
 
     onStart = {
@@ -115,4 +133,4 @@
     }; # end onStart
   }; # End of idx.workspace
 
-} # End of main function
+}
