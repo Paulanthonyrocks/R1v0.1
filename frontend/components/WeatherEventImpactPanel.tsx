@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import {
+  AlertTriangle,
+  CloudSun,
+  Megaphone,
+  ShieldAlert,
+  ShieldHalf,
+  ShieldCheck
+} from 'lucide-react'; // Import icons
 
 interface WeatherData {
   temperature: number;
@@ -89,38 +97,46 @@ const WeatherEventImpactPanel: React.FC = () => {
     return 'Low';
   };
 
-  if (loading) return <div className="p-4">Loading weather and event impacts...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
-  if (!impacts.length) return <div className="p-4">No weather or event impacts found.</div>;
+  if (loading) return <div className="p-4 text-primary tracking-normal">Loading weather and event impacts...</div>; {/* Themed */}
+  if (error) return (
+    <div className="p-4 text-primary tracking-normal flex items-center">
+      <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" /> {/* Icon added */}
+      {error}
+    </div>
+  );
+  if (!impacts.length) return <div className="p-4 text-primary tracking-normal">No weather or event impacts found.</div>; {/* Themed */}
 
   return (
-    <div className="p-4 bg-white rounded-lg shadow-lg">
-      <h2 className="text-xl font-bold mb-4">Weather & Event Impacts</h2>
+    <div className="p-4 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Removed shadow-lg, added border and pixel-drop-shadow */}
+      <h2 className="text-xl font-bold mb-4 text-primary tracking-normal">Weather & Event Impacts</h2> {/* Added text-primary tracking-normal */}
       <div className="space-y-4">
-        {impacts.map((impact, idx) => (
-          <div key={idx} className={`p-4 rounded-lg border ${
-            impact.severity === 'High' ? 'border-red-200 bg-red-50' :
-            impact.severity === 'Medium' ? 'border-yellow-200 bg-yellow-50' :
-            'border-green-200 bg-green-50'
-          }`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold capitalize">{impact.type}</span>
-              <span className={`px-2 py-1 rounded text-sm ${
-                impact.severity === 'High' ? 'bg-red-200 text-red-800' :
-                impact.severity === 'Medium' ? 'bg-yellow-200 text-yellow-800' :
-                'bg-green-200 text-green-800'
-              }`}>
-                {impact.severity} Impact
-              </span>
-            </div>
-            <p className="text-gray-700">{impact.description}</p>
-            <div className="mt-2 text-sm text-gray-500 space-y-1">
-              <p>Location: {impact.location}</p>
-              <p>Start: {new Date(impact.startTime).toLocaleString()}</p>
+        {impacts.map((impact, idx) => {
+          let SeverityIcon = ShieldCheck; // Default to Low/Info
+          if (impact.severity === 'High') SeverityIcon = ShieldAlert;
+          else if (impact.severity === 'Medium') SeverityIcon = ShieldHalf;
+
+          return (
+            <div key={idx} className="p-4 rounded-lg border bg-card border-primary pixel-drop-shadow"> {/* Added pixel-drop-shadow */}
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center"> {/* Wrapper for type icon and text */}
+                  {impact.type === 'weather' && <CloudSun className="h-5 w-5 mr-2 text-primary flex-shrink-0" />}
+                  {impact.type === 'event' && <Megaphone className="h-5 w-5 mr-2 text-primary flex-shrink-0" />}
+                  <span className="font-semibold capitalize text-primary tracking-normal">{impact.type}</span> {/* Added text-primary tracking-normal */}
+                </div>
+                <span className="px-2 py-1 rounded text-sm bg-primary text-primary-foreground tracking-normal flex items-center"> {/* Added flex items-center */}
+                  <SeverityIcon className="h-3 w-3 mr-1.5" /> {/* Icon color inherited (text-primary-foreground) */}
+                  {impact.severity} Impact
+                </span>
+              </div>
+              <p className="text-primary tracking-normal">{impact.description}</p> {/* Changed color, added tracking */}
+              <div className="mt-2 text-sm text-muted-foreground tracking-normal space-y-1"> {/* Changed color, added tracking */}
+              <p className="tracking-normal">Location: {impact.location}</p> {/* Added tracking-normal to inner p's for consistency */}
+              <p className="tracking-normal">Start: {new Date(impact.startTime).toLocaleString()}</p>
               {impact.endTime && (
-                <p>End: {new Date(impact.endTime).toLocaleString()}</p>
+                <p className="tracking-normal">End: {new Date(impact.endTime).toLocaleString()}</p>
               )}
               {impact.type === 'weather' && impact.details && (
+                // Inherits text-muted-foreground and tracking-normal from parent div
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                   <p>Wind: {(impact.details as WeatherData).wind_speed} km/h</p>
                   <p>Precipitation: {(impact.details as WeatherData).precipitation_chance}%</p>
