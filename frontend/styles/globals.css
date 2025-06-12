@@ -261,20 +261,22 @@
 
   /* Style for interactive buttons - more specific than the combined .matrix-button above */
   .matrix-button {
-    /* Base styles from combined rule are inherited */
+    /* Base styles from combined rule are inherited: border, rounded-md, px-3 py-1 (overridden by padding below), color(fg), transition, box-shadow */
+    /* Explicitly apply font-matrix here if not relying on combined rule for font, though it should inherit */
     @apply text-primary-foreground font-semibold; /* Text on primary for buttons */
-    background-color: hsl(var(--primary));
-    border-color: hsl(var(--primary)); /* Ensure border matches bg */
+    background-color: hsl(var(--primary)); /* Black background */
+    border-color: hsl(var(--primary)); /* Black border */
     padding: 0.5rem 1rem; /* Overriding the py-1 from combined rule */
+    /* Ensure tracking-normal is part of its base or applied where used if needed */
   }
   .matrix-button:hover {
-    background-color: hsl(var(--matrix-light));
-    border-color: hsl(var(--matrix-light));
-    /* text-primary-foreground might still work, or you might need a different color if matrix-light is too light */
+    background-color: hsl(var(--primary) / 0.9); /* Slightly transparent black, consistent with Button variant */
+    border-color: hsl(var(--primary)); /* Keep border black */
   }
   .matrix-button:active {
-    background-color: hsl(var(--matrix-dark));
-    border-color: hsl(var(--matrix-dark));
+    background-color: hsl(var(--primary) / 0.8); /* More transparent black */
+    border-color: hsl(var(--primary));
+    box-shadow: inset 0 2px 4px 0 hsla(0, 0%, 0%, 0.05); /* Subtle inner shadow, similar to Button active */
   }
   
   /* --- Progress Bar Styles --- */
