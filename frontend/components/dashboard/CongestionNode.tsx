@@ -3,31 +3,32 @@ import React from 'react';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { CongestionNodeProps } from '@/lib/types';
+import { CheckCircle2, AlertTriangle, XOctagon } from 'lucide-react'; // Import status icons
 
 const CongestionNode = React.memo(({ id, name, value }: CongestionNodeProps) => {
-  // Determine color based on congestion level using theme semantic colors
-  const indicatorColorClass = value > 80
-    ? "[&>div]:bg-destructive" // Targets ProgressPrimitive.Indicator
-    : value > 60
-      ? "[&>div]:bg-warning"
-      : "[&>div]:bg-primary";
+  const indicatorColorClass = "[&>div]:bg-primary"; // Always black indicator
+  const textColorClass = 'text-primary'; // Always black
 
-  const textColorClass = value > 80
-    ? 'text-destructive'
-    : value > 60
-      ? 'text-warning'
-      : 'text-primary'; // Default to primary color for text
+  let StatusIconComponent = null;
+  if (value <= 60) {
+    StatusIconComponent = CheckCircle2;
+  } else if (value <= 80) {
+    StatusIconComponent = AlertTriangle;
+  } else {
+    StatusIconComponent = XOctagon;
+  }
 
   return (
     <div className="group" title={`${name} - ${value}% congested`}>
       <div className="flex justify-between items-center mb-1 text-sm">
-        <span className="font-medium text-foreground truncate pr-2 group-hover:text-primary transition-colors duration-150" >
+        <span className="font-medium text-foreground truncate pr-2 group-hover:text-primary transition-colors duration-150 tracking-normal" > {/* Added tracking-normal */}
           {name}
         </span>
         <span className={cn(
-          "font-mono tabular-nums font-semibold",
-          textColorClass // Use themed text color
+          "font-mono tabular-nums font-semibold tracking-normal flex items-center", /* Added tracking-normal and flex items-center */
+          textColorClass
         )}>
+          {StatusIconComponent && <StatusIconComponent className="h-4 w-4 mr-1 text-primary" />} {/* Icon Added */}
           {value.toFixed(0)}%
         </span>
       </div>
@@ -36,7 +37,7 @@ const CongestionNode = React.memo(({ id, name, value }: CongestionNodeProps) => 
         className={cn(
           "h-1.5 group-hover:h-2 transition-all duration-200 ease-in-out",
           "bg-card", // Set the track color to card background
-          indicatorColorClass, // Apply the class to color the indicator
+          indicatorColorClass,
           'transition-[width] duration-500 ease-out'
         )}
         aria-label={`Congestion level for ${name}: ${value}%`}
