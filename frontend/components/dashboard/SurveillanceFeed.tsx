@@ -51,14 +51,16 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         <Card
             className={cn(
                 "matrix-glow-card overflow-hidden",
-                "cursor-pointer"
+                "cursor-pointer",
+                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none" // Added focus state
             )}
             onClick={isToggling ? undefined : toggleFeed}
+            tabIndex={0} // Make it focusable
         >
             <div className="bg-black aspect-video flex items-center justify-center relative group">
                 {isToggling && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                        <Loader2 className="text-white animate-spin h-10 w-10" />
+                        <Loader2 className="text-primary-foreground animate-spin h-10 w-10" /> {/* Changed text-white to text-primary-foreground */}
                     </div>
                 )}
                 {videoUrl && !videoErrorOccurred && !isToggling ? (
@@ -82,34 +84,34 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                     />
                 ) : videoErrorOccurred && !isToggling ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-card">
-                        <AlertTriangle className="text-destructive text-3xl mb-1" />
-                        <p className="text-xs text-destructive text-center">Video feed unavailable</p>
+                        <AlertTriangle className="text-primary text-3xl mb-1" /> {/* Changed text-destructive to text-primary */}
+                        <p className="text-xs text-primary text-center tracking-normal">Video feed unavailable</p> {/* Changed text-destructive to text-primary, added tracking-normal */}
                     </div>
                 ) : !isToggling ? (
                     <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
-                        <Eye className="text-muted-foreground text-4xl" />
+                        <Eye className="text-primary-foreground text-4xl" /> {/* Changed to green for visibility on black bg */}
                     </div>
                 ) : null}
                 {status === 'running' && typeof fps === 'number' && !isToggling && (
-                  <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-white backdrop-blur-sm">
+                  <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-primary-foreground backdrop-blur-sm tracking-normal"> {/* Changed text-white, added tracking-normal */}
                     {fps} FPS
                   </Badge>
                 )}
                 <Badge
                     variant={status === 'running' ? "default" : "outline"}
                     className={cn(
-                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5",
+                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5 tracking-normal", // Added tracking-normal
                         status === 'running'
                             ? "bg-primary text-primary-foreground animate-matrix-pulse"
-                            : "bg-muted text-muted-foreground",
+                            : "bg-card text-primary", // Changed non-LIVE status badge style
                     )}
                 >
                     {status === 'running' ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
             </div>
             <CardContent className="p-2">
-                <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors">{component_name}</h4>
-                <p className="text-[10px] text-muted-foreground truncate">{component_node}</p>
+                <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors tracking-normal">{component_name}</h4> {/* Added tracking-normal */}
+                <p className="text-[10px] text-muted-foreground truncate tracking-normal">{component_node}</p> {/* Added tracking-normal */}
             </CardContent>
         </Card>
     );
