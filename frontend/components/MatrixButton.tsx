@@ -41,8 +41,8 @@ const MatrixButton: React.FC<MatrixButtonProps> = ({
   // Disabled: backgroundColor = `hsl(var(--matrix-muted-text))`, borderColor = `hsl(var(--matrix-muted-text))`, color = `hsl(var(--matrix-dark))`
   const primaryMatrixVariant = cn(
     "bg-primary border-primary text-primary-foreground", // Default state
-    "hover:bg-matrix-light hover:border-matrix-light hover:text-primary-foreground", // Hover state - text color remains primary-foreground
-    "focus:ring-2 focus:ring-offset-2 focus:ring-matrix-light focus:ring-offset-background", // Focus state - using offset for better visibility
+    "hover:bg-primary/90", // Updated hover state, border remains border-primary
+    "focus:ring-2 focus:ring-offset-2 focus:ring-ring focus:ring-offset-background", // Focus state - using theme ring color
     "disabled:bg-muted disabled:border-muted disabled:text-muted-foreground" // Disabled state - using theme's muted colors
   );
   // Note: text-primary-foreground is often dark (like matrix-bg). matrix-light is a lighter green.

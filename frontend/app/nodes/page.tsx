@@ -8,6 +8,7 @@ import { UserRole } from "@/lib/auth/roles";
 import { BackendCongestionNodeData } from '@/lib/types'; // No longer need AllNodesCongestionResponse from SWR
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import NodeCard from '@/components/nodes/NodeCard'; // Import the new NodeCard component
+import { AlertTriangle } from 'lucide-react'; // Import error icon
 
 // const fetcher = async (url: string) => { ... }; // Removed fetcher
 
@@ -42,13 +43,13 @@ const NodesPage: React.FC = () => {
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
       <div className="p-4">
-        <h1 className="text-2xl font-bold mb-6 uppercase text-matrix">Node Congestion Status</h1>
+        <h1 className="text-2xl font-bold mb-6 uppercase text-matrix tracking-normal">Node Congestion Status</h1> {/* Added tracking-normal */}
 
         <div className="mb-6">
           <input
             type="text"
             placeholder="Search nodes by name or ID..."
-            className="bg-matrix-panel border border-matrix-border-color text-matrix rounded-md p-2 w-full focus:ring-matrix-green focus:border-matrix-green"
+            className="bg-matrix-panel border border-matrix-border-color text-matrix rounded-md p-2 w-full focus:ring-primary focus:border-primary tracking-normal placeholder:text-primary" // Added placeholder:text-primary
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -56,22 +57,26 @@ const NodesPage: React.FC = () => {
 
         {isLoading && (
           <div className="flex justify-center items-center h-64">
-            <p className="text-matrix text-xl animate-pulse">Connecting to Node Data Stream...</p>
+            <p className="text-matrix text-xl animate-pulse tracking-normal">Connecting to Node Data Stream...</p> {/* Added tracking-normal */}
           </div>
         )}
 
         {displayError && (
           <div className="flex justify-center items-center h-64">
-            <div className="bg-destructive text-destructive-foreground border border-destructive/50 p-4 rounded-md max-w-md w-full">
-              <p className="text-xl font-semibold mb-2">Error Connecting to Node Stream</p>
-              <p className="text-sm">{String(displayError.message || displayError)}</p>
+            {/* Changed error panel styling */}
+            <div className="bg-card text-primary border border-primary p-4 rounded-md max-w-md w-full pixel-drop-shadow"> {/* Added pixel-drop-shadow */}
+              <div className="flex items-center mb-2">
+                <AlertTriangle className="h-6 w-6 text-primary mr-2 flex-shrink-0" />
+                <p className="text-xl font-semibold tracking-normal">Error Connecting to Node Stream</p> {/* Added tracking-normal */}
+              </div>
+              <p className="text-sm tracking-normal ml-8">{String(displayError.message || displayError)}</p> {/* Added tracking-normal and left margin for alignment with title */}
             </div>
           </div>
         )}
 
         {!isLoading && !displayError && (!filteredNodes || filteredNodes.length === 0) && (
           <div className="flex justify-center items-center h-64">
-            <p className="text-matrix-muted text-lg">
+            <p className="text-matrix-muted text-lg tracking-normal"> {/* Added tracking-normal */}
               {nodeCongestionData?.length === 0 ? "No nodes are currently reporting data via WebSocket." : "No nodes match your search query."}
             </p>
           </div>

@@ -5,6 +5,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import FeaturesSection from '@/components/landing/FeaturesSection';
 import SolutionsSection from '@/components/landing/SolutionsSection';
+import {
+  ArrowRight, TrafficCone, PlayCircle, ExternalLink, MapPin, Phone, Mail,
+  Twitter, Linkedin, Github, Send, Route as RouteIcon
+} from 'lucide-react'; // Route aliased to RouteIcon
 
 // Helper function for stat animation
 const animateValue = (
@@ -316,18 +320,18 @@ const RouteOnePage = () => {
                     <div className="container mx-auto px-4 py-20">
                         <div className="flex flex-col md:flex-row hero-content">
                             <div ref={addToScrollRefs} className="hero-text w-full md:w-1/2 scroll-transition">
-                                <h2 className="text-primary text-4xl md:text-6xl font-bold mb-6 matrix-glow">
-                                    UNLOCK YOUR CITY&apos;S FLOW: <span className="text-foreground neon-text">AI-Powered Traffic Revolution</span>
+                                <h2 className="text-primary text-4xl md:text-6xl font-bold mb-6 matrix-glow tracking-normal"> {/* Added tracking-normal */}
+                                    UNLOCK YOUR CITY&apos;S FLOW: <span className="text-primary-foreground">AI-Powered Traffic Revolution</span> {/* Changed to solid green, removed neon-text */}
                                 </h2>
-                                <p className="text-muted-foreground mb-8 text-lg">
+                                <p className="text-muted-foreground mb-8 text-lg tracking-normal"> {/* Added tracking-normal */}
                                     Route One harnesses the power of AI and real-time data analytics to optimize urban mobility, reduce congestion, and create smarter cities.
                                 </p>
                                 <div className="flex space-x-4">
                                     <button className="matrix-button hover:scale-105 transform">
-                                        REQUEST DEMO <i className="fas fa-arrow-right ml-2"></i>
+                                        REQUEST DEMO <ArrowRight className="ml-2 h-4 w-4 text-primary-foreground" />
                                     </button>
                                     <button onClick={(e) => handleSmoothScroll(e, '#features')}
-                                            className="matrix-button bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground hover:scale-105 transform">
+                                            className="matrix-button bg-secondary text-secondary-foreground hover:bg-primary/90 hover:scale-105 transform"> {/* Changed hover */}
                                         EXPLORE TECHNOLOGY
                                     </button>
                                 </div>
@@ -339,7 +343,7 @@ const RouteOnePage = () => {
                                     <div className="absolute inset-8 border border-primary rounded-full pulse opacity-70" style={{animationDelay: '1s'}}></div>
                                     <div className="absolute inset-12 flex items-center justify-center">
                                         <div className="w-40 h-40 bg-card/50 rounded-full flex items-center justify-center float relative border border-primary/30">
-                                            <i className="fas fa-traffic-light text-6xl text-primary"></i>
+                                            <TrafficCone size={64} className="text-primary" /> {/* Replaced fa-traffic-light, size is approx */}
                                             <div className="data-flow"> {/* .data-node styled in CSS with --primary */}
                                                 <div className="data-node" style={{top: '20%', left: '20%', animationDelay: '0s'}}></div>
                                                 <div className="data-node" style={{top: '30%', right: '20%', animationDelay: '0.5s'}}></div>
@@ -368,8 +372,8 @@ const RouteOnePage = () => {
                 <section id="demo" className="py-20 bg-background road-animation">
                     <div className="container mx-auto px-4">
                         <div ref={addToScrollRefs} className="text-center mb-16 scroll-transition">
-                            <h2 className="text-primary text-3xl md:text-4xl font-bold mb-4 matrix-glow">EXPERIENCE ROUTE ONE</h2>
-                            <p className="text-muted-foreground max-w-2xl mx-auto">
+                            <h2 className="text-primary text-3xl md:text-4xl font-bold mb-4 matrix-glow tracking-normal">EXPERIENCE ROUTE ONE</h2> {/* Added tracking-normal */}
+                            <p className="text-muted-foreground max-w-2xl mx-auto tracking-normal"> {/* Added tracking-normal */}
                                 See how our platform can transform your city&lsquo;s traffic management.
                             </p>
                         </div>
@@ -385,23 +389,24 @@ const RouteOnePage = () => {
                                         <div className="demo-graph-line"></div>
                                     </div>
                                     <div className="demo-stats">
-                                        <div className="demo-stat">Traffic Flow: 87%</div>
-                                        <div className="demo-stat">Incidents: 2</div>
-                                        <div className="demo-stat">Signals Optimized: 42</div>
+                                        {/* Assuming demo-stat text should also be tracking-normal, but it's a very specific style */}
+                                        <div className="demo-stat tracking-normal">Traffic Flow: 87%</div>
+                                        <div className="demo-stat tracking-normal">Incidents: 2</div>
+                                        <div className="demo-stat tracking-normal">Signals Optimized: 42</div>
                                     </div>
                                     <div className="text-center relative z-10">
-                                        <i className="fas fa-play-circle text-6xl text-primary mb-4 pulse cursor-pointer" onClick={handleDemoPlay}></i>
-                                        <p className="text-primary">CLICK TO VIEW DEMO</p>
+                                        <PlayCircle size={64} className="text-primary mb-4 pulse cursor-pointer" onClick={handleDemoPlay} /> {/* Replaced fa-play-circle */}
+                                        <p className="text-primary tracking-normal">CLICK TO VIEW DEMO</p> {/* Added tracking-normal */}
                                     </div>
                                 </div>
                             </div>
                             <div className="p-6 bg-card/70 flex flex-wrap justify-between items-center border-t border-border">
                                 <div>
-                                    <h3 className="text-primary text-xl font-bold mb-2">CITY TRAFFIC CONTROL CENTER</h3>
-                                    <p className="text-muted-foreground text-sm">Live data visualization and control interface</p>
+                                    <h3 className="text-primary text-xl font-bold mb-2 tracking-normal">CITY TRAFFIC CONTROL CENTER</h3> {/* Added tracking-normal */}
+                                    <p className="text-muted-foreground text-sm tracking-normal">Live data visualization and control interface</p> {/* Added tracking-normal */}
                                         </div>
                                 <button onClick={handleDemoPlay} className="matrix-button mt-4 sm:mt-0 hover:scale-105 transform">
-                                    LAUNCH FULL DEMO <i className="fas fa-external-link-alt ml-2"></i>
+                                    LAUNCH FULL DEMO <ExternalLink className="ml-2 h-4 w-4 text-primary-foreground" />
                                 </button>
                             </div>
                         </div>
@@ -414,28 +419,28 @@ const RouteOnePage = () => {
                 <section ref={statsSectionRef} className="py-20 bg-background/50">
                     <div className="container mx-auto px-4">
                         <div ref={addToScrollRefs} className="text-center mb-12 scroll-transition">
-                            <h3 className="text-primary text-2xl font-bold mb-2 matrix-glow">ROUTE ONE BY THE NUMBERS</h3>
-                            <p className="text-muted-foreground max-w-2xl mx-auto">
+                            <h3 className="text-primary text-2xl font-bold mb-2 matrix-glow tracking-normal">ROUTE ONE BY THE NUMBERS</h3> {/* Added tracking-normal */}
+                            <p className="text-muted-foreground max-w-2xl mx-auto tracking-normal"> {/* Added tracking-normal */}
                                 Quantifiable impact across our network of smart cities
                             </p>
                         </div>
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
                             <div ref={addToScrollRefs} className="text-center scroll-transition">
-                                <div className="text-primary text-4xl font-bold mb-2">{stat1}+</div>
-                                <p className="text-muted-foreground">Cities Optimized</p>
+                                <div className="text-primary text-4xl font-bold mb-2 tracking-normal">{stat1}+</div> {/* Added tracking-normal to stat number */}
+                                <p className="text-muted-foreground tracking-normal">Cities Optimized</p> {/* Added tracking-normal */}
                             </div>
                             <div ref={addToScrollRefs} className="text-center scroll-transition" style={{transitionDelay: '0.1s'}}>
-                                <div className="text-primary text-4xl font-bold mb-2">{stat2}%</div>
-                                <p className="text-muted-foreground">Avg. Traffic Reduction</p>
+                                <div className="text-primary text-4xl font-bold mb-2 tracking-normal">{stat2}%</div> {/* Added tracking-normal to stat number */}
+                                <p className="text-muted-foreground tracking-normal">Avg. Traffic Reduction</p> {/* Added tracking-normal */}
                             </div>
                             <div ref={addToScrollRefs} className="text-center scroll-transition" style={{transitionDelay: '0.2s'}}>
-                                <div className="text-primary text-4xl font-bold mb-2">{stat3}%</div>
-                                <p className="text-muted-foreground">Avg. Emission Decrease</p>
+                                <div className="text-primary text-4xl font-bold mb-2 tracking-normal">{stat3}%</div> {/* Added tracking-normal to stat number */}
+                                <p className="text-muted-foreground tracking-normal">Avg. Emission Decrease</p> {/* Added tracking-normal */}
                             </div>
                             <div ref={addToScrollRefs} className="text-center scroll-transition" style={{transitionDelay: '0.3s'}}>
-                                <div className="text-primary text-4xl font-bold mb-2">{stat4}%</div>
-                                <p className="text-muted-foreground">Avg. Response Time Improvement</p>
+                                <div className="text-primary text-4xl font-bold mb-2 tracking-normal">{stat4}%</div> {/* Added tracking-normal to stat number */}
+                                <p className="text-muted-foreground tracking-normal">Avg. Response Time Improvement</p> {/* Added tracking-normal */}
                             </div>
                         </div>
                     </div>
@@ -456,32 +461,32 @@ const RouteOnePage = () => {
                                     <div className="space-y-6">
                                         <div className="flex items-center">
                                             <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-map-marker-alt text-primary"></i>
+                                                <MapPin className="h-5 w-5 text-primary" /> {/* Replaced fa-map-marker-alt */}
                                             </div>
-                                            <p className="text-muted-foreground">123 Cyber Lane, Neo City, NC 10101</p>
+                                <p className="text-muted-foreground tracking-normal">123 Cyber Lane, Neo City, NC 10101</p> {/* Added tracking-normal */}
                                         </div>
                                         <div className="flex items-center">
                                             <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-phone text-primary"></i>
+                                                <Phone className="h-5 w-5 text-primary" /> {/* Replaced fa-phone */}
                                             </div>
-                                            <p className="text-muted-foreground">+1 (555) 010-1010</p>
+                                <p className="text-muted-foreground tracking-normal">+1 (555) 010-1010</p> {/* Added tracking-normal */}
                                         </div>
                                         <div className="flex items-center">
                                             <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mr-4 flex-shrink-0 float">
-                                                <i className="fas fa-envelope text-primary"></i>
+                                                <Mail className="h-5 w-5 text-primary" /> {/* Replaced fa-envelope */}
                                             </div>
-                                            <p className="text-muted-foreground">contact@routeone.tech</p>
+                                <p className="text-muted-foreground tracking-normal">contact@routeone.tech</p> {/* Added tracking-normal */}
                                         </div>
                                     </div>
                                     <div className="mt-8 flex space-x-4">
-                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-accent hover:text-accent-foreground transition hover:scale-110 transform">
-                                            <i className="fab fa-twitter"></i>
+                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-primary hover:text-primary-foreground transition hover:scale-110 transform"> {/* Updated hover for social icons */}
+                                            <Twitter className="h-5 w-5" /> {/* Replaced fab fa-twitter, color from parent <a> */}
                                         </a>
-                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-accent hover:text-accent-foreground transition hover:scale-110 transform">
-                                            <i className="fab fa-linkedin-in"></i>
+                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-primary hover:text-primary-foreground transition hover:scale-110 transform"> {/* Updated hover for social icons */}
+                                            <Linkedin className="h-5 w-5" /> {/* Replaced fab fa-linkedin-in, color from parent <a> */}
                                         </a>
-                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-accent hover:text-accent-foreground transition hover:scale-110 transform">
-                                            <i className="fab fa-github"></i>
+                                        <a href="#" className="border border-primary text-primary rounded-full w-10 h-10 flex items-center justify-center hover:bg-primary hover:text-primary-foreground transition hover:scale-110 transform"> {/* Updated hover for social icons */}
+                                            <Github className="h-5 w-5" /> {/* Replaced fab fa-github, color from parent <a> */}
                                         </a>
                                     </div>
                                 </div>
@@ -489,24 +494,24 @@ const RouteOnePage = () => {
                                     <form ref={addToScrollRefs} className="scroll-transition" style={{transitionDelay: '0.2s'}} onSubmit={(e) => e.preventDefault()}>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                                             <div>
-                                                <label className="block text-primary text-sm font-bold mb-2" htmlFor="name">NAME</label>
-                                                <input className="matrix-input w-full py-3 px-4" id="name" type="text" placeholder="Your Full Name" />
+                                                <label className="block text-primary text-sm font-bold mb-2 tracking-normal" htmlFor="name">NAME</label> {/* Added tracking-normal */}
+                                                <input className="matrix-input w-full py-3 px-4 tracking-normal" id="name" type="text" placeholder="Your Full Name" /> {/* Added tracking-normal */}
                                             </div>
                                             <div>
-                                                <label className="block text-primary text-sm font-bold mb-2" htmlFor="email">EMAIL</label>
-                                                <input className="matrix-input w-full py-3 px-4" id="email" type="email" placeholder="your.email@example.com" />
+                                                <label className="block text-primary text-sm font-bold mb-2 tracking-normal" htmlFor="email">EMAIL</label> {/* Added tracking-normal */}
+                                                <input className="matrix-input w-full py-3 px-4 tracking-normal" id="email" type="email" placeholder="your.email@example.com" /> {/* Added tracking-normal */}
                                             </div>
                                         </div>
                                         <div className="mb-6">
-                                            <label className="block text-primary text-sm font-bold mb-2" htmlFor="subject">SUBJECT</label>
-                                            <input className="matrix-input w-full py-3 px-4" id="subject" type="text" placeholder="e.g., Demo Request for Neo City" />
+                                            <label className="block text-primary text-sm font-bold mb-2 tracking-normal" htmlFor="subject">SUBJECT</label> {/* Added tracking-normal */}
+                                            <input className="matrix-input w-full py-3 px-4 tracking-normal" id="subject" type="text" placeholder="e.g., Demo Request for Neo City" /> {/* Added tracking-normal */}
                                         </div>
                                         <div className="mb-6">
-                                            <label className="block text-primary text-sm font-bold mb-2" htmlFor="message">MESSAGE</label>
-                                            <textarea className="matrix-input w-full py-3 px-4" id="message" rows={4} placeholder="Tell us about your city's traffic challenges"></textarea>
+                                            <label className="block text-primary text-sm font-bold mb-2 tracking-normal" htmlFor="message">MESSAGE</label> {/* Added tracking-normal */}
+                                            <textarea className="matrix-input w-full py-3 px-4 tracking-normal" id="message" rows={4} placeholder="Tell us about your city's traffic challenges"></textarea> {/* Added tracking-normal */}
                                         </div>
                                         <button type="submit" className="matrix-button w-full hover:scale-105 transform">
-                                            SEND MESSAGE <i className="fas fa-paper-plane ml-2"></i>
+                                            SEND MESSAGE <Send className="ml-2 h-4 w-4 text-primary-foreground" /> {/* Replaced fa-paper-plane */}
                                         </button>
                                     </form>
                                 </div>
@@ -521,16 +526,16 @@ const RouteOnePage = () => {
                         <div className="flex flex-col md:flex-row justify-between items-center">
                             <div className="flex items-center mb-6 md:mb-0">
                                 <div className="border border-primary rounded-full w-10 h-10 flex items-center justify-center mr-3 float">
-                                    <i className="fas fa-route text-xl text-primary"></i>
+                                    <RouteIcon size={24} className="text-primary" /> {/* Replaced fa-route */}
                                 </div>
-                                <h1 className="text-foreground text-2xl font-bold">ROUTE ONE</h1>
+                                <h1 className="text-foreground text-2xl font-bold tracking-normal">ROUTE ONE</h1> {/* Added tracking-normal */}
                             </div>
                             <div className="text-center md:text-right">
-                                <p className="text-muted-foreground mb-2">© {new Date().getFullYear()} Route One Technologies. All rights reserved.</p>
+                                <p className="text-muted-foreground mb-2 tracking-normal">© {new Date().getFullYear()} Route One Technologies. All rights reserved.</p> {/* Added tracking-normal */}
                                 <div className="flex justify-center md:justify-end space-x-6">
-                                    <a href="#" className="text-muted-foreground hover:text-primary transition">Privacy</a>
-                                    <a href="#" className="text-muted-foreground hover:text-primary transition">Terms</a>
-                                    <a href="#" className="text-muted-foreground hover:text-primary transition">Security</a>
+                                    <a href="#" className="text-muted-foreground hover:text-primary transition tracking-normal">Privacy</a> {/* Added tracking-normal */}
+                                    <a href="#" className="text-muted-foreground hover:text-primary transition tracking-normal">Terms</a> {/* Added tracking-normal */}
+                                    <a href="#" className="text-muted-foreground hover:text-primary transition tracking-normal">Security</a> {/* Added tracking-normal */}
                                 </div>
                             </div>
                         </div>

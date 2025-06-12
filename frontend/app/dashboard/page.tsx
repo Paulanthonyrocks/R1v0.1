@@ -10,7 +10,9 @@ import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
-import { Activity, Zap, AlertTriangle, Users } from 'lucide-react'; // Import Lucide icons
+import {
+  Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
+} from 'lucide-react'; // Import Lucide icons & new status icons
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
@@ -32,15 +34,32 @@ const DashboardPage: React.FC = () => {
     setDebugMessages(prev => [...prev, `WebSocket Connected: ${isConnected}, Ready: ${isReady}`]);
   }, [isConnected, isReady]);
 
-  // Helper to color metrics (can be kept or adapted)
-  const getCongestionColor = (val: number) => val > 70 ? 'text-red-400' : val > 40 ? 'text-yellow-400' : 'text-green-400';
-  const getSpeedColor = (val: number) => val < 20 ? 'text-red-400' : val < 40 ? 'text-yellow-400' : 'text-green-400';
-  const getIncidentColor = (val: number) => val > 0 ? 'text-red-400' : 'text-green-400';
+  // Helper functions to determine status icons
+  const getCongestionStatusIcon = (val: number | undefined) => {
+    if (val === undefined || val === null) return undefined; // Or a placeholder like HelpCircle
+    if (val > 70) return TrendingDown; // High congestion is "bad"
+    if (val > 40) return TrendingUp;   // Medium congestion is "warning" or "trending worse"
+    return CheckCircle2; // Low congestion is "good"
+  };
+
+  const getSpeedStatusIcon = (val: number | undefined) => {
+    if (val === undefined || val === null) return undefined;
+    if (val < 20) return TrendingDown; // Low speed is "bad"
+    if (val < 40) return TrendingUp;   // Medium speed is "warning"
+    return CheckCircle2; // Good speed
+  };
+
+  const getIncidentStatusIcon = (val: number | undefined) => {
+    if (val === undefined || val === null) return undefined;
+    if (val > 0) return AlertTriangle; // Active incidents
+    return ShieldCheck; // No incidents
+  };
+  // Total flow doesn't have a qualitative status here, so no specific icon based on value ranges.
 
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}> {/* Wrap content with AuthGuard and specify required role */}
       <div className="p-4 text-matrix">
-        <h1 className="text-2xl font-bold mb-4 uppercase">Dashboard</h1>
+        <h1 className="text-2xl font-bold mb-4 uppercase tracking-normal">Dashboard</h1> {/* Added tracking-normal */}
 
         {/* Navigation Links */}
         <nav className="mb-6 flex gap-4">
@@ -55,7 +74,7 @@ const DashboardPage: React.FC = () => {
             title="Congestion Index"
             value={`${kpis?.congestion_index ?? '--'}%`}
             icon={Activity}
-            valueColor={kpis?.congestion_index ? getCongestionColor(kpis.congestion_index) : 'text-muted-foreground'}
+            statusIcon={getCongestionStatusIcon(kpis?.congestion_index)}
             change="N/A"
             changeText="Change data not available"
           />
@@ -63,15 +82,15 @@ const DashboardPage: React.FC = () => {
             title="Average Speed"
             value={`${kpis?.average_speed_kmh ?? '--'} km/h`}
             icon={Zap}
-            valueColor={kpis?.average_speed_kmh ? getSpeedColor(kpis.average_speed_kmh) : 'text-muted-foreground'}
+            statusIcon={getSpeedStatusIcon(kpis?.average_speed_kmh)}
             change="N/A"
             changeText="Change data not available"
           />
           <StatCard
             title="Active Incidents"
             value={`${kpis?.active_incidents_count ?? '--'}`}
-            icon={AlertTriangle}
-            valueColor={kpis?.active_incidents_count ? getIncidentColor(kpis.active_incidents_count) : 'text-muted-foreground'}
+            icon={AlertTriangle} // Main icon for the card category
+            statusIcon={getIncidentStatusIcon(kpis?.active_incidents_count)} // Status icon next to value
             change="N/A"
             changeText="Change data not available"
           />
@@ -79,15 +98,15 @@ const DashboardPage: React.FC = () => {
             title="Total Flow"
             value={`${kpis?.total_flow ?? '--'} vehicles/hr`}
             icon={Users}
-            valueColor={kpis?.total_flow ? undefined : 'text-muted-foreground'} // No specific color logic for flow, default if no value
+            // No specific statusIcon for total flow based on current logic
             change="N/A"
             changeText="Change data not available"
           />
         </div>
 
         {/* Placeholder for video stream */}
-        <div className="mb-4 bg-card p-4 rounded">
-          <h2 className="text-xl font-semibold mb-2">Video Feed (Sample)</h2>
+        <div className="mb-4 bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <h2 className="text-xl font-semibold mb-2 tracking-normal">Video Feed (Sample)</h2> {/* Added tracking-normal */}
           <div className="w-full h-96 bg-background flex items-center justify-center text-muted-foreground rounded">
             <video
               src="/api/v1/sample-video"
@@ -99,10 +118,10 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* Live Alerts Section */}
-        <div className="mb-6 bg-card p-4 rounded">
-          <h2 className="text-xl font-semibold mb-3">Live Alerts</h2>
-          {!isReady && <p className="text-muted-foreground">Connecting to live alerts...</p>}
-          {isReady && alerts.length === 0 && <p className="text-muted-foreground">No new alerts.</p>}
+        <div className="mb-6 bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <h2 className="text-xl font-semibold mb-3 tracking-normal">Live Alerts</h2> {/* Added tracking-normal */}
+          {!isReady && <p className="text-muted-foreground tracking-normal">Connecting to live alerts...</p>} {/* Added tracking-normal */}
+          {isReady && alerts.length === 0 && <p className="text-muted-foreground tracking-normal">No new alerts.</p>} {/* Added tracking-normal */}
           {isReady && alerts.length > 0 && (
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {alerts.slice(-10).reverse().map((alert) => (
@@ -120,13 +139,13 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* WebSocket debug/messages (optional, using debugMessages now) */}
-        <div className="bg-card p-4 rounded">
-          <h2 className="text-xl font-semibold mb-2">WebSocket Connection Status (Debug)</h2>
+        <div className="bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <h2 className="text-xl font-semibold mb-2 tracking-normal">WebSocket Connection Status (Debug)</h2> {/* Added tracking-normal */}
           <div className="max-h-60 overflow-y-auto text-sm text-muted-foreground">
               {debugMessages.slice(-10).map((msg, index) => (
-                  <p key={index} className="mb-1 break-all">{msg}</p>
+                  <p key={index} className="mb-1 break-all tracking-normal">{msg}</p> /* Added tracking-normal */
               ))}
-              {debugMessages.length === 0 && <p className="text-muted-foreground">Monitoring connection...</p>}
+              {debugMessages.length === 0 && <p className="text-muted-foreground tracking-normal">Monitoring connection...</p>} {/* Added tracking-normal */}
           </div>
         </div>
 

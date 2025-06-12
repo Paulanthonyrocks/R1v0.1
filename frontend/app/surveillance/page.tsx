@@ -24,7 +24,7 @@ const SurveillancePage = () => {
     return (
         <AuthGuard requiredRole={UserRole.AGENCY}>
             <div className="p-4 w-full relative">
-                <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">SURVEILLANCE</h1>
+                <h1 className="text-2xl font-bold mb-4 uppercase text-matrix tracking-normal">SURVEILLANCE</h1> {/* Added tracking-normal */}
                 <LoadingMessage text="Connecting to surveillance system..." />
             </div>
         </AuthGuard>
@@ -34,11 +34,11 @@ const SurveillancePage = () => {
   return (
     <AuthGuard requiredRole={UserRole.AGENCY}>
       <div className="p-4 w-full relative">
-        <h1 className="text-2xl font-bold mb-6 uppercase text-matrix">SURVEILLANCE FEEDS</h1>
+        <h1 className="text-2xl font-bold mb-6 uppercase text-matrix tracking-normal">SURVEILLANCE FEEDS</h1> {/* Added tracking-normal */}
 
         {feeds.length === 0 ? (
           <div className="flex justify-center items-center h-64">
-            <p className="text-matrix-muted text-lg">No surveillance feeds available at the moment.</p>
+            <p className="text-matrix-muted text-lg tracking-normal">No surveillance feeds available at the moment.</p> {/* Added tracking-normal */}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

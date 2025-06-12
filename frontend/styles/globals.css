@@ -73,7 +73,7 @@
     --background-start: var(--matrix-bg);
     --background-end: var(--matrix-bg);
     --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
-    --scanline-opacity: 0.01; /* Adjusted from 0.04 to match noise opacity */
+    --scanline-opacity: 0.01; /* Global subtle scanlines, adjusted from 0.04 */
     --scanline-width: 0.5px;
     /* --content-scanline-opacity: 0.04; */ /* Removed as per refactor */
 
@@ -213,12 +213,20 @@
     box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
   }
   .matrix-input:disabled,
-  .matrix-button:disabled { /* Combined disabled */
-    background-color: hsl(var(--muted));
-    border-color: hsl(var(--muted));
-    color: hsl(var(--muted-foreground));
+  .matrix-button:disabled { /* Combined disabled styling, primarily for buttons now */
+    background-color: hsl(var(--muted)); /* Black background for disabled buttons */
+    border-color: hsl(var(--muted)); /* Black border */
+    color: hsl(var(--matrix-bg)); /* Green text for contrast on black bg */
     cursor: not-allowed;
     box-shadow: none;
+    opacity: 0.7; /* General opacity for disabled buttons */
+  }
+  /* Specific override for .matrix-input:disabled for better 1-bit experience */
+  .matrix-input:disabled {
+    background-color: hsl(var(--matrix-panel)); /* Green background */
+    border-color: hsl(var(--input)); /* Black border */
+    color: hsla(var(--matrix-text), 0.5); /* 50% transparent black text */
+    opacity: 1; /* Override opacity from combined rule if needed, or manage separately */
   }
   .matrix-input::placeholder {
       color: hsl(var(--muted-foreground));
@@ -253,20 +261,22 @@
 
   /* Style for interactive buttons - more specific than the combined .matrix-button above */
   .matrix-button {
-    /* Base styles from combined rule are inherited */
+    /* Base styles from combined rule are inherited: border, rounded-md, px-3 py-1 (overridden by padding below), color(fg), transition, box-shadow */
+    /* Explicitly apply font-matrix here if not relying on combined rule for font, though it should inherit */
     @apply text-primary-foreground font-semibold; /* Text on primary for buttons */
-    background-color: hsl(var(--primary));
-    border-color: hsl(var(--primary)); /* Ensure border matches bg */
+    background-color: hsl(var(--primary)); /* Black background */
+    border-color: hsl(var(--primary)); /* Black border */
     padding: 0.5rem 1rem; /* Overriding the py-1 from combined rule */
+    /* Ensure tracking-normal is part of its base or applied where used if needed */
   }
   .matrix-button:hover {
-    background-color: hsl(var(--matrix-light));
-    border-color: hsl(var(--matrix-light));
-    /* text-primary-foreground might still work, or you might need a different color if matrix-light is too light */
+    background-color: hsl(var(--primary) / 0.9); /* Slightly transparent black, consistent with Button variant */
+    border-color: hsl(var(--primary)); /* Keep border black */
   }
   .matrix-button:active {
-    background-color: hsl(var(--matrix-dark));
-    border-color: hsl(var(--matrix-dark));
+    background-color: hsl(var(--primary) / 0.8); /* More transparent black */
+    border-color: hsl(var(--primary));
+    box-shadow: inset 0 2px 4px 0 hsla(0, 0%, 0%, 0.05); /* Subtle inner shadow, similar to Button active */
   }
   
   /* --- Progress Bar Styles --- */
