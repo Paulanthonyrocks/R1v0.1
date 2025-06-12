@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { AlertTriangle, XOctagon, CheckCircle2 } from 'lucide-react'; // Import error icon & traffic impact icons
 
 interface RouteAnalytics {
   total_routes: number;
@@ -65,18 +66,24 @@ const RouteHistoryPanel: React.FC = () => {
     fetchData();
   }, [timeRange]);
 
-  if (loading) return <div className="p-4">Loading route history...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
-  if (!historyData?.routes.length) return <div className="p-4">No route history found.</div>;
+  if (loading) return <div className="p-4">Loading route history...</div>; // Loading text already themed in previous step
+  if (error) return ( // Added icon to error message
+    <div className="p-4 text-primary tracking-normal flex items-center">
+      <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" /> {/* Icon added, color inherited */}
+      {error}
+    </div>
+  );
+  if (!historyData?.routes.length) return <div className="p-4 text-primary tracking-normal">No route history found.</div>; {/* Added color & tracking */}
 
   return (
-    <div className="p-4 bg-white rounded-lg shadow-lg">
+    <div className="p-4 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Removed shadow-lg, added border and pixel-drop-shadow */}
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-bold">Route History</h2>
-        <div className="flex gap-2">          <select
+        <h2 className="text-xl font-bold text-primary tracking-normal">Route History</h2> {/* Added text-primary tracking-normal */}
+        <div className="flex gap-2">
+          <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value)}
-            className="px-3 py-1 border rounded bg-white"
+            className="px-3 py-1 border border-primary rounded bg-matrix-panel text-primary tracking-normal focus:ring-2 focus:ring-primary focus:outline-none focus:border-primary" // Added focus styling
             aria-label="Time range filter"
             title="Select time range for route history"
           >
@@ -89,57 +96,61 @@ const RouteHistoryPanel: React.FC = () => {
 
       {/* Analytics Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="p-3 bg-gray-50 rounded-lg">
-          <div className="text-sm text-gray-600">Total Routes</div>
-          <div className="text-xl font-semibold">{historyData.analytics.total_routes}</div>
+        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <div className="text-sm text-muted-foreground tracking-normal">Total Routes</div> {/* Changed color, added tracking */}
+          <div className="text-xl font-semibold text-primary tracking-normal">{historyData.analytics.total_routes}</div> {/* Added color & tracking */}
         </div>
-        <div className="p-3 bg-gray-50 rounded-lg">
-          <div className="text-sm text-gray-600">Avg Duration</div>
-          <div className="text-xl font-semibold">{Math.round(historyData.analytics.avg_duration / 60)} min</div>
+        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <div className="text-sm text-muted-foreground tracking-normal">Avg Duration</div> {/* Changed color, added tracking */}
+          <div className="text-xl font-semibold text-primary tracking-normal">{Math.round(historyData.analytics.avg_duration / 60)} min</div> {/* Added color & tracking */}
         </div>
-        <div className="p-3 bg-gray-50 rounded-lg">
-          <div className="text-sm text-gray-600">Traffic Impact</div>
-          <div className="text-xl font-semibold capitalize">{historyData.analytics.avg_traffic_impact}</div>
+        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <div className="text-sm text-muted-foreground tracking-normal">Traffic Impact</div> {/* Changed color, added tracking */}
+          <div className="text-xl font-semibold text-primary tracking-normal capitalize">{historyData.analytics.avg_traffic_impact}</div> {/* Added color & tracking */}
         </div>
-        <div className="p-3 bg-gray-50 rounded-lg">
-          <div className="text-sm text-gray-600">Common Weather</div>
-          <div className="text-sm font-semibold">{historyData.analytics.common_weather_impacts.join(', ')}</div>
+        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
+          <div className="text-sm text-muted-foreground tracking-normal">Common Weather</div> {/* Changed color, added tracking */}
+          <div className="text-sm font-semibold text-primary tracking-normal">{historyData.analytics.common_weather_impacts.join(', ')}</div> {/* Added color & tracking */}
         </div>
       </div>
 
       {/* Routes Table */}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm border">
+        <table className="w-full text-sm border border-primary"> {/* Added border-primary for table border */}
           <thead>
-            <tr className="bg-gray-50">
-              <th className="p-2 border">Date</th>
-              <th className="p-2 border">Route</th>
-              <th className="p-2 border">Duration</th>
-              <th className="p-2 border">Distance</th>
-              <th className="p-2 border">Traffic</th>
-              <th className="p-2 border">Weather</th>
+            <tr className="bg-primary text-primary-foreground"> {/* Themed header row */}
+              <th className="p-2 border border-primary tracking-normal">Date</th> {/* Added tracking, themed border */}
+              <th className="p-2 border border-primary tracking-normal">Route</th> {/* Added tracking, themed border */}
+              <th className="p-2 border border-primary tracking-normal">Duration</th> {/* Added tracking, themed border */}
+              <th className="p-2 border border-primary tracking-normal">Distance</th> {/* Added tracking, themed border */}
+              <th className="p-2 border border-primary tracking-normal">Traffic</th> {/* Added tracking, themed border */}
+              <th className="p-2 border border-primary tracking-normal">Weather</th> {/* Added tracking, themed border */}
             </tr>
           </thead>
-          <tbody>
+          <tbody className="tracking-normal"> {/* Added tracking-normal to be inherited by td */}
             {historyData.routes.map(entry => (
-              <tr key={entry.id} className="border-b hover:bg-gray-50">
-                <td className="p-2 border whitespace-nowrap">{new Date(entry.date).toLocaleString()}</td>
-                <td className="p-2 border">
-                  <div className="font-medium">{entry.origin} → {entry.destination}</div>
-                  <div className="text-xs text-gray-500">{entry.routeSummary}</div>
+              <tr key={entry.id} className="border-b border-primary hover:bg-black/10"> {/* Themed border and hover */}
+                <td className="p-2 border border-primary whitespace-nowrap">{new Date(entry.date).toLocaleString()}</td> {/* Themed border */}
+                <td className="p-2 border border-primary"> {/* Themed border */}
+                  <div className="font-medium text-primary">{entry.origin} → {entry.destination}</div> {/* Ensured text-primary */}
+                  <div className="text-xs text-muted-foreground tracking-normal">{entry.routeSummary}</div> {/* Changed color, added tracking */}
                 </td>
-                <td className="p-2 border whitespace-nowrap">{Math.round(entry.duration / 60)} min</td>
-                <td className="p-2 border whitespace-nowrap">{(entry.distance / 1000).toFixed(1)} km</td>
-                <td className="p-2 border">
-                  <span className={`px-2 py-1 rounded text-xs ${
-                    entry.trafficImpact.toLowerCase().includes('high') ? 'bg-red-100 text-red-800' :
-                    entry.trafficImpact.toLowerCase().includes('medium') ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-green-100 text-green-800'
-                  }`}>
-                    {entry.trafficImpact}
-                  </span>
+                <td className="p-2 border border-primary whitespace-nowrap">{Math.round(entry.duration / 60)} min</td> {/* Themed border */}
+                <td className="p-2 border border-primary whitespace-nowrap">{(entry.distance / 1000).toFixed(1)} km</td> {/* Themed border */}
+                <td className="p-2 border border-primary">
+                  <div className="flex items-center">
+                    {(() => {
+                      const impactText = entry.trafficImpact.toLowerCase();
+                      let IconComponent = null;
+                      if (impactText.includes('high')) IconComponent = XOctagon;
+                      else if (impactText.includes('medium')) IconComponent = AlertTriangle;
+                      else if (impactText.includes('low')) IconComponent = CheckCircle2;
+                      return IconComponent ? <IconComponent className="h-4 w-4 mr-1.5 text-primary flex-shrink-0" /> : null;
+                    })()}
+                    <span className="capitalize text-primary tracking-normal">{entry.trafficImpact}</span>
+                  </div>
                 </td>
-                <td className="p-2 border">{entry.weatherImpact || '-'}</td>
+                <td className="p-2 border border-primary">{entry.weatherImpact || '-'}</td> {/* Themed border */}
               </tr>
             ))}
           </tbody>
