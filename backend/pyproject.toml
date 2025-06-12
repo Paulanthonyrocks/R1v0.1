@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "backend"
+version = "0.1.0"
+description = ""
+authors = ["your-name <your-email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+google-generativeai = "^0.5.4" # Or the latest version
+firebase-admin = "^6.5.0"      # Or the latest version
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
