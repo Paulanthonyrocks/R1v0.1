@@ -2,7 +2,8 @@ import React from 'react';
 import RouteHistoryPanel from '../../components/RouteHistoryPanel';
 
 const HistoryPage: React.FC = () => (
-  <main className="min-h-screen bg-gray-50 p-8">
+  // Changed bg-gray-50 to bg-background, added tracking-normal
+  <main className="min-h-screen bg-background p-8 tracking-normal">
     <RouteHistoryPanel />
   </main>
 );
