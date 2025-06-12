@@ -64,7 +64,7 @@ in
     ] ++ [
       # Packages from Pip using poetry2nix
       (poetry2nix.buildPoetryApplication {
-        projectDir = ./backend; # Assuming pyproject.toml is in the backend directory
+        projectDir = ./backend; # Assumes pyproject.toml is in the backend directory
         overrides = [
           (poetry2nix.defaultPoetryOverrides.overridePythonAttrs (old: {
             # Add any required overrides here if needed
@@ -94,7 +94,6 @@ in
     enable = true;
     previews = {
       backend = {
-        id = "backend";
         command = [
           "/bin/sh"
           "-c"
@@ -104,7 +103,6 @@ in
       }; # end backend preview
 
       frontend = {
-        id = "frontend";
         command = [
           "/bin/sh"
           "-c"
@@ -112,8 +110,8 @@ in
         ];
         manager = "web";
         env = {
-          # Correctly reference the backend preview URL
-          NEXT_PUBLIC_API_URL = ''${previews.backend.url}'';
+          # Correctly reference the backend preview URL provided by IDX
+          NEXT_PUBLIC_API_URL = "${pkgs.idx.previews.backend.url}";
         };
       }; # end frontend preview
     };
@@ -123,7 +121,7 @@ in
   idx.workspace = {
     onCreate = {
       npm-install = "cd frontend && npm install";
-      # pip-install-firebase is no longer needed
+      # pip-install-firebase is no longer needed as it's handled by poetry2nix
     }; # end onCreate
 
     onStart = {
