@@ -44,6 +44,7 @@ google-generativeai>=0.3.0
 
 # Database
 sqlalchemy
+aiosqlite>=0.19.0  # For async SQLite support
 pymongo>=4.0.0 # For MongoDB support
 kafka-python>=2.0.0 # For Kafka messaging support
 

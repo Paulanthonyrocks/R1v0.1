@@ -27,58 +27,58 @@ export default function Nav() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {!user ? (
-              <Link href="/login" className="block w-full">
-                <DropdownMenuItem className="tracking-normal w-full">
+              <DropdownMenuItem asChild>
+                <Link href="/login" className="w-full tracking-normal">
                   Login
-                </DropdownMenuItem>
-              </Link>
+                </Link>
+              </DropdownMenuItem>
             ) : (
               <>
-                <Link href="/" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                <DropdownMenuItem asChild>
+                  <Link href="/" className="w-full tracking-normal">
                     Home
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/dashboard" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/dashboard" className="w-full tracking-normal">
                     Dashboard
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/anomalies" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/anomalies" className="w-full tracking-normal">
                     Anomalies
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/export" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/export" className="w-full tracking-normal">
                     Export
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/grid" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/grid" className="w-full tracking-normal">
                     Grid
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/logs" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/logs" className="w-full tracking-normal">
                     Logs
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/nodes" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/nodes" className="w-full tracking-normal">
                     Nodes
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/stream" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/stream" className="w-full tracking-normal">
                     Stream
-                  </DropdownMenuItem>
-                </Link>
-                <Link href="/surveillance" className="block w-full">
-                  <DropdownMenuItem className="tracking-normal w-full">
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/surveillance" className="w-full tracking-normal">
                     Surveillance
-                  </DropdownMenuItem>
-                </Link>
+                  </Link>
+                </DropdownMenuItem>
               </>
             )}
           </DropdownMenuContent>

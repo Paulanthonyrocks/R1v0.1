@@ -120,7 +120,10 @@ class ActiveWebSocketConnection:
                     await self.send_json_model(
                         WebSocketMessage(
                             event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                            payload=GeneralNotification(message="Authentication successful.")
+                            payload=GeneralNotification(
+                                message_type="auth_success",
+                                message="Authentication successful."
+                            )
                         )
                     )
                 else:
@@ -171,7 +174,10 @@ class ActiveWebSocketConnection:
                 await self.send_json_model(
                     WebSocketMessage(
                         event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        payload=GeneralNotification(message=f"Subscribed to {topic}")
+                        payload=GeneralNotification(
+                            message_type="subscription_update",
+                            message=f"Subscribed to {topic}"
+                        )
                     )
                 )
             else:
@@ -190,7 +196,10 @@ class ActiveWebSocketConnection:
                 await self.send_json_model(
                     WebSocketMessage(
                         event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        payload=GeneralNotification(message=f"Unsubscribed from {topic}")
+                        payload=GeneralNotification(
+                            message_type="subscription_update",
+                            message=f"Unsubscribed from {topic}"
+                        )
                     )
                 )
             else:

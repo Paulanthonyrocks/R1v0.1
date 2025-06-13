@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
@@ -246,6 +247,7 @@ class AnalyticsService:
     async def _broadcast_prediction(self, location: LocationModel, prediction: Dict[str, Any]):
         """Broadcast prediction results to websocket clients"""
         notification = GeneralNotification(
+            message_type="prediction_update",
             message="Traffic Prediction Update",
             details=prediction
         )
@@ -876,11 +878,11 @@ class AnalyticsService:
             "accuracy_metrics": {}
         }
 
-        async with self._db_manager.get_session() as session:
+        with self._db_manager.get_session() as session:
             try:
                 # Total verified predictions matching filters
                 total_stmt = select(func.count(PredictionLogModel.id)).where(*base_query_filters)
-                total_verified_result = await session.execute(total_stmt)
+                total_verified_result = session.execute(total_stmt)
                 total_verified = total_verified_result.scalar_one_or_none() or 0
                 results["total_verified_predictions"] = total_verified
 

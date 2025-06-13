@@ -17,16 +17,19 @@ from pathlib import Path
 from collections import deque
 from functools import lru_cache
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, RetryError
-import torch # Although imported, torch is not directly used in this utils.py. Consider removing if not needed here.
+import torch
 from PIL import Image
 import pytesseract
 import google.generativeai as genai
 from google.api_core import exceptions as google_api_exceptions
 from multiprocessing import Queue as MPQueue
-from typing import Tuple, Dict, Any, List, Optional, Set
+from typing import Tuple, Dict, Any, List, Optional, Set, AsyncContextManager
 from pymongo import MongoClient
-from pymongo.database import Database as MongoDatabase # For type hinting
+from pymongo.database import Database as MongoDatabase
 from pymongo.errors import ConnectionFailure, ConfigurationError as MongoConfigurationError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from contextlib import asynccontextmanager, contextmanager
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -653,29 +656,76 @@ class LicensePlatePreprocessor:
 # --- DatabaseManager (Simplified for SQLite) ---
 class DatabaseManager:
     def __init__(self, config: Dict):
-        # SQLite configuration
-        self.db_config = config.get("database", {})
-        self.db_path = self.db_config.get("db_path")
-        if not self.db_path: raise ConfigError("SQLite database path ('db_path') not found in config.")
-        self.chunk_size = self.db_config.get("chunk_size", 100)
-        self.lock = threading.RLock()
-        logger.info(f"Initializing DatabaseManager with SQLite db path: {self.db_path}")
-        self._initialize_sqlite_database()
-
-        # MongoDB configuration
-        self.mongo_config = config.get("mongodb", {})
-        self.mongo_uri = self.mongo_config.get("uri")
-        self.mongo_db_name = self.mongo_config.get("database_name")
-        self.raw_traffic_collection_name = self.mongo_config.get("raw_traffic_collection", "raw_traffic_data")
+        self.sqlite_db_path = None
+        self.mongo_uri = None
+        self.mongo_db_name = None
+        self._async_engine = None
+        self._async_session_factory = None
         
-        self.mongo_client: Optional[MongoClient] = None
-        self.mongo_db: Optional[MongoDatabase] = None
-
-        if self.mongo_uri and self.mongo_db_name:
-            logger.info(f"MongoDB URI found. Initializing MongoDB connection to {self.mongo_db_name}...")
+        # Initialize database connections
+        self._init_from_config(config)
+        self.lock = threading.Lock()
+        
+        # Initialize databases
+        self._initialize_sqlite_db()
+        if self.mongo_uri:
             self._initialize_mongodb()
-        else:
-            logger.warning("MongoDB URI or database_name not found in config. MongoDB will not be initialized.")
+    
+    def _init_from_config(self, config):
+        """Initialize configuration values"""
+        try:
+            # Get SQLite path
+            data_dir = Path(config.get('data_directory', './data'))
+            self.sqlite_db_path = data_dir / config.get('sqlite_db', 'vehicle_data.db')
+            self.sqlite_db_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Get MongoDB config if present
+            mongo_config = config.get('mongodb', {})
+            if mongo_config and mongo_config.get('enabled', False):
+                self.mongo_uri = mongo_config.get('uri')
+                self.mongo_db_name = mongo_config.get('database', 'traffic_management_hub')
+            
+            logger.info(f"Initializing DatabaseManager with SQLite db path: {self.sqlite_db_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize database configuration: {e}")
+            raise ConfigError(f"Database configuration error: {e}") from e
+
+    @asynccontextmanager
+    async def get_session(self):
+        """Get an async database session.
+        This is a context manager that can be used with 'async with'.
+        """
+        engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_db_path}")
+        async_session = sessionmaker(engine, class_=AsyncSession)
+        async with async_session() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+    @contextmanager
+    def get_session_sync(self):
+        """Get a database session that can be used with 'with' or 'async with'.
+        For SQLite, returns a synchronous session context manager.
+        """
+        from sqlalchemy.orm import Session, sessionmaker
+        from sqlalchemy import create_engine
+        
+        engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        session = SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def _get_sqlite_connection(self) -> sqlite3.Connection: # Renamed for clarity
         try:
@@ -1035,7 +1085,7 @@ class DatabaseManager:
             return None
         except Exception as e:
             logger.error(f"Unexpected error fetching alert ID {alert_id} (async wrapper): {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error fetching alert ID {alert_id}: {e}") from e
+            return None
 
     def _execute_get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
         # Internal synchronous method

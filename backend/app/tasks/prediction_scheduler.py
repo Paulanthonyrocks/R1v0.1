@@ -200,6 +200,7 @@ class PredictionScheduler:
                 }
 
                 notification = GeneralNotification(
+                    message_type="prediction_alert",
                     message=f"High likelihood of traffic incident predicted. Action initiated.",
                     details=notification_details
                 )
