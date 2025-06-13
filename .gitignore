@@ -15,6 +15,10 @@ secrets.txt
 backend/configs/firebase/service-account-key.json
 backend/data
 .vscode
+.next
+.idx
+.cursor
+.firebase
 
 # Python cache files
 __pycache__/
