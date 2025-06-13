@@ -200,9 +200,11 @@ class PredictionScheduler:
                 }
 
                 notification = GeneralNotification(
-                    message_type="prediction_alert",
-                    message=f"High likelihood of traffic incident predicted. Action initiated.",
-                    details=notification_details
+                    message_type="traffic_prediction",  # Add required message_type
+                    message=f"Traffic Prediction for {location.name}: {prediction.get('message', '')}",
+                    severity=prediction.get('severity', 'info'),
+                    suggested_actions=prediction.get('suggested_actions', []),
+                    title=f"Traffic Prediction - {location.name}"
                 )
                 
                 message = WebSocketMessage(

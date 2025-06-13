@@ -27,14 +27,15 @@ def get_database_manager() -> DBManagerClass:
         raise RuntimeError("Database not initialized.")
     return db_manager_instance
 
-def close_database():
-     global db_manager_instance
-     if db_manager_instance:
-          try:
-               logger.info("Closing database connection from app.database...")
-               db_manager_instance.close()
-               db_manager_instance = None
-          except Exception as e:
-               logger.error(f"Error closing database from app.database: {e}")
-     else:
-          logger.info("Database already closed or not initialized.")
+async def close_database():
+    global db_manager_instance
+    if db_manager_instance:
+        try:
+            logger.info("Closing database connections from app.database...")
+            await db_manager_instance.close_async()  # Close async connections
+            db_manager_instance.close()  # Close sync connections
+            db_manager_instance = None
+        except Exception as e:
+            logger.error(f"Error closing database from app.database: {e}")
+    else:
+        logger.info("Database already closed or not initialized.")

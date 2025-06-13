@@ -670,7 +670,13 @@ class DatabaseManager:
         self._initialize_sqlite_db()
         if self.mongo_uri:
             self._initialize_mongodb()
-    
+
+        # Async SQLAlchemy setup
+        self.async_engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_db_path}")
+        self.async_session_factory = sessionmaker(
+            self.async_engine, class_=AsyncSession, expire_on_commit=False
+        )
+
     def _init_from_config(self, config):
         """Initialize configuration values"""
         try:
@@ -695,17 +701,15 @@ class DatabaseManager:
         """Get an async database session.
         This is a context manager that can be used with 'async with'.
         """
-        engine = create_async_engine(f"sqlite+aiosqlite:///{self.sqlite_db_path}")
-        async_session = sessionmaker(engine, class_=AsyncSession)
-        async with async_session() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+        session = self.async_session_factory()
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
     @contextmanager
     def get_session_sync(self):

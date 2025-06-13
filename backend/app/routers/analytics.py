@@ -28,9 +28,8 @@ class NodeCongestionData(BaseModel):
     timestamp: datetime = Field(..., description="Timestamp of the latest data point for this node.")
 
     class Config:
-        orm_mode = True # For potential direct mapping from ORM objects if ever needed
-        # Ensure examples are generated in OpenAPI docs
-        schema_extra = {
+        from_attributes = True  # Updated from orm_mode = True for Pydantic V2
+        json_schema_extra = {  # Updated from schema_extra for Pydantic V2
             "example": {
                 "id": "34.0522,-118.2437",
                 "name": "Node at (34.0522, -118.2437)",

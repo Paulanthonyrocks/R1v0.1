@@ -520,8 +520,7 @@ class AnalyticsService:
         # For now, assume severity is a string like "info", "warning", "error"
 
         payload = GeneralNotification(
-            message_type="operational_alert_by_agent", # Custom type for client-side differentiation
-            title=title,
+            message_type="traffic_analysis",  # Add required message_type
             message=message_text,
             severity=severity.lower(), # Ensure lowercase if frontend expects it
             suggested_actions=suggested_actions # New field
