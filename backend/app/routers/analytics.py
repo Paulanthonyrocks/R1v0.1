@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List, Optional, Any
+from typing import List, Optional, Any, ClassVar
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -45,29 +45,28 @@ class NodeCongestionData(BaseModel):
 
 class AllNodesCongestionResponse(BaseModel):
     nodes: List[NodeCongestionData]
-
-    schema_extra = {
-        "example": {
-            "nodes": [
+    schema_extra: ClassVar[dict] = {
+        'example': {
+            'nodes': [
                 {
-                    "id": "34.0522,-118.2437",
-                    "name": "Node at (34.0522, -118.2437)",
-                    "latitude": 34.0522,
-                    "longitude": -118.2437,
-                    "congestion_score": 65.5,
-                    "vehicle_count": 50,
-                    "average_speed": 25.0,
-                    "timestamp": "2023-10-27T10:30:00Z"
+                    'id': '34.0522,-118.2437',
+                    'name': 'Node at (34.0522, -118.2437)',
+                    'latitude': 34.0522,
+                    'longitude': -118.2437,
+                    'congestion_score': 65.5,
+                    'vehicle_count': 50,
+                    'average_speed': 25.0,
+                    'timestamp': '2023-10-27T10:30:00Z'
                 },
                 {
-                    "id": "40.7128,-74.0060",
-                    "name": "Node at (40.7128, -74.0060)",
-                    "latitude": 40.7128,
-                    "longitude": -74.0060,
-                    "congestion_score": 30.2,
-                    "vehicle_count": 20,
-                    "average_speed": 45.0,
-                    "timestamp": "2023-10-27T10:35:00Z"
+                    'id': '40.7128,-74.0060',
+                    'name': 'Node at (40.7128, -74.0060)',
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'congestion_score': 30.2,
+                    'vehicle_count': 20,
+                    'average_speed': 45.0,
+                    'timestamp': '2023-10-27T10:35:00Z'
                 }
             ]
         }

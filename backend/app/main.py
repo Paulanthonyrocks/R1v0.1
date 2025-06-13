@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, FileResponse
 import json
 import firebase_admin
 from firebase_admin import credentials
+from pathlib import Path # Ensure Path is imported
 import uuid # For generating unique client IDs for WebSockets
 import asyncio
 
@@ -48,16 +49,17 @@ app = FastAPI(
 )
 
 # --- Initialize Firebase ---
-def initialize_firebase():
-    config = get_current_config()
-    if config.get("firebase", {}).get("auth_enabled", False):
-        try:
-            cred = credentials.Certificate(config["firebase"]["service_account_path"])
-            firebase_admin.initialize_app(cred)
-            logger.info("Firebase initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Firebase: {e}")
-            raise
+# This function is not currently used in startup_event, but keeping it for reference
+# def initialize_firebase():
+#     config = get_current_config()
+#     if config.get("firebase", {}).get("auth_enabled", False):
+#         try:
+#             cred = credentials.Certificate(config["firebase"]["service_account_path"])
+#             firebase_admin.initialize_app(cred)
+#             logger.info("Firebase initialized successfully")
+#         except Exception as e:
+#             logger.error(f"Failed to initialize Firebase: {e}")
+#             raise
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
@@ -81,20 +83,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.on_event("startup")
 async def startup_event():
     logger.info("--- Starting Route One Backend ---")
-    loaded_config = None # Ensure loaded_config is defined in the broader scope
+    loaded_config = None
 
-    # 1. Initialize Configuration (Using imported initializer)
+    # 1. Initialize Configuration
     try:
-        # Define path relative to main.py's parent's parent -> backend/configs/config.yaml
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
-        # Logging is now configured within initialize_config
     except Exception as e:
-        # Error is logged within initialize_config, just raise critical failure
         logger.critical(f"CRITICAL FAILURE during config initialization: {e}", exc_info=True)
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
 
-    # Check if config was loaded, if not, we cannot proceed with Firebase init that depends on it.
     if loaded_config is None:
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
@@ -102,37 +100,42 @@ async def startup_event():
     # 2. Initialize Firebase Admin SDK
     try:
         firebase_config = loaded_config.get("firebase_admin", {})
-        
+
         if not firebase_config.get("auth_enabled", False):
             logger.info("Firebase authentication is disabled in config.")
-            return
+            # Allow startup to continue if auth is disabled
+            # return # Removed return to allow other startup tasks to run
 
-        service_account_path = firebase_config.get("service_account_key_path")
-        if not service_account_path:
+        service_account_path_str = firebase_config.get("service_account_key_path")
+        if not service_account_path_str:
             logger.warning("Firebase service account path not configured. Authentication will be disabled.")
-            return
+            # Allow startup to continue if path is not configured
+            # return # Removed return
 
-        # Get the config directory path
-        config_dir = Path(__file__).parent.parent / "configs"
-        key_path = config_dir / service_account_path.lstrip("configs/")
-
-        if not key_path.exists():
-            logger.error(f"Firebase service account key not found at: {key_path}")
-            return
-
-        if not key_path.is_absolute():
-            config_dir = Path(__file__).parent.parent / "configs"
-            key_path = config_dir / service_account_path
+        # Construct the absolute path relative to the backend directory
+        backend_dir = Path(__file__).parent.parent
+        key_path = backend_dir / service_account_path_str
 
         if not key_path.exists():
             logger.error(f"Firebase service account key not found at: {key_path.resolve()}")
-        else:
+            # Raise an exception to halt startup if the key file is missing
+            raise FileNotFoundError(f"Firebase service account key not found at: {key_path.resolve()}")
+
+        # Initialize Firebase Admin SDK
+        try:
             cred = credentials.Certificate(str(key_path.resolve()))
             firebase_admin.initialize_app(cred)
             logger.info(f"Firebase Admin SDK initialized successfully using key: {key_path.resolve()}")
+        except Exception as e:
+            logger.error(f"Firebase Admin SDK Initialization Failed: {e}", exc_info=True)
+            # Re-raise the exception to halt startup if Firebase init fails
+            raise
 
     except Exception as e:
-        logger.error(f"Firebase Admin SDK Initialization Failed: {e}", exc_info=True)
+        # Catch any exceptions during Firebase initialization and re-raise
+        logger.critical(f"CRITICAL FAILURE during Firebase Admin SDK initialization: {e}", exc_info=True)
+        raise RuntimeError(f"Firebase Admin SDK Initialization Failed: {e}") from e
+
 
     # 3. Initialize Database
     try:
@@ -145,36 +148,45 @@ async def startup_event():
         initialize_services(loaded_config)
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
+        # Decide if service initialization failure should halt startup
+        # raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
 
     # 5. Initialize Prediction Scheduler
     try:
         analytics_service = get_analytics_service()
         if analytics_service:
             scheduler = PredictionScheduler(analytics_service)
-            await scheduler.start()  # Use the new async start() method
-            app.state.prediction_scheduler = scheduler  # Store in app state for cleanup
+            await scheduler.start()
+            app.state.prediction_scheduler = scheduler
             logger.info("Prediction scheduler initialized and started")
         else:
-            logger.warning("Analytics service not available, skipping prediction scheduler initialization")
+            logger.warning("AnalyticsService not available, prediction scheduler not started.")
     except Exception as e:
-        logger.error(f"Failed to initialize Prediction Scheduler: {e}", exc_info=True)
+        logger.error(f"Prediction scheduler initialization failed: {e}", exc_info=True)
+        # Decide if scheduler failure should halt startup
+        # raise RuntimeError(f"Prediction scheduler initialization failed: {e}") from e # Uncomment to halt
 
-    logger.info("--- Startup complete ---")
+
+    logger.info("Application startup complete.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
-    
-    # Stop prediction scheduler if it exists
-    if hasattr(app.state, "prediction_scheduler"):
+    # Stop the prediction scheduler if it was initialized
+    if hasattr(app.state, 'prediction_scheduler') and app.state.prediction_scheduler:
         await app.state.prediction_scheduler.stop()
-        logger.info("Prediction scheduler stopped")
-    
-    # Handle other shutdown tasks
-    await shutdown_services()  # Handles services + WS connections
+        logger.info("Prediction scheduler stopped.")
+
+    # Shutdown services
+    shutdown_services()
+    logger.info("Services shut down.")
+
+    # Close database connection
     close_database()
-    logger.info("--- Shutdown complete ---")
+    logger.info("Database connection closed.")
+
+    logger.info("--- Backend shutdown complete ---")
 
 # Global scheduler instance
 prediction_scheduler: Optional[PredictionScheduler] = None

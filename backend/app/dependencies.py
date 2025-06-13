@@ -15,7 +15,7 @@ from .services.services import (
     get_route_optimization_service,
     get_weather_service,
     get_event_service,
-    get_websocket_connection_manager # Assuming this will be added to services.py
+    get_connection_manager
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService
@@ -181,9 +181,8 @@ async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCred
 
 async def get_connection_manager() -> ConnectionManager:
     """Dependency to get the WebSocket ConnectionManager instance."""
-    # This assumes get_websocket_connection_manager() is defined in app.services.services
-    # and returns the singleton ConnectionManager instance.
-    manager = get_websocket_connection_manager()
+    # Get the singleton ConnectionManager instance from services
+    manager = get_connection_manager()
     if manager is None:
         # This case should ideally not happen if ConnectionManager is a critical service
         # and initialized properly in main.py or via services.py
