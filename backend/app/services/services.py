@@ -8,6 +8,7 @@ from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
+from app.database import get_database_manager # Import the getter
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -54,13 +55,24 @@ def initialize_services(config: Dict[str, Any]):
         else:
              logger.info("FeedManager initialization: Successful.")
    
+    # Get the database manager instance
+    try:
+        db_manager = get_database_manager()
+        logger.info("DatabaseManager instance obtained for service initialization.")
+    except RuntimeError as e:
+        logger.error(f"Failed to get DatabaseManager for service initialization: {e}")
+        # Depending on criticality, you might want to raise this error
+        db_manager = None # Ensure db_manager is None if getting it fails
+
     _traffic_signal_service_instance = TrafficSignalService(
         config=config.get("traffic_signal_service", {}),
         connection_manager=connection_manager_instance
     )
+    # Pass db_manager to AnalyticsService
     _analytics_service_instance = AnalyticsService(
         config=config.get("analytics_service", {}),
-        connection_manager=connection_manager_instance
+        connection_manager=connection_manager_instance,
+        database_manager=db_manager # Add this line
     )
     _route_optimization_service_instance = RouteOptimizationService(
         traffic_predictor=_analytics_service_instance._traffic_predictor,
