@@ -4,7 +4,7 @@
 import dynamic from 'next/dynamic';
 import type { ComponentType } from 'react';
 import 'leaflet/dist/leaflet.css';
-import type { Anomaly } from '@/app/anomalies/page'; // Assuming Anomaly type is exported from page.tsx
+import type { Anomaly } from '@/lib/types';
 
 // Updated props to accept full anomaly objects and interaction handlers
 interface AnomalyMapProps {

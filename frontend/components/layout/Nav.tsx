@@ -1,7 +1,6 @@
 "use client"; // Keep this if it was in the original Nav
 
 import Link from "next/link";
-import { usePathname } from "next/navigation"; // Keep if used, or remove
 import { useUser } from "@/lib/auth/UserContext";
 import {
   DropdownMenu,
@@ -9,7 +8,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils"; // Keep if used by Nav for class names
 
 // Potentially add other imports if Nav depends on them, e.g., specific icons
 
@@ -29,37 +27,57 @@ export default function Nav() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {!user ? (
-              <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                <Link href="/login">Login</Link>
+              <DropdownMenuItem asChild>
+                <Link href="/login" className="w-full tracking-normal">
+                  Login
+                </Link>
               </DropdownMenuItem>
             ) : (
               <>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/">Home</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/" className="w-full tracking-normal">
+                    Home
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/dashboard">Dashboard</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/dashboard" className="w-full tracking-normal">
+                    Dashboard
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/anomalies">Anomalies</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/anomalies" className="w-full tracking-normal">
+                    Anomalies
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/export">Export</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/export" className="w-full tracking-normal">
+                    Export
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/grid">Grid</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/grid" className="w-full tracking-normal">
+                    Grid
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/logs">Logs</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/logs" className="w-full tracking-normal">
+                    Logs
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/nodes">Nodes</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/nodes" className="w-full tracking-normal">
+                    Nodes
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/stream">Stream</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/stream" className="w-full tracking-normal">
+                    Stream
+                  </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="tracking-normal" asChild> {/* Added tracking-normal */}
-                  <Link href="/surveillance">Surveillance</Link>
+                <DropdownMenuItem asChild>
+                  <Link href="/surveillance" className="w-full tracking-normal">
+                    Surveillance
+                  </Link>
                 </DropdownMenuItem>
               </>
             )}
