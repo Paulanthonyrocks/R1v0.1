@@ -54,19 +54,19 @@ const TrafficGridPage: React.FC = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
-      <div className="p-4 w-full h-screen flex flex-col">
+      <div className="p-4 w-full h-screen flex flex-col bg-background tracking-normal">
         {isLoading ? (
           <div className="flex-grow flex items-center justify-center">
-            <div className="animate-pulse text-matrix text-2xl uppercase">Loading...</div>
+            <div className="animate-pulse text-primary text-2xl uppercase tracking-normal">Loading...</div>
           </div>
         ) : (
           <>
-            <h1 className="text-2xl font-bold mb-4 uppercase text-matrix">Grid View</h1>
+            <h1 className="text-2xl font-bold mb-4 uppercase tracking-normal">Grid View</h1>
 
             <div className="flex mb-4">
               {/* Updated to use theme consistent classes - similar to Button variant="default" but without all button.tsx features */}
-              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md mr-2 tracking-normal" onClick={handleZoomIn}>Zoom In</button>
-              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md tracking-normal" onClick={handleZoomOut}>Zoom Out</button>
+              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 mr-2 tracking-normal" onClick={handleZoomIn}>Zoom In</button>
+              <button className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 tracking-normal" onClick={handleZoomOut}>Zoom Out</button>
             </div>
 
             <div

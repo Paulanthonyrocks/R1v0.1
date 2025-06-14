@@ -83,6 +83,7 @@
     /* --- Shadows --- */
     --shadow-color: 0 0% 0%;
     --shadow-intensity: 0.2;
+    --pixel-drop-shadow-value: 0 1px 2px rgba(0,0,0,0.25);
 
     /* Semantic Colors for Anomalies/Alerts */
     --warning: 39 90% 50%; /* Deep Amber */
@@ -311,28 +312,46 @@
 
 
   /* --- Matrix Card Component Styles --- */
+  /* Base styles for .matrix-card, effectively .matrix-card--default */
   .matrix-card {
-    background-color: hsl(var(--card));
-    border: 1px solid hsl(var(--border));
-    transition: transform 0.2s ease;
-    border-radius: var(--radius);
-    padding: 1.5rem; /* Default padding */
+    background-color: hsl(var(--background)); /* Theme green */
+    color: hsl(var(--foreground)); /* Theme black */
+    border: 1px solid hsl(var(--primary)); /* 1px solid black */
+    box-shadow: var(--pixel-drop-shadow-value);
+    padding: 1rem; /* p-4 equivalent */
+    font-family: var(--font-matrix);
+    letter-spacing: normal; /* Explicitly normal tracking */
+    /* Removed border-radius for sharp edges */
+    /* Removed transition: transform, hover effect changed */
   }
 
-  .matrix-card:hover {
-    transform: translateY(-1px);
+  /* Hover state driven by JS adding/removing .matrix-card--hover */
+  .matrix-card--hover {
+    box-shadow: 0 0 0 1px hsl(var(--primary)), 0 0 8px hsl(var(--primary));
+    /* ensure no transform if it was on the base .matrix-card before */
+    transform: none;
   }
 
-  .matrix-card__title,
+  .matrix-card__title {
+    color: hsl(var(--foreground)); /* Black */
+    font-family: var(--font-matrix);
+    letter-spacing: normal; /* Component itself adds tracking-normal class too */
+    font-weight: bold;
+    text-transform: uppercase;
+  }
+
   .matrix-card__icon { /* This class is mainly for color, icon size is handled in component */
-    color: hsl(var(--foreground)); /* Default to foreground */
+    color: hsl(var(--foreground)); /* Black */
+    font-family: var(--font-matrix); /* For completeness */
   }
 
   .matrix-card__content {
-    color: hsl(var(--muted-foreground));
+    color: hsl(var(--foreground)); /* Black */
+    font-family: var(--font-matrix);
+    letter-spacing: normal;
   }
 
-  /* For the colorOverride prop */
+  /* For the colorOverride prop - styles remain unchanged as per plan */
   .matrix-card[data-color-override="true"] {
     border-color: var(--color-override, hsl(var(--border))); /* Fallback to default border */
   }
