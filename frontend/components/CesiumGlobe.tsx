@@ -47,27 +47,32 @@ const createLabelSprite = (name: string, position: THREE.Vector3, offsetAmount: 
 
         const fontSize = 16;
         const padding = 8;
-        context.font = `Bold ${fontSize}px monospace`;
+        // APPLY FONT CHANGE FIRST for accurate measureText
+        context.font = `Bold ${fontSize}px 'IBM Plex Mono', monospace`;
         const textMetrics = context.measureText(name);
         const textWidth = textMetrics.width;
 
         canvas.width = textWidth + padding * 2;
         canvas.height = fontSize + padding * 2;
 
-        context.font = `Bold ${fontSize}px monospace`;
-        context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        // Re-apply font after canvas resize (good practice, though often context is preserved)
+        context.font = `Bold ${fontSize}px 'IBM Plex Mono', monospace`;
+        // Solid black background
+        context.fillStyle = 'rgba(0, 0, 0, 1)';
         context.fillRect(0, 0, canvas.width, canvas.height);
+
         context.textAlign = 'center';
         context.textBaseline = 'middle';
-        context.fillStyle = '#FFFFFF';
+        // Theme green text
+        context.fillStyle = '#8CA17C';
         context.fillText(name, canvas.width / 2, canvas.height / 2);
 
         const texture = new THREE.CanvasTexture(canvas);
         texture.needsUpdate = true;
         const spriteMaterial = new THREE.SpriteMaterial({
             map: texture,
-            transparent: true,
-            opacity: 0.9,
+            transparent: false, // Since background is solid
+            opacity: 1,         // Sprite itself is fully opaque
             sizeAttenuation: false
         });
         const label = new THREE.Sprite(spriteMaterial);
@@ -117,7 +122,7 @@ const ThreeGrid: React.FC = () => {
         );
     }, []);
 
-    const addPolygonToScene = useCallback((polygonCoords: number[][][], scene: THREE.Scene, color: THREE.ColorRepresentation = 0x00cc00) => {
+    const addPolygonToScene = useCallback((polygonCoords: number[][][], scene: THREE.Scene, color: THREE.ColorRepresentation = 0x000000) => {
         polygonCoords.forEach((ringCoords: number[][]) => {
             if (!Array.isArray(ringCoords) || ringCoords.length < 3 || !Array.isArray(ringCoords[0]) || ringCoords[0].length !== 2) {
                 return;
@@ -135,7 +140,7 @@ const ThreeGrid: React.FC = () => {
                     points.push(points[0].clone());
                 }
                 const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                const material = new THREE.LineBasicMaterial({ color: color, opacity: 0.5, transparent: true, linewidth: 1 });
+                const material = new THREE.LineBasicMaterial({ color: color, opacity: 1, transparent: false, linewidth: 1 });
                 const line = new THREE.Line(geometry, material);
                 line.userData.isGeoJsonLine = true;
                 scene.add(line);
@@ -144,7 +149,7 @@ const ThreeGrid: React.FC = () => {
     }, [lonLatToVector3]);
 
     const loadGeoJSON = useCallback(async (scene: THREE.Scene): Promise<void> => {
-        console.log('Loading GeoJSON...');
+        // console.log('Loading GeoJSON...'); // Removed for cleanliness
         try {
             const response = await fetch('/continents.geojson');
             if (!response.ok) {
@@ -171,7 +176,7 @@ const ThreeGrid: React.FC = () => {
                     console.error(`Error processing GeoJSON feature ${index}:`, processingError, feature);
                 }
             });
-            console.log('GeoJSON loaded successfully.');
+            // console.log('GeoJSON loaded successfully.'); // Removed for cleanliness
         } catch (error) {
             console.error('Failed to load or parse GeoJSON:', error);
         }
@@ -181,9 +186,9 @@ const ThreeGrid: React.FC = () => {
         const currentContainer = containerRef.current; // Capture ref for use in effect and cleanup
         if (!currentContainer || sceneRef.current) return;
 
-        console.log("Initializing Three.js Scene");
+        // console.log("Initializing Three.js Scene"); // Removed for cleanliness
         const scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x000000, 80, 250);
+        scene.fog = new THREE.Fog(0x8CA17C, 80, 250); // Theme green fog
         const camera = new THREE.PerspectiveCamera(75, currentContainer.clientWidth / currentContainer.clientHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setClearColor(0x000000, 0);
@@ -193,7 +198,10 @@ const ThreeGrid: React.FC = () => {
 
         const globeGeometry = new THREE.SphereGeometry(50, 64, 64);
         const globeMaterial = new THREE.MeshBasicMaterial({
-            color: 0x001133, wireframe: true, opacity: 0.6, transparent: true,
+            color: 0x8CA17C, // Theme green
+            wireframe: false,
+            opacity: 1,
+            transparent: false,
         });
         const globe = new THREE.Mesh(globeGeometry, globeMaterial);
         globeRef.current = globe;
@@ -255,7 +263,7 @@ const ThreeGrid: React.FC = () => {
         animateScene();
 
         return () => {
-            console.log("Cleaning up Three.js Scene");
+            // console.log("Cleaning up Three.js Scene"); // Removed for cleanliness
             const sceneRefsToClean = sceneRef.current;
             if (!sceneRefsToClean) return;
 
@@ -355,6 +363,10 @@ const ThreeGrid: React.FC = () => {
             return 'stopped';
         };
 
+        // Define marker colors for the theme
+        const MARKER_BASE_COLOR = 0x000000; // Black
+        const MARKER_RUNNING_COLOR = 0x8CA17C; // Theme green
+
         const fetchAndUpdateFeeds = async () => {
             const currentSceneRefs = sceneRef.current;
             if (!currentSceneRefs) return;
@@ -417,7 +429,8 @@ const ThreeGrid: React.FC = () => {
                     const position = latLonAltToVector3(lat, lon, altitude, 50);
 
                     const status = mapToMarkerStatus(feed.status);
-                    const color = status === 'running' ? 0x00ff00 : (status === 'error' ? 0xff0000 : 0xcccccc);
+                    // Determine the new marker color based on theme
+                    const newThemeMarkerColor = status === 'running' ? MARKER_RUNNING_COLOR : MARKER_BASE_COLOR;
                     const name = feed.name || feed.source || `Feed ${feed.id}`;
 
                     if (existingMarker) {
@@ -425,7 +438,7 @@ const ThreeGrid: React.FC = () => {
                         existingMarker.status = status;
                         
                         if (existingMarker.mesh) {
-                            (existingMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+                            (existingMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(newThemeMarkerColor);
                             existingMarker.mesh.position.copy(position);
                             existingMarker.mesh.lookAt(0, 0, 0);
                         }
@@ -447,7 +460,7 @@ const ThreeGrid: React.FC = () => {
                         const geometry = new THREE.ConeGeometry(0.8, 3, 8);
                         geometry.translate(0, 1.5, 0);
                         geometry.rotateX(Math.PI / 2);
-                        const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 });
+                        const material = new THREE.MeshBasicMaterial({ color: newThemeMarkerColor, transparent: true, opacity: 0.8 });
                         const mesh = new THREE.Mesh(geometry, material);
                         mesh.position.copy(position);
                         mesh.lookAt(new THREE.Vector3(0,0,0));
@@ -526,13 +539,13 @@ const ThreeGrid: React.FC = () => {
     };
 
     return (
-        <div className="relative w-full h-[600px] overflow-hidden bg-black cursor-grab active:cursor-grabbing">
+        <div className="relative w-full h-[600px] overflow-hidden bg-background cursor-grab active:cursor-grabbing">
             <div ref={containerRef} className="absolute inset-0 w-full h-full" />
-            <div className="absolute top-4 right-4 z-10 bg-black/60 p-3 rounded-md border border-green-700/50 shadow-lg">
+            <div className="absolute top-4 right-4 z-10 bg-primary p-3 border border-primary-foreground">
                 <input
                     type="text"
                     placeholder="Search feed name/ID..."
-                    className="bg-transparent text-green-400 border-none focus:outline-none px-2 py-1 w-60 placeholder-green-600/70 text-sm"
+                    className="bg-transparent text-primary-foreground border-none focus:outline-none px-2 py-1 w-60 placeholder-primary-foreground text-sm tracking-normal"
                     onChange={handleSearchChange}
                 />
             </div>
