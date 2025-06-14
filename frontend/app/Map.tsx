@@ -1,229 +1,148 @@
-import React, { useEffect, useRef, useState } from 'react';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import { cn } from '@/lib/utils'; // Adjust the import based on your project structure
-import { usePathname } from 'next/navigation';
-import styles from '@/styles/Map.module.css';
+// frontend/app/Map.tsx
+'use client';
+import React, { useEffect, useState, useCallback } from 'react';
+import ThreeGrid from '@/components/CesiumGlobe';
+import type { GlobeDataPoint } from '@/components/CesiumGlobe';
 
-// It's good practice to define icons if you're using markers,
-// though circles don't strictly need this, it avoids some common Leaflet issues.
-// If you were using L.marker, you'd need this:
-// import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
-// import iconUrl from 'leaflet/dist/images/marker-icon.png';
-// import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
-
-// L.Icon.Default.mergeOptions({
-//   iconRetinaUrl,
-//   iconUrl,
-//   shadowUrl,
-// });
-
-
+// Interface for the raw data items (can be expanded)
 interface TrafficDataItem {
   latitude: number;
   longitude: number;
-  vehicle_count: number;
-  // AI-enhanced fields
-  prediction_confidence?: number;
+  vehicle_count?: number;
   predicted_congestion?: number;
-  predicted_time?: string;
-  congestion_reason?: string;
-  recommended_lane?: number;
-  alternate_routes?: {
-    route_id: string;
-    eta: number;
-    congestion_level: number;
-    user_preference_score: number;
-    description: string;
-  }[];
+  [key: string]: any; // Allow other properties from API
 }
 
-interface UserPreferences {
-  routePreferences: {
-    preferHighways: boolean;
-    preferScenicRoutes: boolean;
-    avoidTolls: boolean;
-    preferredDepartureTime?: string;
-    commonDestinations: Array<{
-      name: string;
-      location: [number, number];
-      preferredRoute?: string;
-    }>;
-  };
-  trafficAlerts: {
-    notifyAheadMinutes: number;
-    severityThreshold: number;
-    includeWeather: boolean;
-    includeEvents: boolean;
-  };
-}
-
-const MapComponent = () => { // Renamed to avoid conflict with built-in Map type
-  const mapContainerRef = useRef<HTMLDivElement | null>(null); // Ref for the map container div
-  const mapInstanceRef = useRef<L.Map | null>(null); // Ref to store the map instance
-  const pathname = usePathname();
-  const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
-  const [predictionOverlay, setPredictionOverlay] = useState<L.LayerGroup | null>(null);
-
-  // Function to fetch user preferences
-  const fetchUserPreferences = async () => {
-    try {
-      const response = await fetch('/api/v1/user-preferences');
-      if (response.ok) {
-        const prefs = await response.json();
-        setUserPreferences(prefs);
-      }
-    } catch (error) {
-      console.error('Error fetching user preferences:', error);
-    }
-  };
-
-  // Function to get AI traffic predictions
-  const fetchTrafficPredictions = async () => {
-    if (!mapInstanceRef.current) return;
-    
-    try {
-      const response = await fetch('/api/v1/traffic-predictions');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const predictions = await response.json();
-      
-      // Clear existing prediction overlay
-      if (predictionOverlay && mapInstanceRef.current) {
-        predictionOverlay.clearLayers();
-      }
-
-      // Create new overlay for predictions
-      const newOverlay = L.layerGroup().addTo(mapInstanceRef.current);
-
-      predictions.forEach((pred: TrafficDataItem) => {
-        const color = getPredictionColor(pred.predicted_congestion || 0);
-        const circle = L.circle([pred.latitude, pred.longitude], {
-          color: color,
-          fillColor: color,
-          fillOpacity: 0.3,
-          radius: 100
-        });
-
-        // Create detailed popup content
-        const popupContent = `
-          <div class="prediction-popup">
-            <h3>Traffic Prediction</h3>
-            <p>Congestion Level: ${pred.predicted_congestion}</p>
-            <p>Confidence: ${pred.prediction_confidence}%</p>
-            ${pred.congestion_reason ? `<p>Reason: ${pred.congestion_reason}</p>` : ''}
-            ${pred.alternate_routes ? createAlternateRoutesHTML(pred.alternate_routes) : ''}
-          </div>
-        `;
-
-        circle.bindPopup(popupContent);
-        circle.addTo(newOverlay);
-      });
-
-      setPredictionOverlay(newOverlay);
-    } catch (error) {
-      console.error('Error fetching traffic predictions:', error);
-    }
-  };
-
-  // Helper function to determine color based on predicted congestion
-  const getPredictionColor = (congestion: number): string => {
-    if (congestion > 0.8) return '#ff0000';
-    if (congestion > 0.6) return '#ff6600';
-    if (congestion > 0.4) return '#ffcc00';
-    return '#00cc00';
-  };
-
-  // Helper function to create HTML for alternate routes
-  const createAlternateRoutesHTML = (routes: TrafficDataItem['alternate_routes']) => {
-    if (!routes) return '';
-    return `
-      <div class="alternate-routes">
-        <h4>Alternative Routes:</h4>
-        ${routes.map(route => `
-          <div class="route-option">
-            <p>ETA: ${route.eta} min</p>
-            <p>Congestion: ${route.congestion_level}%</p>
-            <p>${route.description}</p>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  };
+const MapPage: React.FC = () => { // Changed component name to avoid conflict if 'Map' is a type
+  const [globeData, setGlobeData] = useState<GlobeDataPoint[]>([]);
+  const [selectedItemDetails, setSelectedItemDetails] = useState<TrafficDataItem | null>(null);
 
   useEffect(() => {
-    // Ensure the map container is available and map isn't already initialized
-    if (mapContainerRef.current && !mapInstanceRef.current) {
-      // Initialize the map
-      const map = L.map(mapContainerRef.current).setView([51.505, -0.09], 13);
-      mapInstanceRef.current = map;
+    const transformAndSetData = (traffic: TrafficDataItem[], predictions: TrafficDataItem[]) => {
+      const transformedTraffic: GlobeDataPoint[] = traffic.map((item, index) => ({
+        id: `traffic-${item.latitude}-${item.longitude}-${index}`, // Create a unique ID
+        name: `Traffic: ${item.vehicle_count !== undefined ? item.vehicle_count + ' vehicles' : 'N/A'}`,
+        lat: item.latitude,
+        lon: item.longitude,
+        altitude: 0.2, // Slightly above surface for traffic markers
+        status: (item.vehicle_count || 0) > 50 ? 'running' : 'stopped', // Example: Green if > 50 vehicles
+        type: 'traffic',
+        originalData: item,
+      }));
 
-      // Add OpenStreetMap tiles
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      }).addTo(map); // Add to the local 'map' variable, which is guaranteed to be non-null here
+      const transformedPredictions: GlobeDataPoint[] = predictions.map((item, index) => ({
+        id: `pred-${item.latitude}-${item.longitude}-${index}`, // Create a unique ID
+        name: `Prediction: Congestion ${item.predicted_congestion?.toFixed(2) || 'N/A'}`,
+        lat: item.latitude,
+        lon: item.longitude,
+        altitude: 0.3, // Slightly higher for prediction markers
+        status: (item.predicted_congestion || 0) > 0.7 ? 'running' : 'stopped', // Example: Green if high congestion
+        type: 'prediction',
+        originalData: item,
+      }));
+      
+      setGlobeData([...transformedTraffic, ...transformedPredictions]);
+    };
 
-      // Fetch and display traffic data
-      const fetchTrafficData = async () => {
-        if (!mapInstanceRef.current) return; // Guard against map not being initialized
+    let trafficDataCache: TrafficDataItem[] = [];
+    let predictionDataCache: TrafficDataItem[] = [];
 
-        try {
-          const response = await fetch('/api/v1/traffic-data'); // Ensure this endpoint exists and returns data
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          const data: TrafficDataItem[] = await response.json();
+    const fetchInitialTraffic = async () => {
+      try {
+        const response = await fetch('/api/v1/traffic-data');
+        if (!response.ok) throw new Error('Failed to fetch traffic data');
+        trafficDataCache = await response.json();
+        // Ensure cache is an array even if API returns null/undefined for empty data
+        if (!Array.isArray(trafficDataCache)) trafficDataCache = [];
+        transformAndSetData(trafficDataCache, predictionDataCache);
+      } catch (error) {
+        console.error('Error fetching initial traffic data:', error);
+        trafficDataCache = []; // Ensure it's an array on error
+        transformAndSetData(trafficDataCache, predictionDataCache); // Update with empty traffic data
+      }
+    };
 
-          data.forEach((item) => {
-            const { latitude, longitude, vehicle_count } = item;
-            if (mapInstanceRef.current) { // Explicitly check mapInstanceRef.current before using
-              L.circle([latitude, longitude], {
-                color: vehicle_count > 50 ? 'orange' : (vehicle_count > 20 ? 'yellow' : 'green'), // Example: color based on count
-                fillColor: vehicle_count > 50 ? '#f03' : (vehicle_count > 20 ? '#f90' : '#0f0'),
-                fillOpacity: 0.5,
-                radius: vehicle_count * 10 + 50 // Adjust radius: base size + increment per vehicle
-              }).addTo(mapInstanceRef.current).bindPopup(`Vehicles: ${vehicle_count}`);
-            }
-          });
-        } catch (error) {
-          console.error('Error fetching or processing traffic data:', error);
-        }
-      };
+    const fetchPeriodicPredictions = async () => {
+      try {
+        const response = await fetch('/api/v1/traffic-predictions');
+        if (!response.ok) throw new Error('Failed to fetch predictions');
+        predictionDataCache = await response.json();
+         // Ensure cache is an array
+        if (!Array.isArray(predictionDataCache)) predictionDataCache = [];
+        transformAndSetData(trafficDataCache, predictionDataCache);
+      } catch (error) {
+        console.error('Error fetching traffic predictions:', error);
+        predictionDataCache = []; // Ensure it's an array on error
+        transformAndSetData(trafficDataCache, predictionDataCache); // Update with empty prediction data
+      }
+    };
 
-      // Initial data fetch
-      fetchTrafficData();
+    fetchInitialTraffic();
+    fetchPeriodicPredictions(); // Initial fetch for predictions too
+    const intervalId = setInterval(fetchPeriodicPredictions, 300000); // 5 minutes
 
-      // Fetch user preferences
-      fetchUserPreferences();
+    return () => clearInterval(intervalId);
+  }, []); // Runs once on mount
 
-      // Set up periodic updates for predictions
-      const predictionInterval = setInterval(fetchTrafficPredictions, 300000); // Update every 5 minutes
+  const handleMarkerClick = (dataPoint: GlobeDataPoint) => {
+    setSelectedItemDetails(dataPoint.originalData as TrafficDataItem);
+  };
 
-      // Cleanup function
-      return () => {
-        clearInterval(predictionInterval);
-        // clearInterval(intervalId); // Clear interval if you set one
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove(); // Dispose of the map on unmount
-          mapInstanceRef.current = null; // Clear the ref
-        }
-      };
-    }
-  }, []); // Empty dependency array means this effect runs once on mount and cleanup on unmount
+  const closeDetailsModal = () => {
+    setSelectedItemDetails(null);
+  };
 
-  // Note: The div now uses mapContainerRef instead of a direct id="map"
-  // This is generally a more React-idiomatic way to handle DOM elements.
   return (
-    <main
-      className={cn(
-        // ...other classes...
-        pathname !== '/' && 'pt-16'
+    <main className="h-screen w-screen bg-background text-primary font-matrix tracking-normal p-4 flex flex-col overflow-hidden">
+      <h1 className="text-2xl font-bold mb-4 uppercase text-primary-foreground">SYSTEM STATUS GLOBE</h1>
+      <div className="flex-grow relative">
+        <ThreeGrid
+          dataPoints={globeData}
+          onMarkerClick={handleMarkerClick}
+        />
+      </div>
+
+      {selectedItemDetails && (
+        <div
+            className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-primary p-4 border-2 border-primary-foreground pixel-drop-shadow z-20"
+            style={{ minWidth: '300px', maxWidth: '90vw' }} // Added min/max width
+        >
+          <h3 className="text-xl font-bold mb-3 text-primary-foreground uppercase">
+            {selectedItemDetails.vehicle_count !== undefined ? 'Traffic Hotspot Details' : 'Congestion Prediction Details'}
+          </h3>
+          <div className="text-sm text-primary-foreground bg-background p-3 border border-primary-foreground max-h-60 overflow-auto tracking-normal">
+            {/* Using a more structured display instead of raw JSON */}
+            <p><strong>ID:</strong> {selectedItemDetails.id || 'N/A'}</p>
+            <p><strong>Name:</strong> {selectedItemDetails.name || 'N/A'}</p>
+            <p><strong>Latitude:</strong> {selectedItemDetails.latitude?.toFixed(4)}</p>
+            <p><strong>Longitude:</strong> {selectedItemDetails.longitude?.toFixed(4)}</p>
+            {selectedItemDetails.vehicle_count !== undefined && (
+              <p><strong>Vehicle Count:</strong> {selectedItemDetails.vehicle_count}</p>
+            )}
+            {selectedItemDetails.predicted_congestion !== undefined && (
+              <p><strong>Predicted Congestion:</strong> {selectedItemDetails.predicted_congestion.toFixed(2)}</p>
+            )}
+            {selectedItemDetails.status && (
+              <p><strong>Status:</strong> <span className={selectedItemDetails.status === 'running' ? 'text-primary-foreground font-bold' : ''}>{selectedItemDetails.status}</span></p>
+            )}
+             {/* Displaying other potential fields from originalData if they exist */}
+            {Object.entries(selectedItemDetails.originalData || {}).map(([key, value]) => {
+              if (['id', 'name', 'lat', 'lon', 'altitude', 'status', 'type', 'originalData', 'latitude', 'longitude', 'vehicle_count', 'predicted_congestion'].includes(key)) return null;
+              return (
+                <p key={key}><strong>{key.replace(/_/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}:</strong> {JSON.stringify(value)}</p>
+              );
+            })}
+          </div>
+          <button
+            onClick={closeDetailsModal}
+            className="mt-4 px-4 py-2 bg-primary-foreground text-primary hover:bg-primary-foreground/90 font-matrix tracking-normal uppercase font-bold"
+          >
+            Close
+          </button>
+        </div>
       )}
-    >
-      <div ref={mapContainerRef} className={styles.mapContainer} />
     </main>
   );
 };
 
-export default MapComponent;
+export default MapPage;

@@ -2,12 +2,9 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { useRouter } from 'next/navigation';
-import type { FeedStatusData } from '@/lib/types';
-import { db } from '@/lib/firebase'; // Assuming db is a Firestore instance from Firebase v9+
-import { collection, getDocs, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore'; // Firebase v9+ imports
+import { useRouter } from 'next/navigation'; // Kept for now, might be replaced by onMarkerClick
 
-// Define GeoJSON Interfaces
+// Define GeoJSON Interfaces (assuming these are still used for continent outlines)
 interface GeoJSONFeature {
     type: 'Feature';
     geometry: { type: 'Polygon'; coordinates: number[][][] } | { type: 'MultiPolygon'; coordinates: number[][][][] };
@@ -19,14 +16,36 @@ interface GeoJSON {
     features: GeoJSONFeature[];
 }
 
-// Define FeedMarker Interface
+// Define GlobeDataPoint Interface for props
+interface GlobeDataPoint {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  altitude?: number;
+  status?: string;
+  type?: string;
+  [key: string]: any;
+}
+
+// Props for the ThreeGrid component
+interface ThreeGridProps {
+  dataPoints: GlobeDataPoint[];
+  onMarkerClick?: (dataPoint: GlobeDataPoint) => void;
+  // className?: string; // Example: if you need to pass Tailwind classes for sizing
+  // style?: React.CSSProperties; // Example: if you need to pass inline styles for sizing
+}
+export type { GlobeDataPoint }; // Export the interface
+
+// Internal FeedMarker Interface (for Three.js objects)
 interface FeedMarker {
     id: string;
     name: string;
     position: THREE.Vector3;
     mesh?: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>;
-    label?: THREE.Sprite; // THREE.Sprite | undefined
-    status: 'error' | 'stopped' | 'running' | 'starting';
+    label?: THREE.Sprite;
+    status: 'error' | 'stopped' | 'running' | 'starting'; // Keep this for status mapping
+    // originalData: GlobeDataPoint; // Optional: store the original data point
 }
 
 // Structure to hold the scene, camera, renderer and controls
@@ -38,16 +57,15 @@ interface SceneRefs {
     animationId: number | null;
 }
 
-// Helper to create label sprites
+// Helper to create label sprites (remains themed)
 const createLabelSprite = (name: string, position: THREE.Vector3, offsetAmount: number = 5): THREE.Sprite | undefined => {
     try {
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        if (!context) return undefined; // Return undefined instead of null
+        if (!context) return undefined;
 
         const fontSize = 16;
         const padding = 8;
-        // APPLY FONT CHANGE FIRST for accurate measureText
         context.font = `Bold ${fontSize}px 'IBM Plex Mono', monospace`;
         const textMetrics = context.measureText(name);
         const textWidth = textMetrics.width;
@@ -55,24 +73,21 @@ const createLabelSprite = (name: string, position: THREE.Vector3, offsetAmount: 
         canvas.width = textWidth + padding * 2;
         canvas.height = fontSize + padding * 2;
 
-        // Re-apply font after canvas resize (good practice, though often context is preserved)
         context.font = `Bold ${fontSize}px 'IBM Plex Mono', monospace`;
-        // Solid black background
-        context.fillStyle = 'rgba(0, 0, 0, 1)';
+        context.fillStyle = 'rgba(0, 0, 0, 1)'; // Solid black background
         context.fillRect(0, 0, canvas.width, canvas.height);
 
         context.textAlign = 'center';
         context.textBaseline = 'middle';
-        // Theme green text
-        context.fillStyle = '#8CA17C';
+        context.fillStyle = '#8CA17C'; // Theme green text
         context.fillText(name, canvas.width / 2, canvas.height / 2);
 
         const texture = new THREE.CanvasTexture(canvas);
         texture.needsUpdate = true;
         const spriteMaterial = new THREE.SpriteMaterial({
             map: texture,
-            transparent: false, // Since background is solid
-            opacity: 1,         // Sprite itself is fully opaque
+            transparent: false,
+            opacity: 1,
             sizeAttenuation: false
         });
         const label = new THREE.Sprite(spriteMaterial);
@@ -83,15 +98,15 @@ const createLabelSprite = (name: string, position: THREE.Vector3, offsetAmount: 
         return label;
     } catch (labelError) {
         console.error("Error creating label canvas/texture:", labelError);
-        return undefined; // Return undefined instead of null
+        return undefined;
     }
 };
 
 
-const ThreeGrid: React.FC = () => {
+const ThreeGrid: React.FC<ThreeGridProps> = ({ dataPoints, onMarkerClick }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [feedMarkers, setFeedMarkers] = useState<Record<string, FeedMarker>>({});
-    const router = useRouter();
+    const router = useRouter(); // Kept for existing click and search logic
     const sceneRef = useRef<SceneRefs | null>(null);
     const globeRef = useRef<THREE.Mesh | null>(null);
     const feedMarkersRef = useRef(feedMarkers);
@@ -100,7 +115,6 @@ const ThreeGrid: React.FC = () => {
         feedMarkersRef.current = feedMarkers;
     }, [feedMarkers]);
 
-    // Wrapped in useCallback as per ESLint suggestion
     const isValidGeoJSONFeature = useCallback((f: unknown): f is GeoJSONFeature => {
         if (typeof f !== 'object' || f === null) return false;
         const feature = f as GeoJSONFeature;
@@ -120,6 +134,13 @@ const ThreeGrid: React.FC = () => {
             radius * Math.cos(phi),
             radius * Math.sin(phi) * Math.sin(theta)
         );
+    }, []);
+
+    const latLonAltToVector3 = useCallback((lat: number, lon: number, alt: number = 0, radius: number = 50): THREE.Vector3 => {
+        const phi = (90 - lat) * Math.PI / 180;
+        const theta = (lon + 180) * Math.PI / 180;
+        const r = radius + alt;
+        return new THREE.Vector3(-(r * Math.sin(phi) * Math.cos(theta)), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
     }, []);
 
     const addPolygonToScene = useCallback((polygonCoords: number[][][], scene: THREE.Scene, color: THREE.ColorRepresentation = 0x000000) => {
@@ -149,7 +170,6 @@ const ThreeGrid: React.FC = () => {
     }, [lonLatToVector3]);
 
     const loadGeoJSON = useCallback(async (scene: THREE.Scene): Promise<void> => {
-        // console.log('Loading GeoJSON...'); // Removed for cleanliness
         try {
             const response = await fetch('/continents.geojson');
             if (!response.ok) {
@@ -161,7 +181,7 @@ const ThreeGrid: React.FC = () => {
                  return;
             }
             geojson.features.forEach((feature: unknown, index: number) => {
-                if (!isValidGeoJSONFeature(feature)) { // isValidGeoJSONFeature is now stable
+                if (!isValidGeoJSONFeature(feature)) {
                     return;
                 }
                 try {
@@ -176,17 +196,15 @@ const ThreeGrid: React.FC = () => {
                     console.error(`Error processing GeoJSON feature ${index}:`, processingError, feature);
                 }
             });
-            // console.log('GeoJSON loaded successfully.'); // Removed for cleanliness
         } catch (error) {
             console.error('Failed to load or parse GeoJSON:', error);
         }
-    }, [addPolygonToScene, isValidGeoJSONFeature]); // Dependencies are stable
+    }, [addPolygonToScene, isValidGeoJSONFeature]);
 
     useEffect(() => {
-        const currentContainer = containerRef.current; // Capture ref for use in effect and cleanup
+        const currentContainer = containerRef.current;
         if (!currentContainer || sceneRef.current) return;
 
-        // console.log("Initializing Three.js Scene"); // Removed for cleanliness
         const scene = new THREE.Scene();
         scene.fog = new THREE.Fog(0x8CA17C, 80, 250); // Theme green fog
         const camera = new THREE.PerspectiveCamera(75, currentContainer.clientWidth / currentContainer.clientHeight, 0.1, 1000);
@@ -198,10 +216,7 @@ const ThreeGrid: React.FC = () => {
 
         const globeGeometry = new THREE.SphereGeometry(50, 64, 64);
         const globeMaterial = new THREE.MeshBasicMaterial({
-            color: 0x8CA17C, // Theme green
-            wireframe: false,
-            opacity: 1,
-            transparent: false,
+            color: 0x8CA17C, wireframe: false, opacity: 1, transparent: false,
         });
         const globe = new THREE.Mesh(globeGeometry, globeMaterial);
         globeRef.current = globe;
@@ -210,10 +225,8 @@ const ThreeGrid: React.FC = () => {
         loadGeoJSON(scene);
 
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-        controls.minDistance = 60;
-        controls.maxDistance = 300;
+        controls.enableDamping = true; controls.dampingFactor = 0.05;
+        controls.minDistance = 60; controls.maxDistance = 300;
         controls.enablePan = false;
 
         camera.position.set(0, 0, 120);
@@ -223,7 +236,6 @@ const ThreeGrid: React.FC = () => {
         sceneRef.current = { scene, camera, renderer, controls, animationId: null };
 
         const handleResize = () => {
-            // Use captured currentContainer for consistency if needed, though direct ref is fine here
             if (!containerRef.current || !sceneRef.current) return;
             const { camera: cam, renderer: rend } = sceneRef.current;
             const width = containerRef.current.clientWidth;
@@ -235,8 +247,8 @@ const ThreeGrid: React.FC = () => {
         window.addEventListener('resize', handleResize);
 
         const animateScene = () => {
-            const currentSceneRefs = sceneRef.current;
-            if (!currentSceneRefs) return;
+            const currentSRefs = sceneRef.current;
+            if (!currentSRefs) return;
             const currentMarkers = feedMarkersRef.current;
 
             Object.values(currentMarkers).forEach(marker => {
@@ -256,22 +268,19 @@ const ThreeGrid: React.FC = () => {
                 }
             });
 
-            currentSceneRefs.controls.update();
-            currentSceneRefs.renderer.render(currentSceneRefs.scene, currentSceneRefs.camera);
-            currentSceneRefs.animationId = requestAnimationFrame(animateScene);
+            currentSRefs.controls.update();
+            currentSRefs.renderer.render(currentSRefs.scene, currentSRefs.camera);
+            currentSRefs.animationId = requestAnimationFrame(animateScene);
         };
         animateScene();
 
         return () => {
-            // console.log("Cleaning up Three.js Scene"); // Removed for cleanliness
-            const sceneRefsToClean = sceneRef.current;
-            if (!sceneRefsToClean) return;
-
+            const sRefsToClean = sceneRef.current;
+            if (!sRefsToClean) return;
             window.removeEventListener('resize', handleResize);
-            if (sceneRefsToClean.animationId) cancelAnimationFrame(sceneRefsToClean.animationId);
-            
-            sceneRefsToClean.controls?.dispose();
-            sceneRefsToClean.scene?.traverse((object) => {
+            if (sRefsToClean.animationId) cancelAnimationFrame(sRefsToClean.animationId);
+            sRefsToClean.controls?.dispose();
+            sRefsToClean.scene?.traverse((object) => {
                 if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Sprite) {
                     object.geometry?.dispose();
                     if (object.material) {
@@ -284,36 +293,125 @@ const ThreeGrid: React.FC = () => {
                     }
                 }
             });
-            while(sceneRefsToClean.scene?.children.length > 0){
-                sceneRefsToClean.scene.remove(sceneRefsToClean.scene.children[0]);
+            while(sRefsToClean.scene?.children.length > 0){
+                sRefsToClean.scene.remove(sRefsToClean.scene.children[0]);
             }
-            // Use the captured 'currentContainer' in cleanup
-            if (currentContainer && sceneRefsToClean.renderer?.domElement) {
-                 if (currentContainer.contains(sceneRefsToClean.renderer.domElement)) {
-                    currentContainer.removeChild(sceneRefsToClean.renderer.domElement);
+            if (currentContainer && sRefsToClean.renderer?.domElement) {
+                 if (currentContainer.contains(sRefsToClean.renderer.domElement)) {
+                    currentContainer.removeChild(sRefsToClean.renderer.domElement);
                  }
             }
-            sceneRefsToClean.renderer?.dispose();
+            sRefsToClean.renderer?.dispose();
             sceneRef.current = null;
             globeRef.current = null;
-            feedMarkersRef.current = {};
-            setFeedMarkers({});
+            feedMarkersRef.current = {}; // Reset ref
+            setFeedMarkers({}); // Reset state
         };
-    }, [loadGeoJSON]);
+    }, [loadGeoJSON]); // loadGeoJSON is stable
+
+    const mapToMarkerStatus = (statusStr: string | undefined): FeedMarker['status'] => {
+        if (statusStr && ['error', 'stopped', 'running', 'starting'].includes(statusStr)) {
+            return statusStr as FeedMarker['status'];
+        }
+        return 'stopped';
+    };
 
     useEffect(() => {
-        const currentContainer = containerRef.current; // Capture for cleanup
+        const currentSceneRefs = sceneRef.current;
+        if (!currentSceneRefs) return;
+        const { scene } = currentSceneRefs;
+
+        const MARKER_BASE_COLOR = 0x000000; // Black
+        const MARKER_RUNNING_COLOR = 0x8CA17C; // Theme green
+
+        setFeedMarkers(prevMarkers => {
+            const updatedMarkers: Record<string, FeedMarker> = { ...prevMarkers };
+            const incomingPointIds = new Set(dataPoints.map(p => p.id));
+            const existingMarkerIds = new Set(Object.keys(prevMarkers));
+
+            dataPoints.forEach(point => {
+                const { id, name, lat, lon, altitude = 1, status } = point;
+                const position = latLonAltToVector3(lat, lon, altitude, 50);
+                const markerStatus = mapToMarkerStatus(status);
+                const newThemeMarkerColor = markerStatus === 'running' ? MARKER_RUNNING_COLOR : MARKER_BASE_COLOR;
+
+                const existingMarker = updatedMarkers[id];
+                if (existingMarker) {
+                    existingMarker.position.copy(position);
+                    existingMarker.status = markerStatus;
+                    existingMarker.name = name;
+
+                    if (existingMarker.mesh) {
+                        (existingMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(newThemeMarkerColor);
+                        existingMarker.mesh.position.copy(position);
+                        existingMarker.mesh.lookAt(0, 0, 0);
+                        existingMarker.mesh.userData = { ...point, isMarker: true };
+                    }
+                    if (existingMarker.label) { // Simple remove and re-add for labels if name or position changed
+                        if (existingMarker.name !== name || !existingMarker.label.position.equals(position)) {
+                            scene.remove(existingMarker.label);
+                            existingMarker.label.material.map?.dispose();
+                            existingMarker.label.material.dispose();
+                            existingMarker.label = createLabelSprite(name, position) || undefined;
+                            if (existingMarker.label) scene.add(existingMarker.label);
+                        } else { // Just update position if only that changed
+                             const labelOffset = 5; // Assuming same offset as in createLabelSprite
+                             existingMarker.label.position.set(position.x, position.y + labelOffset, position.z);
+                        }
+                    }
+                } else {
+                    const newMarker: FeedMarker = { id, name, position, status: markerStatus };
+                    const geometry = new THREE.ConeGeometry(0.8, 3, 8);
+                    geometry.translate(0, 1.5, 0);
+                    geometry.rotateX(Math.PI / 2);
+                    const material = new THREE.MeshBasicMaterial({ color: newThemeMarkerColor, transparent: true, opacity: 0.8 });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.copy(position);
+                    mesh.lookAt(new THREE.Vector3(0,0,0));
+                    mesh.userData = { ...point, isMarker: true };
+                    newMarker.mesh = mesh;
+                    scene.add(mesh);
+
+                    newMarker.label = createLabelSprite(name, position) || undefined;
+                    if (newMarker.label) scene.add(newMarker.label);
+                    updatedMarkers[id] = newMarker;
+                }
+            });
+
+            existingMarkerIds.forEach(markerId => {
+                if (!incomingPointIds.has(markerId)) {
+                    const markerToRemove = updatedMarkers[markerId];
+                    if (markerToRemove.mesh) {
+                        scene.remove(markerToRemove.mesh);
+                        markerToRemove.mesh.geometry.dispose();
+                       (markerToRemove.mesh.material as THREE.Material).dispose();
+                    }
+                    if (markerToRemove.label) {
+                        scene.remove(markerToRemove.label);
+                        markerToRemove.label.material.map?.dispose();
+                        markerToRemove.label.material.dispose();
+                    }
+                    delete updatedMarkers[markerId];
+                }
+            });
+            return updatedMarkers;
+        });
+
+    }, [dataPoints, latLonAltToVector3]);
+
+
+    useEffect(() => {
+        const currentContainer = containerRef.current;
         if (!currentContainer) return;
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
         const handleClick = (event: MouseEvent): void => {
-            const currentSceneRefs = sceneRef.current;
-            // Use currentContainer for consistency within this effect's scope
-            if (!currentContainer || !currentSceneRefs) return;
-            const { camera } = currentSceneRefs;
-            const currentMarkers = feedMarkersRef.current;
+            const currentSRefs = sceneRef.current;
+            if (!currentContainer || !currentSRefs) return;
+            const { camera } = currentSRefs;
+            const currentMarkers = feedMarkersRef.current; // Use ref for up-to-date markers
 
             const rect = currentContainer.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -328,213 +426,62 @@ const ThreeGrid: React.FC = () => {
                 const intersects = raycaster.intersectObjects(markerMeshes);
                 if (intersects.length > 0) {
                     const intersectedObject = intersects[0].object;
-                    if (intersectedObject.userData?.id) {
+                    // Use intersectedObject.userData which now holds the GlobeDataPoint
+                    if (onMarkerClick && intersectedObject.userData?.id) {
+                        onMarkerClick(intersectedObject.userData as GlobeDataPoint);
+                    } else if (intersectedObject.userData?.id) { // Fallback if onMarkerClick not provided
                         router.push(`/surveillance/${intersectedObject.userData.id}`);
                     }
                     return;
                 }
             }
-            
-            const currentGlobe = globeRef.current;
-            if (currentGlobe) {
-                const globeIntersects = raycaster.intersectObject(currentGlobe);
-                if (globeIntersects.length > 0) { /* Clicked on globe */ }
-            }
+            // ... (globe click logic can remain if needed)
         };
         currentContainer.addEventListener('click', handleClick);
         return () => {
-            // Use captured currentContainer for removeEventListener
             currentContainer.removeEventListener('click', handleClick);
         };
-    }, [router]);
-
-    const latLonAltToVector3 = useCallback((lat: number, lon: number, alt: number = 0, radius: number = 50): THREE.Vector3 => {
-        const phi = (90 - lat) * Math.PI / 180;
-        const theta = (lon + 180) * Math.PI / 180; // Longitude needs to be in [-180, 180] range for this typically
-        const r = radius + alt;
-        return new THREE.Vector3(-(r * Math.sin(phi) * Math.cos(theta)), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
-    }, []);
-
-    useEffect(() => {
-        const mapToMarkerStatus = (statusStr: string | undefined): FeedMarker['status'] => {
-            if (statusStr && ['error', 'stopped', 'running', 'starting'].includes(statusStr)) {
-                return statusStr as FeedMarker['status'];
-            }
-            return 'stopped';
-        };
-
-        // Define marker colors for the theme
-        const MARKER_BASE_COLOR = 0x000000; // Black
-        const MARKER_RUNNING_COLOR = 0x8CA17C; // Theme green
-
-        const fetchAndUpdateFeeds = async () => {
-            const currentSceneRefs = sceneRef.current;
-            if (!currentSceneRefs) return;
-            const { scene } = currentSceneRefs;
-
-            if (!db) { // Check if db is initialized
-                console.error("Firestore instance (db) is not initialized.");
-                return;
-            }
-
-            let fetchedData: FeedStatusData[];
-            try {
-                // Firebase v9+ modular SDK syntax
-                const feedsCollectionRef = collection(db, 'feeds'); // Ensure 'feeds' is your collection name
-                const snapshot = await getDocs(feedsCollectionRef);
-                fetchedData = snapshot.docs.map((doc: QueryDocumentSnapshot<DocumentData>) => ({ // Typed 'doc'
-                    id: doc.id, 
-                    ...doc.data() 
-                } as FeedStatusData)); // Cast to FeedStatusData
-                
-                if (!Array.isArray(fetchedData)) {
-                    console.error("Fetched data is not an array:", fetchedData);
-                    fetchedData = [];
-                }
-            } catch (fetchError: unknown) { // Use unknown for error type
-                let message = "An unknown error occurred";
-                if (fetchError instanceof Error) {
-                    message = fetchError.message;
-                } else if (typeof fetchError === 'string') {
-                    message = fetchError;
-                }
-                console.error('Error fetching or parsing feeds:', message);
-                return;
-            }
-
-            setFeedMarkers(prevFeedMarkers => {
-                const updatedMarkers: Record<string, FeedMarker> = { ...prevFeedMarkers };
-                const incomingFeedIds = new Set(fetchedData.map((f: FeedStatusData) => f.id));
-                const existingFeedIds = new Set(Object.keys(prevFeedMarkers));
-                const totalFeeds = fetchedData.length > 0 ? fetchedData.length : 1;
-
-                fetchedData.forEach((feed: FeedStatusData, index: number) => {
-                    const existingMarker = updatedMarkers[feed.id];
-
-                    // Corrected Fibonacci sphere distribution (points on a unit sphere)
-                    const y_sphere = totalFeeds > 1 ? 1 - (index / (totalFeeds - 1)) * 2 : 0; // y from 1 to -1
-                    const phi_golden_angle = index * (Math.PI * (3.0 - Math.sqrt(5.0))); // Golden angle for longitude distribution
-
-                    // Convert spherical (unit sphere) to Cartesian, then to lat/lon
-                    // x = r * cos(theta), z = r * sin(theta) for the slice
-                    // For longitude, we use atan2(z_sphere_coord, x_sphere_coord)
-                    // For latitude, we use asin(y_sphere_coord)
-                    const lat = Math.asin(y_sphere) * (180 / Math.PI);
-                    // Ensure phi_golden_angle is wrapped to [0, 2PI) before converting to degrees
-                    // Then shift to [-180, 180] if needed, but lonLatToVector3 handles [0, 360] or [-180, 180] for longitude
-                    let lon = (phi_golden_angle * (180 / Math.PI)) % 360;
-                    if (lon > 180) lon -= 360; // Normalize to [-180, 180] if desired, though lonLatToVector3 can often handle larger ranges
-
-                    const altitude = 1;
-                    const position = latLonAltToVector3(lat, lon, altitude, 50);
-
-                    const status = mapToMarkerStatus(feed.status);
-                    // Determine the new marker color based on theme
-                    const newThemeMarkerColor = status === 'running' ? MARKER_RUNNING_COLOR : MARKER_BASE_COLOR;
-                    const name = feed.name || feed.source || `Feed ${feed.id}`;
-
-                    if (existingMarker) {
-                        existingMarker.position.copy(position);
-                        existingMarker.status = status;
-                        
-                        if (existingMarker.mesh) {
-                            (existingMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(newThemeMarkerColor);
-                            existingMarker.mesh.position.copy(position);
-                            existingMarker.mesh.lookAt(0, 0, 0);
-                        }
-
-                        if (existingMarker.label && (existingMarker.name !== name || !existingMarker.label.position.equals(position))) {
-                            scene.remove(existingMarker.label);
-                            existingMarker.label.material.map?.dispose();
-                            existingMarker.label.material.dispose();
-                            existingMarker.label = createLabelSprite(name, position) || undefined; // Ensure undefined if null
-                            if (existingMarker.label) scene.add(existingMarker.label);
-                        } else if (existingMarker.label) {
-                             const labelOffset = 5;
-                             existingMarker.label.position.set(position.x, position.y + labelOffset, position.z);
-                        }
-                        existingMarker.name = name;
-
-                    } else {
-                        const newMarker: FeedMarker = { id: feed.id, name, position, status };
-                        const geometry = new THREE.ConeGeometry(0.8, 3, 8);
-                        geometry.translate(0, 1.5, 0);
-                        geometry.rotateX(Math.PI / 2);
-                        const material = new THREE.MeshBasicMaterial({ color: newThemeMarkerColor, transparent: true, opacity: 0.8 });
-                        const mesh = new THREE.Mesh(geometry, material);
-                        mesh.position.copy(position);
-                        mesh.lookAt(new THREE.Vector3(0,0,0));
-                        mesh.userData = { id: newMarker.id, name: newMarker.name, isMarker: true };
-                        newMarker.mesh = mesh;
-                        scene.add(mesh);
-
-                        newMarker.label = createLabelSprite(name, position) || undefined; // Ensure undefined if null
-                        if (newMarker.label) scene.add(newMarker.label);
-                        
-                        updatedMarkers[feed.id] = newMarker;
-                    }
-                });
-
-                existingFeedIds.forEach(feedId => {
-                    if (!incomingFeedIds.has(feedId)) {
-                        const markerToRemove = updatedMarkers[feedId];
-                        if (markerToRemove.mesh) {
-                            scene.remove(markerToRemove.mesh);
-                            markerToRemove.mesh.geometry.dispose();
-                           (markerToRemove.mesh.material as THREE.Material).dispose();
-                        }
-                        if (markerToRemove.label) {
-                            scene.remove(markerToRemove.label);
-                            markerToRemove.label.material.map?.dispose();
-                            markerToRemove.label.material.dispose();
-                        }
-                        delete updatedMarkers[feedId];
-                    }
-                });
-                return updatedMarkers;
-            });
-        };
-
-        fetchAndUpdateFeeds();
-        const intervalId = setInterval(fetchAndUpdateFeeds, 10000);
-
-        return () => clearInterval(intervalId);
-    }, [latLonAltToVector3]);
+    }, [router, onMarkerClick]); // Add onMarkerClick to dependencies
 
 
     const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const currentSceneRefs = sceneRef.current;
         if (!currentSceneRefs) return;
         const { camera, controls } = currentSceneRefs;
-        const currentMarkers = feedMarkersRef.current;
 
         const searchTermValue = e.target.value.toLowerCase().trim();
         if (!searchTermValue) {
             controls.target.set(0,0,0);
-            camera.position.set(0,0,120);
+            camera.position.set(0,0,120); // Reset camera
             controls.update();
             return;
         }
 
-        const matchedFeed = Object.values(currentMarkers).find(
-            (f: FeedMarker) =>
-                f.name.toLowerCase().includes(searchTermValue) ||
-                f.id.toLowerCase().includes(searchTermValue)
+        // Search directly on the dataPoints prop
+        const matchedPoint = dataPoints.find(
+            (point: GlobeDataPoint) =>
+                point.name.toLowerCase().includes(searchTermValue) ||
+                point.id.toLowerCase().includes(searchTermValue)
         );
 
-        if (matchedFeed?.position) {
-            const offsetDistance = 20;
-            const directionToMarker = matchedFeed.position.clone().normalize();
-            const desiredCameraPosition = matchedFeed.position.clone().add(directionToMarker.multiplyScalar(offsetDistance));
-            
-            const minFocusDistance = 50 + 15;
-            if (desiredCameraPosition.length() < minFocusDistance) {
-                desiredCameraPosition.normalize().multiplyScalar(minFocusDistance);
-            }
+        if (matchedPoint) {
+            const currentMarkers = feedMarkersRef.current; // Get current markers state
+            const actualMarker = currentMarkers[matchedPoint.id];
 
-            controls.target.copy(matchedFeed.position);
-            camera.position.copy(desiredCameraPosition);
-            controls.update();
+            if (actualMarker?.position) { // Check if the marker exists and has a position
+                const offsetDistance = 20;
+                const directionToMarker = actualMarker.position.clone().normalize();
+                const desiredCameraPosition = actualMarker.position.clone().add(directionToMarker.multiplyScalar(offsetDistance));
+
+                const minFocusDistance = 50 + 15; // Keep existing logic
+                if (desiredCameraPosition.length() < minFocusDistance) {
+                    desiredCameraPosition.normalize().multiplyScalar(minFocusDistance);
+                }
+
+                controls.target.copy(actualMarker.position);
+                camera.position.copy(desiredCameraPosition);
+                controls.update();
+            }
         }
     };
 
