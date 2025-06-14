@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { AlertTriangle, ShieldAlert, Info } from 'lucide-react';
 
 interface WeatherData {
   temperature: number;
@@ -89,39 +90,34 @@ const WeatherEventImpactPanel: React.FC = () => {
     return 'Low';
   };
 
-  if (loading) return <div className="p-4">Loading weather and event impacts...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
-  if (!impacts.length) return <div className="p-4">No weather or event impacts found.</div>;
+  if (loading) return <div className="p-4 text-primary tracking-normal">Loading weather and event impacts...</div>;
+  if (error) return <div className="p-4 text-primary tracking-normal"><AlertTriangle className="inline-block h-5 w-5 mr-2 text-primary" />{error}</div>;
+  if (!impacts.length) return <div className="p-4 text-primary tracking-normal">No weather or event impacts found.</div>;
 
   return (
-    <div className="p-4 bg-white rounded-lg shadow-lg">
-      <h2 className="text-xl font-bold mb-4">Weather & Event Impacts</h2>
+    <div className="p-4 bg-background border border-primary pixel-drop-shadow">
+      <h2 className="text-xl font-bold mb-4 tracking-normal">Weather & Event Impacts</h2>
       <div className="space-y-4">
         {impacts.map((impact, idx) => (
-          <div key={idx} className={`p-4 rounded-lg border ${
-            impact.severity === 'High' ? 'border-red-200 bg-red-50' :
-            impact.severity === 'Medium' ? 'border-yellow-200 bg-yellow-50' :
-            'border-green-200 bg-green-50'
-          }`}>
+          <div key={idx} className="p-4 border border-primary bg-background">
             <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold capitalize">{impact.type}</span>
-              <span className={`px-2 py-1 rounded text-sm ${
-                impact.severity === 'High' ? 'bg-red-200 text-red-800' :
-                impact.severity === 'Medium' ? 'bg-yellow-200 text-yellow-800' :
-                'bg-green-200 text-green-800'
-              }`}>
+              <span className="font-bold uppercase tracking-normal">{impact.type}</span>
+              <span className="px-2 py-1 text-sm bg-primary text-primary-foreground tracking-normal font-bold uppercase">
+                {impact.severity === 'High' && <AlertTriangle className="inline-block h-4 w-4 mr-1 text-primary-foreground" />}
+                {impact.severity === 'Medium' && <ShieldAlert className="inline-block h-4 w-4 mr-1 text-primary-foreground" />}
+                {impact.severity === 'Low' && <Info className="inline-block h-4 w-4 mr-1 text-primary-foreground" />}
                 {impact.severity} Impact
               </span>
             </div>
-            <p className="text-gray-700">{impact.description}</p>
-            <div className="mt-2 text-sm text-gray-500 space-y-1">
+            <p className="text-foreground tracking-normal">{impact.description}</p>
+            <div className="mt-2 text-sm text-primary tracking-normal space-y-1">
               <p>Location: {impact.location}</p>
               <p>Start: {new Date(impact.startTime).toLocaleString()}</p>
               {impact.endTime && (
                 <p>End: {new Date(impact.endTime).toLocaleString()}</p>
               )}
               {impact.type === 'weather' && impact.details && (
-                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-primary tracking-normal">
                   <p>Wind: {(impact.details as WeatherData).wind_speed} km/h</p>
                   <p>Precipitation: {(impact.details as WeatherData).precipitation_chance}%</p>
                 </div>
