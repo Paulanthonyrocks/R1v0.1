@@ -110,7 +110,7 @@ class DatabaseManager:
 
 
     @asynccontextmanager
-    async def get_session(self) -> asynccontextmanager[AsyncSession]: # Corrected return type hint
+    async def get_session(self):
         """Get an async database session."""
         if not self.async_session_factory:
             raise DatabaseError("Async session factory not initialized. Check SQLite configuration.")
