@@ -4,7 +4,7 @@ from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_config, get_current_active_user, get_current_admin # Added get_current_active_user
-from app.utils.utils import load_config, ConfigError # Import config loading function
+from app.utils import load_config, ConfigError  # Import config loading function
 from app.models.feeds import StandardResponse # Re-use standard response model
 from pathlib import Path
 import logging

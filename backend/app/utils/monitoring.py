@@ -1,9 +1,22 @@
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 # It's good practice to have logging available in all modules
 import logging
 logger = logging.getLogger(__name__)
+
+import psutil # Needed for check_system_resources
+
+def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:
+    """Checks current CPU and Virtual Memory usage percentage."""
+    try:
+        cpu_percent = psutil.cpu_percent(interval=cpu_interval)
+        memory_info = psutil.virtual_memory()
+        memory_percent = memory_info.percent
+        return cpu_percent, memory_percent
+    except Exception as e:
+        logger.error(f"Failed to get system resource usage: {e}", exc_info=True)
+        return 0.0, 0.0
 
 class TrafficMonitor:
     # Class attribute: Mapping of vehicle class IDs to their names.

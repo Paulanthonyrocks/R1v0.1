@@ -23,16 +23,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # ----- System Resources -----
-def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:
-    """Checks current CPU and Virtual Memory usage percentage."""
-    try:
-        cpu_percent = psutil.cpu_percent(interval=cpu_interval)
-        memory_info = psutil.virtual_memory()
-        memory_percent = memory_info.percent
-        return cpu_percent, memory_percent
-    except Exception as e:
-        logger.error(f"Failed to get system resource usage: {e}", exc_info=True)
-        return 0.0, 0.0
+# check_system_resources function moved to monitoring.py
 
 # --- Custom Exceptions ---
 # DatabaseError moved to backend/app/utils/database.py

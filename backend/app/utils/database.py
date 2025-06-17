@@ -4,7 +4,7 @@ import threading
 import logging
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from functools import lru_cache
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, RetryError
 from contextlib import asynccontextmanager, contextmanager
@@ -16,10 +16,9 @@ from pymongo.database import Database as MongoDatabase
 from pymongo.errors import ConnectionFailure, ConfigurationError as MongoConfigurationError
 
 # Attempt to import TrafficMonitor from where it's planned to be
-from ..monitoring import TrafficMonitor
-# No longer need the placeholder class TrafficMonitor here
+from .monitoring import TrafficMonitor
 
-from ..config import DEFAULT_CONFIG, ConfigError # ConfigError might be needed if _init_from_config raises it
+from app.utils import DEFAULT_CONFIG, ConfigError  # Use re-exported config symbols
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,7 @@ class DatabaseManager:
 
 
     @asynccontextmanager
-    async def get_session(self) -> AsyncContextManager[AsyncSession]: # Corrected return type hint
+    async def get_session(self) -> asynccontextmanager[AsyncSession]: # Corrected return type hint
         """Get an async database session."""
         if not self.async_session_factory:
             raise DatabaseError("Async session factory not initialized. Check SQLite configuration.")

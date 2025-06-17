@@ -37,7 +37,8 @@ from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, Fee
 
 # Import core worker and utilities (adjust path as needed)
 from app.core.processing_worker import process_video
-from app.utils.utils import check_system_resources, FrameTimer # Assuming these are in utils
+from app.utils.monitoring import check_system_resources
+from app.utils.video import FrameTimer # FrameTimer moved to video.py
 
 # Import WebSocket Manager type for hinting (will be implemented later)
 from app.websocket.connection_manager import ConnectionManager

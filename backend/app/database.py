@@ -1,6 +1,6 @@
 # app/database.py (Example)
 import logging
-from app.utils.utils import DatabaseManager as DBManagerClass, load_config, ConfigError # Assuming class is in utils
+from app.utils import DatabaseManager as DBManagerClass, load_config, ConfigError  # Assuming class is in utils
 from pathlib import Path
 from typing import Optional
 

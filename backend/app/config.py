@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 # Assuming load_config is defined in utils.utils
-from app.utils.utils import load_config, ConfigError
+from app.utils import load_config, ConfigError
 
 logger = logging.getLogger(__name__)
 

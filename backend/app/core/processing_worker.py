@@ -13,8 +13,12 @@ if TYPE_CHECKING:
 from pathlib import Path
 
 try:
-    # Import necessary components from utils.py
-    from ..utils.utils import FrameTimer, TrafficMonitor, visualize_data, FrameReader, ConfigError
+    # Import necessary components from their respective modules
+    from ..utils.video import FrameTimer, FrameReader
+    from ..utils.monitoring import TrafficMonitor
+    from ..utils.visualization import visualize_data
+    from ..utils.config import ConfigError, load_config
+    from ..utils import DEFAULT_CONFIG
     # LOG_PATH is defined in app.py, get it via config if needed or handle logging differently
     # For simplicity, we might re-fetch the path from config inside the function if needed
 except ImportError as e:
