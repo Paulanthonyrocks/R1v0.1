@@ -3,10 +3,13 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import asyncio
 from datetime import datetime, timezone, timedelta
 import numpy as np # For np.mean in tests
+import json
+from typing import Optional, Dict, Any
+from sqlalchemy.orm import Session
 
 from app.services.analytics_service import AnalyticsService
 from app.ml.data_cache import TrafficDataCache
-from app.utils.utils import DatabaseManager # Import DatabaseManager
+from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, NodeCongestionUpdatePayload, GeneralNotification
 from app.models.alerts import AlertSeverityEnum

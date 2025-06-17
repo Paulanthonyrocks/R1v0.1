@@ -23,15 +23,13 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         return _config_instance
 
     if config_path is None:
-        # Default path relative to this file's parent's parent (i.e., backend/configs/config.yaml)
-        config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
-        config_path = str(config_file_path_obj.resolve())
+        path_to_load = Path(__file__).parent.parent / "configs" / "config.yaml"
     else:
-        config_file_path_obj = Path(config_path) # Use provided path
+        path_to_load = Path(config_path)
 
-    logger.info(f"Initializing configuration from: {config_path}")
+    logger.info(f"Initializing configuration from: {path_to_load}")
     try:
-        _config_instance = load_config(config_path)
+        _config_instance = load_config(path_to_load)
         logger.info("Configuration initialized successfully via app.config.")
 
         # --- Reconfigure Logging Here (Centralized) ---

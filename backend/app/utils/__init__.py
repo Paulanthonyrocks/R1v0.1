@@ -26,10 +26,7 @@ from .video import FrameReader, FrameTimer
 from .visualization import visualize_data, create_lane_overlay, create_grid_overlay, alpha_blend
 
 # Import from .monitoring module
-from .monitoring import TrafficMonitor
-
-# Import from .utils module (the refactored utils.py which now only contains check_system_resources)
-from .utils import check_system_resources
+from .monitoring import TrafficMonitor, check_system_resources
 
 
 logger = logging.getLogger(__name__)

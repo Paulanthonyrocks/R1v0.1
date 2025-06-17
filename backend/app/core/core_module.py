@@ -14,7 +14,7 @@ from collections import deque # Import deque
 
 # Import LicensePlatePreprocessor from utils
 try:
-    from ..utils.utils import LicensePlatePreprocessor
+    from ..utils.image_processing import LicensePlatePreprocessor
 except ImportError:
     print("Error importing utils for CoreModule. Ensure utils.py is accessible.")
     LicensePlatePreprocessor = None

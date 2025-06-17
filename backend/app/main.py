@@ -146,6 +146,12 @@ async def startup_event():
     # 4. Initialize Services
     try:
         initialize_services(loaded_config)
+        # Initialize prediction log table after services are initialized
+        analytics_service = get_analytics_service()
+        if analytics_service:
+            await analytics_service.initialize_prediction_log_table()
+        else:
+            logger.error("AnalyticsService not available during startup; cannot initialize prediction log table.")
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
         # Decide if service initialization failure should halt startup
@@ -179,11 +185,11 @@ async def shutdown_event():
         logger.info("Prediction scheduler stopped.")
 
     # Shutdown services
-    shutdown_services()
+    await shutdown_services()
     logger.info("Services shut down.")
 
     # Close database connection
-    close_database()
+    await close_database()
     logger.info("Database connection closed.")
 
     logger.info("--- Backend shutdown complete ---")

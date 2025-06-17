@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, validator
 
 from app.dependencies import get_current_active_user, get_db, get_connection_manager # Added get_connection_manager
-from app.utils.utils import DatabaseManager
+from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
 from app.websocket.connection_manager import ConnectionManager # Added ConnectionManager
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, AlertStatusUpdatePayload # Added WS models

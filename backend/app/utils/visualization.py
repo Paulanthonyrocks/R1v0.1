@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 # Attempt to import TrafficMonitor from where it's planned to be
-from ..monitoring import TrafficMonitor
+from .monitoring import TrafficMonitor
 # No longer need the placeholder class TrafficMonitor here
 
 # Global variables for caching visualization overlays

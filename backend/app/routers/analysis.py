@@ -43,7 +43,7 @@ from app.models.signals import SignalState # If analysis needs signal state
 
 # Dependencies
 from app.dependencies import get_db, get_current_active_user, get_as # Added get_as
-from app.utils.utils import DatabaseManager
+from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.services.analytics_service import AnalyticsService # For type hinting
 
 router = APIRouter()

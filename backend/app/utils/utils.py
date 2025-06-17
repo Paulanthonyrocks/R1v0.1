@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     # Adjusted imports for moved components
     from backend.app.utils.config import load_config, ConfigError
-    from backend.app.utils.database import DatabaseManager, DatabaseError
     from backend.app.utils.image_processing import LicensePlatePreprocessor # New import
 
     print("Running utils.py directly (for testing purposes)...")
@@ -85,32 +84,13 @@ if __name__ == "__main__":
         gemini_key = config_data.get('ocr_engine',{}).get('gemini_api_key')
         print(f"Gemini Key Set in config: {'Yes' if gemini_key and gemini_key.strip() else 'No'}")
 
-        print("\n--- Testing DatabaseManager (with config from new module) ---")
-        db_manager = DatabaseManager(config_data)
-        # Example: Save an alert and retrieve it.
-        # Note: This is a basic test. More comprehensive tests should be in dedicated test files.
-        # test_alert_success = db_manager.save_alert("INFO", "TestFeedCLI-Utils", "CLI test alert from utils.py.", '{"details": "test from main block"}')
-        # print(f"Save alert success: {test_alert_success}")
-
-        # alerts = asyncio.run(db_manager.get_alerts_filtered({}, limit=3)) # Example for async method
-        # For sync version if preferred for CLI test:
-        # alerts = db_manager._execute_get_alerts_filtered({}, limit=3)
-        # print(f"Retrieved {len(alerts)} recent alerts (example):")
-        # for alert_item in alerts: print(f"  ID:{alert_item['id']} Time:{time.strftime('%H:%M:%S', time.localtime(alert_item['timestamp']))} Sev:{alert_item['severity']}")
-        print("Skipping DB operations in utils.py main block for brevity. Test via dedicated test files.")
-        db_manager.close()
-
-        # LicensePlatePreprocessor is now imported from image_processing.py
-        if gemini_key and gemini_key.strip(): # Check if key is actually present
-            print("\n--- Testing LicensePlatePreprocessor (Gemini - with config from new module) ---")
-            lp_preprocessor = LicensePlatePreprocessor(config_data) # Instantiated from new import
-            dummy_roi = np.zeros((100, 300, 3), dtype=np.uint8)
-            cv2.putText(dummy_roi, "TEST", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (255,255,255), 3)
-            print("Attempting OCR on a dummy image with Gemini...")
-            ocr_text_gemini = lp_preprocessor.preprocess_and_ocr(dummy_roi)
-            print(f"Gemini Dummy OCR Result: '{ocr_text_gemini}' (Empty is OK if key invalid/quota hit)")
-        else:
-            print("\n--- Skipping Gemini OCR test (API key not configured in loaded config) ---")
+        print("\n--- Testing LicensePlatePreprocessor (Gemini - with config from new module) ---")
+        lp_preprocessor = LicensePlatePreprocessor(config_data) # Instantiated from new import
+        dummy_roi = np.zeros((100, 300, 3), dtype=np.uint8)
+        cv2.putText(dummy_roi, "TEST", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (255,255,255), 3)
+        print("Attempting OCR on a dummy image with Gemini...")
+        ocr_text_gemini = lp_preprocessor.preprocess_and_ocr(dummy_roi)
+        print(f"Gemini Dummy OCR Result: '{ocr_text_gemini}' (Empty is OK if key invalid/quota hit)")
 
         print("--- Testing LicensePlatePreprocessor (Tesseract Fallback - with config from new module) ---")
         # Ensure config_data is passed even if Gemini key is missing, for other Tesseract settings
@@ -123,6 +103,5 @@ if __name__ == "__main__":
         print(f"Tesseract Dummy OCR Result: '{ocr_text_tesseract}' (Requires Tesseract installed & configured)")
 
     except ConfigError as ce: print(f"\n--- CONFIGURATION ERROR ---\n{ce}"); sys.exit(1)
-    except DatabaseError as dbe: print(f"\n--- DATABASE ERROR ---\n{dbe}"); sys.exit(1)
     except Exception as exc: print(f"\n--- UNEXPECTED ERROR IN MAIN TEST BLOCK ---\n{exc}"); logger.error("Main test block error", exc_info=True); sys.exit(1)
     print("\n--- Utils.py Tests Finished ---")
