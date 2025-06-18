@@ -7,9 +7,10 @@ from datetime import datetime, timedelta # Added datetime, timedelta
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern # Ensure CommonTravelPattern is directly importable or accessed via service
 from app.services.analytics_service import AnalyticsService
+from app.services.traffic_signal_service import TrafficSignalService
 from app.models.traffic import LocationModel
-from app.models.websocket import UserSpecificConditionAlert
-
+from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
+from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage # Added WebSocketMessage
 logger = logging.getLogger(__name__)
 
 PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD = 60 # Define constant
@@ -20,6 +21,7 @@ class AgentCore:
         prediction_scheduler: PredictionScheduler,
         personalized_routing_service: PersonalizedRoutingService,
         analytics_service: AnalyticsService, # Added analytics_service
+        traffic_signal_service: TrafficSignalService,
     ):
         """
         Initializes the AgentCore with necessary service components.
@@ -27,8 +29,11 @@ class AgentCore:
         self.prediction_scheduler = prediction_scheduler
         self.personalized_routing_service = personalized_routing_service
         self.analytics_service = analytics_service
+        self.traffic_signal_service = traffic_signal_service
+        self._recent_signal_actions: Dict[str, Dict[str, Any]] = {}
+        self.SIGNAL_ACTION_COOLDOWN_SECONDS = 120  # 2 minutes
         self.logger = logger
-        logger.info("AgentCore initialized with PredictionScheduler, PersonalizedRoutingService, and AnalyticsService.")
+        logger.info("AgentCore initialized with PredictionScheduler, PersonalizedRoutingService, AnalyticsService, and TrafficSignalService.")
 
     async def _determine_next_travel_prediction_time(self, pattern: CommonTravelPattern, current_dt: datetime) -> Optional[datetime]:
         """
@@ -84,6 +89,17 @@ class AgentCore:
         self.logger.info("Fetching critical alert summary for AgentCore decision making...")
         alert_summary: Dict[str, Any] = await self.analytics_service.get_critical_alert_summary()
         self.logger.info(f"AgentCore received Critical Alert Summary: {json.dumps(alert_summary, indent=2)}")
+
+        self.logger.info("Fetching all traffic signal states...")
+        all_signal_states: List[SignalState] = await self.traffic_signal_service.get_all_signal_states()
+        self.logger.info(f"AgentCore received {len(all_signal_states)} signal states.")
+        for state in all_signal_states:
+            self.logger.debug(
+                f"Signal ID: {state.signal_id}, "
+                f"Location: {state.location.name if state.location and state.location.name else 'N/A'}, "
+                f"Phase: {state.current_phase.value if state.current_phase else 'N/A'}, "
+                f"Status: {state.operational_status.value if state.operational_status else 'N/A'}"
+            )
 
         # Placeholder: AgentCore determines priority locations based on KPIs/alerts
         # In a future step, this would come from analyzing detailed KPI/congestion data
@@ -239,6 +255,61 @@ class AgentCore:
         else:
             self.logger.info("AgentCore action: System status within acceptable parameters, no new global operational alert issued by AgentCore.")
 
+        # --- Autonomous Traffic Signal Control Logic ---
+        current_congestion_level = system_kpis.get("overall_congestion_level", "UNKNOWN")
+        now_utc = datetime.utcnow() # Use a consistent timestamp for this cycle
+
+        # Cleanup old actions from _recent_signal_actions
+        signal_ids_to_clear = [
+            sig_id for sig_id, action_info in self._recent_signal_actions.items()
+            if (now_utc - action_info['timestamp']).total_seconds() > self.SIGNAL_ACTION_COOLDOWN_SECONDS
+        ]
+        for sig_id in signal_ids_to_clear:
+            del self._recent_signal_actions[sig_id]
+            self.logger.info(f"Removed signal {sig_id} from recent actions list (cooldown expired).")
+
+        if current_congestion_level == "HIGH":
+            self.logger.info(f"High congestion detected ({current_congestion_level}). Evaluating traffic signal interventions.")
+            controlled_a_signal_this_cycle = False
+            for signal_state in all_signal_states:
+                if signal_state.signal_id in self._recent_signal_actions:
+                    self.logger.info(f"Signal {signal_state.signal_id} was recently acted upon. Skipping this cycle. Details: {self._recent_signal_actions[signal_state.signal_id]}")
+                    continue
+
+                if signal_state.operational_status == SignalOperationalStatusEnum.ONLINE and \
+                   signal_state.current_phase != SignalPhaseEnum.GREEN:
+                    self.logger.info(f"Attempting to set signal {signal_state.signal_id} to GREEN due to high congestion.")
+                    try:
+                        response: SignalControlCommandResponse = await self.traffic_signal_service.set_signal_phase(
+                            signal_id=signal_state.signal_id,
+                            phase=SignalPhaseEnum.GREEN,
+                            duration_seconds=60  # Example duration
+                        )
+                        self.logger.info(f"Signal control response for {signal_state.signal_id}: Status='{response.status.value}', Message='{response.message}'")
+                        if response.status == SignalControlStatusEnum.SUCCESS or response.status == SignalControlStatusEnum.ACCEPTED:
+                            self.logger.info(f"Successfully commanded signal {signal_state.signal_id} to GREEN.")
+                            self._recent_signal_actions[signal_state.signal_id] = {
+                                'timestamp': now_utc, # Use consistent timestamp
+                                'phase_commanded': SignalPhaseEnum.GREEN,
+                                'duration_commanded': 60
+                            }
+                            controlled_a_signal_this_cycle = True
+                            self.logger.info(f"Signal {signal_state.signal_id} action recorded. Stopping further signal changes this cycle.")
+                            break # Control one signal per cycle for now
+                    except Exception as e_signal_control:
+                        self.logger.error(f"Error controlling signal {signal_state.signal_id}: {e_signal_control}", exc_info=True)
+                else:
+                    self.logger.debug(
+                        f"No action for signal {signal_state.signal_id}: "
+                        f"Status: {signal_state.operational_status.value if signal_state.operational_status else 'N/A'}, "
+                        f"Phase: {signal_state.current_phase.value if signal_state.current_phase else 'N/A'}. "
+                        f"Required: ONLINE and not GREEN. Or recently acted upon."
+                    )
+            if not controlled_a_signal_this_cycle:
+                self.logger.info("High congestion: No traffic signals required intervention or were suitable for autonomous GREEN phase change this cycle (considering cooldowns).")
+        else:
+            self.logger.info(f"System congestion level ({current_congestion_level}) is not HIGH. No autonomous system-wide signal adjustments made by AgentCore.")
+
         # --- User-Specific Proactive Notifications (Predictive) ---
         self.logger.info("Starting user-specific predictive alert checks...")
         # sample_user_ids_for_proactive_alerts = ["user_agent_test_123", "another_sample_user_id"] # Example user IDs
@@ -393,9 +464,182 @@ async def main_example():
     # Run a decision cycle
     await agent_core.run_decision_cycle(sample_user_id="user_example_456")
 
+async def main_example():
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    logger.info("Starting AgentCore main_example...")
+
+    class MockAnalyticsService:
+        def __init__(self):
+            self._cycle_count_kpi = 0
+
+        async def get_critical_alert_summary(self) -> Dict[str, Any]:
+            logger.info("MockAnalyticsService: get_critical_alert_summary called")
+            return {"critical_unack_alert_count": 1, "recent_critical_types": ["SYSTEM_OVERLOAD"]}
+
+        def get_current_system_kpis_summary(self) -> Dict[str, Any]:
+            self._cycle_count_kpi += 1
+            logger.info(f"MockAnalyticsService: get_current_system_kpis_summary called (cycle {self._cycle_count_kpi})")
+            # Keep congestion HIGH for the first 3 agent cycles to test cooldown logic
+            congestion = "HIGH" if self._cycle_count_kpi <= 3 else "LOW"
+            logger.info(f"MockAnalyticsService: Setting overall_congestion_level to {congestion} for this KPI cycle.")
+            return {
+                "overall_congestion_level": congestion,
+                "average_speed_kmh": 25 if congestion == "HIGH" else 60,
+                "total_vehicle_flow_estimate": 5000 if congestion == "HIGH" else 2000,
+                "active_monitored_locations": 10,
+                "system_stability_indicator": "STABLE"
+            }
+
+        async def predict_incident_likelihood(self, location: LocationModel, prediction_time: datetime) -> Dict[str, Any]:
+            logger.info(f"MockAnalyticsService: predict_incident_likelihood called for {location.name} at {prediction_time}")
+            return {"likelihood_score_percent": 30} # Low likelihood for simplicity
+
+        async def send_user_specific_alert(self, user_id: str, notification_model: UserSpecificConditionAlert):
+            logger.info(f"MockAnalyticsService: send_user_specific_alert called for user {user_id}, title: {notification_model.title}")
+
+        async def broadcast_operational_alert(self, title: str, message_text: str, severity: str, suggested_actions: Optional[List[str]] = None):
+            logger.info(f"MockAnalyticsService: broadcast_operational_alert called. Title: {title}, Severity: {severity}")
+
+    class MockPredictionScheduler:
+        def __init__(self, analytics_service, prediction_interval_minutes):
+            self.analytics_service = analytics_service
+            self.prediction_interval_minutes = prediction_interval_minutes
+            logger.info("MockPredictionScheduler initialized.")
+
+        async def set_priority_locations(self, locations: List[LocationModel]):
+            location_names = [loc.name for loc in locations if loc.name]
+            logger.info(f"MockPredictionScheduler: set_priority_locations called with {len(locations)} locations: {location_names}")
+
+    class MockPersonalizedRoutingService:
+        def __init__(self, db_url: str, traffic_predictor: Any, data_cache: Any):
+            logger.info("MockPersonalizedRoutingService initialized.")
+
+        async def proactively_suggest_route(self, user_id: str) -> Optional[Dict[str, Any]]:
+            logger.info(f"MockPersonalizedRoutingService: proactively_suggest_route called for user {user_id}")
+            return None # No suggestion for simplicity
+
+        async def get_user_common_travel_patterns(self, user_id: str, top_n: int) -> List[CommonTravelPattern]:
+            logger.info(f"MockPersonalizedRoutingService: get_user_common_travel_patterns called for user {user_id}")
+            # Return one pattern for testing predictive alerts
+            return [
+                CommonTravelPattern(
+                    pattern_id="pattern_mock_1",
+                    user_id=user_id,
+                    start_location_summary={"latitude": 34.0, "longitude": -118.0, "name": "Home"},
+                    end_location_summary={"latitude": 34.0522, "longitude": -118.2437, "name": "Work"},
+                    days_of_week=[0, 1, 2, 3, 4], # Mon-Fri
+                    time_of_day_group="morning_commute",
+                    average_duration_minutes=30,
+                    route_representation="mock_route_polyline"
+                )
+            ]
+
+    class MockConnectionManager: # For TrafficSignalService, if it uses one for broadcasting
+        async def broadcast_message_model(self, message_model: Any):
+             logger.info(f"MockConnectionManager: broadcast_message_model called with {type(message_model)}")
+
+
+    class MockTrafficSignalService:
+        def __init__(self, config: Optional[Dict[str, Any]] = None, connection_manager: Optional[Any] = None):
+            self.config = config or {}
+            self.connection_manager = connection_manager
+            self._signals: Dict[str, SignalState] = {}
+            self._get_states_call_count = 0 # Renamed from _cycle_count for clarity
+            logger.info("MockTrafficSignalService initialized.")
+            self._initialize_mock_signals()
+
+        def _initialize_mock_signals(self):
+            locations_data = [
+                {"latitude": 34.052235, "longitude": -118.243683, "name": "Main St & 1st St"}, # TS001
+                {"latitude": 34.053200, "longitude": -118.244800, "name": "Main St & 2nd St"}, # TS002
+                {"latitude": 34.054165, "longitude": -118.245917, "name": "Spring St & Temple St"} # TS003
+            ]
+            signal_ids = ["TS001", "TS002", "TS003"]
+
+            # TS001: ONLINE, RED
+            # TS002: ONLINE, RED
+            # TS003: OFFLINE, OFF
+            for i, signal_id in enumerate(signal_ids):
+                location = LocationModel(**locations_data[i])
+                status = SignalOperationalStatusEnum.ONLINE if i < 2 else SignalOperationalStatusEnum.OFFLINE
+                phase = SignalPhaseEnum.RED if status == SignalOperationalStatusEnum.ONLINE else SignalPhaseEnum.OFF
+
+                self._signals[signal_id] = SignalState(
+                    signal_id=signal_id,
+                    location=location,
+                    current_phase=phase,
+                    operational_status=status,
+                    last_updated=datetime.utcnow() # Use utcnow
+                )
+            logger.info(f"MockTrafficSignalService: Initialized {len(self._signals)} mock signals: {[(s.signal_id, s.current_phase.value, s.operational_status.value) for s in self._signals.values()]}")
+
+        async def get_all_signal_states(self) -> List[SignalState]:
+            self._get_states_call_count += 1
+            logger.info(f"MockTrafficSignalService: get_all_signal_states called (invocation {self._get_states_call_count}). Current states:")
+            for sig_id, state in self._signals.items():
+                 logger.debug(f"  - {sig_id}: Phase={state.current_phase.value}, Status={state.operational_status.value}")
+            # The state of signals is now modified by set_signal_phase and persists.
+            # No need to artificially change TS001 to GREEN here anymore.
+            return list(self._signals.values())
+
+        async def set_signal_phase(self, signal_id: str, phase: SignalPhaseEnum, duration_seconds: Optional[int] = None) -> SignalControlCommandResponse:
+            logger.info(f"MockTrafficSignalService: set_signal_phase called for signal {signal_id} to {phase.value}, duration: {duration_seconds}s.")
+            if signal_id not in self._signals:
+                logger.warning(f"MockTrafficSignalService: Signal {signal_id} not found.")
+                return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.FAILED, message="Signal ID not found.")
+
+            signal = self._signals[signal_id]
+            if signal.operational_status != SignalOperationalStatusEnum.ONLINE:
+                logger.warning(f"MockTrafficSignalService: Signal {signal_id} is not ONLINE (status: {signal.operational_status.value}). Command REJECTED.")
+                return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.REJECTED, message="Signal is not online.")
+
+            signal.current_phase = phase
+            signal.last_updated = datetime.now()
+            logger.info(f"MockTrafficSignalService: Signal {signal_id} phase set to {phase.value}. Command ACCEPTED.")
+            return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ACCEPTED, message=f"Phase set to {phase.value}")
+
+    # Instantiate mock services
+    mock_analytics = MockAnalyticsService()
+    mock_scheduler = MockPredictionScheduler(analytics_service=mock_analytics, prediction_interval_minutes=15)
+    # These mocks for PersonalizedRoutingService are simplified; real ones might come from Analytics or other services
+    mock_traffic_predictor_for_prs = object()
+    mock_data_cache_for_prs = object()
+    mock_routing = MockPersonalizedRoutingService(
+        db_url="sqlite:///:memory:",
+        traffic_predictor=mock_traffic_predictor_for_prs,
+        data_cache=mock_data_cache_for_prs
+    )
+    mock_conn_manager_for_tss = MockConnectionManager()
+    mock_traffic_signals = MockTrafficSignalService(connection_manager=mock_conn_manager_for_tss)
+
+    # Instantiate AgentCore with all mocks
+    agent_core = AgentCore(
+        prediction_scheduler=mock_scheduler,
+        personalized_routing_service=mock_routing,
+        analytics_service=mock_analytics,
+        traffic_signal_service=mock_traffic_signals # New service
+    )
+
+    logger.info("Running AgentCore decision cycle 1...")
+    await agent_core.run_decision_cycle(sample_user_id="user_cycle_1")
+
+    logger.info("======== Running AgentCore decision cycle 2 (expect TS001 cooldown, TS002 GREEN) ========")
+    # Simulate time passing for cooldown testing, though AgentCore uses real datetime.utcnow()
+    # This is more for conceptual clarity in the log reading for the mock.
+    # The actual cooldown is tested by AgentCore's `_recent_signal_actions` and `SIGNAL_ACTION_COOLDOWN_SECONDS`.
+    await asyncio.sleep(0.1) # Small delay to ensure log timestamps are different if needed
+    await agent_core.run_decision_cycle(sample_user_id="user_cycle_2")
+
+    logger.info("======== Running AgentCore decision cycle 3 (expect TS001 & TS002 cooldown) ========")
+    await asyncio.sleep(0.1)
+    await agent_core.run_decision_cycle(sample_user_id="user_cycle_3")
+
+    logger.info("AgentCore main_example completed.")
+
+
 if __name__ == "__main__":
     # This is a simple way to run the example.
     # In a real application, you'd have a proper event loop setup.
-    logging.basicConfig(level=logging.INFO)
-    # asyncio.run(main_example()) # Commented out as it might run in the test environment
+    # logging.basicConfig(level=logging.INFO) # Moved into main_example for DEBUG level
+    # asyncio.run(main_example()) # Commented out as per instruction
     logger.info("AgentCore module defined. Example main_example() function available for testing (currently commented out).")
