@@ -66,27 +66,6 @@ class AnalyticsService:
         self._connection_manager = connection_manager
         self._db_manager = database_manager # Store DatabaseManager instance
 
-        # Attempt to create the PredictionLogModel table if engine is accessible
-        # This is a temporary measure. Ideally, table creation is handled by Alembic migrations or a central DB setup.
-        try:
-            if hasattr(self._db_manager, 'async_engine') and self._db_manager.async_engine is not None:
-                # Ensure PredictionLogModel metadata is bound to the Base, if it isn't already
-                # And create all tables defined in the metadata
-                try:
-                    # Table creation should be awaited within a sync run, but this method is sync.
-                    # This part needs to be called from an async context.
-                    # For now, just log and skip, or raise an error if critical.
-                    # await self._db_manager.async_engine.run_sync(PredictionLogBase.metadata.create_all)
-                    logger.warning("PredictionLogModel table creation deferred. It should be handled during async app startup.")
-                except Exception as sync_run_e:
-                    logger.error(f"Error during deferred table creation for PredictionLogModel: {sync_run_e}", exc_info=True)
-            else:
-                logger.warning("Database async engine not directly accessible via DatabaseManager. "
-                               "PredictionLogModel table creation will need to be handled externally (e.g., by Alembic or main app setup).")
-        except Exception as e:
-            logger.error(f"Error attempting to create PredictionLogModel table: {e}. "
-                         "Table creation may need to be handled externally.")
-
         # Initialize ML components
         self._traffic_predictor = TrafficPredictor(self.config)
         self._data_cache = TrafficDataCache(
@@ -1008,7 +987,8 @@ class AnalyticsService:
         """
         if hasattr(self._db_manager, 'async_engine') and self._db_manager.async_engine is not None:
             try:
-                await self._db_manager.async_engine.run_sync(PredictionLogBase.metadata.create_all)
+                async with self._db_manager.async_engine.connect() as connection:
+                    await connection.run_sync(PredictionLogBase.metadata.create_all)
                 logger.info("PredictionLogModel table (and others) created/checked successfully via async engine metadata.create_all.")
             except Exception as e:
                 logger.error(f"Failed to create PredictionLogModel table during async initialization: {e}", exc_info=True)

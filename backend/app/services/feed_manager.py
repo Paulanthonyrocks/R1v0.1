@@ -53,6 +53,11 @@ try:
 except Exception as e:
     logger.warning(f"Could not set multiprocessing start method ('spawn'): {e}")
     
+# Add this helper at the top of the file (or before _read_result_queues)
+async def queue_get_task():
+    await asyncio.sleep(0.1)
+    return None
+
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -446,6 +451,21 @@ class FeedManager:
             # Check if sample feed needs starting/stopping
             if sample_feed_check_needed:
                 await self._check_and_manage_sample_feed()
+
+            try:
+                # Attempt to get a result from any queue
+                # Using a small timeout to not block indefinitely if queues are empty
+                # This also allows checking self._running more frequently.
+                result = await asyncio.wait_for(queue_get_task, timeout=0.1) 
+                # ... existing code ...
+            except asyncio.TimeoutError:
+                pass  # No result in timeout, continue loop
+            except asyncio.CancelledError:
+                self.logger.info("Result reader task was cancelled.")
+                break # Exit loop gracefully on cancellation
+            except Exception as e:
+                self.logger.error(f"Error processing result queue: {e}", exc_info=True)
+                await asyncio.sleep(1) # Short sleep on error to prevent busy-looping
 
             await asyncio.sleep(0.1) # Prevent busy-waiting
 
