@@ -5,6 +5,12 @@ import enum
 
 from app.models.traffic import LocationModel # For SignalState location
 
+# Conceptual Note for AgentCore:
+# For a SignalState, if main_flow_direction is set (e.g., "NS", "EW", "N", "S", "E", "W"),
+# SignalPhaseEnum.GREEN is assumed to give green light to this primary direction of flow.
+# More complex phase interpretations (e.g., dedicated turn lanes, split phases)
+# are not yet handled by the agent's directional logic based on this field alone.
+
 class SignalPhaseEnum(str, enum.Enum):
     RED = "red"
     YELLOW = "yellow"
@@ -43,6 +49,7 @@ class SignalState(BaseModel):
     operational_status: SignalOperationalStatusEnum = Field(..., example=SignalOperationalStatusEnum.ONLINE, description="Overall operational status of the signal hardware/software")
     last_updated: datetime = Field(..., description="Timestamp of the last state update from the signal (UTC)")
     location: Optional[LocationModel] = Field(None, description="Geographic location of the signal")
+    main_flow_direction: Optional[str] = Field(None, example="NS", description="Primary direction of traffic flow when signal is GREEN (e.g., NS for North-South, EW for East-West, N, S, E, W). Used by agent for directional decisions.")
     next_scheduled_phases: Optional[List[Dict[str, Any]]] = Field(None, description="Upcoming scheduled phase changes, if available. Example: [{'phase': 'green', 'start_time': 'ISO_DATETIME_STR'}]")
     error_details: Optional[str] = Field(None, description="Specific error message if status is 'error'")
     capabilities: Optional[List[str]] = Field(None, example=["set_phase", "get_timing_plan"], description="List of capabilities supported by this signal interface") 
