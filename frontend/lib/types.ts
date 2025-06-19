@@ -23,7 +23,7 @@ export interface AlertData {
   description?: string;
   location?: string; // This is a simple string; backend might send structured location in details.
   acknowledged?: boolean; // For WebSocket updates on acknowledgement status
-  details?: Record<string, any>; // To capture full details from WebSocket if needed
+  details?: Record<string, unknown>; // To capture full details from WebSocket if needed
 }
 
 export interface TrendDataPoint {
@@ -72,6 +72,12 @@ export interface MatrixCardProps {
  children?: React.ReactNode;
 }
 export interface StatCardProps  {
+  title: string;
+  value: string;
+  icon: React.ElementType;
+  statusIcon?: React.ElementType;
+  change: string;
+  changeText: string;
   children?: React.ReactNode;
 }
 
@@ -131,7 +137,6 @@ export interface BackendCongestionNodeData {
 export interface AllNodesCongestionResponse {
   nodes: BackendCongestionNodeData[];
 }
-
 
 // --- Hook Return Types ---
 // Anomaly Type (used by Anomalies page and components)

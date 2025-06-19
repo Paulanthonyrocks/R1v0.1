@@ -61,11 +61,25 @@ const cardSeverityIconConfig: Record<"low" | "medium" | "high", React.ElementTyp
   high: AlertTriangle, // Or Bomb / XOctagon for more critical "high"
 };
 
+// Type guard for location object
+function isLatLng(obj: unknown): obj is { latitude: number; longitude: number } {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    typeof (obj as { latitude?: unknown }).latitude === 'number' &&
+    typeof (obj as { longitude?: unknown }).longitude === 'number'
+  );
+}
+
 const mapAlertDataToAnomaly = (alert: AlertData): Anomaly | null => {
   let locationTuple: LocationTuple | undefined;
-  if (alert.details?.location && typeof alert.details.location.latitude === 'number' && typeof alert.details.location.longitude === 'number') {
+  if (alert.details?.location && isLatLng(alert.details.location)) {
     locationTuple = [alert.details.location.latitude, alert.details.location.longitude];
-  } else if (alert.details?.location_tuple && Array.isArray(alert.details.location_tuple) && alert.details.location_tuple.length === 2) {
+  } else if (
+    alert.details?.location_tuple &&
+    Array.isArray(alert.details.location_tuple) &&
+    alert.details.location_tuple.length === 2
+  ) {
     locationTuple = alert.details.location_tuple as LocationTuple;
   }
   if (!locationTuple) {
@@ -81,7 +95,7 @@ const mapAlertDataToAnomaly = (alert: AlertData): Anomaly | null => {
     location: locationTuple,
     resolved: !!alert.acknowledged,
     details: alert.details ? JSON.stringify(alert.details) : undefined,
-    reportedBy: alert.details?.reportedBy || 'System',
+    reportedBy: typeof alert.details?.reportedBy === 'string' ? alert.details.reportedBy : 'System',
     source: 'websocket',
   };
 };
@@ -102,7 +116,7 @@ type SortOrder = "newest" | "oldest";
 
 const AnomaliesPage = () => {
   // const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher); // SWR removed
-  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
+  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:3000/ws');
 
   const [allAnomalies, setAllAnomalies] = useState<Anomaly[]>([]);
   const [pageLoading, setPageLoading] = useState(true); // Initial loading state

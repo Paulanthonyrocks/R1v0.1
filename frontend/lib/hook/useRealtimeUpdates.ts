@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { AlertData } from '@/lib/types';
+import { AlertData, FeedStatusData } from '@/lib/types';
 
 interface KPIData {
   // Define the expected structure of your KPIs here
@@ -14,9 +14,10 @@ interface RealtimeUpdates {
   startWebSocket: () => void;
 }
 
-export const useRealtimeUpdates = (url: string): RealtimeUpdates => {
+export const useRealtimeUpdates = (url: string): RealtimeUpdates & { feeds: FeedStatusData[] } => {
   const [kpis, setKpis] = useState<KPIData | null>(null);
   const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -40,9 +41,10 @@ export const useRealtimeUpdates = (url: string): RealtimeUpdates => {
     };
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data) as { kpis?: KPIData; alerts?: AlertData[] };
+        const data = JSON.parse(event.data) as { kpis?: KPIData; alerts?: AlertData[]; feeds?: FeedStatusData[] };
         if (data.kpis) setKpis(data.kpis);
         if (data.alerts) setAlerts(data.alerts);
+        if (data.feeds) setFeeds(data.feeds);
       } catch {
         // Ignore parse errors
       }
@@ -58,5 +60,5 @@ export const useRealtimeUpdates = (url: string): RealtimeUpdates => {
     };
   }, []);
 
-  return { kpis, alerts, isConnected, isReady, startWebSocket };
+  return { kpis, alerts, isConnected, isReady, startWebSocket, feeds };
 };

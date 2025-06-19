@@ -19,7 +19,7 @@ const DashboardPage: React.FC = () => {
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
-  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
+  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:3000/ws');
   // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   useEffect(() => {
@@ -56,6 +56,16 @@ const DashboardPage: React.FC = () => {
   };
   // Total flow doesn't have a qualitative status here, so no specific icon based on value ranges.
 
+  // Type guard for location object
+  function isLatLng(obj: unknown): obj is { latitude: number; longitude: number } {
+    return (
+      typeof obj === 'object' &&
+      obj !== null &&
+      typeof (obj as { latitude?: unknown }).latitude === 'number' &&
+      typeof (obj as { longitude?: unknown }).longitude === 'number'
+    );
+  }
+
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}> {/* Wrap content with AuthGuard and specify required role */}
       <div className="p-4 text-matrix">
@@ -72,33 +82,32 @@ const DashboardPage: React.FC = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <StatCard
             title="Congestion Index"
-            value={`${kpis?.congestion_index ?? '--'}%`}
+            value={`${typeof kpis?.congestion_index === 'number' ? kpis.congestion_index : '--'}%`}
             icon={Activity}
-            statusIcon={getCongestionStatusIcon(kpis?.congestion_index)}
+            statusIcon={getCongestionStatusIcon(typeof kpis?.congestion_index === 'number' ? kpis.congestion_index : undefined)}
             change="N/A"
             changeText="Change data not available"
           />
           <StatCard
             title="Average Speed"
-            value={`${kpis?.average_speed_kmh ?? '--'} km/h`}
+            value={`${typeof kpis?.average_speed_kmh === 'number' ? kpis.average_speed_kmh : '--'} km/h`}
             icon={Zap}
-            statusIcon={getSpeedStatusIcon(kpis?.average_speed_kmh)}
+            statusIcon={getSpeedStatusIcon(typeof kpis?.average_speed_kmh === 'number' ? kpis.average_speed_kmh : undefined)}
             change="N/A"
             changeText="Change data not available"
           />
           <StatCard
             title="Active Incidents"
-            value={`${kpis?.active_incidents_count ?? '--'}`}
-            icon={AlertTriangle} // Main icon for the card category
-            statusIcon={getIncidentStatusIcon(kpis?.active_incidents_count)} // Status icon next to value
+            value={`${typeof kpis?.active_incidents_count === 'number' ? kpis.active_incidents_count : '--'}`}
+            icon={AlertTriangle}
+            statusIcon={getIncidentStatusIcon(typeof kpis?.active_incidents_count === 'number' ? kpis.active_incidents_count : undefined)}
             change="N/A"
             changeText="Change data not available"
           />
           <StatCard
             title="Total Flow"
-            value={`${kpis?.total_flow ?? '--'} vehicles/hr`}
+            value={`${typeof kpis?.total_flow === 'number' ? kpis.total_flow : '--'} vehicles/hr`}
             icon={Users}
-            // No specific statusIcon for total flow based on current logic
             change="N/A"
             changeText="Change data not available"
           />
@@ -130,8 +139,12 @@ const DashboardPage: React.FC = () => {
                   timestamp={new Date(alert.timestamp).toLocaleString()}
                   severity={alert.severity || 'info'} // Assuming severity exists
                   message={alert.message}
-                  location={alert.details?.location ? `Lat: ${alert.details.location.latitude}, Lon: ${alert.details.location.longitude}` : 'N/A'}
-                  details={alert.details ? JSON.stringify(alert.details, null, 2) : undefined}
+                  location={
+                    alert.details && typeof alert.details === 'object' && isLatLng(alert.details.location)
+                      ? `Lat: ${alert.details.location.latitude}, Lon: ${alert.details.location.longitude}`
+                      : 'N/A'
+                  }
+                  details={typeof alert.details === 'object' ? alert.details : undefined}
                 />
               ))}
             </div>
