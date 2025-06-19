@@ -21,7 +21,7 @@ const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, removeToast }) 
         <div
           key={toast.id}
           // Error toasts now also use primary styling for monochrome theme
-          className={`p-3 rounded-md shadow-lg flex items-center tracking-normal ${toast.type === 'success' ? 'bg-primary text-primary-foreground' : 'bg-primary text-primary-foreground'}`} {/* Added tracking-normal */}
+          className={`p-3 rounded-md shadow-lg flex items-center tracking-normal ${toast.type === 'success' ? 'bg-primary text-primary-foreground' : 'bg-primary text-primary-foreground'}`}
           onClick={() => removeToast(toast.id)}
         >
           {toast.type === 'success' ?
