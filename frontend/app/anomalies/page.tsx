@@ -13,7 +13,7 @@ import axios from 'axios'; // Keep axios for mutations
 // import useSWR from 'swr'; // Remove SWR
 // import { AxiosResponse } from 'axios'; // No longer needed for SWR fetcher
 import AuthGuard from '@/components/auth/AuthGuard'; // Import AuthGuard
-import { UserRole } from '@/types/user'; // Import UserRole
+import { UserRole } from '@/lib/auth/roles'; // Import UserRole from correct path
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import { AlertData, Anomaly, LocationTuple } from '@/lib/types'; // Import Anomaly and LocationTuple from lib/types
 import AnomalyDetailModal from '@/components/anomalies/AnomalyDetailModal'; // Anomaly types removed from this import
@@ -61,52 +61,28 @@ const cardSeverityIconConfig: Record<"low" | "medium" | "high", React.ElementTyp
   high: AlertTriangle, // Or Bomb / XOctagon for more critical "high"
 };
 
-const mapAlertDataToAnomaly = (alert: AlertData, existingAnomalies: Anomaly[] = []): Anomaly | null => {
-  // Try to find if this alert (by message and timestamp proximity, or ideally a unique ID from details)
-  // corresponds to an already known anomaly from API to preserve its 'resolved' status or DB ID.
-  // This is a simplified example; robust matching can be complex.
-  // For now, assume new alerts from WebSocket are unresolved unless they have a known ID.
-
+const mapAlertDataToAnomaly = (alert: AlertData): Anomaly | null => {
   let locationTuple: LocationTuple | undefined;
   if (alert.details?.location && typeof alert.details.location.latitude === 'number' && typeof alert.details.location.longitude === 'number') {
     locationTuple = [alert.details.location.latitude, alert.details.location.longitude];
   } else if (alert.details?.location_tuple && Array.isArray(alert.details.location_tuple) && alert.details.location_tuple.length === 2) {
-    // Fallback if location_tuple is directly provided in details
     locationTuple = alert.details.location_tuple as LocationTuple;
   }
-
-
-  // If location is crucial and not present, might return null or a default location
   if (!locationTuple) {
-      console.warn("Alert data missing valid location, cannot map to Anomaly for map display:", alert);
-      // Decide if you want to display alerts without map locations or filter them out
-      // For now, let's allow them but they won't show on map if map component requires location.
-      // The page's AnomalyMap component filters for valid locations before rendering.
-      locationTuple = [0,0]; // Default or skip
+    locationTuple = [0, 0];
   }
-
-  // Use a unique ID if available from alert.id (from WebSocket) or generate one for local state keying if necessary.
-  // The backend API uses numeric IDs. WebSocket alerts might have string IDs or require client-side generation for keys.
-  // This example assumes `alert.id` from WebSocket is usable as string, local `Anomaly` needs number.
-  // This part needs careful handling based on actual ID types from WebSocket and API.
-  // For now, let's use a temporary solution for ID:
-  const anomalyId = alert.id ? parseInt(alert.id, 10) : Date.now() + Math.random();
-
-
+  const anomalyId = alert.id ? parseInt(String(alert.id), 10) : Date.now() + Math.random();
   return {
     id: anomalyId,
-    type: alert.type || 'Unknown Event',
-    // Ensure severity mapping handles all cases, especially if AlertData.severity has more options than Anomaly.severity
-    severity: (alert.severity === 'info' || alert.severity === 'Anomaly' || alert.severity === 'Warning' || alert.severity === 'Critical' || alert.severity === 'ERROR')
-              ? (alert.severity === 'info' ? 'low' : alert.severity.toLowerCase() as "low" | "medium" | "high")
-              : 'low', // Default for unexpected severity values
+    type: alert.description || 'Unknown Event',
+    severity: ['Critical', 'Warning', 'Anomaly', 'ERROR'].includes(alert.severity) ? 'high' : 'low',
     description: alert.message,
     timestamp: typeof alert.timestamp === 'string' ? alert.timestamp : alert.timestamp.toISOString(),
     location: locationTuple,
-    resolved: !!alert.acknowledged, // Set 'resolved' based on 'acknowledged' status from WebSocket/AlertData
+    resolved: !!alert.acknowledged,
     details: alert.details ? JSON.stringify(alert.details) : undefined,
     reportedBy: alert.details?.reportedBy || 'System',
-    source: 'websocket', // Or determine based on how data is fetched/merged if API data is also used
+    source: 'websocket',
   };
 };
 
@@ -126,7 +102,7 @@ type SortOrder = "newest" | "oldest";
 
 const AnomaliesPage = () => {
   // const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher); // SWR removed
-  const { alerts: wsAlerts, isConnected, isReady, error: wsError, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
+  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:9002/ws');
 
   const [allAnomalies, setAllAnomalies] = useState<Anomaly[]>([]);
   const [pageLoading, setPageLoading] = useState(true); // Initial loading state
@@ -153,21 +129,13 @@ const AnomaliesPage = () => {
 
   useEffect(() => {
     // Map AlertData from WebSocket to local Anomaly type
-    // This simple version replaces allAnomalies with mapped wsAlerts.
-    // A more complex version might merge or reconcile with data fetched from API or existing state.
-    const mappedAnomalies = wsAlerts.map(alert => mapAlertDataToAnomaly(alert, allAnomalies)).filter(Boolean) as Anomaly[];
-
-    // To prevent infinite loops if mapAlertDataToAnomaly is not stable or wsAlerts reference changes too often:
-    // Consider deep comparison or more selective updates if performance issues arise.
-    // For now, a direct update:
+    const mappedAnomalies = wsAlerts.map(alert => mapAlertDataToAnomaly(alert)).filter(Boolean) as Anomaly[];
     setAllAnomalies(prevAnomalies => {
-        // Simple merge: add new, update existing (by id)
         const newAnomaliesMap = new Map(prevAnomalies.map(a => [a.id, a]));
         mappedAnomalies.forEach(a => newAnomaliesMap.set(a.id, a));
         return Array.from(newAnomaliesMap.values());
     });
-
-  }, [wsAlerts]); // Removed allAnomalies from dependency array to avoid potential loops with naive merge
+  }, [wsAlerts]); // Remove allAnomalies from dependency array
 
   const addToast = (message: string, type: 'success' | 'error') => {
     const id = Date.now();
@@ -216,13 +184,12 @@ const AnomaliesPage = () => {
       // If this client needs to be sure it has the absolute latest from DB (e.g. other fields changed by backend),
       // then a refetch or specific update from a WS message confirming the PATCH would be needed.
       // For now, optimistic update + WS broadcast to others is the flow.
-    } catch (err) {
+    } catch {
       addToast("Failed to acknowledge anomaly.", "error");
-      // Revert optimistic update on error
       setAllAnomalies(prev => prev.map(anomaly =>
-        anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly // Assuming it was false before
+        anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly
       ));
-      console.error("Failed to acknowledge anomaly", err);
+      console.error("Failed to acknowledge anomaly");
     }
   };
   const handleDismiss = async (anomalyId: number) => {
@@ -235,17 +202,9 @@ const AnomaliesPage = () => {
       addToast("Anomaly dismissed successfully.", "success");
       // No SWR mutate. UI is optimistically updated.
       // WebSocket broadcast from backend will inform other clients.
-    } catch (err) {
+    } catch {
       addToast("Failed to dismiss anomaly.", "error");
-      setAllAnomalies(originalAnomalies); // Revert on error
-      // if WebSocket doesn't reflect this specific state change.
-    // } catch (err) { // This catch seems to be a duplicate or misplaced part of the original handleResolve
-    //   addToast("Failed to resolve anomaly.", "error");
-    //   // Revert optimistic update on error
-    //   setAllAnomalies(prev => prev.map(anomaly =>
-    //     anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly // Assuming it was false before
-    //   ));
-    //   console.error("Failed to resolve anomaly", err);
+      setAllAnomalies(originalAnomalies);
     }
   };
   // const handleDismiss = async (anomalyId: number) => { // Removing duplicate
@@ -280,7 +239,7 @@ const AnomaliesPage = () => {
 
   // Updated loading and error states
   if (pageLoading && !isReady) return <Loading />; // Show main loading if not ready from WebSocket
-  if (wsError) return <div className="p-4 text-red-500">Error connecting to real-time updates: {String(wsError.message || wsError)}. Please try again later.</div>;
+  // Remove wsError check since it's not provided by the hook
   // If not pageLoading (i.e. isReady was true) but allAnomalies is empty, it will be handled by the "No anomalies" message below.
 
   return (

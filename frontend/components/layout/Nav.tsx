@@ -12,7 +12,7 @@ import {
 // Potentially add other imports if Nav depends on them, e.g., specific icons
 
 export default function Nav() {
-  const { user } = useUser();
+  const { user, logout } = useUser();
   // const pathname = usePathname(); // Uncomment if Nav uses pathname directly
 
   return (
@@ -78,6 +78,9 @@ export default function Nav() {
                   <Link href="/surveillance" className="w-full tracking-normal">
                     Surveillance
                   </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={logout} className="w-full tracking-normal cursor-pointer text-red-600">
+                  Logout
                 </DropdownMenuItem>
               </>
             )}

@@ -1,19 +1,62 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { AlertData } from '@/lib/types';
 
-export const useRealtimeUpdates = () => {
-  const [data, setData] = useState<{ message: string } | null>(null);
+interface KPIData {
+  // Define the expected structure of your KPIs here
+  [key: string]: unknown;
+}
+
+interface RealtimeUpdates {
+  kpis: KPIData | null;
+  alerts: AlertData[];
+  isConnected: boolean;
+  isReady: boolean;
+  startWebSocket: () => void;
+}
+
+export const useRealtimeUpdates = (url: string): RealtimeUpdates => {
+  const [kpis, setKpis] = useState<KPIData | null>(null);
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const startWebSocket = useCallback(() => {
+    if (wsRef.current) return; // Prevent multiple connections
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      setIsConnected(true);
+      setIsReady(true);
+    };
+    ws.onclose = () => {
+      setIsConnected(false);
+      setIsReady(false);
+      wsRef.current = null;
+    };
+    ws.onerror = () => {
+      setIsConnected(false);
+      setIsReady(false);
+    };
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as { kpis?: KPIData; alerts?: AlertData[] };
+        if (data.kpis) setKpis(data.kpis);
+        if (data.alerts) setAlerts(data.alerts);
+      } catch {
+        // Ignore parse errors
+      }
+    };
+  }, [url]);
 
   useEffect(() => {
-    // This is a placeholder for real-time update logic
-    // In a real application, you would set up a subscription or websocket connection here
-    const dummyData = { message: 'Hello from realtime hook!' };
-    setData(dummyData);
-
-    // Clean up function (if needed)
     return () => {
-      // Close subscription or websocket connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, []);
 
-  return data;
+  return { kpis, alerts, isConnected, isReady, startWebSocket };
 };
