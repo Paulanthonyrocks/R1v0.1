@@ -32,8 +32,11 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
             fps=config.get('fps', 30),
             db_queue=None
         )
+
         traffic_monitor = TrafficMonitor(config)
-        vis_options = {"Tracked Vehicles", "Vehicle Data", "Lane Density Overlay", "Grid Overlay"}
+        vis_options = {"Tracked Vehicles", "Vehicle Data"} # Commented out "Lane Density Overlay", "Grid Overlay"
+        # vis_options = {"Tracked Vehicles", "Vehicle Data", "Lane Density Overlay", "Grid Overlay"}
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"Sample video file not found at {video_path}")
