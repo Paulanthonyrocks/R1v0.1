@@ -122,6 +122,12 @@ export interface MatrixButtonProps {
  backgroundColor?: string;
  children?: React.ReactNode;
 }
+
+// Interface for traffic metrics from a specific feed
+export interface TrafficMetrics {
+  total_vehicles: number;
+  average_speed_kmh: number | null;
+}
 // --- Backend Data Shape Types ---
 export interface BackendCongestionNodeData {
   id: string;
