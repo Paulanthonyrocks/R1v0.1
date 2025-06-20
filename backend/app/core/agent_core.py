@@ -23,6 +23,17 @@ from unittest.mock import MagicMock, patch
 
 logger = logging.getLogger(__name__)
 
+# --- Accident Response Strategy Definitions ---
+STRATEGY_ACCIDENT_EXTEND_GREEN_LONG = "STRATEGY_ACCIDENT_EXTEND_GREEN_LONG"
+STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE = "STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE"
+STRATEGY_ACCIDENT_PULSE_GREEN = "STRATEGY_ACCIDENT_PULSE_GREEN"
+
+ALL_ACCIDENT_STRATEGIES = [
+    STRATEGY_ACCIDENT_EXTEND_GREEN_LONG,
+    STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE,
+    STRATEGY_ACCIDENT_PULSE_GREEN,
+]
+
 PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD = 60
 ACCIDENT_PRE_KPI_RADIUS_METERS = 250
 
@@ -393,17 +404,30 @@ class AgentCore:
                     item['effectiveness_metrics_used'] = metrics_used
                     self.action_performance_logs.append(ActionPerformanceLog(**item))
                     if score is not None:
-                        action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}"
-                        if item['action_type'] == "GREEN_WAVE_ACTIVATION":
-                           action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}"
-                        elif item['action_type'] == "SET_SIGNAL_GREEN_CONGESTION":
-                           action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}"
-                        if action_signature_for_memory:
-                             if action_signature_for_memory not in self.action_effectiveness_memory:
-                                 self.action_effectiveness_memory[action_signature_for_memory] = []
-                             self.action_effectiveness_memory[action_signature_for_memory].append(score)
-                             self.action_effectiveness_memory[action_signature_for_memory] = \
-                                 self.action_effectiveness_memory[action_signature_for_memory][-self.MAX_SCORES_PER_ACTION_SIGNATURE:]
+                        action_signature_key = None
+                        primary_target_id_for_memory = item['target_ids'][0] if item['target_ids'] else None
+
+                        if primary_target_id_for_memory:
+                            action_type_for_key = item['action_type']
+                            if action_type_for_key == "INCIDENT_RESPONSE_ACCIDENT":
+                                strategy_applied = item['action_parameters'].get("strategy_applied")
+                                if strategy_applied:
+                                    action_signature_key = f"{action_type_for_key}:{primary_target_id_for_memory}:{strategy_applied}"
+                                else:
+                                    self.logger.warning(f"Missing 'strategy_applied' in action_parameters for INCIDENT_RESPONSE_ACCIDENT log {item['action_id']}. Using generic key.")
+                                    action_signature_key = f"{action_type_for_key}:{primary_target_id_for_memory}"
+                            else:
+                                # Existing key generation for other action types (can be simplified if all use target_ids[0])
+                                action_signature_key = f"{action_type_for_key}:{primary_target_id_for_memory}"
+                        else:
+                            self.logger.warning(f"Action {item['action_id']} (type {item['action_type']}) has no target_ids for effectiveness memory key. Score not stored.")
+
+                        if action_signature_key: # Proceed only if a key was successfully generated
+                             if action_signature_key not in self.action_effectiveness_memory:
+                                 self.action_effectiveness_memory[action_signature_key] = []
+                             self.action_effectiveness_memory[action_signature_key].append(score)
+                             self.action_effectiveness_memory[action_signature_key] = \
+                                 self.action_effectiveness_memory[action_signature_key][-self.MAX_SCORES_PER_ACTION_SIGNATURE:]
                              self._memory_updated_this_cycle = True
                     processed_pending_indices.append(idx)
                 except Exception as e:
@@ -471,23 +495,147 @@ class AgentCore:
                     nearby_signals = await self._find_signals_near_location(alert_location_model, all_signal_states, self.ACCIDENT_PRE_KPI_RADIUS_METERS)
                     for signal in nearby_signals:
                         if signal.signal_id in processed_signals_for_incident or signal.signal_id in processed_signals_for_coordination: continue
-                        if signal.operational_status == SignalOperationalStatusEnum.ONLINE and signal.current_phase != SignalPhaseEnum.GREEN : # Only act if not already green
-                            action_type_str = "INCIDENT_RESPONSE_ACCIDENT"
-                            params_for_pre_kpi_fetch = {"incident_location": alert_location_model, "radius_meters": self.ACCIDENT_PRE_KPI_RADIUS_METERS}
-                            fetched_kpis = await self._fetch_pre_action_kpis(action_type_str, [signal.signal_id], params_for_pre_kpi_fetch, system_kpis)
+                        # Existing checks for ONLINE status and not already GREEN are implicitly handled by strategies or should be part of _execute_incident_response_strategy
+                        if signal.operational_status == SignalOperationalStatusEnum.ONLINE: # Basic check before strategy selection
+                            self.logger.info(
+                                f"ACCIDENT Strategy Selection for signal '{signal.signal_id}' (Alert: {alert_id}). "
+                                "Evaluating defined strategies."
+                            )
+                            candidate_accident_strategies: List[Dict[str, Any]] = []
 
-                            self.logger.info(f"Incident {alert_id} ({alert_type}): Setting signal {signal.signal_id} to GREEN.")
-                            try:
-                                response = await self.traffic_signal_service.set_signal_phase(signal.signal_id, SignalPhaseEnum.GREEN, self.INCIDENT_SIGNAL_COOLDOWN_SECONDS)
-                                if response.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
-                                    action_ts = datetime.utcnow()
-                                    action_params_log = {"phase": SignalPhaseEnum.GREEN.value, "duration_seconds": self.INCIDENT_SIGNAL_COOLDOWN_SECONDS, "incident_id": alert_id, "signal_id": signal.signal_id}
-                                    pre_action_kpis_log = {"alert_type": alert_type, "incident_id_for_response": alert_id, "signal_initial_phase_at_decision": signal.current_phase.value if signal.current_phase else "N/A"}
-                                    if fetched_kpis: pre_action_kpis_log.update(fetched_kpis)
-                                    # Schedule KPI collection
-                                    # ... (Full pending_item_dict creation and append as in other blocks) ...
-                                    processed_signals_for_incident.add(signal.signal_id); processed_signals_for_coordination.add(signal.signal_id)
-                            except Exception as e: self.logger.error(f"Error setting signal for ACCIDENT {alert_id} on {signal.signal_id}: {e}")
+                            for strategy_name_option in ALL_ACCIDENT_STRATEGIES:
+                                action_signature_key = f"INCIDENT_RESPONSE_ACCIDENT:{signal.signal_id}:{strategy_name_option}"
+                                scores = self.action_effectiveness_memory.get(action_signature_key, [])
+                                avg_score = sum(scores) / len(scores) if scores else 0.0
+
+                                candidate_accident_strategies.append({'name': strategy_name_option, 'avg_score': avg_score})
+                                self.logger.debug(
+                                    f"  Strategy option for '{signal.signal_id}': {strategy_name_option}, "
+                                    f"Avg historical score: {avg_score:.2f} (from {len(scores)} scores)"
+                                )
+
+                            chosen_strategy_dict_entry = None
+                            incident_strategy_selection_method = ""
+
+                            if not candidate_accident_strategies:
+                                self.logger.warning(
+                                    f"No accident response strategies found or defined for signal '{signal.signal_id}'. "
+                                    "No ACCIDENT action will be taken for this signal."
+                                )
+                                # continue # to next signal - implicitly done by loop structure
+                            else:
+                                if self.rng.random() < self.exploration_epsilon:
+                                    chosen_strategy_dict_entry = self.rng.choice(candidate_accident_strategies)
+                                    incident_strategy_selection_method = "EXPLORATORY_ACCIDENT_STRATEGY"
+                                    self.logger.info(
+                                        f"{incident_strategy_selection_method}: Randomly selected strategy "
+                                        f"'{chosen_strategy_dict_entry['name']}' for ACCIDENT at signal '{signal.signal_id}'. "
+                                        f"Its avg score: {chosen_strategy_dict_entry['avg_score']:.2f}"
+                                    )
+                                else:
+                                    candidate_accident_strategies.sort(key=lambda x: x['avg_score'], reverse=True)
+                                    chosen_strategy_dict_entry = candidate_accident_strategies[0]
+                                    incident_strategy_selection_method = "EXPLOITATIVE_ACCIDENT_STRATEGY_BEST_SCORE"
+                                    self.logger.info(
+                                        f"{incident_strategy_selection_method}: Selected strategy "
+                                        f"'{chosen_strategy_dict_entry['name']}' for ACCIDENT at signal '{signal.signal_id}' "
+                                        f"(Avg score: {chosen_strategy_dict_entry['avg_score']:.2f}). Candidates considered: " +
+                                        ", ".join([f"'{s['name']}'({s['avg_score']:.2f})" for s in candidate_accident_strategies])
+                                    )
+
+                                if chosen_strategy_dict_entry:
+                                    self.logger.info(
+                                        f"Chosen ACCIDENT strategy for signal '{signal.signal_id}': '{chosen_strategy_dict_entry['name']}', "
+                                        f"Selected by: {incident_strategy_selection_method}."
+                                    )
+                                    # NOTE: Actual execution of the strategy via _execute_incident_response_strategy
+                                    # and associated KPI scheduling will be handled in subsequent subtasks.
+                                    # This subtask focuses on selecting the strategy name.
+
+                                    # Mark signal as processed for this incident type this cycle.
+                                    # This prevents general congestion logic from overriding a chosen incident strategy.
+                                    processed_signals_for_incident.add(signal.signal_id)
+                                    # Also add to general coordination to prevent GW overlap if incident response is more critical
+                                    processed_signals_for_coordination.add(signal.signal_id)
+
+                                    # The chosen_strategy_dict_entry['name'] and incident_strategy_selection_method
+                                    # will be used by the next subtasks for execution and KPI logging.
+
+                                    # Call to execute the chosen strategy
+                                    strategy_name_to_execute = chosen_strategy_dict_entry['name']
+                                    alert_context_for_execution = {
+                                        "alert_id": alert_id,
+                                        "alert_type": alert_type
+                                    }
+
+                                    self.logger.info(f"Attempting to execute chosen ACCIDENT strategy '{strategy_name_to_execute}' for signal '{signal.signal_id}'.")
+                                    action_execution_successful = await self._execute_incident_response_strategy(
+                                        signal_id=signal.signal_id,
+                                        strategy_name=strategy_name_to_execute,
+                                        alert_context=alert_context_for_execution
+                                    )
+
+                                    if action_execution_successful:
+                                        self.logger.info(
+                                            f"Successfully initiated ACCIDENT strategy '{strategy_name_to_execute}' for signal '{signal.signal_id}'."
+                                        )
+                                        # --- Schedule KPI Collection for INCIDENT_RESPONSE_ACCIDENT ---
+                                        action_type_str_incident = "INCIDENT_RESPONSE_ACCIDENT" # Should be this
+                                        action_kpi_cfg_incident = ACTION_KPI_CONFIG.get(action_type_str_incident)
+
+                                        if action_kpi_cfg_incident:
+                                            action_timestamp_utc_incident = datetime.utcnow()
+
+                                            current_action_parameters_for_kpi = {
+                                                "incident_id": alert_id,
+                                                "signal_id": signal.signal_id,
+                                                "strategy_applied": strategy_name_to_execute,
+                                                "selection_method": incident_strategy_selection_method,
+                                                # Duration/phase are strategy-dependent, captured by strategy_applied
+                                            }
+
+                                            # Pre-action KPIs were fetched before strategy selection
+                                            # Now, enrich them with strategy selection context
+                                            pre_action_kpis_for_log_incident = fetched_kpis.copy() if fetched_kpis else {} # Start with already fetched physical KPIs
+                                            pre_action_kpis_for_log_incident.update({
+                                                "alert_type": alert_type, # General context
+                                                "incident_id_for_response": alert_id, # General context
+                                                "signal_initial_phase_at_decision": signal.current_phase.value if signal.current_phase else "N/A", # General context
+                                                "chosen_strategy_name": chosen_strategy_dict_entry['name'],
+                                                "chosen_strategy_avg_score": chosen_strategy_dict_entry['avg_score'],
+                                                "num_strategy_candidates": len(candidate_accident_strategies),
+                                                "strategy_candidate_scores": {s['name']: round(s['avg_score'], 3) for s in candidate_accident_strategies}
+                                            })
+
+                                            pending_item_id_incident = uuid4()
+                                            self.pending_kpi_collection.append({
+                                                'action_id': pending_item_id_incident,
+                                                'action_type': action_type_str_incident,
+                                                'target_ids': [signal.signal_id, f"incident_area:{alert_id}"], # Primary target is signal, secondary is incident area context
+                                                'action_timestamp': action_timestamp_utc_incident,
+                                                'action_parameters': current_action_parameters_for_kpi,
+                                                'pre_action_context_kpis': pre_action_kpis_for_log_incident,
+                                                'query_after_timestamp': action_timestamp_utc_incident + timedelta(seconds=action_kpi_cfg_incident["delay_seconds"]),
+                                                'metrics_to_collect': action_kpi_cfg_incident["metrics"],
+                                                'evaluation_window_minutes': action_kpi_cfg_incident["eval_window_minutes"],
+                                                'kpi_query_details': {
+                                                    'service_method_name': action_kpi_cfg_incident["service_method"],
+                                                    'method_specific_args': { # Args for get_incident_response_post_action_kpis
+                                                        'incident_id': alert_id,
+                                                        'affected_signal_ids': [signal.signal_id]
+                                                    }
+                                                }
+                                            })
+                                            self.logger.info(f"Scheduled KPI collection for {action_type_str_incident} (ID: {pending_item_id_incident}) on signal {signal.signal_id} for incident {alert_id} using strategy {strategy_name_to_execute}.")
+                                        else:
+                                            self.logger.warning(f"No KPI config found for {action_type_str_incident}, cannot schedule KPI collection.")
+                                    else:
+                                        self.logger.warning(
+                                            f"Failed to initiate or complete ACCIDENT strategy '{strategy_name_to_execute}' for signal '{signal.signal_id}'. "
+                                            "KPI collection for this attempt might be skipped or will reflect failure."
+                                        )
+                        else:
+                            self.logger.debug(f"Signal {signal.signal_id} is not ONLINE, skipping ACCIDENT strategy selection.")
 
                 elif alert_type == "ROAD_CLOSURE":
                     nearby_signals = await self._find_signals_near_location(alert_location_model, all_signal_states, self.ROAD_CLOSURE_IMMEDIATE_RADIUS_METERS)
@@ -667,8 +815,96 @@ class AgentCore:
                     self.logger.info(f"Scheduled KPI collection for {action_type_str} (ID: {action_id}) on {corridor_id_to_run}. Choice: {green_wave_selection_method}.")
         # ... (rest of GW logic, illustrative example, and end of cycle) ...
 
-        # --- Illustrative Green Wave Example (This should be reviewed if it's still needed or if it's test code) ---
-        # This block is separate from the operational logic above.
+    async def _execute_incident_response_strategy(
+        self,
+        signal_id: str,
+        strategy_name: str,
+        alert_context: Dict[str, Any],
+    ) -> bool:
+        self.logger.info(
+            f"Executing incident response strategy '{strategy_name}' for signal '{signal_id}' "
+            f"(Alert: {alert_context.get('alert_id', 'N/A')})."
+        )
+
+        action_initiated_successfully = False
+
+        try:
+            if strategy_name == STRATEGY_ACCIDENT_EXTEND_GREEN_LONG:
+                response = await self.traffic_signal_service.set_signal_phase(
+                    signal_id=signal_id,
+                    phase=SignalPhaseEnum.GREEN,
+                    duration_seconds=90
+                )
+                self.logger.info(
+                    f"  Strategy '{strategy_name}' on '{signal_id}': set_signal_phase(GREEN, 90s) -> "
+                    f"{response.status.value if response and response.status else 'NoResponse/Error'}"
+                )
+                if response and response.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                    action_initiated_successfully = True
+
+            elif strategy_name == STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE:
+                response = await self.traffic_signal_service.set_signal_phase(
+                    signal_id=signal_id,
+                    phase=SignalPhaseEnum.GREEN,
+                    duration_seconds=60
+                )
+                self.logger.info(
+                    f"  Strategy '{strategy_name}' on '{signal_id}': set_signal_phase(GREEN, 60s) -> "
+                    f"{response.status.value if response and response.status else 'NoResponse/Error'}"
+                )
+                if response and response.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                    action_initiated_successfully = True
+
+            elif strategy_name == STRATEGY_ACCIDENT_PULSE_GREEN:
+                # Step 1: Set GREEN
+                self.logger.info(f"  Strategy '{strategy_name}' on '{signal_id}': Step 1 - Setting GREEN for 75s.")
+                response_green = await self.traffic_signal_service.set_signal_phase(
+                    signal_id=signal_id,
+                    phase=SignalPhaseEnum.GREEN,
+                    duration_seconds=75
+                )
+                self.logger.info(
+                    f"  Strategy '{strategy_name}' on '{signal_id}': Step 1 set_signal_phase(GREEN, 75s) -> "
+                    f"{response_green.status.value if response_green and response_green.status else 'NoResponse/Error'}"
+                )
+
+                if response_green and response_green.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                    action_initiated_successfully = True
+
+                    sleep_duration = 70
+                    self.logger.info(f"  Strategy '{strategy_name}' on '{signal_id}': Step 2 - Waiting {sleep_duration}s before setting RED.")
+                    await asyncio.sleep(sleep_duration)
+
+                    self.logger.info(f"  Strategy '{strategy_name}' on '{signal_id}': Step 3 - Setting RED for 30s.")
+                    response_red = await self.traffic_signal_service.set_signal_phase(
+                        signal_id=signal_id,
+                        phase=SignalPhaseEnum.RED,
+                        duration_seconds=30
+                    )
+                    self.logger.info(
+                        f"  Strategy '{strategy_name}' on '{signal_id}': Step 3 set_signal_phase(RED, 30s) -> "
+                        f"{response_red.status.value if response_red and response_red.status else 'NoResponse/Error'}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"  Strategy '{strategy_name}' on '{signal_id}': Initial GREEN command failed. Skipping subsequent RED phase."
+                    )
+            else:
+                self.logger.warning(
+                    f"Unknown or unhandled incident response strategy '{strategy_name}' for signal '{signal_id}'. No action taken."
+                )
+                return False
+
+        except Exception as e:
+            self.logger.error(
+                f"Error executing strategy '{strategy_name}' for signal '{signal_id}': {e}", exc_info=True
+            )
+            return False
+
+        return action_initiated_successfully
+
+    # --- Illustrative Green Wave Example (This should be reviewed if it's still needed or if it's test code) ---
+    # This block is separate from the operational logic above.
         if True: # Placeholder for actual trigger - This makes it always run, which might be unintended.
             selected_wave_to_run_example = {"id": "main_st_ns_wave", "config": GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]}
             if selected_wave_to_run_example:
@@ -1349,6 +1585,138 @@ async def main_example():
 
     # Restore mocks if they were changed for specific demos
     analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]}) # Reset to no active alerts
+
+
+    # --- MAIN_EXAMPLE: Epsilon-Greedy ACCIDENT Response Strategy Demonstration ---
+    logger.info("--- MAIN_EXAMPLE: Starting Epsilon-Greedy ACCIDENT Response Strategy Demonstration ---")
+    agent.exploration_epsilon = 0.5  # Restore for this demo section
+    agent.rng.seed(789) # Distinct seed for this part of the demo
+
+    target_signal_id_incident_demo = "TS002"
+    mock_incident_location_ts002 = traffic_mock._signals[target_signal_id_incident_demo].location
+    mock_accident_alert_details_ts002 = {
+        "id": "demo_acc_ts002",
+        "type": "ACCIDENT",
+        "location": mock_incident_location_ts002.model_dump(),
+        "description": f"Mock accident near {target_signal_id_incident_demo} for strategy demo"
+    }
+    pre_kpi_incident_target_key_ts002 = f"{mock_incident_location_ts002.latitude}_{mock_incident_location_ts002.longitude}"
+
+    # --- Cycle Group 1: Build Initial Effectiveness History for Accident Strategies on TS002 ---
+    logger.info("--- MAIN_EXAMPLE (Accident Strategy Demo): Cycle Group 1 - Building Strategy History ---")
+    original_epsilon_hist_build = agent.exploration_epsilon
+    agent.exploration_epsilon = 1.0  # Force exploration path to mock choice easily
+
+    strategies_to_build_history_for = [
+        (STRATEGY_ACCIDENT_EXTEND_GREEN_LONG, {"area_clearance_time_minutes": 10, "avg_speed_kmh_incident_zone": 35}, 0.8), # Good score
+        (STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE, {"area_clearance_time_minutes": 25, "avg_speed_kmh_incident_zone": 25}, 0.2), # Moderate
+        (STRATEGY_ACCIDENT_PULSE_GREEN, {"area_clearance_time_minutes": 50, "avg_speed_kmh_incident_zone": 15}, -0.5) # Bad score
+    ]
+
+    for i, (strategy_name, post_kpi_payload, expected_score_approx) in enumerate(strategies_to_build_history_for):
+        logger.info(f"--- MAIN_EXAMPLE (Accident Strategy Demo): History Build for {strategy_name} ---")
+        current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=30*i)).isoformat().replace("+00:00", "Z")
+
+        # Setup Mocks for this run
+        analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_accident_alert_details_ts002]})
+        traffic_mock._signals[target_signal_id_incident_demo].current_phase = SignalPhaseEnum.RED
+        traffic_mock._signals[target_signal_id_incident_demo].operational_status = SignalOperationalStatusEnum.ONLINE
+        agent._recent_signal_actions.clear() # Ensure no cooldown interference
+
+        analytics_mock.configure_pre_action_kpis(
+            pre_kpi_incident_target_key_ts002,
+            "get_incident_area_current_kpis",
+            {"avg_speed_kmh": 10, "vehicle_count": 60} # Consistent pre-KPIs
+        )
+        # Force choice of the current strategy for history building
+        forced_choice_candidate = {'name': strategy_name, 'avg_score': 0.0} # avg_score here is just for the dict structure
+
+        with patch.object(agent.rng, 'choice', return_value=forced_choice_candidate):
+            # Action Cycle
+            await main_example_run_with_mock_time(
+                current_sim_time_str, f"user_acc_hist_{i}_action", agent, analytics_mock,
+                kpis={"overall_congestion_level": "MEDIUM"} # Background KPI
+            )
+
+        # Configure Post-Action KPIs for this specific strategy and incident
+        analytics_mock.configure_post_action_kpis(
+            mock_accident_alert_details_ts002["id"],
+            "get_incident_response_post_action_kpis",
+            post_kpi_payload
+        )
+
+        # KPI Cycle
+        kpi_delay = ACTION_KPI_CONFIG["INCIDENT_RESPONSE_ACCIDENT"]["delay_seconds"]
+        kpi_time = datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(seconds=kpi_delay + 20)
+        await main_example_run_with_mock_time(
+            kpi_time.isoformat().replace("+00:00", "Z"), f"user_acc_hist_{i}_kpi", agent, analytics_mock,
+            kpis={"overall_congestion_level": "LOW"} # Background KPI
+        )
+        logger.info(f"MAIN_EXAMPLE (Accident Strategy Demo): Memory after {strategy_name}: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+
+    agent.exploration_epsilon = original_epsilon_hist_build # Restore original epsilon for this demo block if needed later, or set new one.
+    logger.info(f"MAIN_EXAMPLE (Accident Strategy Demo): Effectiveness Memory after History Building: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+
+    # --- Cycle Group 2: Demonstrate Epsilon-Greedy Strategy Selection for Accidents on TS002 ---
+    logger.info("--- MAIN_EXAMPLE (Accident Strategy Demo): Cycle Group 2 - Demonstrating Epsilon-Greedy Selection ---")
+    agent.exploration_epsilon = 0.5 # Set for this demo part
+
+    for i in range(6): # Run a few cycles to observe exploration/exploitation
+        cycle_num_acc_demo = i + 1
+        current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+        logger.info(f"--- MAIN_EXAMPLE (Accident Strategy Demo): Epsilon-Greedy Cycle {cycle_num_acc_demo} ---")
+
+        # Setup for the cycle
+        analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_accident_alert_details_ts002]})
+        traffic_mock._signals[target_signal_id_incident_demo].current_phase = SignalPhaseEnum.RED
+        traffic_mock._signals[target_signal_id_incident_demo].operational_status = SignalOperationalStatusEnum.ONLINE
+        if target_signal_id_incident_demo in agent._recent_signal_actions: # Clear cooldown for demo
+            del agent._recent_signal_actions[target_signal_id_incident_demo]
+
+        logger.info(f"MAIN_EXAMPLE (Accident Strategy Demo): Scores before cycle {cycle_num_acc_demo}:")
+        for strat_name in ALL_ACCIDENT_STRATEGIES:
+            mem_key = f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id_incident_demo}:{strat_name}"
+            scores = agent.action_effectiveness_memory.get(mem_key, [])
+            avg_s = sum(scores)/len(scores) if scores else 0.0
+            logger.info(f"  Strategy {strat_name}: Avg Score = {avg_s:.2f} (History: {scores})")
+
+        # Action Cycle
+        await main_example_run_with_mock_time(
+            current_sim_time_str, f"user_acc_egreedy_{cycle_num_acc_demo}_action", agent, analytics_mock,
+            kpis={"overall_congestion_level": "MEDIUM"}
+        )
+
+        # Log chosen strategy from pending items
+        chosen_strategy_for_kpi = "UNKNOWN"
+        if agent.pending_kpi_collection:
+            last_pending_item = agent.pending_kpi_collection[-1]
+            if last_pending_item['action_type'] == "INCIDENT_RESPONSE_ACCIDENT":
+                chosen_strategy_for_kpi = last_pending_item['action_parameters'].get('strategy_applied', "ERROR_NO_STRATEGY")
+                selection_method_log = last_pending_item['action_parameters'].get('selection_method', "ERROR_NO_METHOD")
+                chosen_score_log = last_pending_item['pre_action_context_kpis'].get('chosen_strategy_avg_score', "N/A")
+                logger.info(f"MAIN_EXAMPLE (Accident Strategy Demo): Cycle {cycle_num_acc_demo} chose '{chosen_strategy_for_kpi}' via '{selection_method_log}' (score: {chosen_score_log}).")
+
+        # Configure Post-Action KPIs for a neutral outcome for the chosen strategy
+        analytics_mock.configure_post_action_kpis(
+            mock_accident_alert_details_ts002["id"],
+            "get_incident_response_post_action_kpis",
+            {"area_clearance_time_minutes": 28, "avg_speed_kmh_incident_zone": 22} # Neutral-ish score
+        )
+
+        # KPI Cycle
+        kpi_delay = ACTION_KPI_CONFIG["INCIDENT_RESPONSE_ACCIDENT"]["delay_seconds"]
+        kpi_time = datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(seconds=kpi_delay + 20)
+        await main_example_run_with_mock_time(
+            kpi_time.isoformat().replace("+00:00", "Z"), f"user_acc_egreedy_{cycle_num_acc_demo}_kpi", agent, analytics_mock,
+            kpis={"overall_congestion_level": "LOW"}
+        )
+        logger.info(f"MAIN_EXAMPLE (Accident Strategy Demo): Memory after E-Greedy Cycle {cycle_num_acc_demo}: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+
+    # Restore original agent state if necessary
+    agent.exploration_epsilon = original_epsilon # Restore original epsilon from the very start of main_example
+    agent.rng.setstate(original_rng_state) # Restore original RNG state from the very start
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]})
+    logger.info("--- MAIN_EXAMPLE: Epsilon-Greedy ACCIDENT Response Strategy Demonstration Completed ---")
 
 
     if os.path.exists(EFFECTIVENESS_MEMORY_FILEPATH): os.remove(EFFECTIVENESS_MEMORY_FILEPATH)

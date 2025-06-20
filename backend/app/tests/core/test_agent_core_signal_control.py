@@ -19,6 +19,13 @@ from app.models.signals import (
 )
 from app.models.traffic import LocationModel
 
+from app.core.agent_core import (
+    STRATEGY_ACCIDENT_EXTEND_GREEN_LONG,
+    STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE,
+    STRATEGY_ACCIDENT_PULSE_GREEN,
+    ALL_ACCIDENT_STRATEGIES
+)
+
 
 # Helper to create a default valid candidate signal state
 def create_candidate_signal(signal_id: str, current_phase: SignalPhaseEnum = SignalPhaseEnum.RED) -> SignalState:
@@ -848,3 +855,253 @@ async def test_green_wave_selection_single_top_priority_candidate_exploit(
     agent_core.logger.info.assert_any_call(
         "EXPLOITATIVE_GREEN_WAVE_BEST_SCORE: Selected best-score corridor 'main_st_ns_wave' (Prio: 1, AvgScore: 0.50). Top-priority candidates considered (ID, Prio, Score): 'main_st_ns_wave'(P1,0.50)"
     )
+
+# --- Tests for _execute_incident_response_strategy ---
+
+@pytest.mark.asyncio
+async def test_execute_strategy_extend_green_long(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=SignalControlCommandResponse(signal_id="test_sig", status=SignalControlStatusEnum.SUCCESS, message="", timestamp=datetime.utcnow()))
+
+    signal_id = "test_sig"
+    alert_context = {"alert_id": "alert123", "alert_type": "ACCIDENT"}
+
+    result = await agent_core._execute_incident_response_strategy(signal_id, STRATEGY_ACCIDENT_EXTEND_GREEN_LONG, alert_context)
+
+    assert result is True
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id=signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=90
+    )
+
+@pytest.mark.asyncio
+async def test_execute_strategy_extend_green_moderate(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=SignalControlCommandResponse(signal_id="test_sig", status=SignalControlStatusEnum.SUCCESS, message="", timestamp=datetime.utcnow()))
+
+    signal_id = "test_sig"
+    alert_context = {"alert_id": "alert123", "alert_type": "ACCIDENT"}
+
+    result = await agent_core._execute_incident_response_strategy(signal_id, STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE, alert_context)
+
+    assert result is True
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id=signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+
+@pytest.mark.asyncio
+@patch('asyncio.sleep', new_callable=AsyncMock)
+async def test_execute_strategy_pulse_green_success(mock_sleep, agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=SignalControlCommandResponse(signal_id="test_sig", status=SignalControlStatusEnum.SUCCESS, message="", timestamp=datetime.utcnow()))
+
+    signal_id = "test_sig"
+    alert_context = {"alert_id": "alert123", "alert_type": "ACCIDENT"}
+
+    result = await agent_core._execute_incident_response_strategy(signal_id, STRATEGY_ACCIDENT_PULSE_GREEN, alert_context)
+
+    assert result is True
+    assert mock_traffic_signal_service.set_signal_phase.call_count == 2
+    mock_traffic_signal_service.set_signal_phase.assert_any_call(
+        signal_id=signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=75
+    )
+    mock_sleep.assert_called_once_with(70)
+    mock_traffic_signal_service.set_signal_phase.assert_any_call(
+        signal_id=signal_id, phase=SignalPhaseEnum.RED, duration_seconds=30
+    )
+
+@pytest.mark.asyncio
+@patch('asyncio.sleep', new_callable=AsyncMock)
+async def test_execute_strategy_pulse_green_first_call_fails(mock_sleep, agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=SignalControlCommandResponse(signal_id="test_sig", status=SignalControlStatusEnum.ERROR, message="Simulated error", timestamp=datetime.utcnow()))
+
+    signal_id = "test_sig"
+    alert_context = {"alert_id": "alert123", "alert_type": "ACCIDENT"}
+
+    result = await agent_core._execute_incident_response_strategy(signal_id, STRATEGY_ACCIDENT_PULSE_GREEN, alert_context)
+
+    assert result is False
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id=signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=75
+    )
+    mock_sleep.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_execute_strategy_unknown(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_traffic_signal_service.set_signal_phase = AsyncMock()
+
+    signal_id = "test_sig"
+    alert_context = {"alert_id": "alert123", "alert_type": "ACCIDENT"}
+
+    result = await agent_core._execute_incident_response_strategy(signal_id, "UNKNOWN_STRATEGY_NAME", alert_context)
+
+    assert result is False
+    mock_traffic_signal_service.set_signal_phase.assert_not_called()
+    agent_core.logger.warning.assert_any_call(
+        f"Unknown or unhandled incident response strategy 'UNKNOWN_STRATEGY_NAME' for signal '{signal_id}'. No action taken."
+    )
+
+
+# --- Tests for Epsilon-Greedy Incident Strategy Selection ---
+
+@pytest.mark.asyncio
+async def test_incident_strategy_selection_explores(
+    agent_core_with_patched_logger_and_persistence, mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core._execute_incident_response_strategy = AsyncMock(return_value=True) # Mock execution
+    agent_core.exploration_epsilon = 0.1
+
+    target_signal_id = "TS001"
+    incident_alert_id = "incident_explore_alert"
+
+    # Setup alert
+    mock_analytics_service.get_critical_alert_summary.return_value = {
+        "active_alerts": [{"id": incident_alert_id, "type": "ACCIDENT", "location": {"latitude": 1.0, "longitude": 1.0, "name": "Near TS001"}}]}
+    # Setup signal states
+    mock_traffic_signal_service.get_all_signal_states.return_value = [
+        create_candidate_signal(target_signal_id, SignalPhaseEnum.RED),
+        create_candidate_signal("TS002", SignalPhaseEnum.RED)
+    ]
+    # Setup memory: STRATEGY_ACCIDENT_EXTEND_GREEN_LONG is best, STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE is worst
+    agent_core.action_effectiveness_memory = {
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_LONG}": [0.8],
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE}": [0.2], # This will be chosen by mock
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_PULSE_GREEN}": [0.5]
+    }
+
+    # Force exploration and choice of the moderate strategy
+    # The structure of candidate_accident_strategies is List[Dict[str, Any]] where dict has 'name' and 'avg_score'
+    strategy_to_be_chosen_by_mock = {'name': STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE, 'avg_score': 0.2}
+
+    with patch.object(agent_core.rng, 'random', return_value=0.05) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice', return_value=strategy_to_be_chosen_by_mock) as mock_rng_choice:
+
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called() # Could be called multiple times if other selections happen
+    mock_rng_choice.assert_called() # Check it was called for incident strategy
+
+    agent_core._execute_incident_response_strategy.assert_called_with(
+        signal_id=target_signal_id,
+        strategy_name=STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE,
+        alert_context=ANY
+    )
+    agent_core.logger.info.assert_any_call(
+        f"EXPLORATORY_ACCIDENT_STRATEGY: Randomly selected strategy '{STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE}' for ACCIDENT at signal '{target_signal_id}'. Its avg score: 0.20"
+    )
+
+    # Check KPI scheduling context
+    assert len(agent_core.pending_kpi_collection) > 0
+    incident_kpi_entry = next((item for item in agent_core.pending_kpi_collection if item['action_type'] == "INCIDENT_RESPONSE_ACCIDENT" and item['target_ids'][0] == target_signal_id), None)
+    assert incident_kpi_entry is not None
+    assert incident_kpi_entry['action_parameters']['strategy_applied'] == STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE
+    assert incident_kpi_entry['action_parameters']['selection_method'] == "EXPLORATORY_ACCIDENT_STRATEGY"
+    assert incident_kpi_entry['pre_action_context_kpis']['chosen_strategy_name'] == STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE
+    assert incident_kpi_entry['pre_action_context_kpis']['chosen_strategy_avg_score'] == 0.2
+    assert "strategy_candidate_scores" in incident_kpi_entry['pre_action_context_kpis']
+
+
+@pytest.mark.asyncio
+async def test_incident_strategy_selection_exploits(
+    agent_core_with_patched_logger_and_persistence, mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core._execute_incident_response_strategy = AsyncMock(return_value=True)
+    agent_core.exploration_epsilon = 0.1
+
+    target_signal_id = "TS001"
+    incident_alert_id = "incident_exploit_alert"
+
+    mock_analytics_service.get_critical_alert_summary.return_value = {
+        "active_alerts": [{"id": incident_alert_id, "type": "ACCIDENT", "location": {"latitude": 1.0, "longitude": 1.0, "name": "Near TS001"}}]}
+    mock_traffic_signal_service.get_all_signal_states.return_value = [create_candidate_signal(target_signal_id, SignalPhaseEnum.RED)]
+
+    agent_core.action_effectiveness_memory = {
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_LONG}": [0.8], # Best
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE}": [0.2],
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_PULSE_GREEN}": [0.5]
+    }
+
+    with patch.object(agent_core.rng, 'random', return_value=0.5) as mock_rng_random: # Force exploitation
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called()
+    agent_core._execute_incident_response_strategy.assert_called_with(
+        signal_id=target_signal_id,
+        strategy_name=STRATEGY_ACCIDENT_EXTEND_GREEN_LONG,
+        alert_context=ANY
+    )
+    agent_core.logger.info.assert_any_call(
+        f"EXPLOITATIVE_ACCIDENT_STRATEGY_BEST_SCORE: Selected strategy '{STRATEGY_ACCIDENT_EXTEND_GREEN_LONG}' for ACCIDENT at signal '{target_signal_id}' (Avg score: 0.80). Candidates considered: '{STRATEGY_ACCIDENT_EXTEND_GREEN_LONG}'(0.80), '{STRATEGY_ACCIDENT_PULSE_GREEN}'(0.50), '{STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE}'(0.20)"
+    )
+
+    incident_kpi_entry = next((item for item in agent_core.pending_kpi_collection if item['action_type'] == "INCIDENT_RESPONSE_ACCIDENT" and item['target_ids'][0] == target_signal_id), None)
+    assert incident_kpi_entry is not None
+    assert incident_kpi_entry['action_parameters']['strategy_applied'] == STRATEGY_ACCIDENT_EXTEND_GREEN_LONG
+    assert incident_kpi_entry['action_parameters']['selection_method'] == "EXPLOITATIVE_ACCIDENT_STRATEGY_BEST_SCORE"
+
+
+# --- Test for Strategy-Aware Key in Effectiveness Memory ---
+
+@patch('app.core.agent_core.datetime', new_callable=MagicMock) # To control time for KPI collection
+@pytest.mark.asyncio
+async def test_effectiveness_memory_uses_strategy_key_for_incidents(
+    mock_dt, agent_core_with_patched_logger_and_persistence,
+    mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    # DO NOT mock _execute_incident_response_strategy, let it run.
+    # Mock the underlying traffic_signal_service calls instead.
+    mock_traffic_signal_service.set_signal_phase = AsyncMock(
+        return_value=SignalControlCommandResponse(signal_id="TS001", status=SignalControlStatusEnum.SUCCESS, message="", timestamp=datetime.utcnow())
+    )
+
+    target_signal_id = "TS001"
+    incident_alert_id = "incident_mem_key_alert"
+    chosen_strategy_for_test = STRATEGY_ACCIDENT_EXTEND_GREEN_LONG
+
+    # Arrange: Setup alert and signal
+    mock_incident_location = LocationModel(latitude=1.0, longitude=1.0, name="Near TS001")
+    mock_analytics_service.get_critical_alert_summary.return_value = {
+        "active_alerts": [{"id": incident_alert_id, "type": "ACCIDENT", "location": mock_incident_location.model_dump()}]}
+    mock_traffic_signal_service.get_all_signal_states.return_value = [create_candidate_signal(target_signal_id, SignalPhaseEnum.RED)]
+
+    # Arrange: Force selection of STRATEGY_ACCIDENT_EXTEND_GREEN_LONG
+    agent_core.exploration_epsilon = 0.0 # Force exploitation
+    agent_core.action_effectiveness_memory = { # Make this strategy the best
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_LONG}": [0.9],
+        f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE}": [0.1]
+    }
+
+    # Arrange: Mock KPI fetching
+    # Pre-action KPI for incident area
+    mock_analytics_service.get_incident_area_current_kpis = AsyncMock(return_value={"avg_speed_kmh": 10, "vehicle_count": 5})
+    # Post-action KPI for incident response
+    mock_analytics_service.get_incident_response_post_action_kpis = AsyncMock(return_value={
+        "area_clearance_time_minutes": 10, # Good score
+        "avg_speed_kmh_incident_zone": 25  # Good score
+    })
+
+    # Act: First cycle - select and execute strategy, schedule KPI collection
+    now_cycle1 = datetime(2023, 1, 1, 12, 0, 0)
+    mock_dt.utcnow.return_value = now_cycle1
+    await agent_core.run_decision_cycle(sample_user_id="user_cycle1_mem_test")
+
+    assert len(agent_core.pending_kpi_collection) == 1
+    pending_item = agent_core.pending_kpi_collection[0]
+    assert pending_item['action_parameters']['strategy_applied'] == chosen_strategy_for_test
+
+    # Act: Second cycle - advance time to process KPI and update memory
+    kpi_delay = ACTION_KPI_CONFIG["INCIDENT_RESPONSE_ACCIDENT"]["delay_seconds"]
+    mock_dt.utcnow.return_value = now_cycle1 + timedelta(seconds=kpi_delay + 30)
+    await agent_core.run_decision_cycle(sample_user_id="user_cycle2_mem_test")
+
+    # Assert: Check effectiveness memory
+    expected_key = f"INCIDENT_RESPONSE_ACCIDENT:{target_signal_id}:{chosen_strategy_for_test}"
+    assert expected_key in agent_core.action_effectiveness_memory
+    assert len(agent_core.action_effectiveness_memory[expected_key]) == 1
+    # Score from _score_incident_clearance_speed:
+    # clear_time=10 (<15) -> +0.6; pre_speed=10 (<20), post_speed=25 (>1.5*10, >15) -> +0.4. Total = (0.6+0.4)/2 = 0.5
+    assert agent_core.action_effectiveness_memory[expected_key][0] == pytest.approx(0.5)
