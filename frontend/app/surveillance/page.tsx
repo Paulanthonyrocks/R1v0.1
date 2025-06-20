@@ -7,9 +7,10 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import th
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed component
 import { FeedStatusData } from '@/lib/types'; // To type the feed items
 import LoadingMessage from '@/components/ui/LoadingMessage'; // Import the new LoadingMessage component
+import { WS_URL } from '@/lib/hook';
 
 const SurveillancePage = () => {
-  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
+  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
 
   useEffect(() => {
     // Start WebSocket connection on component mount

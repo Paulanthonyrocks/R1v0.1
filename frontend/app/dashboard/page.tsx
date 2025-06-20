@@ -13,13 +13,14 @@ import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
+import { WS_URL } from '@/lib/hook';
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
-  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
+  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
   // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   useEffect(() => {

@@ -177,8 +177,19 @@ class WebSocketClient {
 
 }
 
+const getOrCreateClientId = () => {
+  if (typeof window === 'undefined') return '';
+  let clientId = localStorage.getItem('ws_client_id');
+  if (!clientId) {
+    clientId = crypto.randomUUID();
+    localStorage.setItem('ws_client_id', clientId);
+  }
+  return clientId;
+};
+
 const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsUrl = `${wsProtocol}//${process.env.NEXT_PUBLIC_API_URL}/ws`;
+const clientId = getOrCreateClientId();
+const wsUrl = `${wsProtocol}//${process.env.NEXT_PUBLIC_API_URL}/ws/${clientId}`;
 const ws = new WebSocketClient(wsUrl);
 
 export { ws, WebSocketClient as default };

@@ -318,3 +318,5 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
     sendMessage,
   };
 };
+
+export { WS_URL };

@@ -18,7 +18,7 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import th
 import { AlertData, Anomaly, LocationTuple } from '@/lib/types'; // Import Anomaly and LocationTuple from lib/types
 import AnomalyDetailModal from '@/components/anomalies/AnomalyDetailModal'; // Anomaly types removed from this import
 import ToastContainer, { ToastMessage } from '@/components/ui/ToastContainer';
-
+import { WS_URL } from '@/lib/hook';
 
 // Modified AnomalyMapProps to include onMarkerClick and activeAnomalyId
 interface AnomalyMapProps {
@@ -116,7 +116,7 @@ type SortOrder = "newest" | "oldest";
 
 const AnomaliesPage = () => {
   // const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher); // SWR removed
-  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
+  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
 
   const [allAnomalies, setAllAnomalies] = useState<Anomaly[]>([]);
   const [pageLoading, setPageLoading] = useState(true); // Initial loading state
