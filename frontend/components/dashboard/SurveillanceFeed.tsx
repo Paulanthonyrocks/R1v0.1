@@ -4,8 +4,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2 } from 'lucide-react';
 import { cn } from "@/lib/utils";
-import type { SurveillanceFeedProps } from '@/lib/types'; // Will point to updated definition
-import { useRealtimeUpdates } from '@/lib/hook';
+import type { SurveillanceFeedProps, TrafficMetrics } from '@/lib/types';
+import { useRealtimeUpdates, useMultipartStream } from '@/lib/hook';
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { id, name: feedName, source, status, fps } = feed; // Destructure from the feed prop
@@ -14,17 +14,15 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
 
     const { sendMessage, isConnected } = useRealtimeUpdates();
 
-    const [videoUrl, setVideoUrl] = useState<string | null>(null);
-    const [videoErrorOccurred, setVideoErrorOccurred] = useState<boolean>(false);
+    const streamUrl = status === 'running' && source ? source : null;
+    const { frame, metrics, error: streamError } = useMultipartStream(streamUrl);
+
     const [isToggling, setIsToggling] = useState<boolean>(false);
 
     useEffect(() => {
-        setVideoErrorOccurred(false);
-        if (status === 'running' && source) {
-            setVideoUrl(source);
-        } else {
-            setVideoUrl(null);
-        }
+        // This effect previously handled videoUrl state, which is now managed by useMultipartStream
+        // It can potentially be used to react to streamError if needed for more complex error states
+        // For now, simply ensure isToggling is false when stream status is resolved
     }, [status, source]);
 
     useEffect(() => {

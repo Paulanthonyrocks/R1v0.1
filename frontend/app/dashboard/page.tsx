@@ -13,6 +13,7 @@ import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
+import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed
 import { WS_URL } from '@/lib/hook';
 
 const DashboardPage: React.FC = () => {
@@ -114,15 +115,14 @@ const DashboardPage: React.FC = () => {
           />
         </div>
 
-        {/* Placeholder for video stream */}
-        <div className="mb-4 bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <h2 className="text-xl font-semibold mb-2 tracking-normal">Video Feed (Sample)</h2> {/* Added tracking-normal */}
-          <div className="w-full h-96 bg-background flex items-center justify-center text-muted-foreground rounded">
-            <video
-              src="/api/v1/sample-video"
-              controls
-              autoPlay
-              className="w-full h-full object-cover rounded bg-black"
+        {/* Sample Video Feed */}
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold mb-2 tracking-normal">Sample Video Feed</h2>
+          <div className="w-full aspect-video rounded border border-primary pixel-drop-shadow overflow-hidden">
+            <SurveillanceFeed
+              feed={{
+                id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/video/sample-video/stream', fps: 30
+              }}
             />
           </div>
         </div>
