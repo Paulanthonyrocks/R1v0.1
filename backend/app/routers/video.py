@@ -51,6 +51,19 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
                     proximity_threshold=config['vehicle_detection']['proximity_threshold'],
                     track_timeout=config['vehicle_detection']['track_timeout']
                 )
+                # Ensure tracked_vehicles is a dict of int keys (track IDs) to dicts with bbox, speed, lane, class_id, license_plate
+                if not isinstance(tracked_vehicles, dict):
+                    tracked_vehicles = {}
+                else:
+                    # Convert keys to int if needed
+                    tracked_vehicles = {int(k): v for k, v in tracked_vehicles.items() if isinstance(v, dict)}
+                    # Ensure all required fields are present
+                    for v in tracked_vehicles.values():
+                        v.setdefault('bbox', None)
+                        v.setdefault('speed', 0.0)
+                        v.setdefault('lane', -1)
+                        v.setdefault('class_id', -1)
+                        v.setdefault('license_plate', '')
                 traffic_monitor.update_vehicles(tracked_vehicles)
                 metrics = traffic_monitor.get_metrics()
                 # Visualization
