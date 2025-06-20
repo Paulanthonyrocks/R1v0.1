@@ -176,3 +176,225 @@ async def test_green_wave_priority_selection_uses_avg_score_tie_breaker(mock_dt,
 # Ensure ACTION_EFFECTIVENESS_CONFIG is accessible (it's imported)
 # The agent_core fixture now sets self.action_effectiveness_config = ACTION_EFFECTIVENESS_CONFIG
 # so the scoring methods use the version from app.core.agent_core module.
+
+# --- Test Cases for Epsilon-Greedy General Congestion Logic ---
+
+@pytest.mark.asyncio
+async def test_congestion_logic_explores_when_epsilon_triggered(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    # Ensure overall_congestion_level is HIGH to trigger the logic
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    sig_a_state = create_candidate_signal("sig_A", SignalPhaseEnum.RED)
+    sig_b_state = create_candidate_signal("sig_B", SignalPhaseEnum.RED)
+    sig_c_state = create_candidate_signal("sig_C", SignalPhaseEnum.RED)
+
+    agent_core.action_effectiveness_memory = {
+        "SET_SIGNAL_GREEN_CONGESTION:sig_A": [0.2], # Low score
+        "SET_SIGNAL_GREEN_CONGESTION:sig_B": [0.8], # High score (would be chosen by exploit)
+        "SET_SIGNAL_GREEN_CONGESTION:sig_C": [0.5]  # Mid score
+    }
+    all_mock_states = [sig_a_state, sig_b_state, sig_c_state]
+    mock_traffic_signal_service.get_all_signal_states.return_value = all_mock_states
+
+    # Candidate dict entry for sig_A (the one we force rng.choice to pick)
+    # Note: The actual list passed to rng.choice will contain all candidates.
+    # We are mocking rng.choice to return a specific one from that list.
+    # The structure of dict entry must match what's created in AgentCore.
+    candidate_a_dict_entry = {
+        'signal_id': 'sig_A',
+        'signal_state': sig_a_state,
+        'avg_score': 0.2
+    }
+
+    with patch.object(agent_core.rng, 'random', return_value=0.05) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice', return_value=candidate_a_dict_entry) as mock_rng_choice:
+
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    # Assert that rng.choice was called. The argument to choice will be a list of dicts.
+    # We need to ensure it was called with a list of the correct candidates.
+    # The order within candidate_signals_for_congestion_relief before choice is not guaranteed if scores are calculated on the fly.
+    # So, check that the *set* of signal_ids in the choice list is correct.
+    assert mock_rng_choice.call_count == 1
+    args_list, _ = mock_rng_choice.call_args
+    passed_candidates_list = args_list[0]
+    assert len(passed_candidates_list) == 3
+    assert {cand['signal_id'] for cand in passed_candidates_list} == {'sig_A', 'sig_B', 'sig_C'}
+
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id="sig_A", phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+    agent_core.logger.info.assert_any_call(
+        "EXPLORATORY_RANDOM general congestion action: Randomly selected signal 'sig_A' from 3 candidates. (Its avg score: 0.20)"
+    )
+
+    assert len(agent_core.pending_kpi_collection) == 1
+    kpi_entry = agent_core.pending_kpi_collection[0]
+    assert kpi_entry['action_parameters']['selection_method'] == "EXPLORATORY_RANDOM"
+    assert kpi_entry['pre_action_context_kpis']['chosen_candidate_avg_score'] == 0.2
+    assert kpi_entry['pre_action_context_kpis']['num_candidates_considered'] == 3
+    assert kpi_entry['target_ids'] == ["sig_A"]
+
+
+@pytest.mark.asyncio
+async def test_congestion_logic_exploits_best_when_epsilon_not_triggered(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    sig_a_state = create_candidate_signal("sig_A", SignalPhaseEnum.RED) # score 0.2
+    sig_b_state = create_candidate_signal("sig_B", SignalPhaseEnum.RED) # score 0.8 (best)
+    sig_c_state = create_candidate_signal("sig_C", SignalPhaseEnum.RED) # score 0.5
+
+    agent_core.action_effectiveness_memory = {
+        "SET_SIGNAL_GREEN_CONGESTION:sig_A": [0.2],
+        "SET_SIGNAL_GREEN_CONGESTION:sig_B": [0.8],
+        "SET_SIGNAL_GREEN_CONGESTION:sig_C": [0.5]
+    }
+    all_mock_states = [sig_a_state, sig_b_state, sig_c_state] # Order here doesn't matter for exploitation after sorting
+    mock_traffic_signal_service.get_all_signal_states.return_value = all_mock_states
+
+    with patch.object(agent_core.rng, 'random', return_value=0.5) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice') as mock_rng_choice: # Should not be called
+
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_not_called()
+
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id="sig_B", phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+    agent_core.logger.info.assert_any_call(
+        "EXPLOITATIVE_BEST_SCORE general congestion action: Selected signal 'sig_B' (Avg score: 0.80). Top candidates considered (ID, Score): [{'id': 'sig_B', 'score': '0.80'}, {'id': 'sig_C', 'score': '0.50'}, {'id': 'sig_A', 'score': '0.20'}]"
+    )
+
+    assert len(agent_core.pending_kpi_collection) == 1
+    kpi_entry = agent_core.pending_kpi_collection[0]
+    assert kpi_entry['action_parameters']['selection_method'] == "EXPLOITATIVE_BEST_SCORE"
+    assert kpi_entry['pre_action_context_kpis']['chosen_candidate_avg_score'] == 0.8
+    assert kpi_entry['target_ids'] == ["sig_B"]
+
+@pytest.mark.asyncio
+async def test_congestion_logic_handles_single_candidate_exploration(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    sig_x_state = create_candidate_signal("sig_X", SignalPhaseEnum.RED)
+    agent_core.action_effectiveness_memory = {"SET_SIGNAL_GREEN_CONGESTION:sig_X": [0.3]}
+    mock_traffic_signal_service.get_all_signal_states.return_value = [sig_x_state]
+
+    candidate_x_dict_entry = {'signal_id': 'sig_X', 'signal_state': sig_x_state, 'avg_score': 0.3}
+
+    with patch.object(agent_core.rng, 'random', return_value=0.05) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice', return_value=candidate_x_dict_entry) as mock_rng_choice:
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_called_once_with([candidate_x_dict_entry]) # Called with a list containing the single candidate dict
+
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id="sig_X", phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+    agent_core.logger.info.assert_any_call(
+        "EXPLORATORY_RANDOM general congestion action: Randomly selected signal 'sig_X' from 1 candidates. (Its avg score: 0.30)"
+    )
+    assert len(agent_core.pending_kpi_collection) == 1
+    kpi_entry = agent_core.pending_kpi_collection[0]
+    assert kpi_entry['action_parameters']['selection_method'] == "EXPLORATORY_RANDOM"
+    assert kpi_entry['pre_action_context_kpis']['chosen_candidate_avg_score'] == 0.3
+
+@pytest.mark.asyncio
+async def test_congestion_logic_handles_single_candidate_exploitation(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    sig_x_state = create_candidate_signal("sig_X", SignalPhaseEnum.RED)
+    agent_core.action_effectiveness_memory = {"SET_SIGNAL_GREEN_CONGESTION:sig_X": [0.7]}
+    mock_traffic_signal_service.get_all_signal_states.return_value = [sig_x_state]
+
+    with patch.object(agent_core.rng, 'random', return_value=0.5) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice') as mock_rng_choice: # Should not be called
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_not_called()
+
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id="sig_X", phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+    agent_core.logger.info.assert_any_call(
+         "EXPLOITATIVE_BEST_SCORE general congestion action: Selected signal 'sig_X' (Avg score: 0.70). Top candidates considered (ID, Score): [{'id': 'sig_X', 'score': '0.70'}]"
+    )
+    assert len(agent_core.pending_kpi_collection) == 1
+    kpi_entry = agent_core.pending_kpi_collection[0]
+    assert kpi_entry['action_parameters']['selection_method'] == "EXPLOITATIVE_BEST_SCORE"
+    assert kpi_entry['pre_action_context_kpis']['chosen_candidate_avg_score'] == 0.7
+
+@pytest.mark.asyncio
+async def test_congestion_logic_no_candidates_no_action(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    # Scenario 1: No signals returned
+    mock_traffic_signal_service.get_all_signal_states.return_value = []
+    await agent_core.run_decision_cycle()
+    mock_traffic_signal_service.set_signal_phase.assert_not_called()
+    agent_core.logger.info.assert_any_call("General Congestion: No suitable signals found for congestion relief this cycle after filtering.")
+    assert len(agent_core.pending_kpi_collection) == 0
+
+    # Scenario 2: Signals are not eligible (e.g., all GREEN or OFFLINE)
+    mock_traffic_signal_service.reset_mock() # Reset call counts for set_signal_phase
+    agent_core.logger.reset_mock()
+    agent_core.pending_kpi_collection = []
+
+    all_green_signal = create_candidate_signal("sig_green", SignalPhaseEnum.GREEN)
+    offline_signal = create_candidate_signal("sig_offline", SignalPhaseEnum.RED)
+    offline_signal.operational_status = SignalOperationalStatusEnum.OFFLINE
+    mock_traffic_signal_service.get_all_signal_states.return_value = [all_green_signal, offline_signal]
+
+    await agent_core.run_decision_cycle()
+    mock_traffic_signal_service.set_signal_phase.assert_not_called()
+    agent_core.logger.info.assert_any_call("General Congestion: No suitable signals found for congestion relief this cycle after filtering.")
+    agent_core.logger.debug.assert_any_call("Signal sig_green skipped (already GREEN).")
+    agent_core.logger.debug.assert_any_call("Signal sig_offline skipped (not ONLINE).")
+    assert len(agent_core.pending_kpi_collection) == 0
+
+@pytest.mark.asyncio
+async def test_congestion_logic_respects_cooldown(agent_core_with_patched_logger_and_persistence, mock_traffic_signal_service, mock_analytics_service):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.0 # Force exploitation for predictability
+    mock_analytics_service.get_current_system_kpis_summary.return_value = {"overall_congestion_level": "HIGH"}
+
+    sig_a_state = create_candidate_signal("sig_A", SignalPhaseEnum.RED)
+    sig_b_state = create_candidate_signal("sig_B", SignalPhaseEnum.RED) # Will be put on cooldown
+
+    agent_core.action_effectiveness_memory = {
+        "SET_SIGNAL_GREEN_CONGESTION:sig_A": [0.7], # Best non-cooldown
+        "SET_SIGNAL_GREEN_CONGESTION:sig_B": [0.9], # Best overall, but on cooldown
+    }
+    # Simulate sig_B was actioned recently
+    agent_core._recent_signal_actions["sig_B"] = {
+        'timestamp': datetime.utcnow() - timedelta(seconds=agent_core.SIGNAL_ACTION_COOLDOWN_SECONDS / 2),
+        'reason': 'some_other_reason'
+    }
+    mock_traffic_signal_service.get_all_signal_states.return_value = [sig_a_state, sig_b_state]
+
+    await agent_core.run_decision_cycle()
+
+    # sig_B should be skipped due to cooldown, so sig_A is chosen
+    mock_traffic_signal_service.set_signal_phase.assert_called_once_with(
+        signal_id="sig_A", phase=SignalPhaseEnum.GREEN, duration_seconds=60
+    )
+    agent_core.logger.debug.assert_any_call("Signal sig_B skipped (on cooldown). Last action: some_other_reason at %s." % agent_core._recent_signal_actions["sig_B"]['timestamp'])
+    agent_core.logger.info.assert_any_call(
+        "EXPLOITATIVE_BEST_SCORE general congestion action: Selected signal 'sig_A' (Avg score: 0.70). Top candidates considered (ID, Score): [{'id': 'sig_A', 'score': '0.70'}]"
+    )
+    assert len(agent_core.pending_kpi_collection) == 1
+    kpi_entry = agent_core.pending_kpi_collection[0]
+    assert kpi_entry['target_ids'] == ["sig_A"]
