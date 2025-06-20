@@ -4,8 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2 } from 'lucide-react';
 import { cn } from "@/lib/utils";
-import type { SurveillanceFeedProps, TrafficMetrics } from '@/lib/types';
-import { useRealtimeUpdates, useMultipartStream } from '@/lib/hook';
+import type { SurveillanceFeedProps } from '@/lib/types';
+import { useRealtimeUpdates } from '@/lib/hook';
+import { useMultipartStream } from '@/lib/useMultipartStream';
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { id, name: feedName, source, status, fps } = feed; // Destructure from the feed prop
@@ -55,7 +56,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
             onClick={isToggling ? undefined : toggleFeed}
             tabIndex={0} // Make it focusable
         >
-            <div className="bg-black aspect-video flex items-center justify-center relative group">
+            <div className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden"> {/* Added overflow-hidden */}
                 {isToggling && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
                         <Loader2 className="text-primary-foreground animate-spin h-10 w-10" /> {/* Changed text-white to text-primary-foreground */}
@@ -74,17 +75,13 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                             console.warn(`Error loading video: ${videoUrl} for feed ID: ${id}`);
                             setVideoErrorOccurred(true);
                         }}
-                        onCanPlay={() => {
-                            if (videoErrorOccurred) {
-                                setVideoErrorOccurred(false);
-                            }
-                        }}
                     />
                 ) : videoErrorOccurred && !isToggling ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-card">
                         <AlertTriangle className="text-primary text-3xl mb-1" /> {/* Changed text-destructive to text-primary */}
                         <p className="text-xs text-primary text-center tracking-normal">Video feed unavailable</p> {/* Changed text-destructive to text-primary, added tracking-normal */}
-                    </div>
+
+                    </div> {/* Corrected closing tag */}
                 ) : !isToggling ? (
                     <div className="absolute inset-0 flex items-center justify-center opacity-30 group-hover:opacity-50 transition-opacity duration-300">
                         <Eye className="text-primary-foreground text-4xl" /> {/* Changed to green for visibility on black bg */}
