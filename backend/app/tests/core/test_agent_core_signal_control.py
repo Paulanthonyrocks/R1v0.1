@@ -398,3 +398,235 @@ async def test_congestion_logic_respects_cooldown(agent_core_with_patched_logger
     assert len(agent_core.pending_kpi_collection) == 1
     kpi_entry = agent_core.pending_kpi_collection[0]
     assert kpi_entry['target_ids'] == ["sig_A"]
+
+
+# --- Test Cases for Epsilon-Greedy Green Wave Selection Logic ---
+
+@patch('app.core.agent_core.datetime', new_callable=MagicMock)
+@pytest.mark.asyncio
+async def test_green_wave_selection_explores_among_top_priority(
+    mock_dt, agent_core_with_patched_logger_and_persistence,
+    mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    mock_dt.utcnow.return_value = datetime(2023, 1, 1, 8, 0, 0) # Time window for main_st and alt_st
+
+    # Configure two P1 corridors: main_st (score 0.8) and alt_st (score 0.3)
+    # Both will be triggered by time and demand KPI
+    kpis = {"overall_congestion_level": "LOW"}
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]] = "HIGH"
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["demand_kpi_trigger"]] = "HIGH"
+    mock_analytics_service.get_current_system_kpis_summary.return_value = kpis
+
+    agent_core.action_effectiveness_memory = {
+        "GREEN_WAVE_ACTIVATION:main_st_ns_wave": [0.8], # Higher score
+        "GREEN_WAVE_ACTIVATION:alt_st_ew_wave": [0.3]   # Lower score
+    }
+    # Provide some generic signal states for all signals involved if _execute_green_wave needs them
+    all_involved_sids = set(GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["signals_in_order"] +
+                            GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["signals_in_order"])
+    mock_traffic_signal_service.get_all_signal_states.return_value = [
+        create_candidate_signal(sid) for sid in all_involved_sids
+    ]
+
+    # Mock _execute_green_wave
+    agent_core._execute_green_wave = AsyncMock(return_value=True)
+
+    # Force exploration (0.05 < 0.1 epsilon)
+    # Force rng.choice to pick the lower-scored "alt_st_ew_wave"
+    # The structure passed to choice is a list of dicts: {'id': ..., 'priority': ..., 'config': ..., 'avg_score': ...}
+    # We need to find the actual candidate dict for alt_st_ew_wave to return it from the mock
+
+    # Construct what top_priority_candidates would look like for rng.choice to operate on
+    # Note: they are sorted by score descending in the agent's logic before choice (if exploring)
+    # However, rng.choice doesn't care about the order of the list it receives for making a random choice.
+    # Forcing the return value is the key here.
+
+    # Expected candidate dict for alt_st_ew_wave (the one we want exploration to pick)
+    # This needs to match the structure created inside AgentCore.run_decision_cycle
+    # The 'config' field is the direct config dict from GREEN_WAVE_CORRIDOR_CONFIGS
+    expected_alt_st_candidate_dict = {
+        "id": "alt_st_ew_wave",
+        "priority": GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["priority"],
+        "config": GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"],
+        "avg_score": 0.3,
+        "trigger_type": "TIME" # Or DEMAND_KPI, depends on how test is set up, ensure it matches agent logic
+    }
+
+
+    with patch.object(agent_core.rng, 'random', return_value=0.05) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice', return_value=expected_alt_st_candidate_dict) as mock_rng_choice:
+
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_called_once()
+    # We can make the assertion on mock_rng_choice.call_args more specific if needed,
+    # by checking the content of the list passed to it. For now, just checking it was called.
+
+    agent_core._execute_green_wave.assert_called_once()
+    called_args, _ = agent_core._execute_green_wave.call_args
+    assert called_args[0]['corridor_id'] == "alt_st_ew_wave" # Check that the explored corridor was called
+
+    agent_core.logger.info.assert_any_call(
+        "EXPLORATORY_GREEN_WAVE_RANDOM: Randomly selected corridor 'alt_st_ew_wave' (Prio: 1, AvgScore: 0.30) from 2 top-priority candidates."
+    )
+
+    assert len(agent_core.pending_kpi_collection) >= 1 # Can be more if general congestion also ran
+    gw_kpi_entry = None
+    for entry in agent_core.pending_kpi_collection:
+        if entry['action_type'] == "GREEN_WAVE_ACTIVATION" and entry['target_ids'][0] == "alt_st_ew_wave":
+            gw_kpi_entry = entry
+            break
+    assert gw_kpi_entry is not None, "Green Wave KPI entry for alt_st_ew_wave not found"
+    assert gw_kpi_entry['action_parameters']['selection_method'] == "EXPLORATORY_GREEN_WAVE_RANDOM"
+    assert gw_kpi_entry['pre_action_context_kpis']['chosen_corridor_avg_score'] == 0.3
+
+
+@patch('app.core.agent_core.datetime', new_callable=MagicMock)
+@pytest.mark.asyncio
+async def test_green_wave_selection_exploits_best_among_top_priority(
+    mock_dt, agent_core_with_patched_logger_and_persistence,
+    mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1
+    mock_dt.utcnow.return_value = datetime(2023, 1, 1, 8, 0, 0)
+
+    kpis = {"overall_congestion_level": "LOW"}
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]] = "HIGH" # P1, Score 0.8
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["demand_kpi_trigger"]] = "HIGH"  # P1, Score 0.3
+    mock_analytics_service.get_current_system_kpis_summary.return_value = kpis
+
+    agent_core.action_effectiveness_memory = {
+        "GREEN_WAVE_ACTIVATION:main_st_ns_wave": [0.8],
+        "GREEN_WAVE_ACTIVATION:alt_st_ew_wave": [0.3]
+    }
+    all_involved_sids = set(GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["signals_in_order"] +
+                            GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["signals_in_order"])
+    mock_traffic_signal_service.get_all_signal_states.return_value = [
+        create_candidate_signal(sid) for sid in all_involved_sids
+    ]
+    agent_core._execute_green_wave = AsyncMock(return_value=True)
+
+    # Force exploitation (0.5 >= 0.1 epsilon)
+    with patch.object(agent_core.rng, 'random', return_value=0.5) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice') as mock_rng_choice: # Should not be called
+
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_not_called()
+
+    agent_core._execute_green_wave.assert_called_once()
+    called_args, _ = agent_core._execute_green_wave.call_args
+    assert called_args[0]['corridor_id'] == "main_st_ns_wave" # Best score among P1
+
+    agent_core.logger.info.assert_any_call(
+       "EXPLOITATIVE_GREEN_WAVE_BEST_SCORE: Selected best-score corridor 'main_st_ns_wave' (Prio: 1, AvgScore: 0.80). Top-priority candidates considered (ID, Prio, Score): 'main_st_ns_wave'(P1,0.80), 'alt_st_ew_wave'(P1,0.30)"
+    )
+
+    assert len(agent_core.pending_kpi_collection) >= 1
+    gw_kpi_entry = None
+    for entry in agent_core.pending_kpi_collection:
+        if entry['action_type'] == "GREEN_WAVE_ACTIVATION" and entry['target_ids'][0] == "main_st_ns_wave":
+            gw_kpi_entry = entry
+            break
+    assert gw_kpi_entry is not None
+    assert gw_kpi_entry['action_parameters']['selection_method'] == "EXPLOITATIVE_GREEN_WAVE_BEST_SCORE"
+    assert gw_kpi_entry['pre_action_context_kpis']['chosen_corridor_avg_score'] == 0.8
+
+
+@patch('app.core.agent_core.datetime', new_callable=MagicMock)
+@pytest.mark.asyncio
+async def test_green_wave_selection_respects_higher_priority_over_exploration(
+    mock_dt, agent_core_with_patched_logger_and_persistence,
+    mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 1.0 # Always explore if multiple options of same highest priority
+    mock_dt.utcnow.return_value = datetime(2023, 1, 1, 12, 0, 0) # Time for oak_ave (P2) and main_st (P1)
+
+    kpis = {"overall_congestion_level": "LOW"}
+    # Trigger P1 (main_st_ns_wave, score 0.2) and P2 (oak_ave_ew_wave, score 0.9)
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]] = "HIGH"
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["oak_ave_ew_wave"]["demand_kpi_trigger"]] = "HIGH"
+    mock_analytics_service.get_current_system_kpis_summary.return_value = kpis
+
+    agent_core.action_effectiveness_memory = {
+        "GREEN_WAVE_ACTIVATION:main_st_ns_wave": [0.2], # P1
+        "GREEN_WAVE_ACTIVATION:oak_ave_ew_wave": [0.9]  # P2
+    }
+    all_involved_sids = set(GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["signals_in_order"] +
+                            GREEN_WAVE_CORRIDOR_CONFIGS["oak_ave_ew_wave"]["signals_in_order"])
+    mock_traffic_signal_service.get_all_signal_states.return_value = [
+        create_candidate_signal(sid) for sid in all_involved_sids
+    ]
+    agent_core._execute_green_wave = AsyncMock(return_value=True)
+
+    with patch.object(agent_core.rng, 'random', return_value=0.05) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice') as mock_rng_choice: # choice might be called if there were multiple P1s
+
+        await agent_core.run_decision_cycle()
+
+    # main_st_ns_wave is P1, oak_ave_ew_wave is P2. P1 should be chosen.
+    # Since only one P1 candidate, exploration logic still picks it.
+    # If rng.random was > epsilon, it would be EXPLOITATIVE for the single P1.
+    # If epsilon = 1.0, rng.random will always be < 1.0, so it's EXPLORATORY.
+
+    agent_core._execute_green_wave.assert_called_once()
+    called_args, _ = agent_core._execute_green_wave.call_args
+    assert called_args[0]['corridor_id'] == "main_st_ns_wave"
+
+    # Check that rng.choice was called with a list containing only the P1 candidate
+    # The actual candidate dict needs to be constructed for comparison if being very strict
+    # For now, checking the log is sufficient to see it was chosen via exploration path.
+    agent_core.logger.info.assert_any_call(
+        "EXPLORATORY_GREEN_WAVE_RANDOM: Randomly selected corridor 'main_st_ns_wave' (Prio: 1, AvgScore: 0.20) from 1 top-priority candidates."
+    )
+    mock_rng_choice.assert_called_once() # Called with list of one (the P1 candidate)
+
+    assert len(agent_core.pending_kpi_collection) >= 1
+    gw_kpi_entry = None
+    for entry in agent_core.pending_kpi_collection:
+        if entry['action_type'] == "GREEN_WAVE_ACTIVATION" and entry['target_ids'][0] == "main_st_ns_wave":
+            gw_kpi_entry = entry
+            break
+    assert gw_kpi_entry is not None
+    assert gw_kpi_entry['action_parameters']['selection_method'] == "EXPLORATORY_GREEN_WAVE_RANDOM"
+
+
+@patch('app.core.agent_core.datetime', new_callable=MagicMock)
+@pytest.mark.asyncio
+async def test_green_wave_selection_single_top_priority_candidate_exploit(
+    mock_dt, agent_core_with_patched_logger_and_persistence,
+    mock_analytics_service, mock_traffic_signal_service
+):
+    agent_core = agent_core_with_patched_logger_and_persistence
+    agent_core.exploration_epsilon = 0.1 # Exploit if rng.random >= 0.1
+    mock_dt.utcnow.return_value = datetime(2023, 1, 1, 8, 0, 0)
+
+    kpis = {"overall_congestion_level": "LOW"}
+    kpis[GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]] = "HIGH" # Only P1 triggered
+    mock_analytics_service.get_current_system_kpis_summary.return_value = kpis
+
+    agent_core.action_effectiveness_memory = {"GREEN_WAVE_ACTIVATION:main_st_ns_wave": [0.5]}
+    mock_traffic_signal_service.get_all_signal_states.return_value = [
+        create_candidate_signal(sid) for sid in GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["signals_in_order"]
+    ]
+    agent_core._execute_green_wave = AsyncMock(return_value=True)
+
+    with patch.object(agent_core.rng, 'random', return_value=0.5) as mock_rng_random, \
+         patch.object(agent_core.rng, 'choice') as mock_rng_choice:
+        await agent_core.run_decision_cycle()
+
+    mock_rng_random.assert_called_once()
+    mock_rng_choice.assert_not_called() # Exploitation path
+
+    agent_core._execute_green_wave.assert_called_once()
+    called_args, _ = agent_core._execute_green_wave.call_args
+    assert called_args[0]['corridor_id'] == "main_st_ns_wave"
+    agent_core.logger.info.assert_any_call(
+        "EXPLOITATIVE_GREEN_WAVE_BEST_SCORE: Selected best-score corridor 'main_st_ns_wave' (Prio: 1, AvgScore: 0.50). Top-priority candidates considered (ID, Prio, Score): 'main_st_ns_wave'(P1,0.50)"
+    )

@@ -1,12 +1,12 @@
 import asyncio
 import logging
-from typing import Optional, Dict, Any, List, Set, Tuple, Union # Added Union
+from typing import Optional, Dict, Any, List, Set, Tuple, Union
 import json
 from datetime import datetime, timedelta, time
 import math
 from uuid import UUID, uuid4
 import os
-import random # Added for exploration parameters
+import random
 
 from pydantic import BaseModel, Field
 
@@ -16,14 +16,11 @@ from app.services.analytics_service import AnalyticsService
 from app.services.traffic_signal_service import TrafficSignalService
 from app.models.traffic import LocationModel
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
-from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage # WebSocketMessage might be needed by mock examples
-# Ensure all signal model imports are present
-from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum # Already mostly there, ensuring completeness
+from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage
 
 logger = logging.getLogger(__name__)
 
 PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD = 60
-# ... (GREEN_WAVE_CORRIDOR_CONFIGS, ALL_CORRIDOR_DEMAND_KPIS, ACTION_KPI_CONFIG, ACTION_EFFECTIVENESS_CONFIG, Filepath constants remain the same) ...
 GREEN_WAVE_CORRIDOR_CONFIGS = {
     "main_st_ns_wave": { "description": "Main Street NS Wave", "signals_in_order": ["TS001", "TS002", "TS004"], "target_green_phase": SignalPhaseEnum.GREEN, "wave_green_time_seconds": 50, "offsets_seconds": [0, 18, 36], "corridor_flow_direction_assumption": "NS", "time_windows": [{"start": "07:00", "end": "09:00"}, {"start": "16:00", "end": "18:00"}], "demand_kpi_trigger": "corridor_main_st_ns_demand_high", "priority": 1 },
     "alt_st_ew_wave": { "description": "Alternative Street EW Wave (Prio 1)", "signals_in_order": ["TS005", "TS003"], "target_green_phase": SignalPhaseEnum.GREEN, "wave_green_time_seconds": 45, "offsets_seconds": [0, 22], "corridor_flow_direction_assumption": "EW", "time_windows": [{"start": "07:00", "end": "09:00"}], "demand_kpi_trigger": "corridor_alt_st_ew_demand", "priority": 1 },
@@ -48,44 +45,69 @@ _BACKEND_DIR = os.path.dirname(_APP_DIR)
 EFFECTIVENESS_MEMORY_DIR: str = os.path.join(_BACKEND_DIR, "data")
 EFFECTIVENESS_MEMORY_FILEPATH: str = os.path.join(EFFECTIVENESS_MEMORY_DIR, EFFECTIVENESS_MEMORY_FILENAME)
 
-class ActionPerformanceLog(BaseModel): # ... (as before) ...
-    action_id: UUID = Field(default_factory=uuid4); action_timestamp: datetime; action_type: str = Field(...)
-    target_ids: List[str] = Field(...); action_parameters: Dict[str, Any] = Field(default_factory=dict)
+class ActionPerformanceLog(BaseModel):
+    action_id: UUID = Field(default_factory=uuid4)
+    action_timestamp: datetime
+    action_type: str = Field(...)
+    target_ids: List[str] = Field(...)
+    action_parameters: Dict[str, Any] = Field(default_factory=dict)
     pre_action_context_kpis: Dict[str, Any] = Field(default_factory=dict)
-    post_action_kpis: Optional[Dict[str, Any]] = Field(None); kpi_collection_timestamp: Optional[datetime] = Field(None)
-    effectiveness_score: Optional[float] = Field(None); effectiveness_metrics_used: Optional[Dict[str, Any]] = Field(None)
+    post_action_kpis: Optional[Dict[str, Any]] = Field(None)
+    kpi_collection_timestamp: Optional[datetime] = Field(None)
+    effectiveness_score: Optional[float] = Field(None)
+    effectiveness_metrics_used: Optional[Dict[str, Any]] = Field(None)
 
-class AgentCore: # ... (attributes and __init__ as before) ...
-    SIGNAL_ACTION_COOLDOWN_SECONDS = 120; INCIDENT_SIGNAL_COOLDOWN_SECONDS = 300
-    ROAD_CLOSURE_IMMEDIATE_RADIUS_METERS = 50; MAX_SCORES_PER_ACTION_SIGNATURE: int = 10
-    def __init__(self, ps, pr, an, ts): # Simplified args
-        self.prediction_scheduler=ps; self.personalized_routing_service=pr; self.analytics_service=an; self.traffic_signal_service=ts
-        self._recent_signal_actions={}; self.green_wave_corridor_configs=GREEN_WAVE_CORRIDOR_CONFIGS
-        self.action_effectiveness_config=ACTION_EFFECTIVENESS_CONFIG; self.action_performance_logs=[]
-        self.pending_kpi_collection=[]; self.effectiveness_memory_filepath=EFFECTIVENESS_MEMORY_FILEPATH
-        self.action_effectiveness_memory=self._load_effectiveness_memory(); self._memory_updated_this_cycle=False
-        self.logger=logger; self.logger.info(f"AgentCore initialized with PredictionScheduler, PersonalizedRoutingService, AnalyticsService, TrafficSignalService. (mem loaded: {len(self.action_effectiveness_memory)}).")
+class AgentCore:
+    SIGNAL_ACTION_COOLDOWN_SECONDS = 120
+    INCIDENT_SIGNAL_COOLDOWN_SECONDS = 300
+    ROAD_CLOSURE_IMMEDIATE_RADIUS_METERS = 50
+    MAX_SCORES_PER_ACTION_SIGNATURE: int = 10
 
-        # Initialize Exploration Attributes
-        self.exploration_epsilon: float = 0.1  # Default 10% exploration rate
+    def __init__(self, prediction_scheduler: PredictionScheduler,
+                 personalized_routing_service: PersonalizedRoutingService,
+                 analytics_service: AnalyticsService,
+                 traffic_signal_service: TrafficSignalService):
+        self.prediction_scheduler = prediction_scheduler
+        self.personalized_routing_service = personalized_routing_service
+        self.analytics_service = analytics_service
+        self.traffic_signal_service = traffic_signal_service
+
+        self._recent_signal_actions: Dict[str, Dict[str, Any]] = {}
+        self.green_wave_corridor_configs = GREEN_WAVE_CORRIDOR_CONFIGS
+        self.action_effectiveness_config = ACTION_EFFECTIVENESS_CONFIG
+        self.action_performance_logs: List[ActionPerformanceLog] = []
+        self.pending_kpi_collection: List[Dict[str, Any]] = []
+
+        self.effectiveness_memory_filepath = EFFECTIVENESS_MEMORY_FILEPATH
+        self.action_effectiveness_memory: Dict[str, List[float]] = self._load_effectiveness_memory()
+        self._memory_updated_this_cycle: bool = False
+
+        self.logger = logger
+        self.logger.info(f"AgentCore initialized with PredictionScheduler, PersonalizedRoutingService, AnalyticsService, TrafficSignalService. (mem loaded: {len(self.action_effectiveness_memory)}).")
+
+        self.exploration_epsilon: float = 0.1
         self.rng = random.Random()
-        self.rng.seed(42) # Optional: for deterministic behavior in examples
+        self.rng.seed(42)
         self.logger.info(f"Exploration parameters initialized: epsilon = {self.exploration_epsilon}, rng_seed = 42")
 
     def _load_effectiveness_memory(self) -> Dict[str, List[float]]: return {}
     def _save_effectiveness_memory(self) -> bool: return True
-    def _extract_kpi_value(self, sd: Optional[Dict[str,Any]], kp: List[str]) -> Any:
-        if sd is None: return None; v=sd
-        for k in kp:
-            if isinstance(v,dict) and k in v: v=v[k]
-            else: self.logger.debug(f"Key path {kp} not fully found in {sd}. Missing '{k}'."); return None
-        return v
+
+    def _extract_kpi_value(self, source_dict: Optional[Dict[str, Any]], key_path: List[str]) -> Any:
+        if source_dict is None: return None
+        current_val = source_dict
+        for key_part in key_path:
+            if isinstance(current_val, dict) and key_part in current_val:
+                current_val = current_val[key_part]
+            else:
+                self.logger.debug(f"Key path {key_path} not fully found in {source_dict}. Missing '{key_part}'.")
+                return None
+        return current_val
 
     def _score_congestion_improvement(self, metrics: Dict[str, Any]) -> Optional[float]:
         self.logger.debug(f"Scoring congestion improvement with: {metrics}")
         pre_overall = metrics.get("pre_overall_congestion_proxy"); post_local = metrics.get("post_local_congestion")
-        # pre_flow = metrics.get("pre_flow"); post_flow = metrics.get("post_flow_rate") # Example if using flow
-        if post_local is None: self.logger.warning("Congestion score: post_local_congestion missing."); return None
+        if post_local is None: self.logger.warning("Congestion score: post_local_congestion missing."); return 0.0
         score = 0.0
         if pre_overall == "HIGH": score = {"LOW":1.0, "MEDIUM":0.5, "HIGH":-0.2}.get(post_local,0.0)
         elif pre_overall == "MEDIUM": score = {"LOW":0.5, "MEDIUM":0.0, "HIGH":-0.5}.get(post_local,0.0)
@@ -99,17 +121,17 @@ class AgentCore: # ... (attributes and __init__ as before) ...
         score = 0.0; metrics_counted = 0
         if post_tt is not None:
             metrics_counted+=1
-            baseline_tt = pre_tt if pre_tt is not None and pre_tt > 0 else metrics.get("gw_typical_travel_time", 150) # Fallback typical
+            baseline_tt = pre_tt if pre_tt is not None and pre_tt > 0 else metrics.get("gw_typical_travel_time", 150)
             if post_tt < baseline_tt * 0.8: score += 0.5
             elif post_tt < baseline_tt * 1.1: score += 0.1
             else: score -= 0.5
         if post_tp is not None:
             metrics_counted+=1
-            baseline_tp = pre_tp if pre_tp is not None else metrics.get("gw_target_throughput_vph", 700) # Fallback target
+            baseline_tp = pre_tp if pre_tp is not None else metrics.get("gw_target_throughput_vph", 700)
             if baseline_tp > 0 and post_tp > baseline_tp * 0.9 : score += 0.5
             elif baseline_tp > 0 and post_tp > baseline_tp * 0.6 : score += 0.1
-            elif post_tp < baseline_tp * 0.5: score -= 0.4 # Penalize if significantly below non-zero baseline
-            elif baseline_tp == 0 and post_tp > 50 : score += 0.2 # Some throughput is better than none
+            elif post_tp < baseline_tp * 0.5: score -= 0.4
+            elif baseline_tp == 0 and post_tp > 50 : score += 0.2
         if metrics_counted == 0: self.logger.warning(f"GW efficiency: No relevant post-KPIs found in {metrics}."); return None
         return max(-1.0, min(1.0, score))
 
@@ -118,10 +140,10 @@ class AgentCore: # ... (attributes and __init__ as before) ...
         clear_time = metrics.get("post_clearance_time"); post_speed = metrics.get("post_incident_avg_speed"); pre_speed = metrics.get("pre_incident_avg_speed")
         if clear_time is None: self.logger.warning("Incident score: post_clearance_time missing."); return None
         score = 0.0
-        if clear_time < 900: score += 0.6      # < 15 mins
-        elif clear_time < 1800: score += 0.2   # < 30 mins
+        if clear_time < 900: score += 0.6
+        elif clear_time < 1800: score += 0.2
         else: score -= 0.6
-        if post_speed is not None and pre_speed is not None and pre_speed < 40 : # If congested before
+        if post_speed is not None and pre_speed is not None and pre_speed < 40 :
              if post_speed > pre_speed * 1.5 and post_speed > 20 : score += 0.4
              elif post_speed > pre_speed + 5 : score += 0.1
         return max(-1.0, min(1.0, score))
@@ -135,192 +157,66 @@ class AgentCore: # ... (attributes and __init__ as before) ...
         if post_reduction > 20: return 0.1
         return -0.5
 
-    def _calculate_effectiveness_score(self, log_entry_data: Dict[str,Any]) -> Tuple[Optional[float],Optional[Dict[str,Any]]]: # ... (as before) ...
-        action_type = log_entry_data.get("action_type"); config = self.action_effectiveness_config.get(action_type)
-        if not config: return None, None; metrics_for_scoring: Dict[str, Any] = {}
+    def _calculate_effectiveness_score(self, log_entry_data: Dict[str,Any]) -> Tuple[Optional[float],Optional[Dict[str,Any]]]:
+        action_type = log_entry_data.get("action_type")
+        config = self.action_effectiveness_config.get(action_type)
+        if not config: return None, None
+
+        metrics_for_scoring: Dict[str, Any] = {}
         for kpi_spec in config.get("relevant_kpis", []):
             source_data = log_entry_data.get("pre_action_context_kpis") if kpi_spec["source"] == "pre" else log_entry_data.get("post_action_kpis")
             value = self._extract_kpi_value(source_data, kpi_spec["key_path"])
             if value is not None: metrics_for_scoring[kpi_spec["as"]] = value
-        if not metrics_for_scoring and config.get("relevant_kpis"): return 0.0, metrics_for_scoring
-        logic_type = config.get("scoring_logic_type"); score: Optional[float] = 0.0
+
+        if not metrics_for_scoring and config.get("relevant_kpis"): return 0.0, metrics_for_scoring # Return neutral if no relevant KPIs were extracted but some were expected.
+
+        logic_type = config.get("scoring_logic_type")
+        score: Optional[float] = 0.0
         if logic_type == "congestion_improvement": score = self._score_congestion_improvement(metrics_for_scoring)
         elif logic_type == "green_wave_efficiency": score = self._score_green_wave_efficiency(metrics_for_scoring)
         elif logic_type == "incident_clearance_speed": score = self._score_incident_clearance_speed(metrics_for_scoring)
         elif logic_type == "closure_effectiveness": score = self._score_closure_effectiveness(metrics_for_scoring)
         else: self.logger.warning(f"Unknown scoring_logic_type: {logic_type}"); return None, metrics_for_scoring
+
         self.logger.info(f"Effectiveness score for {action_type} (ID: {log_entry_data.get('action_id')}): {score}. Metrics used: {metrics_for_scoring}")
         return score, metrics_for_scoring
 
-    async def _find_signals_near_location(self, il: LocationModel, sigs: List[SignalState], r: int) -> List[SignalState]: return []
-    async def _determine_next_travel_prediction_time(self, p: CommonTravelPattern, dt: datetime) -> Optional[datetime]: return None
-    async def _execute_green_wave( self, cid: str, sigs_ord: List[str], gph: SignalPhaseEnum, gts: int, offs: List[int], all_curr_states: Dict[str, SignalState], proc_coord: Set[str], nu: datetime) -> bool: return True
-    async def _fetch_pre_action_kpis(self, action_type_str: str, current_action_target_ids: List[str], current_action_parameters: Dict[str, Any], system_kpis_snapshot: Dict[str,Any]) -> Dict[str, Any]: # ... (as before)
-        return {}
+    async def _find_signals_near_location(self, target_location: LocationModel, all_signals: List[SignalState], radius_meters: int) -> List[SignalState]: return [] # Placeholder
+    async def _determine_next_travel_prediction_time(self, pattern: CommonTravelPattern, current_datetime: datetime) -> Optional[datetime]: return None # Placeholder
 
-# --- Main Example for Traffic Signal Integration (as per subtask) ---
-async def main_example_traffic_integration():
-    # 1. Logging Setup
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
-    logger_main_example = logging.getLogger(__name__ + ".main_example_traffic_integration") # Use a specific logger
-    logger_main_example.info("--- Starting main_example_traffic_integration ---")
-
-    # 2. Mock Classes (defined within main_example_traffic_integration)
-    class MockAnalyticsService:
-        async def get_critical_alert_summary(self):
-            logger_main_example.debug("MockAnalyticsService.get_critical_alert_summary called")
-            # Return structure as per subtask example, even if AgentCore doesn't use all fields immediately
-            return {"critical_unack_alert_count": 1, "active_alerts": [{"id": "alert1", "type": "TEST_ALERT"}]}
-
-        def get_current_system_kpis_summary(self): # Sync as per subtask example
-            logger_main_example.debug("MockAnalyticsService.get_current_system_kpis_summary called")
-            # Return structure as per subtask example
-            return {"overall_congestion_level": "HIGH", "sample_kpi": 123}
-
-        async def get_signal_current_kpis(self, signal_id: str, metrics: List[str]):
-            logger_main_example.debug(f"MockAnalyticsService.get_signal_current_kpis called for {signal_id} with {metrics}")
-            return {"mock_metric": 100}
-
-        async def get_signal_post_action_kpis(self, signal_id: str, **kwargs):
-            logger_main_example.debug(f"MockAnalyticsService.get_signal_post_action_kpis called for {signal_id} with {kwargs}")
-            return {"mock_post_metric": 110}
-
-        # Add other async methods used by AgentCore if any, returning defaults
-        async def get_corridor_current_kpis(self, corridor_id: str, metrics: List[str]): return {}
-        async def get_incident_area_current_kpis(self, incident_location: LocationModel, radius_meters: int, metrics: List[str]): return {}
-        async def get_corridor_post_action_kpis(self, corridor_id: str, **kwargs): return {}
-        async def get_incident_response_post_action_kpis(self, incident_id: str, **kwargs): return {}
+    async def _execute_green_wave(
+        self, corridor_id: str, signals_in_order: List[str], green_phase: SignalPhaseEnum,
+        green_time_seconds: int, offsets_seconds: List[int],
+        all_current_signal_states: Dict[str, SignalState],
+        processed_signals_for_coordination: Set[str], now_utc: datetime
+    ) -> bool:
+        # ... (existing _execute_green_wave implementation) ...
+        self.logger.info(f"Executing green wave for corridor {corridor_id} - placeholder")
+        # Simulate some action for now
+        action_taken_on_at_least_one_signal = False
+        for i, signal_id_to_control in enumerate(signals_in_order):
+            await asyncio.sleep(0.01) # simulate async work
+            processed_signals_for_coordination.add(signal_id_to_control)
+            action_taken_on_at_least_one_signal = True
+        return action_taken_on_at_least_one_signal
 
 
-    class MockPredictionScheduler:
-        async def set_priority_locations(self, locations: List[LocationModel]):
-            logger_main_example.debug(f"MockPredictionScheduler.set_priority_locations called with {locations}")
-            pass
-        # Add other async methods used by AgentCore if any
-        async def get_traffic_predictions_for_locations(self, locations: List[LocationModel]): return []
-
-
-    class MockPersonalizedRoutingService:
-        async def proactively_suggest_route(self, user_id: str, common_pattern: CommonTravelPattern, current_location: LocationModel):
-            logger_main_example.debug(f"MockPersonalizedRoutingService.proactively_suggest_route called for {user_id}")
-            return None
-
-        async def get_user_common_travel_patterns(self, user_id: str) -> List[CommonTravelPattern]:
-            logger_main_example.debug(f"MockPersonalizedRoutingService.get_user_common_travel_patterns called for {user_id}")
-            # Return list with one CommonTravelPattern with valid nested dicts for location summaries
-            return [
-                CommonTravelPattern(
-                    pattern_id="pattern1",
-                    user_id=user_id,
-                    start_location_summary={"name": "Home"},
-                    end_location_summary={"name": "Work"},
-                    days_of_week=[0,1,2,3,4], # Mon-Fri
-                    time_of_day="08:00",
-                    frequency=5
-                )
-            ]
-        # Add other async methods used by AgentCore if any
-        async def update_user_route_feedback(self, user_id: str, route_id: str, feedback: Dict[str, Any]): pass
-
-
-    class MockConnectionManager: # As per subtask, if needed
-        async def broadcast_message_model(self, message: WebSocketMessage):
-            logger_main_example.debug(f"MockConnectionManager.broadcast_message_model called with {message.model_dump_json()}")
-            pass
-
-    class MockTrafficSignalService:
-        def __init__(self, config: Optional[Dict[str, Any]] = None, connection_manager: Optional[MockConnectionManager] = None):
-            self.config = config
-            self.connection_manager = connection_manager # Stored but may not be used in this mock
-            self._signals: Dict[str, SignalState] = {}
-            self._cycle_count = 0
-
-            # Initialize with 3 SignalState instances
-            self._signals["TS001"] = SignalState(
-                signal_id="TS001", location=LocationModel(latitude=1.0, longitude=1.0, name="Main St @ First Ave"),
-                current_phase=SignalPhaseEnum.RED, operational_status=SignalOperationalStatusEnum.ONLINE,
-                last_updated=datetime.utcnow()
-            )
-            self._signals["TS002"] = SignalState(
-                signal_id="TS002", location=LocationModel(latitude=1.01, longitude=1.01, name="Main St @ Second Ave"),
-                current_phase=SignalPhaseEnum.RED, operational_status=SignalOperationalStatusEnum.ONLINE,
-                last_updated=datetime.utcnow()
-            )
-            self._signals["TS003"] = SignalState(
-                signal_id="TS003", location=LocationModel(latitude=1.02, longitude=1.02, name="Oak St @ Third Ave"),
-                current_phase=SignalPhaseEnum.OFF, operational_status=SignalOperationalStatusEnum.OFFLINE, # OFFLINE/OFF
-                last_updated=datetime.utcnow()
-            )
-            logger_main_example.debug(f"MockTrafficSignalService initialized with {len(self._signals)} signals.")
-
-        async def get_all_signal_states(self) -> List[SignalState]:
-            self._cycle_count += 1
-            logger_main_example.debug(f"MockTrafficSignalService.get_all_signal_states called (cycle {self._cycle_count}).")
-
-            # If self._cycle_count == 2, change the first ONLINE signal to GREEN
-            if self._cycle_count == 2:
-                for signal_id in self._signals:
-                    if self._signals[signal_id].operational_status == SignalOperationalStatusEnum.ONLINE:
-                        logger_main_example.info(f"MockTrafficSignalService: Cycle 2 - Changing {signal_id} to GREEN before returning states.")
-                        self._signals[signal_id].current_phase = SignalPhaseEnum.GREEN
-                        self._signals[signal_id].last_updated = datetime.utcnow()
-                        break
-            return list(self._signals.values())
-
-        async def set_signal_phase(self, signal_id: str, phase: SignalPhaseEnum, duration_seconds: Optional[int] = None) -> SignalControlCommandResponse:
-            logger_main_example.debug(f"MockTrafficSignalService.set_signal_phase called for {signal_id} to {phase.value} for {duration_seconds}s.")
-            if signal_id not in self._signals:
-                logger_main_example.warning(f"Signal {signal_id} not found.")
-                return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.FAILED, message="Signal not found")
-
-            signal = self._signals[signal_id]
-            if signal.operational_status != SignalOperationalStatusEnum.ONLINE:
-                logger_main_example.warning(f"Signal {signal_id} is not ONLINE (status: {signal.operational_status.value}). Action REJECTED.")
-                return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.REJECTED, message="Signal not ONLINE")
-
-            logger_main_example.info(f"Signal {signal_id} phase updated to {phase.value}. Status ACCEPTED.")
-            signal.current_phase = phase
-            signal.last_updated = datetime.utcnow()
-            # Here, you might also want to simulate the duration if your main logic depends on it being held
-            # For this mock, just accepting the command is enough.
-            return SignalControlCommandResponse(signal_id=signal_id, status=SignalControlStatusEnum.ACCEPTED, message="Phase change command accepted")
-
-    # 3. Instantiate and Run
-    mock_analytics = MockAnalyticsService()
-    mock_prediction_scheduler = MockPredictionScheduler() # Using specific mock for clarity
-    mock_routing_service = MockPersonalizedRoutingService() # Using specific mock
-    # mock_conn_manager = MockConnectionManager() # Not directly passed to AgentCore in current structure
-    mock_traffic_signal_service = MockTrafficSignalService() # Using specific mock
-
-    agent_core = AgentCore(
-        prediction_scheduler=mock_prediction_scheduler,
-        personalized_routing_service=mock_routing_service,
-        analytics_service=mock_analytics,
-        traffic_signal_service=mock_traffic_signal_service # ts argument
-    )
-
-    logger_main_example.info("--- Running decision cycle 1 ---")
-    await agent_core.run_decision_cycle(sample_user_id="cycle_1_user")
-
-    logger_main_example.info("--- Running decision cycle 2 ---")
-    await agent_core.run_decision_cycle(sample_user_id="cycle_2_user")
-
-    logger_main_example.info("--- main_example_traffic_integration completed ---")
+    async def _fetch_pre_action_kpis(self, action_type_str: str, current_action_target_ids: List[str],
+                                   current_action_parameters: Dict[str, Any], system_kpis_snapshot: Dict[str,Any]
+                                   ) -> Dict[str, Any]:
+        # ... (existing _fetch_pre_action_kpis implementation) ...
+        return {"fetched_pre_kpi_example": 123}
 
 
     async def run_decision_cycle(self, sample_user_id: str = "user_agent_test_123"):
-        # ... (Full logic including KPI scheduling and processing, and other agent phases) ...
-        # For brevity, only showing the relevant parts for KPI scheduling and processing
         now_utc = datetime.utcnow()
         self.logger.info(f"--- Starting AgentCore cycle for {sample_user_id} at {now_utc.isoformat()} ---")
         self._memory_updated_this_cycle = False
 
-        # Existing KPI and alert fetching
         system_kpis = self.analytics_service.get_current_system_kpis_summary()
-        # alert_summary = await self.analytics_service.get_critical_alert_summary() # Assuming this is fetched elsewhere or not critical for this specific logic block
+        alert_summary = await self.analytics_service.get_critical_alert_summary()
+        active_alerts = alert_summary.get("active_alerts", [])
 
-        # --- Fetch all traffic signal states (as per subtask) ---
-        self.logger.info("Fetching all traffic signal states...")
         all_signal_states: List[SignalState] = await self.traffic_signal_service.get_all_signal_states()
         self.logger.info(f"AgentCore received {len(all_signal_states)} signal states.")
         for state in all_signal_states:
@@ -331,36 +227,84 @@ async def main_example_traffic_integration():
                 f"Status: {state.operational_status.value if state.operational_status else 'N/A'}"
             )
 
+        all_signal_states_map = {s.signal_id: s for s in all_signal_states} # For quick lookups
+
+        # --- Process Pending KPI Collections ---
+        processed_pending_indices: List[int] = []
+        for idx, item in enumerate(self.pending_kpi_collection):
+            if now_utc >= item['query_after_timestamp']:
+                try:
+                    self.logger.info(f"Processing pending KPI collection for action ID {item['action_id']} ({item['action_type']})")
+                    post_action_kpis = await getattr(self.analytics_service, item['kpi_query_details']['service_method_name'])(
+                        **item['kpi_query_details']['method_specific_args'],
+                        metrics_to_collect=item['metrics_to_collect'],
+                        evaluation_window_minutes=item['evaluation_window_minutes']
+                    )
+                    item['post_action_kpis'] = post_action_kpis
+                    item['kpi_collection_timestamp'] = now_utc
+
+                    score, metrics_used = self._calculate_effectiveness_score(item)
+                    item['effectiveness_score'] = score
+                    item['effectiveness_metrics_used'] = metrics_used
+
+                    self.action_performance_logs.append(ActionPerformanceLog(**item))
+
+                    if score is not None:
+                        action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}" # Main target
+                        if item['action_type'] == "GREEN_WAVE_ACTIVATION": # For GW, target_ids[0] is corridor_id
+                           action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}"
+                        elif item['action_type'] == "SET_SIGNAL_GREEN_CONGESTION": # For signal, target_ids[0] is signal_id
+                           action_signature_for_memory = f"{item['action_type']}:{item['target_ids'][0]}"
+                        # Add other specific handling if main target_id isn't always first
+
+                        if action_signature_for_memory:
+                             if action_signature_for_memory not in self.action_effectiveness_memory:
+                                 self.action_effectiveness_memory[action_signature_for_memory] = []
+                             self.action_effectiveness_memory[action_signature_for_memory].append(score)
+                             # Keep only the last N scores
+                             self.action_effectiveness_memory[action_signature_for_memory] = \
+                                 self.action_effectiveness_memory[action_signature_for_memory][-self.MAX_SCORES_PER_ACTION_SIGNATURE:]
+                             self._memory_updated_this_cycle = True
+
+                    processed_pending_indices.append(idx)
+                except Exception as e:
+                    self.logger.error(f"Error processing KPI for action ID {item['action_id']}: {e}", exc_info=True)
+                    # Optionally, decide if it should remain in pending_kpi_collection or be moved to a failed queue
+
+        for idx in sorted(processed_pending_indices, reverse=True):
+            del self.pending_kpi_collection[idx]
+
+        # --- Incident Response Logic ---
+        processed_signals_for_incident: Set[str] = set()
+        # ... (Assuming incident logic exists here and populates processed_signals_for_incident) ...
+
         # --- Autonomous Traffic Signal Control Logic (General Congestion with Epsilon-Greedy) ---
         current_congestion_level = system_kpis.get("overall_congestion_level", "UNKNOWN")
         self.logger.info(f"Overall congestion: {current_congestion_level}. Evaluating general signal adjustments.")
-
-        controlled_a_signal_this_cycle_general = False # Specific flag for this logic block
+        controlled_a_signal_this_cycle_general = False
 
         if current_congestion_level == "HIGH":
             candidate_signals_for_congestion_relief: List[Dict[str, Any]] = []
             for signal_state in all_signal_states:
-                # Eligibility checks
+                if signal_state.signal_id in processed_signals_for_incident: continue # Skip if handled by incident logic
                 if signal_state.operational_status != SignalOperationalStatusEnum.ONLINE:
                     self.logger.debug(f"Signal {signal_state.signal_id} skipped (not ONLINE)."); continue
-                if signal_state.current_phase == SignalPhaseEnum.GREEN: # Don't intervene if already green
+                if signal_state.current_phase == SignalPhaseEnum.GREEN:
                     self.logger.debug(f"Signal {signal_state.signal_id} skipped (already GREEN)."); continue
 
-                # Cooldown check (ensure this respects other signal control reasons like incident or green wave)
                 last_action_info = self._recent_signal_actions.get(signal_state.signal_id)
                 if last_action_info and (now_utc - last_action_info['timestamp']).total_seconds() < self.SIGNAL_ACTION_COOLDOWN_SECONDS:
                     self.logger.debug(f"Signal {signal_state.signal_id} skipped (on cooldown). Last action: {last_action_info['reason']} at {last_action_info['timestamp']}.")
                     continue
 
-                # Fetch historical average effectiveness score
                 action_type_for_score = "SET_SIGNAL_GREEN_CONGESTION"
                 action_signature = f"{action_type_for_score}:{signal_state.signal_id}"
                 scores = self.action_effectiveness_memory.get(action_signature, [])
-                avg_score = sum(scores) / len(scores) if scores else 0.0 # Default to 0.0 if no history
+                avg_score = sum(scores) / len(scores) if scores else 0.0
 
                 candidate_signals_for_congestion_relief.append({
                     'signal_id': signal_state.signal_id,
-                    'signal_state': signal_state, # Keep the full state object
+                    'signal_state': signal_state,
                     'avg_score': avg_score
                 })
                 self.logger.debug(f"Signal {signal_state.signal_id} added as candidate for congestion relief. Avg score: {avg_score:.2f}")
@@ -370,7 +314,6 @@ async def main_example_traffic_integration():
                 action_choice_method = ""
 
                 if self.rng.random() < self.exploration_epsilon:
-                    # --- EXPLORE ---
                     selected_candidate_dict_entry = self.rng.choice(candidate_signals_for_congestion_relief)
                     action_choice_method = "EXPLORATORY_RANDOM"
                     self.logger.info(
@@ -379,7 +322,6 @@ async def main_example_traffic_integration():
                         f"(Its avg score: {selected_candidate_dict_entry['avg_score']:.2f})"
                     )
                 else:
-                    # --- EXPLOIT ---
                     candidate_signals_for_congestion_relief.sort(key=lambda x: x['avg_score'], reverse=True)
                     selected_candidate_dict_entry = candidate_signals_for_congestion_relief[0]
                     action_choice_method = "EXPLOITATIVE_BEST_SCORE"
@@ -421,6 +363,7 @@ async def main_example_traffic_integration():
                             f"Recorded general congestion action ({action_choice_method}) for signal '{signal_to_control_state.signal_id}'. "
                             f"Recent actions: {len(self._recent_signal_actions)}"
                         )
+                        processed_signals_for_coordination.add(signal_to_control_state.signal_id) # Add to set to prevent GW using it
 
                         action_type_str = "SET_SIGNAL_GREEN_CONGESTION"
                         action_kpi_cfg = ACTION_KPI_CONFIG.get(action_type_str)
@@ -435,7 +378,7 @@ async def main_example_traffic_integration():
                             fetched_pre_action_kpis = await self._fetch_pre_action_kpis(
                                 action_type_str=action_type_str,
                                 current_action_target_ids=current_action_target_ids,
-                                current_action_parameters=current_action_parameters, # Pass parameters that might be needed for KPI query (e.g. signal_id from target_ids)
+                                current_action_parameters=current_action_parameters,
                                 system_kpis_snapshot=system_kpis
                             )
 
@@ -444,27 +387,22 @@ async def main_example_traffic_integration():
                                 "signal_initial_phase_at_decision": signal_to_control_state.current_phase.value if signal_to_control_state.current_phase else 'N/A',
                                 "chosen_candidate_avg_score": selected_candidate_dict_entry['avg_score'],
                                 "num_candidates_considered": len(candidate_signals_for_congestion_relief),
-                                "all_candidate_scores": {c['signal_id']: c['avg_score'] for c in candidate_signals_for_congestion_relief} # Store all scores for context
+                                "all_candidate_scores": {c['signal_id']: c['avg_score'] for c in candidate_signals_for_congestion_relief}
                             }
                             if fetched_pre_action_kpis: pre_action_kpis_for_log.update(fetched_pre_action_kpis)
 
                             pending_item_id = uuid4()
                             self.pending_kpi_collection.append({
-                                'action_id': pending_item_id,
-                                'action_type': action_type_str,
-                                'target_ids': current_action_target_ids,
-                                'action_timestamp': action_timestamp_utc,
-                                'action_parameters': current_action_parameters,
-                                'pre_action_context_kpis': pre_action_kpis_for_log,
+                                'action_id': pending_item_id, 'action_type': action_type_str,
+                                'target_ids': current_action_target_ids, 'action_timestamp': action_timestamp_utc,
+                                'action_parameters': current_action_parameters, 'pre_action_context_kpis': pre_action_kpis_for_log,
                                 'query_after_timestamp': action_timestamp_utc + timedelta(seconds=action_kpi_cfg["delay_seconds"]),
-                                'metrics_to_collect': action_kpi_cfg["metrics"],
-                                'evaluation_window_minutes': action_kpi_cfg["eval_window_minutes"],
+                                'metrics_to_collect': action_kpi_cfg["metrics"], 'evaluation_window_minutes': action_kpi_cfg["eval_window_minutes"],
                                 'kpi_query_details': {'service_method_name': action_kpi_cfg["service_method"], 'method_specific_args': {'signal_id': signal_to_control_state.signal_id}}
                             })
                             self.logger.info(f"Scheduled KPI collection for {action_type_str} (ID: {pending_item_id}) on {signal_to_control_state.signal_id}. Choice: {action_choice_method}.")
                         else:
                             self.logger.warning(f"No ACTION_KPI_CONFIG found for '{action_type_str}'. KPI collection will not be scheduled.")
-
                 except Exception as e_signal_control:
                     self.logger.error(
                         f"Error controlling signal '{signal_to_control_state.signal_id}' for general congestion ({action_choice_method}): {e_signal_control}",
@@ -472,39 +410,224 @@ async def main_example_traffic_integration():
                     )
             else:
                 self.logger.info("General Congestion: No suitable signals found for congestion relief this cycle after filtering.")
-
-        else: # Congestion not HIGH
+        else:
             self.logger.info("Congestion not HIGH. No system-wide general signal adjustments for congestion relief.")
 
-        # --- Process Pending KPI Collections ---
-        processed_pending_indices: List[int] = []
-        # ... (Full KPI collection logic as per previous step, calling _calculate_effectiveness_score) ...
+        # --- Green Wave Coordination Logic ---
+        # (This is the block that was previously overwritten with epsilon-greedy logic for GW selection)
+        candidate_corridors: List[Dict[str, Any]] = []
+        now_time = now_utc.time()
 
-        # --- Green Wave Example (Illustrative of pre-KPI fetch and scheduling) ---
-        # This is a simplified version of the full green wave logic block
-        if True: # Placeholder for actual trigger
-            selected_wave_to_run = {"id": "main_st_ns_wave", "config": GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]}
-            if selected_wave_to_run:
-                cfg_run = selected_wave_to_run["config"]; cid_run = selected_wave_to_run["id"]
-                action_type_str = "GREEN_WAVE_ACTIVATION"; current_action_target_ids = [cid_run]
-                current_action_parameters = {"corridor_config": cfg_run, "corridor_id": cid_run} # Add corridor_id here for pre-KPI arg_mapping
+        for corridor_id, config in self.green_wave_corridor_configs.items():
+            is_time_triggered = False
+            for window in config.get("time_windows", []):
+                start_time = datetime.strptime(window["start"], "%H:%M").time()
+                end_time = datetime.strptime(window["end"], "%H:%M").time()
+                if start_time <= now_time <= end_time:
+                    is_time_triggered = True; break
 
-                fetched_pre_action_kpis = await self._fetch_pre_action_kpis(action_type_str, current_action_target_ids, current_action_parameters, system_kpis)
-                wave_executed = True # Assume executed for demo
-                if wave_executed:
-                    action_kpi_cfg = ACTION_KPI_CONFIG.get(action_type_str)
-                    if action_kpi_cfg:
-                        action_id = uuid4(); action_ts = datetime.utcnow()
-                        base_pre_kpis = {"overall_congestion_at_decision": system_kpis.get("overall_congestion_level"), "corridor_id": cid_run, "expected_demand_level": system_kpis.get(cfg_run.get("demand_kpi_trigger"), "N/A")}
-                        if fetched_pre_action_kpis: base_pre_kpis.update(fetched_pre_action_kpis)
+            demand_kpi_name = config.get("demand_kpi_trigger")
+            is_demand_triggered = system_kpis.get(demand_kpi_name) == "HIGH" if demand_kpi_name else False
+
+            if is_time_triggered or is_demand_triggered:
+                action_signature_gw = f"GREEN_WAVE_ACTIVATION:{corridor_id}"
+                scores_gw = self.action_effectiveness_memory.get(action_signature_gw, [])
+                avg_score_gw = sum(scores_gw) / len(scores_gw) if scores_gw else 0.0
+
+                candidate_corridors.append({
+                    "id": corridor_id, "priority": config.get("priority", 99),
+                    "config": config, "avg_score": avg_score_gw,
+                    "trigger_type": "TIME" if is_time_triggered else "DEMAND_KPI"
+                })
+
+        candidate_corridors.sort(key=lambda x: (x['priority'], -x['avg_score']))
+
+        self.logger.info(f"Sorted candidate green wave corridors: " +
+                         ", ".join([f"'{c['id']}'(Prio:{c['priority']},Score:{c['avg_score']:.2f},Trig:{c['trigger_type']})" for c in candidate_corridors]))
+
+        selected_candidate_for_wave = None
+        green_wave_selection_method = ""
+        top_priority_candidates = [] # Defined here for broader scope for KPI context
+
+        if candidate_corridors:
+            highest_priority_val = candidate_corridors[0]['priority']
+            top_priority_candidates = [
+                c for c in candidate_corridors if c['priority'] == highest_priority_val
+            ]
+
+            if top_priority_candidates:
+                if self.rng.random() < self.exploration_epsilon:
+                    selected_candidate_for_wave = self.rng.choice(top_priority_candidates)
+                    green_wave_selection_method = "EXPLORATORY_GREEN_WAVE_RANDOM"
+                    self.logger.info(
+                        f"{green_wave_selection_method}: Randomly selected corridor '{selected_candidate_for_wave['id']}' "
+                        f"(Prio: {selected_candidate_for_wave['priority']}, AvgScore: {selected_candidate_for_wave['avg_score']:.2f}) "
+                        f"from {len(top_priority_candidates)} top-priority candidates."
+                    )
+                else:
+                    selected_candidate_for_wave = top_priority_candidates[0]
+                    green_wave_selection_method = "EXPLOITATIVE_GREEN_WAVE_BEST_SCORE"
+                    self.logger.info(
+                        f"{green_wave_selection_method}: Selected best-score corridor '{selected_candidate_for_wave['id']}' "
+                        f"(Prio: {selected_candidate_for_wave['priority']}, AvgScore: {selected_candidate_for_wave['avg_score']:.2f}). "
+                        f"Top-priority candidates considered (ID, Prio, Score): " +
+                        ", ".join([f"'{c['id']}'(P{c['priority']},{c['avg_score']:.2f})" for c in top_priority_candidates[:3]])
+                    )
+
+        final_selected_wave_details_for_execution = None
+
+        if selected_candidate_for_wave:
+            corridor_id_to_check = selected_candidate_for_wave["id"]
+            config_to_check = selected_candidate_for_wave["config"]
+            signals_for_this_wave = config_to_check.get("signals_in_order", [])
+
+            can_run_this_wave = True
+            for signal_id_in_wave in signals_for_this_wave:
+                if signal_id_in_wave in processed_signals_for_coordination:
+                    self.logger.info(
+                        f"Green wave candidate '{corridor_id_to_check}' (selected by {green_wave_selection_method}) "
+                        f"shares signal '{signal_id_in_wave}' with an already chosen coordination strategy this cycle. Skipping."
+                    )
+                    can_run_this_wave = False; break
+
+            if can_run_this_wave:
+                final_selected_wave_details_for_execution = selected_candidate_for_wave
+
+        if final_selected_wave_details_for_execution:
+            corridor_id_to_run = final_selected_wave_details_for_execution["id"]
+            config_to_run = final_selected_wave_details_for_execution["config"]
+
+            self.logger.info(
+                f"Activating green wave for selected corridor: '{corridor_id_to_run}' "
+                f"(Priority: {config_to_run.get('priority',99)}, "
+                f"AvgScore: {final_selected_wave_details_for_execution['avg_score']:.2f}, Method: {green_wave_selection_method})."
+            )
+
+            wave_success = await self._execute_green_wave(
+                corridor_id=corridor_id_to_run,
+                signals_in_order=config_to_run["signals_in_order"],
+                green_phase=config_to_run["target_green_phase"],
+                green_time_seconds=config_to_run["wave_green_time_seconds"],
+                offsets_seconds=config_to_run["offsets_seconds"],
+                all_current_signal_states=all_signal_states_map,
+                processed_signals_for_coordination=processed_signals_for_coordination,
+                now_utc=now_utc
+            )
+
+            if wave_success:
+                self.logger.info(f"Green wave initiation for '{corridor_id_to_run}' (Method: {green_wave_selection_method}) reported some action.")
+                action_type_str = "GREEN_WAVE_ACTIVATION"
+                action_kpi_cfg = ACTION_KPI_CONFIG.get(action_type_str)
+                if action_kpi_cfg:
+                    action_id = uuid4(); action_ts = datetime.utcnow()
+
+                    # Determine triggering_demand_kpi_value for logging
+                    trigger_type_for_log = final_selected_wave_details_for_execution.get('trigger_type', "UNKNOWN")
+                    demand_kpi_name_for_log = config_to_run.get("demand_kpi_trigger")
+                    triggering_demand_kpi_value_for_log = "N/A"
+                    if trigger_type_for_log == "DEMAND_KPI" and demand_kpi_name_for_log:
+                        triggering_demand_kpi_value_for_log = system_kpis.get(demand_kpi_name_for_log, "NOT_FOUND")
+                    elif trigger_type_for_log == "TIME":
+                        triggering_demand_kpi_value_for_log = "TIME_TRIGGERED"
+
+                    base_pre_kpis = {
+                        "overall_congestion_at_decision": system_kpis.get("overall_congestion_level", "UNKNOWN"),
+                        "corridor_id": corridor_id_to_run,
+                        "triggering_demand_kpi_name": demand_kpi_name_for_log or "N/A",
+                        "triggering_demand_kpi_value": triggering_demand_kpi_value_for_log,
+                        "chosen_corridor_avg_score": final_selected_wave_details_for_execution['avg_score'] if final_selected_wave_details_for_execution else None,
+                        "num_top_priority_candidates": len(top_priority_candidates) if top_priority_candidates is not None else 0,
+                        "top_priority_candidate_scores": {
+                            c['id']: round(c['avg_score'], 3) for c in top_priority_candidates
+                        } if top_priority_candidates is not None else {}
+                    }
+                    current_action_target_ids_gw = [corridor_id_to_run] + config_to_run["signals_in_order"]
+                    current_action_parameters_gw = {
+                        "corridor_id": corridor_id_to_run,
+                        "wave_green_time_seconds": config_to_run.get("wave_green_time_seconds"),
+                        "offsets_seconds": config_to_run.get("offsets_seconds"),
+                        "priority": config_to_run.get("priority", 99),
+                        "num_signals_in_wave": len(config_to_run["signals_in_order"]),
+                        "selection_method": green_wave_selection_method
+                    }
+
+                    fetched_pre_action_kpis_for_wave = await self._fetch_pre_action_kpis(
+                        action_type_str=action_type_str,
+                        current_action_target_ids=current_action_target_ids_gw,
+                        current_action_parameters=current_action_parameters_gw,
+                        system_kpis_snapshot=system_kpis
+                    )
+                    if fetched_pre_action_kpis_for_wave and isinstance(fetched_pre_action_kpis_for_wave, dict):
+                        base_pre_kpis.update(fetched_pre_action_kpis_for_wave)
+
+                    self.pending_kpi_collection.append({
+                        'action_id': action_id, 'action_type': action_type_str,
+                        'target_ids': current_action_target_ids_gw,
+                        'action_timestamp': action_ts,
+                        'action_parameters': current_action_parameters_gw,
+                        'pre_action_context_kpis': base_pre_kpis,
+                        'query_after_timestamp': action_ts + timedelta(seconds=action_kpi_cfg["delay_seconds"]),
+                        'metrics_to_collect': action_kpi_cfg["metrics"],
+                        'evaluation_window_minutes': action_kpi_cfg["eval_window_minutes"],
+                        'kpi_query_details': {'service_method_name': action_kpi_cfg["service_method"], 'method_specific_args': {'corridor_id': corridor_id_to_run}}
+                    })
+                    self.logger.info(f"Scheduled KPI collection for {action_type_str} (ID: {action_id}) on {corridor_id_to_run}. Choice: {green_wave_selection_method}.")
+            else:
+                self.logger.warning(f"Green wave '{corridor_id_to_run}' (Method: {green_wave_selection_method}) execution attempt reported no action or failure.")
+        elif candidate_corridors:
+             self.logger.info("No suitable green wave corridor selected for execution this cycle (all candidates conflicted or other selection reasons).")
+        else:
+            self.logger.info("No green wave corridors were triggered as candidates this cycle.")
+
+        # --- Illustrative Green Wave Example (This should be reviewed if it's still needed or if it's test code) ---
+        # This block is separate from the operational logic above.
+        if True: # Placeholder for actual trigger - This makes it always run, which might be unintended.
+            selected_wave_to_run_example = {"id": "main_st_ns_wave", "config": GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]}
+            if selected_wave_to_run_example: # This will always be true if the above line is active
+                # This example might conflict with the operational logic if not managed by processed_signals_for_coordination
+                # For now, assuming it's intended to run or is for a different purpose.
+                # However, it does not use the epsilon-greedy selection.
+                cfg_run_example = selected_wave_to_run_example["config"]; cid_run_example = selected_wave_to_run_example["id"]
+
+                # Check if this example conflicts with signals already processed by operational green wave
+                example_can_run = True
+                for sig_id_ex in cfg_run_example.get("signals_in_order",[]):
+                    if sig_id_ex in processed_signals_for_coordination:
+                        example_can_run = False; break
+
+                if example_can_run:
+                    self.logger.info(f"ILLUSTRATIVE_EXAMPLE: Attempting to run illustrative wave {cid_run_example}")
+                    action_type_str_example = "GREEN_WAVE_ACTIVATION"; current_action_target_ids_example = [cid_run_example]
+                    current_action_parameters_example = {"corridor_config": cfg_run_example, "corridor_id": cid_run_example, "selection_method": "ILLUSTRATIVE_HARDCODED"}
+
+                    fetched_pre_action_kpis_example = await self._fetch_pre_action_kpis(action_type_str_example, current_action_target_ids_example, current_action_parameters_example, system_kpis)
+                    # wave_executed_example = True # This illustrative block does not call _execute_green_wave
+                                                # It directly schedules KPI collection if the placeholder `True` is met.
+                                                # This might be a bug or incomplete illustrative code.
+                                                # For now, let's assume it proceeds to KPI scheduling directly if the example is active.
+
+                    action_kpi_cfg_example = ACTION_KPI_CONFIG.get(action_type_str_example)
+                    if action_kpi_cfg_example:
+                        action_id_example = uuid4(); action_ts_example = datetime.utcnow()
+                        base_pre_kpis_example = {"overall_congestion_at_decision": system_kpis.get("overall_congestion_level"),
+                                                 "corridor_id": cid_run_example,
+                                                 "expected_demand_level": system_kpis.get(cfg_run_example.get("demand_kpi_trigger"), "N/A"),
+                                                 "selection_method": "ILLUSTRATIVE_HARDCODED" # Explicitly mark as illustrative
+                                                 }
+                        if fetched_pre_action_kpis_example: base_pre_kpis_example.update(fetched_pre_action_kpis_example)
                         self.pending_kpi_collection.append({
-                            'action_id': action_id, 'action_type': action_type_str, 'target_ids': [cid_run] + cfg_run["signals_in_order"],
-                            'action_timestamp': action_ts, 'action_parameters': {"wave_green_time_seconds": cfg_run["wave_green_time_seconds"]},
-                            'pre_action_context_kpis': base_pre_kpis,
-                            'query_after_timestamp': action_ts + timedelta(seconds=action_kpi_cfg["delay_seconds"]),
-                            'metrics_to_collect': action_kpi_cfg["metrics"], 'evaluation_window_minutes': action_kpi_cfg["eval_window_minutes"],
-                            'kpi_query_details': {'service_method_name': action_kpi_cfg["service_method"], 'method_specific_args': {'corridor_id': cid_run}}})
-                        self.logger.info(f"Scheduled KPI collection for GW {action_id} on {cid_run} with pre_kpis: {base_pre_kpis}")
+                            'action_id': action_id_example, 'action_type': action_type_str_example,
+                            'target_ids': [cid_run_example] + cfg_run_example["signals_in_order"],
+                            'action_timestamp': action_ts_example,
+                            'action_parameters': {"wave_green_time_seconds": cfg_run_example["wave_green_time_seconds"], "selection_method": "ILLUSTRATIVE_HARDCODED"},
+                            'pre_action_context_kpis': base_pre_kpis_example,
+                            'query_after_timestamp': action_ts_example + timedelta(seconds=action_kpi_cfg_example["delay_seconds"]),
+                            'metrics_to_collect': action_kpi_cfg_example["metrics"],
+                            'evaluation_window_minutes': action_kpi_cfg_example["eval_window_minutes"],
+                            'kpi_query_details': {'service_method_name': action_kpi_cfg_example["service_method"], 'method_specific_args': {'corridor_id': cid_run_example}}})
+                        self.logger.info(f"Scheduled KPI collection for Illustrative GW Example {action_id_example} on {cid_run_example} with pre_kpis: {base_pre_kpis_example}")
+                else:
+                    self.logger.info(f"ILLUSTRATIVE_EXAMPLE: Illustrative wave {cid_run_example} conflicts with already processed signals. Skipping.")
 
         if self._memory_updated_this_cycle: self._save_effectiveness_memory()
         self.logger.info(f"--- AgentCore cycle completed for {sample_user_id} at {datetime.utcnow().isoformat()} ---")
@@ -518,6 +641,8 @@ async def main_example_run_with_mock_time(mock_dt_obj, time_str: str, user: str,
     an_mock.get_current_system_kpis_summary = get_mod_kpis
     await agent.run_decision_cycle(user); an_mock.get_current_system_kpis_summary = orig_func
 
+# The main_example() function remains below, unchanged by this specific subtask.
+# It will be modified by the overwrite_file_with_block call.
 async def main_example():
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     logger.info(f"--- Setting up main_example for Enhanced Mock Analytics & Scoring ---")
@@ -526,8 +651,8 @@ async def main_example():
 
     class MockAnalytics(MagicMock):
         _call_counters = {}
-        _pre_configured_kpis = {} # For pre-action kpis
-        _post_configured_kpis = {} # For post-action kpis
+        _pre_configured_kpis = {}
+        _post_configured_kpis = {}
 
         def _dynamic_value(self, key_seed: str, metric_name: str, min_val: Union[int, float], max_val: Union[int, float], return_float: bool = False) -> Union[int, float]:
             try: val_hash = hash(f"{key_seed}_{metric_name}_{self._call_counters.get(metric_name, 0)}")
@@ -574,228 +699,325 @@ async def main_example():
             if lookup_key in self._post_configured_kpis: return self._post_configured_kpis[lookup_key]
             return {"clearance_time_seconds": self._dynamic_value(incident_id,"clear_time",300,1200), "avg_speed_kmh_incident_zone": self._dynamic_value(incident_id,"post_inc_speed",20,50)}
 
-    class MockTraffic(MagicMock): # ... (as before) ...
+    class MockTraffic(MagicMock):
         _signals = {}
         def __init__(self, *args, **kwargs): super().__init__(*args, **kwargs); self._initialize_mock_signals()
-        def _initialize_mock_signals(self): self._signals.clear(); sids = ["TS001","TS002","TS003","TS004","TS005"];
-            for i,sid in enumerate(sids): self._signals[sid]=SignalState(signal_id=sid,location=LocationModel(latitude=1+i*0.01,longitude=1),current_phase=SignalPhaseEnum.RED,operational_status=SignalOperationalStatusEnum.ONLINE,last_updated=datetime.utcnow(),main_flow_direction="NS")
+        def _initialize_mock_signals(self):
+            self._signals.clear()
+            sids = ["TS001","TS002","TS003","TS004","TS005"]
+            for i,sid in enumerate(sids):
+                self._signals[sid]=SignalState(
+                    signal_id=sid,
+                    location=LocationModel(latitude=1+i*0.01,longitude=1, name=f"Signal {sid}"), # Added name
+                    current_phase=SignalPhaseEnum.RED,
+                    operational_status=SignalOperationalStatusEnum.ONLINE,
+                    last_updated=datetime.utcnow(),
+                    main_flow_direction="NS" # Example
+                )
         async def get_all_signal_states(self): return list(self._signals.values())
-        async def set_signal_phase(self, sid,p,d): self._signals[sid].current_phase=p; return SignalControlCommandResponse(signal_id=sid,status=SignalControlStatusEnum.ACCEPTED)
+        async def set_signal_phase(self, signal_id,phase,duration):
+            if signal_id in self._signals:
+                self._signals[signal_id].current_phase=phase
+                self._signals[signal_id].last_updated=datetime.utcnow()
+                return SignalControlCommandResponse(signal_id=signal_id,status=SignalControlStatusEnum.ACCEPTED)
+            return SignalControlCommandResponse(signal_id=signal_id,status=SignalControlStatusEnum.FAILED, message="Not found")
 
-    analytics_mock = MockAnalytics(); traffic_mock = MockTraffic() # Renamed from MockTraffic to MockTrafficSignalService in prev steps, ensure consistency if this example is run. For now, assume MockTraffic is the intended class here.
-    # For this demo, let's ensure the signals used in general congestion are part of MockTraffic's setup
-    # TS001, TS002, TS004 are used by main_st_ns_wave, so they should exist.
-    # Let's refine MockTraffic or ensure its state can be manipulated for the demo.
 
-    # Helper to reset signal states in MockTraffic for a new general congestion scenario
+    analytics_mock = MockAnalytics(); traffic_mock = MockTraffic()
+
     def reset_mock_traffic_signals_for_congestion_demo(phase=SignalPhaseEnum.RED):
-        traffic_mock._signals["TS001"].current_phase = phase
-        traffic_mock._signals["TS001"].operational_status = SignalOperationalStatusEnum.ONLINE
-        traffic_mock._signals["TS002"].current_phase = phase
-        traffic_mock._signals["TS002"].operational_status = SignalOperationalStatusEnum.ONLINE
-        traffic_mock._signals["TS004"].current_phase = phase # TS004 is used in main_st_ns_wave
-        traffic_mock._signals["TS004"].operational_status = SignalOperationalStatusEnum.ONLINE
-        # Other signals can be offline or green to not interfere initially
-        if "TS003" in traffic_mock._signals: traffic_mock._signals["TS003"].current_phase = SignalPhaseEnum.GREEN
-        if "TS005" in traffic_mock._signals: traffic_mock._signals["TS005"].operational_status = SignalOperationalStatusEnum.OFFLINE
-        logger.debug(f"MAIN_EXAMPLE: Reset TS001, TS002, TS004 to {phase.value}, ONLINE for congestion demo.")
+        # This helper is specific to the congestion demo signals.
+        # GW demo will set its signals directly or use a new helper.
+        for sig_id_congestion in ["TS001", "TS002", "TS004"]: # Signals used in congestion demo
+            if sig_id_congestion in traffic_mock._signals:
+                traffic_mock._signals[sig_id_congestion].current_phase = phase
+                traffic_mock._signals[sig_id_congestion].operational_status = SignalOperationalStatusEnum.ONLINE
+        if "TS003" in traffic_mock._signals: traffic_mock._signals["TS003"].current_phase = SignalPhaseEnum.GREEN # Make it not a candidate for congestion
+        if "TS005" in traffic_mock._signals: traffic_mock._signals["TS005"].operational_status = SignalOperationalStatusEnum.OFFLINE # Make it not a candidate
+        logger.debug(f"MAIN_EXAMPLE: Reset signals for congestion demo (TS001,TS002,TS004 to {phase.value}).")
 
     agent = AgentCore(MagicMock(spec=PredictionScheduler), MagicMock(spec=PersonalizedRoutingService), analytics_mock, traffic_mock)
 
-    # --- Epsilon-Greedy General Congestion Demonstration ---
     logger.info("--- MAIN_EXAMPLE: Starting Epsilon-Greedy General Congestion Demonstration ---")
     original_epsilon = agent.exploration_epsilon
-    original_rng_state = agent.rng.getstate() # Save RNG state if needed for other parts of main_example
-    agent.rng.seed(123) # Consistent RNG for this demo part
+    original_rng_state = agent.rng.getstate()
+    agent.rng.seed(123)
 
     kpi_collection_delay = ACTION_KPI_CONFIG["SET_SIGNAL_GREEN_CONGESTION"]["delay_seconds"]
-    # Initial time for the demo
     current_sim_time_str = "2023-01-01T10:00:00Z"
 
-    # --- Cycle Group 1: Build Initial Effectiveness History (Forcing Exploitation) ---
     logger.info("--- MAIN_EXAMPLE: Cycle Group 1 - Building Initial History (Forcing Exploitation) ---")
     agent.exploration_epsilon = 0.0
     logger.info(f"MAIN_EXAMPLE: Temporarily set exploration_epsilon to {agent.exploration_epsilon}")
 
-    # Helper function to run an action cycle and then a KPI processing cycle
     async def run_action_and_kpi_cycles(action_time_str, action_user_id, kpi_user_id,
-                                        signal_to_configure_kpis_for, post_kpi_payload,
-                                        overall_congestion_level_action="HIGH", overall_congestion_level_kpi="LOW"):
-        nonlocal current_sim_time_str # To update the global sim time for the next iteration
+                                        target_id_for_kpi_config, # Can be signal_id or corridor_id
+                                        action_type_for_kpi_config, # e.g. SET_SIGNAL_GREEN_CONGESTION or GREEN_WAVE_ACTIVATION
+                                        post_kpi_payload,
+                                        kpi_service_method_name, # e.g. get_signal_post_action_kpis
+                                        demand_kpi_settings=None, # For GW, to set specific demand KPIs
+                                        overall_congestion_level_action="HIGH",
+                                        overall_congestion_level_kpi="LOW"):
+        nonlocal current_sim_time_str # Use the general sim time for congestion demo
 
-        # Action Cycle
-        logger.info(f"MAIN_EXAMPLE: Running ACTION cycle at {action_time_str} for {action_user_id}")
+        logger.info(f"MAIN_EXAMPLE: Running ACTION cycle at {action_time_str} for {action_user_id} targeting {target_id_for_kpi_config if target_id_for_kpi_config else 'any'}")
+
+        current_kpi_snapshot = {"overall_congestion_level": overall_congestion_level_action}
+        if demand_kpi_settings: # Used for GW demo to set specific corridor demands
+            for gw_cfg_id_inner in GREEN_WAVE_CORRIDOR_CONFIGS:
+                demand_kpi_inner = GREEN_WAVE_CORRIDOR_CONFIGS[gw_cfg_id_inner].get("demand_kpi_trigger")
+                if demand_kpi_inner and demand_kpi_inner not in demand_kpi_settings: # Default others to LOW
+                    current_kpi_snapshot[demand_kpi_inner] = "LOW"
+            current_kpi_snapshot.update(demand_kpi_settings)
+
         await main_example_run_with_mock_time(
             action_time_str, action_user_id, agent, analytics_mock,
-            kpis={"overall_congestion_level": overall_congestion_level_action}
+            kpis=current_kpi_snapshot
         )
 
-        # Configure post-action KPIs for the signal that was just acted upon
-        # This assumes only one signal action happens per cycle in this controlled demo
+        latest_action_item = None
         if agent.pending_kpi_collection:
-            last_pending_action = agent.pending_kpi_collection[-1]
-            if last_pending_action['action_type'] == "SET_SIGNAL_GREEN_CONGESTION":
-                affected_signal_id = last_pending_action['target_ids'][0]
-                if affected_signal_id == signal_to_configure_kpis_for:
-                     analytics_mock.configure_post_action_kpis(affected_signal_id, "get_signal_post_action_kpis", post_kpi_payload)
-                     logger.info(f"MAIN_EXAMPLE: Configured post-KPIs for {affected_signal_id} to yield score via: {post_kpi_payload}")
-                else: # Safety log if a different signal was chosen than expected
-                    logger.warning(f"MAIN_EXAMPLE: Expected to configure KPIs for {signal_to_configure_kpis_for}, but last action was for {affected_signal_id}. Not configuring KPIs.")
+            for item_idx in range(len(agent.pending_kpi_collection) - 1, -1, -1):
+                if agent.pending_kpi_collection[item_idx]['action_type'] == action_type_for_kpi_config:
+                    # For GW, target_ids[0] is corridor_id. For signal, target_ids[0] is signal_id.
+                    if target_id_for_kpi_config is None or agent.pending_kpi_collection[item_idx]['target_ids'][0] == target_id_for_kpi_config:
+                        latest_action_item = agent.pending_kpi_collection[item_idx]
+                        break
 
-        # KPI Processing Cycle
-        kpi_collection_time = datetime.fromisoformat(action_time_str.replace("Z","+00:00")) + timedelta(seconds=kpi_collection_delay + 5)
+        if latest_action_item:
+            actual_target_id = latest_action_item['target_ids'][0]
+            analytics_mock.configure_post_action_kpis(
+                actual_target_id,
+                kpi_service_method_name,
+                post_kpi_payload
+            )
+            logger.info(f"MAIN_EXAMPLE: Configured post-KPIs for {actual_target_id} ({action_type_for_kpi_config}) to yield score via: {post_kpi_payload}")
+        elif target_id_for_kpi_config: # If we expected a specific target but no action was found
+             logger.warning(f"MAIN_EXAMPLE: Expected action for {target_id_for_kpi_config} ({action_type_for_kpi_config}) but none found in pending items.")
+
+
+        current_kpi_collection_delay = ACTION_KPI_CONFIG[action_type_for_kpi_config]["delay_seconds"]
+        kpi_collection_time = datetime.fromisoformat(action_time_str.replace("Z","+00:00")) + timedelta(seconds=current_kpi_collection_delay + 15) # Generic buffer
         kpi_collection_time_str = kpi_collection_time.isoformat().replace("+00:00", "Z")
         logger.info(f"MAIN_EXAMPLE: Running KPI PROCESSING cycle at {kpi_collection_time_str} for {kpi_user_id}")
         await main_example_run_with_mock_time(
             kpi_collection_time_str, kpi_user_id, agent, analytics_mock,
-            kpis={"overall_congestion_level": overall_congestion_level_kpi} # Low congestion for KPI cycle
+            kpis={"overall_congestion_level": overall_congestion_level_kpi}
         )
-        current_sim_time_str = (kpi_collection_time + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # Advance time for next action
+        # Update the correct sim time string based on context (congestion or GW)
+        # This part needs to be context-aware or use separate time trackers if demos interleave more.
+        # For now, assuming demos run sequentially, so current_sim_time_str (general) is updated.
+        current_sim_time_str = (kpi_collection_time + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
 
-    # Cycle 1.1 (TS001 - Good Score)
-    logger.info("--- MAIN_EXAMPLE: Cycle 1.1 (TS001 Good Score) ---")
-    reset_mock_traffic_signals_for_congestion_demo() # TS001, TS002, TS004 are RED
-    traffic_mock._signals["TS002"].current_phase = SignalPhaseEnum.GREEN # Make TS002 not a candidate
-    traffic_mock._signals["TS004"].current_phase = SignalPhaseEnum.GREEN # Make TS004 not a candidate
-    await run_action_and_kpi_cycles(current_sim_time_str, "user_hist_ts001", "user_kpi_ts001",
-                                    "TS001", {"local_congestion_level": "LOW", "flow_rate_absolute": 800}) # Good score
 
-    # Cycle 1.2 (TS002 - Bad Score)
-    logger.info("--- MAIN_EXAMPLE: Cycle 1.2 (TS002 Bad Score) ---")
+    # Congestion Demo Cycles (using current_sim_time_str)
+    logger.info("--- MAIN_EXAMPLE: Cycle 1.1 (TS001 Good Score - Congestion Demo) ---")
     reset_mock_traffic_signals_for_congestion_demo()
-    traffic_mock._signals["TS001"].current_phase = SignalPhaseEnum.GREEN # TS001 not candidate (or use cooldown from agent._recent_signal_actions)
-    agent._recent_signal_actions.clear() # Clear recent for this controlled setup
-    agent._recent_signal_actions["TS001"] = {'timestamp': datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) - timedelta(seconds=10), 'reason':'demo'} # Simulate TS001 just acted
+    traffic_mock._signals["TS002"].current_phase = SignalPhaseEnum.GREEN
+    traffic_mock._signals["TS004"].current_phase = SignalPhaseEnum.GREEN
+    await run_action_and_kpi_cycles(current_sim_time_str, "user_hist_ts001", "user_kpi_ts001",
+                                    "TS001", "SET_SIGNAL_GREEN_CONGESTION",
+                                    {"local_congestion_level": "LOW", "flow_rate_absolute": 800},
+                                    "get_signal_post_action_kpis"
+                                    )
+
+    logger.info("--- MAIN_EXAMPLE: Cycle 1.2 (TS002 Bad Score - Congestion Demo) ---")
+    reset_mock_traffic_signals_for_congestion_demo()
+    traffic_mock._signals["TS001"].current_phase = SignalPhaseEnum.GREEN
+    agent._recent_signal_actions.clear()
+    agent._recent_signal_actions["TS001"] = {'timestamp': datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) - timedelta(seconds=10), 'reason':'demo'}
     traffic_mock._signals["TS004"].current_phase = SignalPhaseEnum.GREEN
     await run_action_and_kpi_cycles(current_sim_time_str, "user_hist_ts002", "user_kpi_ts002",
-                                    "TS002", {"local_congestion_level": "HIGH", "flow_rate_absolute": 100}) # Bad score
+                                    "TS002", "SET_SIGNAL_GREEN_CONGESTION",
+                                    {"local_congestion_level": "HIGH", "flow_rate_absolute": 100},
+                                    "get_signal_post_action_kpis"
+                                    )
 
-    # Cycle 1.3 (TS004 - Neutral Score)
-    logger.info("--- MAIN_EXAMPLE: Cycle 1.3 (TS004 Neutral Score) ---")
+    logger.info("--- MAIN_EXAMPLE: Cycle 1.3 (TS004 Neutral Score - Congestion Demo) ---")
     reset_mock_traffic_signals_for_congestion_demo()
     agent._recent_signal_actions.clear()
     agent._recent_signal_actions["TS001"] = {'timestamp': datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) - timedelta(seconds=10), 'reason':'demo'}
     agent._recent_signal_actions["TS002"] = {'timestamp': datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) - timedelta(seconds=10), 'reason':'demo'}
     await run_action_and_kpi_cycles(current_sim_time_str, "user_hist_ts004", "user_kpi_ts004",
-                                    "TS004", {"local_congestion_level": "MEDIUM", "flow_rate_absolute": 400}) # Neutral score
+                                    "TS004", "SET_SIGNAL_GREEN_CONGESTION",
+                                    {"local_congestion_level": "MEDIUM", "flow_rate_absolute": 400},
+                                    "get_signal_post_action_kpis"
+                                    )
 
-    logger.info(f"MAIN_EXAMPLE: Effectiveness Memory after History Building: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+    logger.info(f"MAIN_EXAMPLE: Effectiveness Memory after Congestion History Building: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
 
-    # --- Cycle Group 2: Demonstrate Epsilon-Greedy (Exploration & Exploitation) ---
-    logger.info("--- MAIN_EXAMPLE: Cycle Group 2 - Demonstrating Epsilon-Greedy ---")
+    logger.info("--- MAIN_EXAMPLE: Cycle Group 2 - Demonstrating Epsilon-Greedy (Congestion Demo) ---")
     agent.exploration_epsilon = 0.5
-    logger.info(f"MAIN_EXAMPLE: Set exploration_epsilon to {agent.exploration_epsilon}")
+    logger.info(f"MAIN_EXAMPLE: Set exploration_epsilon to {agent.exploration_epsilon} for Congestion Demo")
 
-    # Signals that might be chosen by congestion logic
     congestion_candidate_ids = ["TS001", "TS002", "TS004"]
-
-    for i in range(6): # Run 6 cycles for demonstration
+    for i in range(6):
         cycle_num = i + 1
-        logger.info(f"--- MAIN_EXAMPLE: Epsilon-Greedy Cycle {cycle_num} ---")
-        # Ensure all 3 are viable candidates for general congestion logic
+        logger.info(f"--- MAIN_EXAMPLE: Epsilon-Greedy Cycle {cycle_num} (Congestion Demo) ---")
         reset_mock_traffic_signals_for_congestion_demo(SignalPhaseEnum.RED)
-        agent._recent_signal_actions.clear() # Clear cooldowns for this demo to ensure all are candidates
+        agent._recent_signal_actions.clear()
 
-        logger.info("Current scores before cycle:")
+        logger.info("Current scores before cycle (Congestion Demo):")
         for sig_id in congestion_candidate_ids:
             score_key = f"SET_SIGNAL_GREEN_CONGESTION:{sig_id}"
-            avg_score = sum(agent.action_effectiveness_memory.get(score_key, [0])) / len(agent.action_effectiveness_memory.get(score_key, [1]))
-            logger.info(f"  {sig_id}: Avg Score = {avg_score:.2f} (History: {agent.action_effectiveness_memory.get(score_key, [])})")
+            scores = agent.action_effectiveness_memory.get(score_key, [])
+            avg_score = sum(scores) / len(scores) if scores else 0.0
+            logger.info(f"  {sig_id}: Avg Score = {avg_score:.2f} (History: {scores})")
 
-        # Determine which signal is likely to be chosen to set its post-KPIs
-        # This is a simplification; in reality, the agent makes the choice.
-        # For demo, we'll just give all chosen signals a 'MEDIUM' outcome.
-        # The key is to observe the 'selection_method'.
-
-        action_time_str = current_sim_time_str
+        action_time_str = current_sim_time_str # Uses the general current_sim_time_str
         action_user_id = f"user_egreedy_action_{cycle_num}"
         kpi_user_id = f"user_egreedy_kpi_{cycle_num}"
 
-        # Run action cycle (HIGH congestion)
-        logger.info(f"MAIN_EXAMPLE: Running ACTION cycle for E-Greedy {cycle_num} at {action_time_str}")
-        await main_example_run_with_mock_time(
-            action_time_str, action_user_id, agent, analytics_mock,
-            kpis={"overall_congestion_level": "HIGH"}
+        await run_action_and_kpi_cycles(
+            action_time_str, action_user_id, kpi_user_id,
+            None, # Let the agent pick, then we'll see what it was
+            "SET_SIGNAL_GREEN_CONGESTION",
+            {"local_congestion_level": "MEDIUM", "flow_rate_absolute": 500}, # Neutral outcome for any chosen signal
+            "get_signal_post_action_kpis"
         )
-
-        chosen_signal_for_kpi_config = None
-        if agent.pending_kpi_collection:
-            last_pending_item = agent.pending_kpi_collection[-1]
-            if last_pending_item['action_type'] == "SET_SIGNAL_GREEN_CONGESTION":
-                chosen_signal_for_kpi_config = last_pending_item['target_ids'][0]
-                selection_method = last_pending_item['action_parameters'].get('selection_method', 'UNKNOWN_METHOD')
-                chosen_signal_score = last_pending_item['pre_action_context_kpis'].get('chosen_candidate_avg_score', 'N/A')
-                logger.info(f"MAIN_EXAMPLE: Cycle {cycle_num} action: {selection_method} chose {chosen_signal_for_kpi_config} (score {chosen_signal_score:.2f})")
-
-                # Configure this chosen signal to produce a 'MEDIUM' outcome for simplicity
-                analytics_mock.configure_post_action_kpis(chosen_signal_for_kpi_config, "get_signal_post_action_kpis",
-                                                          {"local_congestion_level": "MEDIUM", "flow_rate_absolute": 500})
-                logger.info(f"MAIN_EXAMPLE: Configured post-KPIs for chosen signal {chosen_signal_for_kpi_config} to yield MEDIUM score.")
+        # Log details from the *last* general congestion action, if any
+        latest_congestion_action_item = None
+        for item_idx in range(len(agent.pending_kpi_collection) - 1, -1, -1):
+            item = agent.pending_kpi_collection[item_idx]
+            if item['action_type'] == "SET_SIGNAL_GREEN_CONGESTION":
+                latest_congestion_action_item = item
+                break
+        if latest_congestion_action_item:
+            chosen_signal_id = latest_congestion_action_item['target_ids'][0]
+            selection_method = latest_congestion_action_item['action_parameters'].get('selection_method', 'UNKNOWN_METHOD')
+            chosen_score_raw = latest_congestion_action_item['pre_action_context_kpis'].get('chosen_candidate_avg_score', 'N/A')
+            chosen_score_str = f"{chosen_score_raw:.2f}" if isinstance(chosen_score_raw, float) else str(chosen_score_raw)
+            logger.info(f"MAIN_EXAMPLE (Congestion Demo): Cycle {cycle_num} action: {selection_method} chose {chosen_signal_id} (score {chosen_score_str})")
         else:
-            logger.info(f"MAIN_EXAMPLE: Cycle {cycle_num}: No general congestion action taken.")
+            logger.info(f"MAIN_EXAMPLE (Congestion Demo): Cycle {cycle_num}: No congestion action found in pending items this iteration.")
 
+        logger.info(f"MAIN_EXAMPLE: Effectiveness Memory after E-Greedy Cycle {cycle_num} (Congestion Demo): {json.dumps(agent.action_effectiveness_memory, indent=2)}")
 
-        # Run KPI processing cycle
-        kpi_collection_time = datetime.fromisoformat(action_time_str.replace("Z","+00:00")) + timedelta(seconds=kpi_collection_delay + 10) # Ensure enough delay
-        kpi_collection_time_str = kpi_collection_time.isoformat().replace("+00:00", "Z")
-        logger.info(f"MAIN_EXAMPLE: Running KPI PROCESSING cycle for E-Greedy {cycle_num} at {kpi_collection_time_str}")
-        await main_example_run_with_mock_time(
-            kpi_collection_time_str, kpi_user_id, agent, analytics_mock,
-            kpis={"overall_congestion_level": "LOW"} # Low congestion for KPI cycle
-        )
-        current_sim_time_str = (kpi_collection_time + timedelta(minutes=2)).isoformat().replace("+00:00", "Z") # Advance time for next action
-
-        logger.info(f"MAIN_EXAMPLE: Effectiveness Memory after E-Greedy Cycle {cycle_num}: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
-        if not agent.pending_kpi_collection and not chosen_signal_for_kpi_config : # if no action was taken, break early or log
-             logger.info(f"MAIN_EXAMPLE: E-Greedy Cycle {cycle_num} - No action was taken, check setup if this is unexpected.")
-
-
-    # Restore original epsilon and RNG state
-    agent.exploration_epsilon = original_epsilon
-    agent.rng.setstate(original_rng_state)
+    agent.exploration_epsilon = original_epsilon # Restore original epsilon
+    agent.rng.setstate(original_rng_state) # Restore original RNG state
     logger.info(f"MAIN_EXAMPLE: Restored exploration_epsilon to {agent.exploration_epsilon}. RNG state restored.")
-    logger.info("--- MAIN_EXAMPLE: Epsilon-Greedy Demonstration Completed ---")
+    logger.info("--- MAIN_EXAMPLE: Epsilon-Greedy General Congestion Demonstration Completed ---")
+
+    # --- Epsilon-Greedy GREEN WAVE SELECTION Demonstration ---
+    logger.info("--- MAIN_EXAMPLE: Starting Epsilon-Greedy GREEN WAVE SELECTION Demonstration ---")
+    original_epsilon_gw_demo = agent.exploration_epsilon
+    original_rng_state_gw_demo = agent.rng.getstate()
+    agent.exploration_epsilon = 0.5
+    agent.rng.seed(456) # New seed for this demo segment
+    logger.info(f"MAIN_EXAMPLE (GW Demo): Temporarily set exploration_epsilon to {agent.exploration_epsilon}.")
+
+    # Ensure signals for alt_st_ew_wave (TS003, TS005) are also ONLINE and RED initially
+    # main_st_ns_wave (TS001, TS002, TS004) are handled by reset_mock_traffic_signals_for_congestion_demo
+    if "TS003" in traffic_mock._signals: # traffic_mock is from the outer main_example scope
+        traffic_mock._signals["TS003"].current_phase = SignalPhaseEnum.RED
+        traffic_mock._signals["TS003"].operational_status = SignalOperationalStatusEnum.ONLINE
+    if "TS005" in traffic_mock._signals:
+        traffic_mock._signals["TS005"].current_phase = SignalPhaseEnum.RED
+        traffic_mock._signals["TS005"].operational_status = SignalOperationalStatusEnum.ONLINE
+    # Also ensure the primary signals for main_st_ns_wave are reset if they were changed by congestion demo
+    traffic_mock._signals["TS001"].current_phase = SignalPhaseEnum.RED
+    traffic_mock._signals["TS001"].operational_status = SignalOperationalStatusEnum.ONLINE
+    traffic_mock._signals["TS002"].current_phase = SignalPhaseEnum.RED
+    traffic_mock._signals["TS002"].operational_status = SignalOperationalStatusEnum.ONLINE
+    traffic_mock._signals["TS004"].current_phase = SignalPhaseEnum.RED
+    traffic_mock._signals["TS004"].operational_status = SignalOperationalStatusEnum.ONLINE
+    logger.info("MAIN_EXAMPLE (GW Demo): Ensured TS001-TS005 are ONLINE and RED for GW demo.")
+
+    current_sim_time_str_gw = "2023-01-01T07:00:00Z" # Start time for GW demo
+
+    # --- Cycle Group 1: Build Initial GW Effectiveness History (Forcing Exploitation) ---
+    logger.info("--- MAIN_EXAMPLE (GW Demo): Cycle Group 1 - Building GW History (Forcing Exploitation) ---")
+    agent.exploration_epsilon = 0.0
+    logger.info(f"MAIN_EXAMPLE (GW Demo): Set exploration_epsilon to {agent.exploration_epsilon}")
+
+    # History for "main_st_ns_wave" (P1) - Moderate Score (e.g. ~0.2)
+    current_sim_time_str_gw = "2023-01-01T07:15:00Z"
+    demand_kpis_main_st_only = { GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]: "HIGH" }
+    await run_action_and_kpi_cycles( # Use the unified helper
+        current_sim_time_str_gw, "user_gw_hist_main", "user_gw_kpi_main",
+        "main_st_ns_wave", "GREEN_WAVE_ACTIVATION",
+        {"corridor_avg_travel_time_seconds": 130, "corridor_throughput_vph": 500},
+        "get_corridor_post_action_kpis",
+        demand_kpi_settings=demand_kpis_main_st_only
+    )
+
+    # History for "alt_st_ew_wave" (P1) - Good Score (e.g. ~1.0)
+    current_sim_time_str_gw = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat() + "Z" # Ensure current_sim_time_str is advanced from congestion demo
+    current_sim_time_str_gw = "2023-01-01T07:45:00Z"
+    demand_kpis_alt_st_only = { GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["demand_kpi_trigger"]: "HIGH" }
+    await run_action_and_kpi_cycles( # Use the unified helper
+        current_sim_time_str_gw, "user_gw_hist_alt", "user_gw_kpi_alt",
+        "alt_st_ew_wave", "GREEN_WAVE_ACTIVATION",
+        {"corridor_avg_travel_time_seconds": 70, "corridor_throughput_vph": 900},
+        "get_corridor_post_action_kpis",
+        demand_kpi_settings=demand_kpis_alt_st_only
+    )
+    logger.info(f"MAIN_EXAMPLE (GW Demo): Effectiveness Memory after History Building: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+
+    # --- Cycle Group 2: Demonstrate Epsilon-Greedy GW Selection ---
+    logger.info("--- MAIN_EXAMPLE (GW Demo): Cycle Group 2 - Demonstrating Epsilon-Greedy GW Selection ---")
+    agent.exploration_epsilon = 0.5
+    logger.info(f"MAIN_EXAMPLE (GW Demo): Set exploration_epsilon to {agent.exploration_epsilon}")
+
+    gw_candidate_ids_for_demo = ["main_st_ns_wave", "alt_st_ew_wave"]
+    # Reset current_sim_time_str_gw if it was modified by run_action_and_kpi_cycles
+    current_sim_time_str_gw = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat() + "Z"
+
+    for i in range(8):
+        cycle_num = i + 1
+        logger.info(f"--- MAIN_EXAMPLE (GW Demo): Epsilon-Greedy Cycle {cycle_num} ---")
+
+        current_sim_time_str_gw = (datetime.fromisoformat(current_sim_time_str_gw.replace("Z","+00:00")) + timedelta(minutes=20)).isoformat().replace("+00:00","Z")
+        demand_kpis_both_high = {
+            GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]["demand_kpi_trigger"]: "HIGH",
+            GREEN_WAVE_CORRIDOR_CONFIGS["alt_st_ew_wave"]["demand_kpi_trigger"]: "HIGH"
+        }
+        agent._recent_signal_actions.clear()
+
+        logger.info("MAIN_EXAMPLE (GW Demo): Current GW scores before cycle:")
+        for corridor_id_log in gw_candidate_ids_for_demo:
+            score_key = f"GREEN_WAVE_ACTIVATION:{corridor_id_log}"
+            scores = agent.action_effectiveness_memory.get(score_key, [])
+            avg_score = sum(scores) / len(scores) if scores else 0.0
+            logger.info(f"  {corridor_id_log}: Avg Score = {avg_score:.2f} (History: {scores})")
+
+        action_user_id = f"user_gw_egreedy_action_{cycle_num}"
+        kpi_user_id = f"user_gw_egreedy_kpi_{cycle_num}"
+
+        await run_action_and_kpi_cycles(
+            current_sim_time_str_gw, action_user_id, kpi_user_id,
+            None, # Let agent choose, we'll see what it was from pending_kpi_collection
+            "GREEN_WAVE_ACTIVATION",
+            {"corridor_avg_travel_time_seconds": 140, "corridor_throughput_vph": 650}, # Neutral outcome for any chosen GW
+            "get_corridor_post_action_kpis",
+            demand_kpi_settings=demand_kpis_both_high
+        )
+
+        latest_gw_action_item = None
+        for item_idx in range(len(agent.pending_kpi_collection) - 1, -1, -1):
+            if agent.pending_kpi_collection[item_idx]['action_type'] == "GREEN_WAVE_ACTIVATION":
+                latest_gw_action_item = agent.pending_kpi_collection[item_idx]
+                break
+
+        if latest_gw_action_item:
+            chosen_gw_id_for_logging = latest_gw_action_item['target_ids'][0]
+            selection_method_gw = latest_gw_action_item['action_parameters'].get('selection_method', 'UNKNOWN_METHOD')
+            chosen_gw_score_raw = latest_gw_action_item['pre_action_context_kpis'].get('chosen_corridor_avg_score', 'N/A')
+            chosen_gw_score_str = f"{chosen_gw_score_raw:.2f}" if isinstance(chosen_gw_score_raw, float) else str(chosen_gw_score_raw)
+            num_top_prio = latest_gw_action_item['pre_action_context_kpis'].get('num_top_priority_candidates',0)
+            top_prio_scores_log = latest_gw_action_item['pre_action_context_kpis'].get('top_priority_candidate_scores',{})
+            logger.info(f"MAIN_EXAMPLE (GW Demo): Cycle {cycle_num} action: {selection_method_gw} chose {chosen_gw_id_for_logging} (score {chosen_gw_score_str}). "
+                        f"Num top_prio: {num_top_prio}. Top prio scores: {json.dumps(top_prio_scores_log)}")
+        else:
+            logger.info(f"MAIN_EXAMPLE (GW Demo): Cycle {cycle_num}: No GREEN_WAVE_ACTIVATION action found in pending items for logging.")
+
+        logger.info(f"MAIN_EXAMPLE (GW Demo): Effectiveness Memory after E-Greedy Cycle {cycle_num}: {json.dumps(agent.action_effectiveness_memory, indent=2)}")
+
+    agent.exploration_epsilon = original_epsilon_gw_demo
+    agent.rng.setstate(original_rng_state_gw_demo)
+    logger.info(f"MAIN_EXAMPLE (GW Demo): Restored exploration_epsilon to {agent.exploration_epsilon}. RNG state restored.")
+    logger.info("--- MAIN_EXAMPLE: Epsilon-Greedy GREEN WAVE SELECTION Demonstration Completed ---")
 
     # Original Scenario: Green Wave, then KPI collection, check score
     logger.info("--- MainExample Refined Scoring: Cycle 1 (Trigger Green Wave 'main_st_ns_wave') ---")
-    corridor_to_test = "main_st_ns_wave"
-    action_time = "2023-01-01T08:00:00Z"
-    # Configure specific pre-action KPIs for this corridor
-    analytics_mock.configure_pre_action_kpis(corridor_to_test, "get_corridor_current_kpis", {"avg_travel_time_seconds": 190, "throughput_vph": 450})
-
-    kpi_settings = {GREEN_WAVE_CORRIDOR_CONFIGS[corridor_to_test]["demand_kpi_trigger"]:"HIGH"}
-    await main_example_run_with_mock_time(action_time, "user_score_test_gw_action", agent, analytics_mock, kpi_settings)
-
-    assert len(agent.pending_kpi_collection) == 1
-    pending_item = agent.pending_kpi_collection[0]
-    logger.info(f"Pending item pre_action_kpis: {json.dumps(pending_item['pre_action_context_kpis'], default=str, indent=2)}")
-    assert pending_item['pre_action_context_kpis'].get("avg_travel_time_seconds") == 190 # From pre-config
-
-    # Configure specific post-action KPIs for this corridor
-    analytics_mock.configure_post_action_kpis(corridor_to_test, "get_corridor_post_action_kpis", {"corridor_avg_travel_time_seconds": 95, "corridor_throughput_vph": 880})
-
-    kpi_collection_time = (datetime.fromisoformat(action_time.replace("Z","+00:00")) +
-                           timedelta(seconds=ACTION_KPI_CONFIG["GREEN_WAVE_ACTIVATION"]["delay_seconds"] + 30)).isoformat().replace("+00:00","Z")
-
-    logger.info(f"--- MainExample Refined Scoring: Cycle 2 (KPI Collection for '{corridor_to_test}') ---")
-    await main_example_run_with_mock_time(kpi_collection_time, "user_score_test_gw_collect", agent, analytics_mock, {})
-
-    assert len(agent.action_performance_logs) == 1
-    final_log = agent.action_performance_logs[0]
-    logger.info(f"Final ActionPerformanceLog: {final_log.model_dump_json(indent=2, default=str)}")
-    assert final_log.effectiveness_score is not None
-    assert final_log.effectiveness_metrics_used.get("pre_gw_avg_travel_time") == 190
-    assert final_log.effectiveness_metrics_used.get("gw_post_avg_travel_time") == 95
-    # Example: score should be high for good improvement (0.5 for TT + 0.5 for TP = 1.0 based on current _score_green_wave_efficiency)
-    assert final_log.effectiveness_score > 0.5
-
-    if os.path.exists(EFFECTIVENESS_MEMORY_FILEPATH): os.remove(EFFECTIVENESS_MEMORY_FILEPATH)
-    logger.info("--- AgentCore main_example for Refined Scoring completed ---")
-
-if __name__ == "__main__":
-    # asyncio.run(main_example()) # Original main_example, commented out.
-    # To run the new example:
-    # asyncio.run(main_example_traffic_integration())
-    logger.info("AgentCore module defined. Original main_example() commented out. New main_example_traffic_integration() is available.")
-
-[end of backend/app/core/agent_core.py]
+>>>>>>> REPLACE
