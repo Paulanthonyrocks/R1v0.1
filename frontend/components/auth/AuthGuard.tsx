@@ -16,9 +16,8 @@ const AuthGuard: React.FC<{ children: React.ReactNode, requiredRole?: UserRole }
       if (!user) {
         // Redirect to the login page if not authenticated
         router.push('/login');
-      } else if (requiredRole && userRole !== requiredRole) {
-        // Redirect to unauthorized page if authenticated but role doesn't match
-        // You might want a dedicated unauthorized page or handle this differently
+      } else if (requiredRole && userRole !== requiredRole && userRole !== UserRole.ADMIN) {
+        // Only redirect if user is not admin
         console.warn(`User with role ${userRole} attempted to access content requiring role ${requiredRole}`);
         router.push('/unauthorized'); // Assuming an /unauthorized route exists
       }
@@ -30,8 +29,8 @@ const AuthGuard: React.FC<{ children: React.ReactNode, requiredRole?: UserRole }
     return <div>Loading...</div>; // Replace with a proper loading component/spinner
   }
 
-  // If authenticated and role matches (or no requiredRole), render children
-  if (user && (!requiredRole || userRole === requiredRole)) {
+  // If authenticated and role matches (or no requiredRole), or user is admin, render children
+  if (user && (!requiredRole || userRole === requiredRole || userRole === UserRole.ADMIN)) {
     return <>{children}</>;
   }
 

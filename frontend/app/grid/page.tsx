@@ -6,6 +6,7 @@ import MatrixCard from '@/components/MatrixCard';
 import { useState, useEffect } from 'react';
 import TrafficSignalIcon from '@/components/ui/TrafficSignalIcon'; // Import the new icon component
 import DitheredTrafficIndicator from '@/components/ui/DitheredTrafficIndicator'; // Import dither component
+import styles from './Grid.module.css';
 
 interface GridItemData {
   id: number;
@@ -70,17 +71,11 @@ const TrafficGridPage: React.FC = () => {
             </div>
 
             <div
-              className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-grow overflow-auto"
-              style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: 'top left',
-                imageRendering: 'pixelated',
-                msImageRendering: 'crisp-edges', // For IE/Edge
-                mozImageRendering: 'crisp-edges', // For Firefox (older versions)
-              }}
+              className={`grid grid-cols-1 md:grid-cols-3 gap-4 flex-grow overflow-auto ${styles.gridZoom}`}
+              data-zoom={`scale(${zoom})`}
             >
               {gridItems.map((item) => (
-                <div key={item.id} onClick={() => handleGridItemClick(item)} style={{ cursor: 'pointer' }}>
+                <div key={item.id} onClick={() => handleGridItemClick(item)} className={styles.pointer}>
                   <MatrixCard
                     title={item.label}
                   >

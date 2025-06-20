@@ -116,7 +116,7 @@ type SortOrder = "newest" | "oldest";
 
 const AnomaliesPage = () => {
   // const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher); // SWR removed
-  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:3000/ws');
+  const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
 
   const [allAnomalies, setAllAnomalies] = useState<Anomaly[]>([]);
   const [pageLoading, setPageLoading] = useState(true); // Initial loading state

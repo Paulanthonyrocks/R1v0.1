@@ -5,6 +5,7 @@ import MatrixCard from "@/components/MatrixCard";
 import AuthGuard from "@/components/auth/AuthGuard";
 import MatrixButton from "@/components/MatrixButton";
 import { UserRole } from "@/lib/auth/roles";
+import { cn } from "@/lib/utils";
 
 const ExportPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);

@@ -9,7 +9,7 @@ import { FeedStatusData } from '@/lib/types'; // To type the feed items
 import LoadingMessage from '@/components/ui/LoadingMessage'; // Import the new LoadingMessage component
 
 const SurveillancePage = () => {
-  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:3000/ws');
+  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
 
   useEffect(() => {
     // Start WebSocket connection on component mount

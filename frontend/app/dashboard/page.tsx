@@ -19,7 +19,7 @@ const DashboardPage: React.FC = () => {
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
-  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:3000/ws');
+  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates('ws://localhost:8000/ws');
   // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   useEffect(() => {

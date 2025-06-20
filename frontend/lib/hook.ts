@@ -1,10 +1,14 @@
 // lib/hooks.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import {
     FeedStatusData, KpiData, AlertData, BackendCongestionNodeData, // Added BackendCongestionNodeData
 } from '@/lib/types';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws'; // Ensure this is ws://localhost:9002/ws if backend is on 9002
+// Generate a unique client_id for this session
+const CLIENT_ID = typeof window !== 'undefined' ? (window.localStorage.getItem('client_id') || (() => { const id = uuidv4(); window.localStorage.setItem('client_id', id); return id; })()) : 'default-client';
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ? `${process.env.NEXT_PUBLIC_WS_URL}/${CLIENT_ID}` : `ws://localhost:8000/ws/${CLIENT_ID}`;
+
 const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
 const MAX_RECONNECT_DELAY_MS = 30000; // Max delay 30s
 const MAX_RECONNECT_ATTEMPTS = 6;     // Max attempts before stopping
