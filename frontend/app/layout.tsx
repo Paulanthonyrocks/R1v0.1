@@ -21,6 +21,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <UserProvider>
+        <head>
+          <link rel="icon" href="/logo.png" />
+        </head>
         <body
           className={cn(
             "min-h-screen bg-background antialiased flex flex-col font-matrix text-foreground",
