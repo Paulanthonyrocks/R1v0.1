@@ -80,7 +80,7 @@ class FeedManager:
         self._feed_id_counter = 1 # Simple counter for unique IDs
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
- self._connection_manager = None # Added type hint
+        self._connection_manager = None # Added type hint
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = 1.0 # Seconds
         self._sample_feed_id: Optional[str] = None # Store the ID of the sample feed
