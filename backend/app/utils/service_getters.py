@@ -48,7 +48,7 @@ def get_feed_manager() -> FMClass:
         RuntimeError: If the FeedManager has not been initialized.
     """
     # Access the global instance variable from the imported services module
- if services.feed_manager_instance is None:
+    if services.feed_manager_instance is None:
         logger.error("Attempted to get FeedManager before initialization.")
         raise RuntimeError("FeedManager not initialized.")
  return services.feed_manager_instance
