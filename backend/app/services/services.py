@@ -114,10 +114,6 @@ def initialize_services(config: Dict[str, Any]):
 
     logger.info("Application services initialized.")
 
-def get_feed_manager() -> FMClass:
-    if feed_manager_instance is None: raise RuntimeError("FeedManager not initialized.")
-    return feed_manager_instance
-
 def get_connection_manager() -> ConnectionManager:
      if connection_manager_instance is None:
           raise RuntimeError("WebSocket ConnectionManager not initialized.")

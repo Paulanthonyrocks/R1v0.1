@@ -24,9 +24,7 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
   const router = useRouter(); // Get the router instance
   return (
     // Use bg-card, apply theme border color via border-border
-    <header className={cn(
-        "sticky top-0 z-50 w-full h-16 bg-card/80 backdrop-blur-sm flex items-center px-4 md:px-6 justify-between",
-        "border-b border-border" // Use theme variable for border
+    <header className={cn("sticky top-0 z-50 w-full h-16 bg-card/80 backdrop-blur-sm flex items-center px-4 md:px-6 justify-between"
     )}>
       <div className="flex items-center space-x-2 md:space-x-4">
         <Button

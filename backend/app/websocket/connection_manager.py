@@ -15,7 +15,7 @@ from app.services.exceptions import FeedNotFoundError, FeedOperationError
 # from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
 
 from app.services.services import get_feed_manager # Import the feed manager getter
-logger = logging.getLogger(__name__)
+from app.utils.service_getters import get_feed_manager # Import the feed manager getter
 
 class ActiveWebSocketConnection:
     def __init__(self, websocket: WebSocket, client_id: str, manager: 'ConnectionManager'):

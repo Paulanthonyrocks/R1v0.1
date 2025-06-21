@@ -33,7 +33,8 @@ from . import api
 # Initializers/Getters - Import config initializer now
 from .config import initialize_config, get_current_config  # Import config init/getter
 from .database import initialize_database, close_database, get_database_manager
-from .services import initialize_services, shutdown_services, get_feed_manager, get_connection_manager, get_analytics_service
+from .services import initialize_services, shutdown_services, get_connection_manager, get_analytics_service
+from app.utils.service_getters import get_feed_manager # Import get_feed_manager from the new utility file
 from .services.services import health_check as services_health_check # Import directly
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification # Added imports
 from app.tasks.prediction_scheduler import PredictionScheduler # Import the new scheduler
