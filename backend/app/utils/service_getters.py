@@ -51,7 +51,7 @@ def get_feed_manager() -> FMClass:
     if services.feed_manager_instance is None:
         logger.error("Attempted to get FeedManager before initialization.")
         raise RuntimeError("FeedManager not initialized.")
- return services.feed_manager_instance
+    return services.feed_manager_instance
 
 # You would add similar getters for other services if needed elsewhere
 # def get_connection_manager() -> ConnectionManager:
