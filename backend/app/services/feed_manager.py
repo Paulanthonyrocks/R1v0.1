@@ -359,6 +359,34 @@ class FeedManager:
         await self.stop_feed(feed_id)
         logger.info(f"Stopped feed via WS request: {feed_id}")
 
+    async def refresh_feed(self, feed_id: str):
+        """Refreshes a feed by stopping and then attempting to start it."""
+        logger.info(f"Refresh requested for feed: '{feed_id}'")
+        original_source = None
+        is_sample = False
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                raise FeedNotFoundError(feed_id)
+            original_source = entry['source'] # Store source before stopping
+            is_sample = entry.get('is_sample_feed', False)
+
+        if not original_source: # Should not happen if entry exists
+            raise FeedOperationError(f"Cannot refresh {feed_id}, source not found.")
+
+        try:
+            logger.debug(f"Stopping '{feed_id}' for refresh...")
+            await self.stop_feed(feed_id) # This will handle broadcasts and sample check if it was a real feed
+            # Wait briefly for resources to release (optional but can help)
+            await asyncio.sleep(1.0)
+            logger.debug(f"Starting '{feed_id}' after stop for refresh...")
+            await self.start_feed(feed_id) # This handles resource check, broadcasts, and sample check if it's a real feed
+            logger.info(f"Feed '{feed_id}' refresh sequence initiated.")
+        except Exception as e:
+            logger.error(f"Error during refresh sequence for '{feed_id}': {e}", exc_info=True)
+            # Error status and broadcast handled by start_feed
+            raise FeedOperationError(f"Refresh failed for '{feed_id}': {e}") from e
+
     async def _read_result_queues(self):
         """Background task to read from worker result queues."""
         logger.info("Result queue reader task started.")

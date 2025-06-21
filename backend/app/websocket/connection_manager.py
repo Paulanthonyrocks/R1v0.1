@@ -11,8 +11,10 @@ import firebase_admin # For auth checking in WS
 from firebase_admin import auth
 
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification, GeneralNotification # Import new models
+from app.services.exceptions import FeedNotFoundError, FeedOperationError
 # from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
 
+from app.services.services import get_feed_manager # Import the feed manager getter
 logger = logging.getLogger(__name__)
 
 class ActiveWebSocketConnection:
@@ -217,6 +219,44 @@ class ActiveWebSocketConnection:
                     payload={"timestamp": datetime.utcnow().isoformat()}
                 )
             )
+
+        elif message.event_type == 'refresh_feed': # Handle the new refresh_feed event type
+            feed_id = message.payload.get("feed_id") if isinstance(message.payload, dict) else None
+            if feed_id and isinstance(feed_id, str):
+                logger.info(f"Client {self.client_id} requested refresh for feed: {feed_id}")
+                try:
+                    # Get the FeedManager instance
+                    feed_manager = get_feed_manager()
+                    # Call the refresh_feed method on the FeedManager
+                    await feed_manager.refresh_feed(feed_id)
+                    logger.info(f"Refresh process initiated for feed {feed_id}.")
+                    # Send a confirmation back to the client
+                    await self.send_json_model(
+                        WebSocketMessage(
+                            event_type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
+                            payload=GeneralNotification(message_type="feed_refresh_initiated", message=f"Refresh initiated for feed {feed_id}.")
+                        )
+                    )
+                except (FeedNotFoundError, FeedOperationError) as e:
+                     logger.warning(f"Failed to refresh feed {feed_id} as requested by {self.client_id}: {e}")
+                     await self.send_json_model(
+                        WebSocketMessage(
+                            event_type=WebSocketMessageTypeEnum.ERROR,
+                            payload=ErrorNotification(code="FEED_REFRESH_FAILED", message=f"Failed to refresh feed {feed_id}: {e}")
+                        )
+                    )
+                except RuntimeError as e:
+                     logger.error(f"Failed to get FeedManager to refresh feed {feed_id}: {e}", exc_info=True)
+                     await self.send_json_model(
+                        WebSocketMessage(
+                            event_type=WebSocketMessageTypeEnum.ERROR,
+                            payload=ErrorNotification(code="INTERNAL_ERROR", message="Server error attempting to refresh feed.")
+                        )
+                    )
+                except RuntimeError as e:
+                     logger.error(f"Failed to get FeedManager to refresh feed {feed_id}: {e}")
+            else:
+                 await self.send_json_model(WebSocketMessage(event_type=WebSocketMessageTypeEnum.ERROR, payload=ErrorNotification(code="INVALID_REFRESH_REQUEST", message="Invalid or missing feed_id for refresh.")))
 
         else:
             logger.warning(f"Unhandled message type from {self.client_id}: {message.event_type}")

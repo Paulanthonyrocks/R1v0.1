@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2 } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps, TrafficMetrics } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook'; // Assuming useRealtimeUpdates is still needed from this hook file
@@ -40,6 +40,15 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         sendMessage(messageType, { feed_id: id });
     };
 
+    const handleRefreshFeed = () => {
+        if (!isConnected) {
+            console.warn('Refresh prevented: Not connected to WebSocket');
+            return;
+        }
+        console.log(`Sending refresh_feed for ${id}`);
+        sendMessage('refresh_feed', { feed_id: id });
+    };
+    
     return (
         <Card
             className={cn(
@@ -101,6 +110,14 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <span>Avg Speed: {metrics.average_speed_kmh ?? '--'} km/h</span>
                      </div>
                  )}
+                 {/* Refresh Button */}
+                {!isToggling && !isStreamLoading && ( // Only show when not toggling or loading
+                    <button
+                        className="absolute bottom-1.5 left-1.5 text-primary-foreground/80 hover:text-primary transition-colors z-20 p-1 rounded-full bg-black/50 backdrop-blur-sm"
+                        onClick={(e) => { e.stopPropagation(); handleRefreshFeed(); }} // Stop click event from propagating to card toggle
+                    >
+                        <RotateCw size={14} />
+                    </button>)}
             </div>
             <CardContent className="p-2">
                 <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors tracking-normal">{component_name}</h4> {/* Added tracking-normal */}
