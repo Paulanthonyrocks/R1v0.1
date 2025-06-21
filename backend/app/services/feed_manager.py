@@ -40,9 +40,6 @@ from app.core.processing_worker import process_video
 from app.utils.monitoring import check_system_resources
 from app.utils.video import FrameTimer # FrameTimer moved to video.py
 
-# Import WebSocket Manager type for hinting (will be implemented later)
-from app.websocket.connection_manager import ConnectionManager
-
 logger = logging.getLogger(__name__)
 
 # Ensure start method is set (important for multiprocessing)
@@ -83,7 +80,7 @@ class FeedManager:
         self._feed_id_counter = 1 # Simple counter for unique IDs
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
-        self._connection_manager: Optional[ConnectionManager] = None # Added type hint
+ self._connection_manager = None # Added type hint
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = 1.0 # Seconds
         self._sample_feed_id: Optional[str] = None # Store the ID of the sample feed
@@ -95,7 +92,7 @@ class FeedManager:
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         logger.info("FeedManager initialized and result reader task started.")
 
-    def set_connection_manager(self, manager): # manager: ConnectionManager): # Add type hint later
+    def set_connection_manager(self, manager: "ConnectionManager"): # Add type hint later
         """Inject the WebSocket ConnectionManager."""
         self._connection_manager = manager
         logger.info("WebSocket ConnectionManager set in FeedManager.")

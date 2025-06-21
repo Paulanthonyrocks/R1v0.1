@@ -1,7 +1,6 @@
 # backend/app/utils/service_getters.py
 
 from typing import Optional
-from app.services.feed_manager import FeedManager as FMClass  # Import the actual class
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,10 +35,9 @@ logger = logging.getLogger(__name__)
 # This import *could* still cause issues if services.py initialization
 # triggers imports that lead back here before feed_manager_instance is set.
 try:
-    # Import the services module to access its global instance variables
-    from app.services import services as services_module
+ from app.services import services # Import the services module to access its global instance variables
 except ImportError as e:
-    logger.critical(f"Failed to import services module in service_getters: {e}")
+ logger.critical(f"Failed to import services module in service_getters: {e}")
     # Re-raise or handle appropriately - indicates a core structure issue
 
 def get_feed_manager() -> FMClass:
@@ -50,10 +48,10 @@ def get_feed_manager() -> FMClass:
         RuntimeError: If the FeedManager has not been initialized.
     """
     # Access the global instance variable from the imported services module
-    if services_module.feed_manager_instance is None:
+ if services.feed_manager_instance is None:
         logger.error("Attempted to get FeedManager before initialization.")
         raise RuntimeError("FeedManager not initialized.")
-    return services_module.feed_manager_instance
+ return services.feed_manager_instance
 
 # You would add similar getters for other services if needed elsewhere
 # def get_connection_manager() -> ConnectionManager:
