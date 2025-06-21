@@ -8,7 +8,6 @@ from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
-from app.database import get_database_manager # Import the getter
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -22,6 +21,10 @@ _route_optimization_service_instance: Optional[RouteOptimizationService] = None
 _personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
 _weather_service_instance: Optional[WeatherService] = None
 _event_service_instance: Optional[EventService] = None
+
+# Import service getters here
+from app.database import get_database_manager
+from app.utils.service_getters import get_feed_manager # Import the moved getter
 
 def initialize_services(config: Dict[str, Any]):
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \

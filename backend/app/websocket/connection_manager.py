@@ -14,7 +14,6 @@ from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, Err
 from app.services.exceptions import FeedNotFoundError, FeedOperationError
 # from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
 
-from app.services.services import get_feed_manager # Import the feed manager getter
 from app.utils.service_getters import get_feed_manager # Import the feed manager getter
 
 class ActiveWebSocketConnection:
