@@ -147,6 +147,8 @@ async def startup_event():
     # 4. Initialize Services, including ConnectionManager
     try:
         initialize_services(loaded_config)
+        # Store ConnectionManager instance in app.state for direct access
+        app.state.connection_manager = get_connection_manager() 
         # Initialize prediction log table after services are initialized
         analytics_service = get_analytics_service()
         if analytics_service:
@@ -156,7 +158,8 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
         # Decide if service initialization failure should halt startup
-        # raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
+        raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
+
 
     # 5. Initialize Prediction Scheduler
     try:
@@ -258,10 +261,11 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    manager = get_connection_manager()
+    # Retrieve manager from app.state, which is set during startup
+    manager = websocket.app.state.connection_manager 
     if manager is None:
-        logger.error(f"WebSocket connection for {client_id} rejected: ConnectionManager not initialized.")
-        await websocket.close(code=1011, reason="ConnectionManager not initialized")
+        logger.error(f"WebSocket connection for {client_id} rejected: ConnectionManager not initialized in app.state.")
+        await websocket.close(code=1011, reason="ConnectionManager not initialized in app.state")
         return
 
     # The actual connection object (ActiveWebSocketConnection) is created inside manager.connect
