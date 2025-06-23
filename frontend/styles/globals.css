@@ -312,7 +312,6 @@
   /* --- Matrix Card Component Styles --- */
   /* Base styles for .matrix-card, effectively .matrix-card--default */
   .matrix-card {
-    background-color: hsl(var(--background)); /* Theme green */
     color: hsl(var(--foreground)); /* Theme black */
     border: 1px solid hsl(var(--primary)); /* 1px solid black */
     box-shadow: var(--pixel-drop-shadow-value);
