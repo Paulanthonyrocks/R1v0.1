@@ -23,7 +23,9 @@ from app.database import get_database_manager
 from app.utils.service_getters import get_feed_manager # Import the moved getter
 feed_manager_instance: Optional[FMClass] = None # Keep FeedManager instance global if needed outside initialize_services
 
-def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accept logger as argument
+logger = logging.getLogger(__name__)  # Module-level logger
+
+def initialize_services(config: Dict[str, Any]): # Accept logger as argument
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
            _analytics_service_instance, _route_optimization_service_instance, \
            _personalized_routing_service_instance, _weather_service_instance, _event_service_instance
