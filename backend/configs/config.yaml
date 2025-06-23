@@ -143,7 +143,7 @@ interface:
 # --- Pavement Analysis Configuration ---
 pavement_analysis:
   camera_calibration:
-    calibration_file: ./data/calibration_params.npz
+    calibration_file: ./calibration_params.npz
 ml_model:
   model_path: ./models/pavement/pavement_model.pt
 storage:

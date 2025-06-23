@@ -161,6 +161,22 @@ async def startup_event():
         raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
 
 
+    # Attempt to start the sample feed automatically
+    try:
+        fm = get_feed_manager()
+        sample_feed_id = 'Feed_1_Sample_Video' # Assuming this is the ID from backend logs
+        logger.info(f"Attempting to start sample feed: {sample_feed_id}")
+        success = await fm.start_feed(sample_feed_id)
+        if success:
+            logger.info(f"Sample feed '{sample_feed_id}' started successfully on startup.")
+        else:
+            # This might happen if the feed is already running or in an unexpected state
+            status_data = await fm.get_feed_status(sample_feed_id)
+            logger.warning(f"Failed to explicitly start sample feed '{sample_feed_id}' on startup. Current status: {status_data.status if status_data else 'Unknown'}. Message: {status_data.status_message if status_data else 'N/A'}")
+    except Exception as e:
+        logger.error(f"An error occurred while trying to start sample feed on startup: {e}", exc_info=True)
+
+
     # 5. Initialize Prediction Scheduler
     try:
         analytics_service = get_analytics_service()
