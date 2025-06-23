@@ -159,16 +159,14 @@
 @layer components {
   .matrix-glow-card {
     @apply border overflow-hidden rounded-md;
-    border-color: hsl(var(--border));
-    background-color: hsl(var(--card));
+    @apply glossy-gradient; /* Use the glossy-gradient class */
+    border-color: hsl(var(--border)); /* Keep border color */
     border-radius: var(--radius);
-    box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2),
-                0 0 2px 1px hsla(var(--matrix), 0.2);
+    box-shadow: none; /* Remove box shadow */
     @apply transition-all duration-200;
   }
   .matrix-glow-card:hover {
-    box-shadow: 0 0 2px 2px hsla(var(--matrix-light), 0.3),
-                0 0 4px 1px hsla(var(--matrix), 0.2);
+    box-shadow: none; /* Remove box shadow on hover */
   }
 
  .glossy-gradient {
