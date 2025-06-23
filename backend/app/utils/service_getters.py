@@ -12,9 +12,9 @@ import logging
 
 # Use TYPE_CHECKING to avoid runtime circular imports
 if TYPE_CHECKING:
-    from .app.services.feed_manager import FeedManager
-    from .app.services.analytics_service import AnalyticsService
-    from .app.websocket.connection_manager import ConnectionManager
+    from backend.app.services.feed_manager import FeedManager
+    from backend.app.services.analytics_service import AnalyticsService
+    from backend.app.websocket.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def get_feed_manager() -> "FeedManager":
     
     try:
         # Lazy import to avoid circular dependencies
-        from .app.services import services
+        from backend.app.services import services
         
         if not hasattr(services, 'feed_manager_instance') or services.feed_manager_instance is None:
             logger.error("FeedManager not initialized. Call initialize_services() first.")
@@ -71,7 +71,7 @@ def get_analytics_service() -> "AnalyticsService":
         return _service_cache["analytics_service"]
     
     try:
-        from .app.services import services
+        from backend.app.services import services
         
         # Check for both possible attribute names (with and without underscore)
         analytics_instance = getattr(services, 'analytics_service_instance', None) or \
@@ -107,7 +107,7 @@ def get_connection_manager() -> "ConnectionManager":
         return _service_cache["connection_manager"]
     
     try:
-        from .app.services import services
+        from backend.app.services import services
         
         if not hasattr(services, 'connection_manager_instance') or services.connection_manager_instance is None:
             logger.error("ConnectionManager not initialized. Call initialize_services() first.")
@@ -135,7 +135,7 @@ def is_service_initialized(service_name: str) -> bool:
         bool: True if the service is initialized, False otherwise.
     """
     try:
-        from .app.services import services
+        from backend.app.services import services
         
         service_map = {
             'feed_manager': 'feed_manager_instance',

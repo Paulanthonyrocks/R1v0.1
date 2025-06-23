@@ -19,7 +19,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
 
         <div className="feature-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {/* Feature Card 1 */}
-          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition">
+          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition backdrop-blur-sm bg-card/80 hover:shadow-lg">
             <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
               <Brain size={32} className="text-primary" /> {/* Replaced fa-brain, adjusted size (text-2xl is approx 24px, Lucide default is 24px. size={32} is closer to a larger icon) */}
             </div>
@@ -38,7 +38,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
             <div className="feature-underline"></div>
           </div>
           {/* Feature Card 2 */}
-          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-100">
+          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-100 backdrop-blur-sm bg-card/80 hover:shadow-lg">
            <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                <MapPin size={32} className="text-primary" /> {/* Replaced fa-map-marked-alt */}
            </div>
@@ -57,7 +57,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
            <div className="feature-underline"></div>
           </div>
           {/* Feature Card 3 */}
-          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-200">
+          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-200 backdrop-blur-sm bg-card/80 hover:shadow-lg">
            <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                <Car size={32} className="text-primary" /> {/* Replaced fa-car-side */}
            </div>
@@ -76,7 +76,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
            <div className="feature-underline"></div>
           </div>
           {/* Feature Card 4 */}
-          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-300">
+          <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-300 backdrop-blur-sm bg-card/80 hover:shadow-lg">
              <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                  <LineChart size={32} className="text-primary" /> {/* Replaced fa-chart-line */}
              </div>
@@ -95,7 +95,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
              <div className="feature-underline"></div>
          </div>
          {/* Feature Card 5 */}
-         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-[400ms]">
+         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-[400ms] backdrop-blur-sm bg-card/80 hover:shadow-lg">
              <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                  <Cloud size={32} className="text-primary" /> {/* Replaced fa-cloud */}
              </div>
@@ -114,7 +114,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
              <div className="feature-underline"></div>
          </div>
          {/* Feature Card 6 */}
-         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-500">
+         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-500 backdrop-blur-sm bg-card/80 hover:shadow-lg">
              <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                  <Shield size={32} className="text-primary" /> {/* Replaced fa-shield-alt */}
              </div>
