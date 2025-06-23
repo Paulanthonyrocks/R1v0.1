@@ -11,8 +11,6 @@ from app.services.event_service import EventService
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
-
 feed_manager_instance: Optional[FMClass] = None
 connection_manager_instance: Optional[ConnectionManager] = None
 _traffic_signal_service_instance: Optional[TrafficSignalService] = None
@@ -26,13 +24,14 @@ _event_service_instance: Optional[EventService] = None
 from app.database import get_database_manager
 from app.utils.service_getters import get_feed_manager # Import the moved getter
 
-def initialize_services(config: Dict[str, Any]):
+def initialize_services(config: Dict[str, Any], logger: logging.Logger):
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
            _analytics_service_instance, _route_optimization_service_instance, \
            _personalized_routing_service_instance, _weather_service_instance, _event_service_instance
     
     logger.info("Initializing application services...")
     if connection_manager_instance is None:
+         logger.info("Attempting to initialize WebSocket ConnectionManager...")
          try:
               connection_manager_instance = ConnectionManager()
               logger.info("WebSocket ConnectionManager initialized via app.services.")
@@ -42,6 +41,7 @@ def initialize_services(config: Dict[str, Any]):
                logger.info(f"WebSocket ConnectionManager initialization: Failed. Reason: {e}")
          else:
               logger.info("WebSocket ConnectionManager initialization: Successful.")
+    logger.info(f"ConnectionManager instance after initialization attempt: {connection_manager_instance}")
 
 
     if feed_manager_instance is None:
