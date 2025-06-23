@@ -8,7 +8,7 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="card"
       className={cn(
         "glossy-gradient", // Add the glossy-gradient class here
-        "bg-card/80 text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm backdrop-blur-sm", // Use only bg-card/80 for semi-transparent blur
+        "text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm backdrop-blur-sm", // Removed bg-card/80
         className
       )}
       {...props}

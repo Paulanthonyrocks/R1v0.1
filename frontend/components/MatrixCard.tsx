@@ -15,7 +15,7 @@ const MatrixCard: React.FC<MatrixCardProps> = ({ title, content, icon, className
 
   return (
     <div
-      className={cn(`matrix-card ${isHovered ? 'matrix-card--hover' : 'matrix-card--default'} flex flex-col gap-3 backdrop-blur-sm bg-card/80 glossy-gradient`, className)}
+      className={cn(`matrix-card ${isHovered ? 'matrix-card--hover' : 'matrix-card--default'} flex flex-col gap-3 backdrop-blur-sm glossy-gradient`, className)}
       {...(colorOverride ? { 'data-color-override': 'true', style: { '--color-override': colorOverride } as React.CSSProperties } : {})}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
