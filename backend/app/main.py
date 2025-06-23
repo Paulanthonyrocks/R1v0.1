@@ -144,7 +144,7 @@ async def startup_event():
     except Exception as e:
         raise RuntimeError(f"Database Initialization Failed: {e}") from e
 
-    # 4. Initialize Services
+    # 4. Initialize Services, including ConnectionManager
     try:
         initialize_services(loaded_config)
         # Initialize prediction log table after services are initialized
@@ -152,7 +152,7 @@ async def startup_event():
         if analytics_service:
             await analytics_service.initialize_prediction_log_table()
         else:
-            logger.error("AnalyticsService not available during startup; cannot initialize prediction log table.")
+            logger.warning("AnalyticsService not available during startup; cannot initialize prediction log table.")
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
         # Decide if service initialization failure should halt startup
