@@ -146,7 +146,7 @@ async def startup_event():
 
     # 4. Initialize Services, including ConnectionManager
     try:
-        initialize_services(loaded_config)
+        initialize_services(loaded_config, logger=logger)
         # Store ConnectionManager instance in app.state for direct access
         app.state.connection_manager = get_connection_manager() 
         # Initialize prediction log table after services are initialized
@@ -336,4 +336,6 @@ import asyncio
 
 if __name__ == "__main__":
     import uvicorn
+    import multiprocessing
+    multiprocessing.set_start_method("spawn", force=True)
     uvicorn.run("app.main:app", host="0.0.0.0", port=9002, reload=True)
