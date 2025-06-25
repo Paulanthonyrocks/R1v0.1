@@ -87,7 +87,11 @@ ACTION_EFFECTIVENESS_CONFIG = {
     "SET_SIGNAL_RED_ROAD_CLOSURE": {
         "relevant_kpis": [
             {"source": "pre", "key_path": ["current_green_approach_flow_vph"], "as": "pre_closure_flow_on_green_vph"},
-            {"source": "post", "key_path": ["flow_rate_towards_closure_absolute"], "as": "post_closure_flow_towards_vph"}
+            {"source": "post", "key_path": ["flow_rate_towards_closure_absolute"], "as": "post_closure_flow_towards_vph"},
+            {"source": "action_parameters", "key_path": ["closure_direction_affected"], "as": "context_closure_direction_affected"},
+            {"source": "action_parameters", "key_path": ["signal_main_flow_direction"], "as": "context_signal_main_flow_direction"},
+            {"source": "pre", "key_path": ["closure_location", "latitude"], "as": "context_closure_latitude"}, # Assuming model_dump was used for location
+            {"source": "pre", "key_path": ["closure_location", "longitude"], "as": "context_closure_longitude"}
         ],
         "scoring_logic_type": "closure_effectiveness"
     }
@@ -376,6 +380,88 @@ class AgentCore:
         else: self.logger.warning(f"Unknown scoring_logic_type: {logic_type}"); return None, metrics_for_scoring
         self.logger.info(f"Effectiveness score for {action_type} (ID: {log_entry_data.get('action_id')}): {score}. Metrics used: {metrics_for_scoring}")
         return score, metrics_for_scoring
+
+    def _is_signal_upstream_of_closure(
+        self,
+        signal_state: SignalState,
+        closure_location: LocationModel,
+        closure_direction_affected: str  # e.g., "N", "S", "E", "W", "ALL"
+    ) -> bool:
+        if not signal_state.location or not signal_state.main_flow_direction:
+            self.logger.debug(f"Signal {signal_state.signal_id} missing location or main_flow_direction. Cannot determine if upstream.")
+            return False
+
+        sig_lat = signal_state.location.latitude
+        sig_lon = signal_state.location.longitude
+        cls_lat = closure_location.latitude
+        cls_lon = closure_location.longitude
+
+        lat_epsilon = 0.0001  # Approx 11 meters, for distinct positioning
+        lon_epsilon = 0.0001
+
+        signal_flow_dir = signal_state.main_flow_direction.upper()
+        # Normalize closure_direction_affected to simplify checks, e.g. "NORTHBOUND" -> "N"
+        # For this implementation, assume closure_direction_affected is already "N", "S", "E", "W", or "ALL"
+        closure_dir = closure_direction_affected.upper()
+
+        self.logger.debug(f"Checking upstream status: Signal {signal_state.signal_id} (Lat:{sig_lat}, Lon:{sig_lon}, Flow:{signal_flow_dir}) "
+                          f"for Closure (Lat:{cls_lat}, Lon:{cls_lon}, AffectedDir:{closure_dir})")
+
+        is_upstream = False
+
+        if closure_dir == "ALL":
+            # Simplified "ALL": if signal is upstream on any of its flow components.
+            # Example: if signal flows "NS"
+            # - is it South of closure (potential for N flow)?
+            # - is it North of closure (potential for S flow)?
+            if "N" in signal_flow_dir and (sig_lat < cls_lat - lat_epsilon): # South of closure, controls Northbound
+                is_upstream = True
+            elif "S" in signal_flow_dir and (sig_lat > cls_lat + lat_epsilon): # North of closure, controls Southbound
+                is_upstream = True
+            elif "E" in signal_flow_dir and (sig_lon < cls_lon - lon_epsilon): # West of closure, controls Eastbound
+                is_upstream = True
+            elif "W" in signal_flow_dir and (sig_lon > cls_lon + lon_epsilon): # East of closure, controls Westbound
+                is_upstream = True
+
+            if is_upstream:
+                 self.logger.debug(f"Signal {signal_state.signal_id} considered potentially upstream for 'ALL' directions closure based on its flow components and relative position.")
+                 return True
+            # If not caught by specific components, "ALL" might mean it's not clearly upstream for its specific flow directions.
+            # A more sophisticated "ALL" might consider any signal in a radius if no flow direction helps.
+            # For now, this simplified logic is used.
+            self.logger.debug(f"Signal {signal_state.signal_id} not conclusively upstream for 'ALL' directions based on its flow components.")
+            return False # Explicitly return false if no component matches for "ALL"
+
+        # Check for Northbound closure (closure affects Northbound traffic)
+        # Signal must be South of closure and control Northbound traffic
+        if closure_dir == "N":
+            if ("N" in signal_flow_dir) and (sig_lat < cls_lat - lat_epsilon):
+                is_upstream = True
+
+        # Check for Southbound closure
+        # Signal must be North of closure and control Southbound traffic
+        elif closure_dir == "S":
+            if ("S" in signal_flow_dir) and (sig_lat > cls_lat + lat_epsilon):
+                is_upstream = True
+
+        # Check for Eastbound closure
+        # Signal must be West of closure and control Eastbound traffic
+        elif closure_dir == "E":
+            if ("E" in signal_flow_dir) and (sig_lon < cls_lon - lon_epsilon):
+                is_upstream = True
+
+        # Check for Westbound closure
+        # Signal must be East of closure and control Westbound traffic
+        elif closure_dir == "W":
+            if ("W" in signal_flow_dir) and (sig_lon > cls_lon + lon_epsilon):
+                is_upstream = True
+
+        if is_upstream:
+            self.logger.debug(f"Signal {signal_state.signal_id} is UPSTREAM of closure affecting {closure_dir} traffic.")
+        else:
+            self.logger.debug(f"Signal {signal_state.signal_id} is NOT upstream of closure affecting {closure_dir} traffic (or closure_dir '{closure_dir}' is not N/S/E/W).")
+
+        return is_upstream
 
     async def _find_signals_near_location(self, target_location: LocationModel, all_signals: List[SignalState], radius_meters: int) -> List[SignalState]:
         # ... (implementation as before)
@@ -714,25 +800,85 @@ class AgentCore:
                             self.logger.debug(f"Signal {signal.signal_id} is not ONLINE, skipping ACCIDENT strategy selection.")
 
                 elif alert_type == "ROAD_CLOSURE":
-                    nearby_signals = await self._find_signals_near_location(alert_location_model, all_signal_states, self.ROAD_CLOSURE_IMMEDIATE_RADIUS_METERS)
-                    for signal in nearby_signals:
-                        if signal.signal_id in processed_signals_for_incident or signal.signal_id in processed_signals_for_coordination: continue
-                        if signal.operational_status == SignalOperationalStatusEnum.ONLINE and signal.current_phase == SignalPhaseEnum.GREEN:
-                            action_type_str = "SET_SIGNAL_RED_ROAD_CLOSURE"
-                            params_for_pre_kpi_fetch = {}
-                            fetched_kpis = await self._fetch_pre_action_kpis(action_type_str, [signal.signal_id], params_for_pre_kpi_fetch, system_kpis)
+                    closure_details = alert_item.get("details", {})
+                    closure_direction_affected = closure_details.get("direction_affected", "ALL") # Default to "ALL" if not specified
+                    self.logger.info(f"Processing ROAD_CLOSURE alert {alert_id} at {alert_location_model}. Direction affected: {closure_direction_affected}")
 
-                            self.logger.info(f"Incident {alert_id} ({alert_type}): Setting signal {signal.signal_id} to RED.")
+                    # Iterate through all signals to check if they are upstream, instead of just nearby.
+                    # Proximity filter can still be an initial step if performance becomes an issue with many signals.
+                    # For now, let's check all signals that are ONLINE and GREEN.
+                    for signal_state in all_signal_states:
+                        if signal_state.signal_id in processed_signals_for_incident or signal_state.signal_id in processed_signals_for_coordination:
+                            continue
+                        if not (signal_state.operational_status == SignalOperationalStatusEnum.ONLINE and signal_state.current_phase == SignalPhaseEnum.GREEN):
+                            continue
+
+                        is_upstream = self._is_signal_upstream_of_closure(
+                            signal_state=signal_state,
+                            closure_location=alert_location_model,
+                            closure_direction_affected=closure_direction_affected
+                        )
+
+                        if is_upstream:
+                            self.logger.info(f"ROAD_CLOSURE {alert_id}: Signal {signal_state.signal_id} is UPSTREAM and controls affected flow. Setting to RED.")
+                            action_type_str = "SET_SIGNAL_RED_ROAD_CLOSURE"
+                            # Fetch pre-action KPIs (optional, but good for consistency if scoring is used)
+                            params_for_pre_kpi_fetch = {} # No specific params needed for this action's pre-KPIs beyond signal_id
+                            fetched_kpis = await self._fetch_pre_action_kpis(
+                                action_type_str, [signal_state.signal_id], params_for_pre_kpi_fetch, system_kpis
+                            )
                             try:
-                                response = await self.traffic_signal_service.set_signal_phase(signal.signal_id, SignalPhaseEnum.RED, self.INCIDENT_SIGNAL_COOLDOWN_SECONDS)
+                                response = await self.traffic_signal_service.set_signal_phase(
+                                    signal_id=signal_state.signal_id,
+                                    phase=SignalPhaseEnum.RED,
+                                    duration_seconds=self.INCIDENT_SIGNAL_COOLDOWN_SECONDS  # Or a configurable duration for closures
+                                )
                                 if response.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
                                     action_ts = datetime.utcnow()
-                                    action_params_log = {"phase": SignalPhaseEnum.RED.value, "duration_seconds": self.INCIDENT_SIGNAL_COOLDOWN_SECONDS, "incident_id": alert_id, "signal_id": signal.signal_id}
-                                    pre_action_kpis_log = {"alert_type": alert_type, "incident_id_for_response": alert_id, "signal_initial_phase_at_decision": signal.current_phase.value} # Was GREEN
-                                    if fetched_kpis: pre_action_kpis_log.update(fetched_kpis)
-                                    # ... (Full pending_item_dict creation and append as in other blocks) ...
-                                    processed_signals_for_incident.add(signal.signal_id); processed_signals_for_coordination.add(signal.signal_id)
-                            except Exception as e: self.logger.error(f"Error setting signal for ROAD_CLOSURE {alert_id} on {signal.signal_id}: {e}")
+                                    action_parameters_for_log = {
+                                        "phase": SignalPhaseEnum.RED.value,
+                                        "duration_seconds": self.INCIDENT_SIGNAL_COOLDOWN_SECONDS,
+                                        "incident_id": alert_id,
+                                        "signal_id": signal_state.signal_id,
+                                        "closure_direction_affected": closure_direction_affected,
+                                        "signal_main_flow_direction": signal_state.main_flow_direction
+                                    }
+                                    pre_action_kpis_for_log = {
+                                        "alert_type": alert_type,
+                                        "incident_id_for_response": alert_id,
+                                        "signal_initial_phase_at_decision": signal_state.current_phase.value, # Was GREEN
+                                        "closure_location": alert_location_model.model_dump()
+                                    }
+                                    if fetched_kpis:
+                                        pre_action_kpis_for_log.update(fetched_kpis)
+
+                                    # Schedule KPI collection (copied from other action types, adjust as needed)
+                                    action_kpi_cfg = ACTION_KPI_CONFIG.get(action_type_str)
+                                    if action_kpi_cfg:
+                                        pending_item_id_closure = uuid4()
+                                        self.pending_kpi_collection.append({
+                                            'action_id': pending_item_id_closure,
+                                            'action_type': action_type_str,
+                                            'target_ids': [signal_state.signal_id],
+                                            'action_timestamp': action_ts,
+                                            'action_parameters': action_parameters_for_log,
+                                            'pre_action_context_kpis': pre_action_kpis_for_log,
+                                            'query_after_timestamp': action_ts + timedelta(seconds=action_kpi_cfg["delay_seconds"]),
+                                            'metrics_to_collect': action_kpi_cfg["metrics"],
+                                            'evaluation_window_minutes': action_kpi_cfg["eval_window_minutes"],
+                                            'kpi_query_details': {
+                                                'service_method_name': action_kpi_cfg["service_method"],
+                                                'method_specific_args': {'signal_id': signal_state.signal_id}
+                                            }
+                                        })
+                                        self.logger.info(f"Scheduled KPI collection for {action_type_str} (ID: {pending_item_id_closure}) on {signal_state.signal_id} for ROAD_CLOSURE {alert_id}.")
+
+                                    processed_signals_for_incident.add(signal_state.signal_id)
+                                    processed_signals_for_coordination.add(signal_state.signal_id) # Prevent other logic from overriding
+                            except Exception as e:
+                                self.logger.error(f"Error setting signal {signal_state.signal_id} to RED for ROAD_CLOSURE {alert_id}: {e}", exc_info=True)
+                        else:
+                            self.logger.debug(f"ROAD_CLOSURE {alert_id}: Signal {signal_state.signal_id} is not upstream or does not control affected flow. No action taken.")
 
         # --- Autonomous Traffic Signal Control Logic (General Congestion with Epsilon-Greedy) ---
         current_congestion_level = system_kpis.get("overall_congestion_level", "UNKNOWN")
@@ -1226,15 +1372,39 @@ async def main_example():
         def _initialize_mock_signals(self):
             self._signals.clear()
             sids = ["TS001","TS002","TS003","TS004","TS005"]
-            for i,sid in enumerate(sids):
-                self._signals[sid]=SignalState(
-                    signal_id=sid,
-                    location=LocationModel(latitude=1+i*0.01,longitude=1, name=f"Signal {sid}"), # Added name
-                    current_phase=SignalPhaseEnum.RED,
-                    operational_status=SignalOperationalStatusEnum.ONLINE,
-                    last_updated=datetime.utcnow(),
-                    main_flow_direction="NS" # Example
-                )
+            # Define locations and flow directions more deliberately for testing directional logic
+            # TS001: North of TS002, controls Southbound traffic
+            # TS002: At an "intersection", controls NS and EW (less specific for simple test)
+            # TS003: West of TS002, controls Eastbound traffic
+            # TS004: South of TS002, controls Northbound traffic
+            # TS005: East of TS002, controls Westbound traffic
+            signal_configs = {
+                "TS001": {"lat": 34.06, "lon": -118.24, "flow": "S", "name": "Signal North"},  # Controls Southbound
+                "TS002": {"lat": 34.05, "lon": -118.24, "flow": "NS", "name": "Signal Center NS"}, # Controls North/South
+                "TS003": {"lat": 34.05, "lon": -118.25, "flow": "E", "name": "Signal West"},   # Controls Eastbound
+                "TS004": {"lat": 34.04, "lon": -118.24, "flow": "N", "name": "Signal South"},  # Controls Northbound
+                "TS005": {"lat": 34.05, "lon": -118.23, "flow": "W", "name": "Signal East"}    # Controls Westbound
+            }
+            for sid in sids:
+                config = signal_configs.get(sid)
+                if config:
+                    self._signals[sid]=SignalState(
+                        signal_id=sid,
+                        location=LocationModel(latitude=config["lat"], longitude=config["lon"], name=config["name"]),
+                        current_phase=SignalPhaseEnum.RED,
+                        operational_status=SignalOperationalStatusEnum.ONLINE,
+                        last_updated=datetime.utcnow(),
+                        main_flow_direction=config["flow"]
+                    )
+                else: # Fallback for any sids not in config (should not happen with current sids list)
+                     self._signals[sid]=SignalState(
+                        signal_id=sid,
+                        location=LocationModel(latitude=34.00,longitude=-118.00, name=f"Signal {sid} Fallback"),
+                        current_phase=SignalPhaseEnum.RED,
+                        operational_status=SignalOperationalStatusEnum.ONLINE,
+                        last_updated=datetime.utcnow(),
+                        main_flow_direction="NS"
+                    )
         async def get_all_signal_states(self): return list(self._signals.values())
         async def set_signal_phase(self, signal_id,phase,duration):
             if signal_id in self._signals:
@@ -1930,6 +2100,114 @@ async def main_example():
     agent.rng.setstate(original_rng_state) # Restore original RNG state from the very start
     analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]})
     logger.info("--- MAIN_EXAMPLE: Epsilon-Greedy ACCIDENT Response Strategy Demonstration Completed ---")
+
+    # --- Demonstration of Directional ROAD_CLOSURE Logic ---
+    logger.info("--- MAIN_EXAMPLE: Starting Directional ROAD_CLOSURE Logic Demonstration ---")
+    agent.action_performance_logs = [] # Clear logs for this demo
+    agent.pending_kpi_collection = []
+    agent.exploration_epsilon = 0.0 # Ensure predictable actions if any other logic interferes
+
+    # Helper to reset signal states for closure demos
+    def reset_signals_for_closure_demo(initial_phases: Dict[str, SignalPhaseEnum]):
+        for sid, sig_state_obj in traffic_mock._signals.items():
+            sig_state_obj.current_phase = initial_phases.get(sid, SignalPhaseEnum.GREEN) # Default to GREEN to test RED setting
+            sig_state_obj.operational_status = SignalOperationalStatusEnum.ONLINE
+        agent._recent_signal_actions.clear()
+        logger.debug(f"MAIN_EXAMPLE (Road Closure Demo): Reset signals. Initial phases: {initial_phases}")
+
+    closure_sim_time_base = "2023-01-04T10:00:00Z"
+
+    # Scenario 1: Northbound (N) closure near TS002 (Center Signal)
+    logger.info("--- Road Closure Demo: Scenario 1 - Northbound Closure near TS002 ---")
+    current_sim_time_str = closure_sim_time_base
+    reset_signals_for_closure_demo({
+        "TS001": SignalPhaseEnum.GREEN, # North of center, flows S
+        "TS002": SignalPhaseEnum.GREEN, # Center, flows NS
+        "TS003": SignalPhaseEnum.GREEN, # West of center, flows E
+        "TS004": SignalPhaseEnum.GREEN, # South of center, flows N - EXPECTED TO TURN RED
+        "TS005": SignalPhaseEnum.GREEN  # East of center, flows W
+    })
+
+    closure_loc_ts002 = traffic_mock._signals["TS002"].location
+    mock_closure_alert_nb = {
+        "id": "closure_nb_ts002", "type": "ROAD_CLOSURE",
+        "location": closure_loc_ts002.model_dump(), # Ensure this is a dict
+        "details": {"direction_affected": "N", "description": "Northbound closure on Main St at Center"},
+        "severity": IncidentSeverityEnum.CRITICAL
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_closure_alert_nb]})
+
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_closure_nb_action", agent, analytics_mock,
+        kpis={"overall_congestion_level": "LOW"} # Background KPI
+    )
+
+    # Assertions for Scenario 1
+    assert traffic_mock._signals["TS004"].current_phase == SignalPhaseEnum.RED, "TS004 (South, N-Flow) should be RED for NB closure"
+    assert traffic_mock._signals["TS001"].current_phase == SignalPhaseEnum.GREEN, "TS001 (North, S-Flow) should remain GREEN for NB closure"
+    assert traffic_mock._signals["TS003"].current_phase == SignalPhaseEnum.GREEN, "TS003 (West, E-Flow) should remain GREEN for NB closure"
+    logger.info("Road Closure Demo: Scenario 1 (NB Closure) assertions passed for TS004, TS001, TS003.")
+
+    # Scenario 2: Eastbound (E) closure near TS002
+    logger.info("--- Road Closure Demo: Scenario 2 - Eastbound Closure near TS002 ---")
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    reset_signals_for_closure_demo({
+        "TS001": SignalPhaseEnum.GREEN,
+        "TS003": SignalPhaseEnum.GREEN, # West of center, flows E - EXPECTED TO TURN RED
+        "TS005": SignalPhaseEnum.GREEN  # East of center, flows W
+    })
+    mock_closure_alert_eb = {
+        "id": "closure_eb_ts002", "type": "ROAD_CLOSURE",
+        "location": closure_loc_ts002.model_dump(), # Ensure this is a dict
+        "details": {"direction_affected": "E", "description": "Eastbound closure on Cross St at Center"},
+        "severity": IncidentSeverityEnum.CRITICAL
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_closure_alert_eb]})
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_closure_eb_action", agent, analytics_mock,
+        kpis={"overall_congestion_level": "LOW"}
+    )
+    assert traffic_mock._signals["TS003"].current_phase == SignalPhaseEnum.RED, "TS003 (West, E-Flow) should be RED for EB closure"
+    assert traffic_mock._signals["TS005"].current_phase == SignalPhaseEnum.GREEN, "TS005 (East, W-Flow) should remain GREEN for EB closure"
+    logger.info("Road Closure Demo: Scenario 2 (EB Closure) assertions passed for TS003, TS005.")
+
+    # Scenario 3: "ALL" directions closure near TS002
+    logger.info("--- Road Closure Demo: Scenario 3 - ALL Directions Closure near TS002 ---")
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    reset_signals_for_closure_demo({ # All relevant signals initially green
+        "TS001": SignalPhaseEnum.GREEN, # North, S-flow -> should turn RED
+        "TS003": SignalPhaseEnum.GREEN, # West, E-flow -> should turn RED
+        "TS004": SignalPhaseEnum.GREEN, # South, N-flow -> should turn RED
+        "TS005": SignalPhaseEnum.GREEN  # East, W-flow -> should turn RED
+    })
+    mock_closure_alert_all = {
+        "id": "closure_all_ts002", "type": "ROAD_CLOSURE",
+        "location": closure_loc_ts002.model_dump(), # Ensure this is a dict
+        "details": {"direction_affected": "ALL", "description": "Full intersection closure at Center"},
+        "severity": IncidentSeverityEnum.CRITICAL
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_closure_alert_all]})
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_closure_all_action", agent, analytics_mock,
+        kpis={"overall_congestion_level": "LOW"}
+    )
+    assert traffic_mock._signals["TS001"].current_phase == SignalPhaseEnum.RED, "TS001 (N, S-flow) should be RED for ALL closure"
+    assert traffic_mock._signals["TS003"].current_phase == SignalPhaseEnum.RED, "TS003 (W, E-flow) should be RED for ALL closure"
+    assert traffic_mock._signals["TS004"].current_phase == SignalPhaseEnum.RED, "TS004 (S, N-flow) should be RED for ALL closure"
+    assert traffic_mock._signals["TS005"].current_phase == SignalPhaseEnum.RED, "TS005 (E, W-flow) should be RED for ALL closure"
+    logger.info("Road Closure Demo: Scenario 3 (ALL Closure) assertions passed.")
+
+    # Check ActionPerformanceLog for one of the actions
+    closure_log_nb = next((log for log in agent.action_performance_logs if log.action_parameters.get("incident_id") == "closure_nb_ts002" and log.target_ids[0] == "TS004"), None)
+    assert closure_log_nb is not None, "Log for NB closure action on TS004 not found"
+    if closure_log_nb:
+        assert closure_log_nb.action_parameters.get("closure_direction_affected") == "N"
+        assert closure_log_nb.action_parameters.get("signal_main_flow_direction") == "N"
+        assert "closure_location" in closure_log_nb.pre_action_context_kpis # Check if location is logged
+        logger.info("Road Closure Demo: Log parameters verified for NB closure action.")
+
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]}) # Reset alerts
+    logger.info("--- MAIN_EXAMPLE: Directional ROAD_CLOSURE Logic Demonstration Completed ---")
 
 
     if os.path.exists(EFFECTIVENESS_MEMORY_FILEPATH): os.remove(EFFECTIVENESS_MEMORY_FILEPATH)
