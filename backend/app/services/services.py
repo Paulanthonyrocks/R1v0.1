@@ -8,6 +8,7 @@ from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
+from app.services.dms_service import DmsService # Import DmsService
 from app.database import get_database_manager # Import the getter
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -22,11 +23,13 @@ _route_optimization_service_instance: Optional[RouteOptimizationService] = None
 _personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
 _weather_service_instance: Optional[WeatherService] = None
 _event_service_instance: Optional[EventService] = None
+_dms_service_instance: Optional[DmsService] = None # Add DmsService instance
 
 def initialize_services(config: Dict[str, Any]):
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
            _analytics_service_instance, _route_optimization_service_instance, \
-           _personalized_routing_service_instance, _weather_service_instance, _event_service_instance
+           _personalized_routing_service_instance, _weather_service_instance, _event_service_instance, \
+           _dms_service_instance # Add DmsService instance to global
     
     logger.info("Initializing application services...")
     if connection_manager_instance is None:
@@ -112,6 +115,17 @@ def initialize_services(config: Dict[str, Any]):
         logger.error(f"Failed to initialize EventService: {e}")
         _event_service_instance = None
 
+    # Initialize DMS service
+    try:
+        _dms_service_instance = DmsService(
+            config=config.get("dms_service", {}), # Pass dms_service specific config
+            connection_manager=connection_manager_instance # Optional: if DMS service needs to broadcast
+        )
+        logger.info("DmsService initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize DmsService: {e}", exc_info=True)
+        _dms_service_instance = None
+
     logger.info("Application services initialized.")
 
 def get_feed_manager() -> FMClass:
@@ -161,8 +175,16 @@ def get_event_service() -> EventService:
         raise RuntimeError("EventService not initialized")
     return _event_service_instance
 
+def get_dms_service() -> DmsService:
+    """Get the DMS service instance."""
+    if _dms_service_instance is None:
+        logger.error("DmsService accessed before initialization!")
+        raise RuntimeError("DmsService not initialized.")
+    return _dms_service_instance
+
 async def shutdown_services(): # Make async for feed manager shutdown
-    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance, _route_optimization_service_instance
+    global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
+           _analytics_service_instance, _route_optimization_service_instance, _dms_service_instance # Add dms instance
     logger.info("Shutting down application services...")
     if connection_manager_instance:
         try:
@@ -195,6 +217,11 @@ async def shutdown_services(): # Make async for feed manager shutdown
 
     # Clear route optimization service
     _route_optimization_service_instance = None
+
+    if _dms_service_instance:
+        # Add any specific shutdown logic for DmsService if needed in the future
+        logger.info("DmsService does not require explicit shutdown currently.")
+        _dms_service_instance = None
         
     logger.info("Application services shut down.")
 

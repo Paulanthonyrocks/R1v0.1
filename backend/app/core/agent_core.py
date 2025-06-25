@@ -14,8 +14,10 @@ from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern
 from app.services.analytics_service import AnalyticsService
 from app.services.traffic_signal_service import TrafficSignalService
-from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum # Added IncidentSeverityEnum
+from app.services.dms_service import DmsService # Import DmsService
+from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
+from app.models.dms import DmsState, DmsMessage # Import DMS models for type hinting if needed by AgentCore later
 from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage
 # For patching in main_example
 from unittest.mock import MagicMock, patch, AsyncMock # Added AsyncMock
@@ -123,11 +125,13 @@ class AgentCore:
     def __init__(self, prediction_scheduler: PredictionScheduler,
                  personalized_routing_service: PersonalizedRoutingService,
                  analytics_service: AnalyticsService,
-                 traffic_signal_service: TrafficSignalService):
+                 traffic_signal_service: TrafficSignalService,
+                 dms_service: DmsService): # Add DmsService
         self.prediction_scheduler = prediction_scheduler
         self.personalized_routing_service = personalized_routing_service
         self.analytics_service = analytics_service
         self.traffic_signal_service = traffic_signal_service
+        self.dms_service = dms_service # Store DmsService
 
         self._recent_signal_actions: Dict[str, Dict[str, Any]] = {}
         self.green_wave_corridor_configs = GREEN_WAVE_CORRIDOR_CONFIGS
@@ -1254,6 +1258,50 @@ async def main_example():
 
     analytics_mock = MockAnalytics(); traffic_mock = MockTraffic()
 
+    class MockDmsService(MagicMock):
+        _dms_states: Dict[str, DmsState] = {}
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.logger = logging.getLogger(__name__ + ".MockDmsService")
+            # Initialize a few mock DMS units for basic testing if AgentCore tries to get them
+            # More specific states for tests will be configured directly on the instance or via a helper
+            self._dms_states["DMS_MOCK_01"] = DmsState(
+                dms_id="DMS_MOCK_01",
+                location=LocationModel(latitude=34.055, longitude=-118.245, name="Mock DMS 1"),
+                current_messages=[],
+                operational_status=DmsStatusEnum.ONLINE,
+                last_updated=datetime.utcnow(),
+                capabilities=["set_custom_message", "clear_message"]
+            )
+
+        async def get_all_dms_states(self) -> List[DmsState]:
+            self.logger.debug(f"MockDmsService.get_all_dms_states called, returning {len(self._dms_states)} states.")
+            return list(self._dms_states.values())
+
+        async def set_dms_message(self, dms_id: str, messages: List[DmsMessage], duration_minutes: Optional[int] = None) -> DmsCommandResponse:
+            self.logger.info(f"MockDmsService.set_dms_message called for {dms_id} with {len(messages)} pages, duration {duration_minutes} mins.")
+            if dms_id in self._dms_states:
+                 if self._dms_states[dms_id].operational_status == DmsStatusEnum.ONLINE:
+                    self._dms_states[dms_id].current_messages = messages
+                    self._dms_states[dms_id].last_updated = datetime.utcnow()
+                    return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.SUCCESS, message="Mock DMS message set.")
+                 else:
+                    return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.REJECTED, message="Mock DMS not ONLINE.")
+            return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.FAILED, message="Mock DMS not found.")
+
+        async def clear_dms_message(self, dms_id: str) -> DmsCommandResponse:
+            self.logger.info(f"MockDmsService.clear_dms_message called for {dms_id}")
+            if dms_id in self._dms_states:
+                if self._dms_states[dms_id].operational_status == DmsStatusEnum.ONLINE:
+                    self._dms_states[dms_id].current_messages = []
+                    self._dms_states[dms_id].last_updated = datetime.utcnow()
+                    return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.SUCCESS, message="Mock DMS message cleared.")
+                else:
+                    return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.REJECTED, message="Mock DMS not ONLINE.")
+            return DmsCommandResponse(dms_id=dms_id, status=SignalControlStatusEnum.FAILED, message="Mock DMS not found.")
+
+    dms_mock = MockDmsService()
+
     def reset_mock_traffic_signals_for_congestion_demo(phase=SignalPhaseEnum.RED):
         for sig_id_congestion in ["TS001", "TS002", "TS004"]:
             if sig_id_congestion in traffic_mock._signals:
@@ -1263,7 +1311,13 @@ async def main_example():
         if "TS005" in traffic_mock._signals: traffic_mock._signals["TS005"].operational_status = SignalOperationalStatusEnum.OFFLINE
         logger.debug(f"MAIN_EXAMPLE: Reset signals for congestion demo (TS001,TS002,TS004 to {phase.value}).")
 
-    agent = AgentCore(MagicMock(spec=PredictionScheduler), MagicMock(spec=PersonalizedRoutingService), analytics_mock, traffic_mock)
+    agent = AgentCore(
+        MagicMock(spec=PredictionScheduler),
+        MagicMock(spec=PersonalizedRoutingService),
+        analytics_mock,
+        traffic_mock,
+        dms_mock # Pass the DmsService mock
+    )
 
     logger.info("--- MAIN_EXAMPLE: Starting Epsilon-Greedy General Congestion Demonstration ---")
     original_epsilon = agent.exploration_epsilon
@@ -2055,12 +2109,16 @@ async def main_example_subtask():
     mock_personalized_routing_service = MockPersonalizedRoutingService()
     mock_connection_manager = MockConnectionManager()
     mock_traffic_signal_service = MockTrafficSignalService(config={}, connection_manager=mock_connection_manager)
+    # Add a basic MockDmsService for main_example_subtask if it needs AgentCore
+    mock_dms_service_subtask = MockDmsService()
+
 
     agent_core = AgentCore(
         prediction_scheduler=mock_prediction_scheduler,
         personalized_routing_service=mock_personalized_routing_service,
         analytics_service=mock_analytics_service,
-        traffic_signal_service=mock_traffic_signal_service
+        traffic_signal_service=mock_traffic_signal_service,
+        dms_service=mock_dms_service_subtask # Pass DmsService mock
     )
 
     logger_subtask.info("--- Running main_example_subtask: decision cycle 1 ---")
