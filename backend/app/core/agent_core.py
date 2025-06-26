@@ -155,6 +155,9 @@ class AgentCore:
         self.rng.seed(42)
         self.logger.info(f"Exploration parameters initialized: epsilon = {self.exploration_epsilon}, rng_seed = 42")
 
+        self.congestion_duration_options: List[int] = [30, 45, 60, 75, 90] # seconds
+        self.logger.info(f"Congestion signal green duration options set to: {self.congestion_duration_options}")
+
     def _load_effectiveness_memory(self) -> Dict[str, List[float]]:
         if not os.path.exists(self.effectiveness_memory_filepath):
             self.logger.info("Effectiveness memory file not found. Initializing empty memory.")
@@ -913,18 +916,60 @@ class AgentCore:
                     params_for_pre_kpi_fetch, system_kpis
                 )
 
-                self.logger.info(f"General Congestion ({action_choice_method}): Setting signal '{signal_to_control_state.signal_id}' to GREEN.")
+                # --- Start of New Duration Selection Logic ---
+                selected_duration = 60 # Default duration
+                duration_choice_method = "DEFAULT_DURATION"
+                signal_selection_method = action_choice_method # Save original signal selection method
+
+                candidate_durations_scores: List[Dict[str, Any]] = []
+                for duration_opt in self.congestion_duration_options:
+                    duration_action_signature = f"{action_type_str}:{signal_to_control_state.signal_id}:{duration_opt}s"
+                    duration_scores = self.action_effectiveness_memory.get(duration_action_signature, [])
+                    avg_duration_score = sum(duration_scores) / len(duration_scores) if duration_scores else 0.0
+                    candidate_durations_scores.append({'duration': duration_opt, 'avg_score': avg_duration_score})
+                    self.logger.debug(f"  Duration option for '{signal_to_control_state.signal_id}': {duration_opt}s, Avg historical score: {avg_duration_score:.2f} from {len(duration_scores)} scores")
+
+                if candidate_durations_scores:
+                    # Use a separate epsilon for duration exploration, or reuse self.exploration_epsilon
+                    # For simplicity, reusing self.exploration_epsilon here.
+                    if self.rng.random() < self.exploration_epsilon:
+                        selected_duration_entry = self.rng.choice(candidate_durations_scores)
+                        selected_duration = selected_duration_entry['duration']
+                        duration_choice_method = f"EXPLORATORY_RANDOM_DURATION (AvgScore: {selected_duration_entry['avg_score']:.2f})"
+                    else:
+                        candidate_durations_scores.sort(key=lambda x: x['avg_score'], reverse=True)
+                        if all(cds['avg_score'] == 0.0 for cds in candidate_durations_scores) and len(candidate_durations_scores) > 0 :
+                             # If all scores are 0 (e.g. no history for any), pick a sensible default like the middle option or a pre-defined default.
+                            selected_duration = self.congestion_duration_options[len(self.congestion_duration_options) // 2]
+                            duration_choice_method = "EXPLOITATIVE_NO_HISTORY_DEFAULT_DURATION"
+                        elif candidate_durations_scores: # Should have at least one entry
+                            selected_duration_entry = candidate_durations_scores[0]
+                            selected_duration = selected_duration_entry['duration']
+                            duration_choice_method = f"EXPLOITATIVE_BEST_DURATION_SCORE (AvgScore: {selected_duration_entry['avg_score']:.2f})"
+                        # else: selected_duration remains default 60s, duration_choice_method "DEFAULT_DURATION"
+                self.logger.info(f"Duration Selection for {signal_to_control_state.signal_id} (Signal Choice: {signal_selection_method}): Chose duration {selected_duration}s via {duration_choice_method}")
+                # --- End of New Duration Selection Logic ---
+
+                self.logger.info(f"General Congestion ({signal_selection_method}, Duration: {selected_duration}s via {duration_choice_method}): Setting signal '{signal_to_control_state.signal_id}' to GREEN.")
                 try:
                     response = await self.traffic_signal_service.set_signal_phase(
-                        signal_id=signal_to_control_state.signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=60)
+                        signal_id=signal_to_control_state.signal_id, phase=SignalPhaseEnum.GREEN, duration_seconds=selected_duration) # Use selected_duration
                     if response.status in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
                         action_timestamp_utc = datetime.utcnow()
                         self._recent_signal_actions[signal_to_control_state.signal_id] = {
                             'timestamp': action_timestamp_utc, 'phase_commanded': SignalPhaseEnum.GREEN,
-                            'duration_commanded': 60, 'reason': 'general_congestion', 'selection_method': action_choice_method }
+                            'duration_commanded': selected_duration, 'reason': 'general_congestion',
+                            'selection_method': signal_selection_method, 'duration_selection_method': duration_choice_method
+                        }
                         processed_signals_for_coordination.add(signal_to_control_state.signal_id)
 
-                        action_parameters_for_log = {"phase": SignalPhaseEnum.GREEN.value, "duration_seconds": 60, "selection_method": action_choice_method}
+                        action_parameters_for_log = {
+                            "phase": SignalPhaseEnum.GREEN.value,
+                            "duration_seconds": selected_duration, # Log chosen duration
+                            "selection_method": signal_selection_method, # Original signal selection
+                            "duration_selection_method": duration_choice_method, # How duration was chosen
+                            "candidate_duration_scores": {str(cds['duration'])+"s": round(cds['avg_score'],3) for cds in candidate_durations_scores}
+                        }
                         pre_action_kpis_for_log = {
                             "overall_system_congestion_at_decision": current_congestion_level,
                             "signal_initial_phase_at_decision": signal_to_control_state.current_phase.value if signal_to_control_state.current_phase else 'N/A',
