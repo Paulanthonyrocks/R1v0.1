@@ -1068,6 +1068,131 @@ class AgentCore:
         if self._memory_updated_this_cycle: self._save_effectiveness_memory()
         self.logger.info(f"--- AgentCore cycle completed for {sample_user_id} at {datetime.utcnow().isoformat()} ---")
 
+    async def _formulate_dms_message(self, incident_type: str, incident_location: LocationModel, closure_direction_affected: Optional[str]) -> List[DmsMessage]:
+        messages: List[DmsMessage] = []
+        location_name = incident_location.name if incident_location.name else "AREA"
+
+        if incident_type.upper() == "ROAD_CLOSURE":
+            line1 = f"ROAD CLOSED"
+            line2 = f"AT {location_name.upper()}"
+            if closure_direction_affected:
+                line2 += f" {closure_direction_affected.upper()}BOUND"
+            line3 = "USE ALT ROUTE"
+            messages.append(DmsMessage(text=f"{line1} {line2}", page_number=1))
+            messages.append(DmsMessage(text=line3, page_number=2))
+            # Could add a third page with "EXPECT DELAYS"
+
+        elif incident_type.upper() == "ACCIDENT":
+            line1 = f"ACCIDENT"
+            line2 = f"AT {location_name.upper()}"
+            line3 = "EXPECT DELAYS"
+            line4 = "REDUCE SPEED"
+            messages.append(DmsMessage(text=f"{line1} {line2}", page_number=1))
+            messages.append(DmsMessage(text=line3, page_number=2))
+            messages.append(DmsMessage(text=line4, page_number=3)) # Example of a third page
+
+        else: # Default message for other incident types if DMS activation is expanded
+            messages.append(DmsMessage(text=f"{incident_type.upper()} AT {location_name.upper()}", page_number=1))
+            messages.append(DmsMessage(text="PROCEED WITH CAUTION", page_number=2))
+
+        # Ensure messages are within typical DMS display limits (e.g., character count per line/page)
+        # This is a basic placeholder; real DMS have specific constraints.
+        # For now, assuming the DmsMessage model or display hardware handles truncation/formatting.
+        # Max characters per message object can be enforced here if needed.
+        for msg in messages:
+            if len(msg.text) > 30: # Arbitrary limit for example
+                 self.logger.warning(f"DMS message text too long, may be truncated: '{msg.text}'")
+                 # msg.text = msg.text[:30] # Example truncation
+
+        self.logger.debug(f"Formulated DMS messages for {incident_type} at {location_name}: {[(m.page_number, m.text) for m in messages]}")
+        return messages
+
+    async def _handle_dms_for_incident(self, incident_alert: Dict[str, Any], all_dms_states: List[DmsState], system_kpis: Dict[str, Any]):
+        incident_type = incident_alert.get("type", "UNKNOWN_INCIDENT").upper()
+        incident_location_data = incident_alert.get("location")
+
+        if not incident_location_data:
+            self.logger.warning(f"DMS Handling: Incident {incident_alert.get('id')} has no location data. Skipping DMS activation.")
+            return
+
+        try:
+            incident_location = LocationModel(**incident_location_data)
+        except Exception as e:
+            self.logger.error(f"DMS Handling: Could not parse incident location for {incident_alert.get('id')}: {e}. Skipping DMS.")
+            return
+
+        # Basic relevance check: For now, only ROAD_CLOSURE and high-severity ACCIDENT trigger DMS
+        alert_severity_str = incident_alert.get("severity", IncidentSeverityEnum.LOW.value if hasattr(IncidentSeverityEnum, "LOW") else "low") # Handle if enum not directly passed
+
+        # Convert severity string to enum member if possible for comparison
+        try:
+            alert_severity = IncidentSeverityEnum(alert_severity_str.lower())
+        except ValueError:
+            self.logger.warning(f"DMS Handling: Unknown severity '{alert_severity_str}' for incident {incident_alert.get('id')}. Defaulting to LOW.")
+            alert_severity = IncidentSeverityEnum.LOW
+
+
+        if not (incident_type == "ROAD_CLOSURE" or (incident_type == "ACCIDENT" and alert_severity in [IncidentSeverityEnum.HIGH, IncidentSeverityEnum.CRITICAL])):
+            self.logger.debug(f"DMS Handling: Incident type {incident_type} with severity {alert_severity.value} not configured for DMS activation. Skipping.")
+            return
+
+        closure_direction_affected = incident_alert.get("details", {}).get("direction_affected")
+
+        # Simple DMS selection: find the closest ONLINE DMS within a certain radius (e.g., 2km)
+        # This is a placeholder for more sophisticated selection logic based on road network, DMS viewable direction etc.
+        MAX_DMS_ACTIVATION_RADIUS_METERS = 2000
+        candidate_dms_units: List[DmsState] = []
+
+        # Placeholder for _find_dms_near_location - for now, iterate all and check distance manually
+        # In a real system, self.traffic_signal_service._haversine_distance or similar would be used.
+        # For now, a simplified check assuming a simple grid for mock locations.
+        relevant_dms_found = False
+        for dms_state in all_dms_states:
+            if dms_state.operational_status == DmsStatusEnum.ONLINE and dms_state.location:
+                # Simplified distance check (Manhattan distance for example on a grid)
+                # Replace with Haversine or proper geospatial query in a real system
+                lat_diff = abs(dms_state.location.latitude - incident_location.latitude)
+                lon_diff = abs(dms_state.location.longitude - incident_location.longitude)
+                # Rough conversion: 0.01 degrees ~ 1.1km. So 2km ~ 0.018 degrees
+                if lat_diff < 0.018 * (MAX_DMS_ACTIVATION_RADIUS_METERS / 1000.0) and \
+                   lon_diff < 0.018 * (MAX_DMS_ACTIVATION_RADIUS_METERS / 1000.0): # Approx check
+
+                    # TODO: Add more sophisticated logic here:
+                    # - Is DMS upstream of incident for relevant traffic flow?
+                    # - Does DMS viewable_directions match traffic that would be affected?
+                    # - Is DMS target_roadway_segment_id relevant?
+
+                    messages_to_display = await self._formulate_dms_message(incident_type, incident_location, closure_direction_affected)
+
+                    if messages_to_display:
+                        self.logger.info(f"DMS Handling: Activating DMS {dms_state.dms_id} for incident {incident_alert.get('id')}. Message: '{messages_to_display[0].text}'")
+                        try:
+                            response = await self.dms_service.set_dms_message(dms_state.dms_id, messages_to_display)
+                            if response.status == SignalControlStatusEnum.SUCCESS or response.status == SignalControlStatusEnum.ACCEPTED:
+                                self.logger.info(f"DMS {dms_state.dms_id} message set successfully for incident {incident_alert.get('id')}.")
+                                relevant_dms_found = True
+                                # Log this action (simplified logging for now)
+                                self.action_performance_logs.append(ActionPerformanceLog(
+                                    action_timestamp=datetime.utcnow(),
+                                    action_type="SET_DMS_MESSAGE",
+                                    target_ids=[dms_state.dms_id],
+                                    action_parameters={
+                                        "incident_id": incident_alert.get('id'),
+                                        "incident_type": incident_type,
+                                        "messages": [msg.model_dump() for msg in messages_to_display]
+                                    },
+                                    # Pre/Post KPIs for DMS are TBD, can be added later if direct effectiveness is measurable
+                                ))
+                                # For now, only activate one DMS per incident for simplicity in this initial step
+                                break
+                            else:
+                                self.logger.error(f"DMS Handling: Failed to set message on DMS {dms_state.dms_id} for incident {incident_alert.get('id')}: {response.message}")
+                        except Exception as e:
+                            self.logger.error(f"DMS Handling: Exception setting message on DMS {dms_state.dms_id}: {e}", exc_info=True)
+        if not relevant_dms_found:
+            self.logger.info(f"DMS Handling: No suitable/available DMS found or activated for incident {incident_alert.get('id')}.")
+
+
 async def main_example_run_with_mock_time(iso_time_str: str, user_id_for_cycle: str, agent_instance: AgentCore, analytics_service_mock: MagicMock, kpis: Dict[str, Any]):
     """Helper to run agent cycle with mocked time and system KPIs."""
     dt_object = datetime.fromisoformat(iso_time_str.replace("Z", "+00:00"))
@@ -1263,16 +1388,44 @@ async def main_example():
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.logger = logging.getLogger(__name__ + ".MockDmsService")
-            # Initialize a few mock DMS units for basic testing if AgentCore tries to get them
-            # More specific states for tests will be configured directly on the instance or via a helper
-            self._dms_states["DMS_MOCK_01"] = DmsState(
-                dms_id="DMS_MOCK_01",
-                location=LocationModel(latitude=34.055, longitude=-118.245, name="Mock DMS 1"),
-                current_messages=[],
-                operational_status=DmsStatusEnum.ONLINE,
-                last_updated=datetime.utcnow(),
-                capabilities=["set_custom_message", "clear_message"]
-            )
+            self._dms_states: Dict[str, DmsState] = {
+                "DMS_UPSTREAM_NB_01": DmsState(
+                    dms_id="DMS_UPSTREAM_NB_01",
+                    location=LocationModel(latitude=34.035, longitude=-118.24, name="DMS Upstream of TS002 for NB Traffic"), # South of TS002
+                    current_messages=[],
+                    operational_status=DmsStatusEnum.ONLINE,
+                    last_updated=datetime.utcnow(),
+                    capabilities=["set_custom_message", "clear_message", "max_pages_2"],
+                    viewable_directions=["N"] # Viewable by Northbound traffic
+                ),
+                "DMS_UPSTREAM_EB_01": DmsState(
+                    dms_id="DMS_UPSTREAM_EB_01",
+                    location=LocationModel(latitude=34.05, longitude=-118.255, name="DMS Upstream of TS002 for EB Traffic"), # West of TS002
+                    current_messages=[],
+                    operational_status=DmsStatusEnum.ONLINE,
+                    last_updated=datetime.utcnow(),
+                    capabilities=["set_custom_message", "clear_message"],
+                    viewable_directions=["E"] # Viewable by Eastbound traffic
+                ),
+                "DMS_DOWNSTREAM_SB_01": DmsState(
+                    dms_id="DMS_DOWNSTREAM_SB_01",
+                    location=LocationModel(latitude=34.065, longitude=-118.24, name="DMS Downstream (North) of TS002"), # North of TS002
+                    current_messages=[],
+                    operational_status=DmsStatusEnum.ONLINE,
+                    last_updated=datetime.utcnow(),
+                    capabilities=["set_custom_message", "clear_message"],
+                    viewable_directions=["S"] # Viewable by Southbound traffic
+                ),
+                 "DMS_OFFLINE_01": DmsState(
+                    dms_id="DMS_OFFLINE_01",
+                    location=LocationModel(latitude=34.045, longitude=-118.235, name="Offline DMS"),
+                    current_messages=[],
+                    operational_status=DmsStatusEnum.OFFLINE,
+                    last_updated=datetime.utcnow(),
+                    capabilities=[]
+                )
+            }
+            self.logger.info(f"MockDmsService initialized with {len(self._dms_states)} DMS units.")
 
         async def get_all_dms_states(self) -> List[DmsState]:
             self.logger.debug(f"MockDmsService.get_all_dms_states called, returning {len(self._dms_states)} states.")
@@ -1968,6 +2121,125 @@ async def main_example():
     analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]})
     logger.info("--- MAIN_EXAMPLE: Directional ROAD_CLOSURE Logic Demonstration Completed ---")
 
+    # --- Demonstration of DMS Activation Logic ---
+    logger.info("--- MAIN_EXAMPLE: Starting DMS Activation Logic Demonstration ---")
+    agent.action_performance_logs = [] # Clear logs
+    agent.pending_kpi_collection = [] # Clear pending KPIs
+
+    # Ensure DMS mock states are pristine for these tests
+    dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages = []
+    dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages = []
+    dms_mock._dms_states["DMS_DOWNSTREAM_SB_01"].current_messages = []
+    dms_mock._dms_states["DMS_OFFLINE_01"].current_messages = []
+    dms_mock._dms_states["DMS_OFFLINE_01"].operational_status = DmsStatusEnum.OFFLINE # Ensure it's offline for test
+
+    dms_sim_time_base = "2023-01-05T10:00:00Z"
+    closure_loc_for_dms_test = traffic_mock._signals["TS002"].location # Closure near center
+
+    # Scenario 1: Road Closure activating upstream DMS for Northbound traffic
+    logger.info("--- DMS Demo: Scenario 1 - Road Closure NB, Activate Upstream DMS ---")
+    current_sim_time_str = dms_sim_time_base
+    # Reset signals to a neutral state (e.g., all green or a mix, doesn't strictly matter for DMS test focus)
+    reset_signals_for_closure_demo({"TS001": SignalPhaseEnum.GREEN, "TS004": SignalPhaseEnum.GREEN})
+
+    mock_dms_closure_alert_nb = {
+        "id": "dms_closure_nb_01", "type": "ROAD_CLOSURE",
+        "location": closure_loc_for_dms_test.model_dump(),
+        "details": {"direction_affected": "N", "description": "NB lane closed at Main/Center"},
+        "severity": IncidentSeverityEnum.CRITICAL.value # Ensure severity is a string value for the dict
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_dms_closure_alert_nb]})
+
+    # Mock the set_dms_message to track calls
+    dms_mock.set_dms_message = AsyncMock(wraps=dms_mock.set_dms_message) # Wrap to retain original logic but allow call tracking
+
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_dms_closure_nb", agent, analytics_mock,
+        kpis={"overall_congestion_level": "LOW"}
+    )
+
+    # Assertions for DMS_UPSTREAM_NB_01 (ID: DMS_UPSTREAM_NB_01, loc: 34.035, -118.24, viewable N)
+    # Closure is at 34.05, -118.24, affecting N. DMS is South, viewable N. Should be activated.
+    dms_upstream_nb_state = dms_mock._dms_states["DMS_UPSTREAM_NB_01"]
+    assert dms_upstream_nb_state.current_messages is not None and len(dms_upstream_nb_state.current_messages) > 0, \
+        "DMS_UPSTREAM_NB_01 should have messages for NB closure."
+    if dms_upstream_nb_state.current_messages:
+        logger.info(f"DMS_UPSTREAM_NB_01 message: {dms_upstream_nb_state.current_messages[0].text}")
+        assert "ROAD CLOSED" in dms_upstream_nb_state.current_messages[0].text
+        assert "NBOUND" in dms_upstream_nb_state.current_messages[0].text # Check if direction is in message
+
+    # Assert other DMS were not activated or have old messages
+    assert not dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages, "DMS_UPSTREAM_EB_01 should not be activated for NB closure."
+    assert not dms_mock._dms_states["DMS_DOWNSTREAM_SB_01"].current_messages, "DMS_DOWNSTREAM_SB_01 should not be activated for NB closure."
+
+    # Check if SET_DMS_MESSAGE action was logged
+    dms_action_log = next((log for log in agent.action_performance_logs if log.action_type == "SET_DMS_MESSAGE" and log.target_ids[0] == "DMS_UPSTREAM_NB_01"), None)
+    assert dms_action_log is not None, "SET_DMS_MESSAGE action for DMS_UPSTREAM_NB_01 not found in logs."
+    if dms_action_log:
+        assert dms_action_log.action_parameters.get("incident_id") == "dms_closure_nb_01"
+        assert len(dms_action_log.action_parameters.get("messages", [])) > 0
+    logger.info("DMS Demo: Scenario 1 (NB Road Closure) assertions passed.")
+    dms_mock.set_dms_message.reset_mock() # Reset call counts for next test
+
+    # Scenario 2: High-Severity Accident activating DMS
+    logger.info("--- DMS Demo: Scenario 2 - Critical Accident, Activate Nearby DMS ---")
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages = [] # Reset its messages
+
+    # Accident location near DMS_UPSTREAM_EB_01 (loc: 34.05, -118.255)
+    accident_loc_dms_eb = LocationModel(latitude=34.0505, longitude=-118.2545, name="Near DMS EB")
+    mock_dms_accident_alert = {
+        "id": "dms_acc_crit_01", "type": "ACCIDENT",
+        "location": accident_loc_dms_eb.model_dump(),
+        "details": {"description": "Major accident on Cross St."},
+        "severity": IncidentSeverityEnum.CRITICAL.value
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_dms_accident_alert]})
+    dms_mock.set_dms_message = AsyncMock(wraps=dms_mock.set_dms_message)
+
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_dms_accident", agent, analytics_mock,
+        kpis={"overall_congestion_level": "MEDIUM"}
+    )
+
+    dms_upstream_eb_state = dms_mock._dms_states["DMS_UPSTREAM_EB_01"]
+    assert dms_upstream_eb_state.current_messages is not None and len(dms_upstream_eb_state.current_messages) > 0, \
+        "DMS_UPSTREAM_EB_01 should have messages for critical accident."
+    if dms_upstream_eb_state.current_messages:
+        logger.info(f"DMS_UPSTREAM_EB_01 message: {dms_upstream_eb_state.current_messages[0].text}")
+        assert "ACCIDENT" in dms_upstream_eb_state.current_messages[0].text
+
+    dms_action_log_acc = next((log for log in agent.action_performance_logs if log.action_type == "SET_DMS_MESSAGE" and log.target_ids[0] == "DMS_UPSTREAM_EB_01"), None)
+    assert dms_action_log_acc is not None, "SET_DMS_MESSAGE action for DMS_UPSTREAM_EB_01 (accident) not found."
+    logger.info("DMS Demo: Scenario 2 (Critical Accident) assertions passed.")
+    dms_mock.set_dms_message.reset_mock()
+
+    # Scenario 3: Offline DMS is not activated
+    logger.info("--- DMS Demo: Scenario 3 - Offline DMS Not Activated ---")
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+
+    offline_dms_location = dms_mock._dms_states["DMS_OFFLINE_01"].location
+    mock_dms_offline_test_alert = {
+        "id": "dms_offline_test_01", "type": "ROAD_CLOSURE",
+        "location": offline_dms_location.model_dump(),
+        "details": {"direction_affected": "E", "description": "Closure near offline DMS"},
+        "severity": IncidentSeverityEnum.CRITICAL.value
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_dms_offline_test_alert]})
+    dms_mock.set_dms_message = AsyncMock(wraps=dms_mock.set_dms_message)
+
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_dms_offline_test", agent, analytics_mock,
+        kpis={"overall_congestion_level": "LOW"}
+    )
+
+    dms_mock.set_dms_message.assert_not_called() # Check that set_dms_message was not called for the offline DMS or any DMS if it's the only one in range
+    # More specific check: ensure the offline DMS state did not change (if it was the only one in range)
+    assert not dms_mock._dms_states["DMS_OFFLINE_01"].current_messages, "Offline DMS should not have messages."
+    logger.info("DMS Demo: Scenario 3 (Offline DMS) assertions passed.")
+
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]}) # Reset alerts
+    logger.info("--- MAIN_EXAMPLE: DMS Activation Logic Demonstration Completed ---")
 
     if os.path.exists(EFFECTIVENESS_MEMORY_FILEPATH): os.remove(EFFECTIVENESS_MEMORY_FILEPATH)
     logger.info("--- AgentCore main_example for All Scoring Demonstrations completed ---")
