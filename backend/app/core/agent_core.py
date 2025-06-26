@@ -25,6 +25,28 @@ from unittest.mock import MagicMock, patch, AsyncMock # Added AsyncMock
 
 logger = logging.getLogger(__name__)
 
+# --- Plan Structures for Advanced Planning/Reasoning ---
+class PlanAction(BaseModel):
+    action_type: str # e.g., "SET_SIGNAL_PHASE", "SET_DMS_MESSAGE", "UPDATE_VSL"
+    target_ids: List[str]
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    # Example parameters for SET_SIGNAL_PHASE: {"phase": SignalPhaseEnum.RED, "duration_seconds": 300}
+    # Example parameters for SET_DMS_MESSAGE: {"messages": [DmsMessage(text="ACCIDENT AHEAD")], "duration_minutes": 30}
+
+class PlanStepStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+class PlanStep(BaseModel):
+    step_id: str
+    description: Optional[str] = None
+    actions: List[PlanAction] = Field(default_factory=list)
+    status: PlanStepStatus = PlanStepStatus.PENDING
+    # Future: Add dependencies, trigger_conditions, completion_criteria
+
 # --- Accident Response Strategy Definitions ---
 STRATEGY_ACCIDENT_EXTEND_GREEN_LONG = "STRATEGY_ACCIDENT_EXTEND_GREEN_LONG"
 STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE = "STRATEGY_ACCIDENT_EXTEND_GREEN_MODERATE"
@@ -157,6 +179,86 @@ class AgentCore:
 
         self.congestion_duration_options: List[int] = [30, 45, 60, 75, 90] # seconds
         self.logger.info(f"Congestion signal green duration options set to: {self.congestion_duration_options}")
+
+        # For Advanced Planning/Reasoning
+        self.active_plan: Optional[List[PlanStep]] = None
+        self.current_plan_step_index: int = -1 # -1 indicates no plan active or current step not set
+        self.active_plan_id: Optional[str] = None # To identify the type of plan active
+        self.logger.info("Advanced planning attributes initialized (active_plan: None).")
+
+    def _get_hardcoded_hwy_closure_plan(self, incident_alert: Dict[str, Any]) -> List[PlanStep]:
+        incident_id = incident_alert.get('id', 'unknown_incident')
+        incident_location = LocationModel(**incident_alert.get("location", {}))
+        incident_loc_name = incident_location.name if incident_location.name else f"Lat:{incident_location.latitude:.3f},Lon:{incident_location.longitude:.3f}"
+
+        closure_dir_affected = incident_alert.get("details", {}).get("direction_affected", "ALL").upper()
+        closure_dir_display = f" {closure_dir_affected}BOUND" if closure_dir_affected != "ALL" else ""
+
+
+        self.logger.info(f"Generating hardcoded highway closure plan for incident: {incident_id} at {incident_loc_name} affecting {closure_dir_affected} direction.")
+
+        # These IDs are examples and should match DMS/signals in the mock inventory or real system
+        # Ideally, these would be dynamically selected based on incident location and network topology.
+        # For a Northbound closure at TS002 (lat: 34.05, lon: -118.24):
+        # Upstream signal (south): TS004 (lat: 34.04, lon: -118.24, flow: "N")
+        # Upstream DMS (south, for NB traffic): DMS_UPSTREAM_NB_01 (lat: 34.035, lon: -118.24)
+        # Secondary DMS (e.g., on an approach route): DMS_UPSTREAM_EB_01 (lat: 34.05, lon: -118.255)
+
+        # Customize based on closure_direction_affected if needed, or make generic for "ALL LANES"
+        # This example is somewhat generic but uses closure_dir_display for messaging.
+
+        plan_steps = [
+            PlanStep(
+                step_id="HWY_CLOSURE_S1_CONTAIN_ALERT",
+                description="Immediate containment: Set key upstream signals to RED, activate primary DMS.",
+                actions=[
+                    PlanAction( # Action to set an upstream signal (e.g., on-ramp or approach) to RED
+                        action_type="SET_SIGNAL_PHASE",
+                        target_ids=["TS004"], # Example: Signal South of TS002, controlling Northbound traffic
+                        parameters={"phase": SignalPhaseEnum.RED.value, "duration_seconds": 7200} # Long red for closure (2 hours)
+                    ),
+                    PlanAction(
+                        action_type="SET_DMS_MESSAGE",
+                        target_ids=["DMS_UPSTREAM_NB_01"], # Example: DMS South of TS002, viewable by NB traffic
+                        parameters={
+                            "messages": [
+                                DmsMessage(text=f"HWY CLOSED{closure_dir_display}", page_number=1),
+                                DmsMessage(text=f"AT {incident_loc_name.upper()}", page_number=2),
+                                DmsMessage(text="ALL LANES BLOCKED", page_number=3),
+                                DmsMessage(text="USE ALT ROUTE", page_number=4)
+                            ]
+                        }
+                    )
+                ]
+            ),
+            PlanStep(
+                step_id="HWY_CLOSURE_S2_SECONDARY_ALERTS",
+                description="Activate secondary DMS for wider area notification or alternative routes.",
+                actions=[
+                    PlanAction(
+                        action_type="SET_DMS_MESSAGE",
+                        target_ids=["DMS_UPSTREAM_EB_01"], # Example: DMS on a cross-street or alternative approach
+                        parameters={
+                            "messages": [
+                                DmsMessage(text=f"HWY CLSD{closure_dir_display} @ {incident_loc_name.upper()}", page_number=1),
+                                DmsMessage(text="SEVERE DELAYS", page_number=2),
+                                DmsMessage(text="CONSIDER ALT ROUTE", page_number=3)
+                            ]
+                        }
+                    )
+                ]
+            ),
+            PlanStep(
+                step_id="HWY_CLOSURE_S3_MONITOR",
+                description="Monitoring phase. Agent will continue standard reactive logic or specific plan monitoring KPIs.",
+                actions=[] # No direct new actions; this step implies a period of waiting/monitoring
+                           # Transitions from this step would be based on incident status updates or KPIs.
+            ),
+            # Plan completion (clearing DMS, signals) would be handled by a separate trigger or plan,
+            # e.g., when the incident is cleared. This template focuses on initial response.
+        ]
+        self.logger.info(f"Generated plan '{self.active_plan_id}' with {len(plan_steps)} steps for incident {incident_id}.")
+        return plan_steps
 
     def _load_effectiveness_memory(self) -> Dict[str, List[float]]:
         if not os.path.exists(self.effectiveness_memory_filepath):
@@ -570,6 +672,149 @@ class AgentCore:
 
         processed_signals_for_coordination: Set[str] = set()
         processed_signals_for_incident: Set[str] = set()
+
+        # --- Complex Plan Activation & Execution ---
+        if self.active_plan and self.current_plan_step_index >= 0 and self.current_plan_step_index < len(self.active_plan):
+            # Placeholder for plan execution logic (Step 4)
+            current_step_obj = self.active_plan[self.current_plan_step_index]
+            self.logger.info(f"Executing Step '{current_step_obj.step_id}': {current_step_obj.description} of Plan '{self.active_plan_id}'.")
+            current_step_obj.status = PlanStepStatus.ACTIVE
+
+            all_actions_successful = True
+            for action_to_execute in current_step_obj.actions:
+                self.logger.info(f"Plan Action: Type='{action_to_execute.action_type}', Targets='{action_to_execute.target_ids}', Params='{action_to_execute.parameters}'")
+                try:
+                    if action_to_execute.action_type == "SET_SIGNAL_PHASE":
+                        for target_id in action_to_execute.target_ids:
+                            phase_val = action_to_execute.parameters.get("phase")
+                            duration = action_to_execute.parameters.get("duration_seconds")
+                            if phase_val:
+                                phase_enum = SignalPhaseEnum(phase_val)
+                                # TODO: Consider adding cooldown override or specific reason for plan actions
+                                response = await self.traffic_signal_service.set_signal_phase(
+                                    signal_id=target_id,
+                                    phase=phase_enum,
+                                    duration_seconds=duration # Can be None
+                                )
+                                if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                                    self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} failed: {response.message}")
+                                    all_actions_successful = False
+                            else:
+                                self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} missing 'phase' parameter.")
+                                all_actions_successful = False
+
+                    elif action_to_execute.action_type == "SET_DMS_MESSAGE":
+                        for target_id in action_to_execute.target_ids:
+                            messages_data = action_to_execute.parameters.get("messages", [])
+                            dms_messages = [DmsMessage(**msg_data) for msg_data in messages_data]
+                            duration_mins = action_to_execute.parameters.get("duration_minutes")
+                            if dms_messages:
+                                response = await self.dms_service.set_dms_message(
+                                    dms_id=target_id,
+                                    messages=dms_messages,
+                                    duration_minutes=duration_mins
+                                )
+                                if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                                    self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} failed: {response.message}")
+                                    all_actions_successful = False
+                            else:
+                                self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} missing 'messages' parameter or empty.")
+                                all_actions_successful = False
+
+                    # Add other action types here (e.g., CLEAR_DMS_MESSAGE)
+                    elif action_to_execute.action_type == "CLEAR_DMS_MESSAGE":
+                        for target_id in action_to_execute.target_ids:
+                            response = await self.dms_service.clear_dms_message(dms_id=target_id)
+                            if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                                self.logger.error(f"Plan Action CLEAR_DMS_MESSAGE for {target_id} failed: {response.message}")
+                                all_actions_successful = False
+                    else:
+                        self.logger.warning(f"Plan Action: Unknown action_type '{action_to_execute.action_type}'")
+                        all_actions_successful = False
+
+                except Exception as e:
+                    self.logger.error(f"Exception executing plan action {action_to_execute.action_type} for targets {action_to_execute.target_ids}: {e}", exc_info=True)
+                    all_actions_successful = False
+
+            current_step_obj.status = PlanStepStatus.COMPLETED if all_actions_successful else PlanStepStatus.FAILED
+            self.logger.info(f"Step '{current_step_obj.step_id}' completed with status: {current_step_obj.status.value}")
+
+            # Simple advancement: move to next step or finish plan
+            self.current_plan_step_index += 1
+            if self.current_plan_step_index >= len(self.active_plan):
+                self.logger.info(f"Complex plan '{self.active_plan_id}' has completed all steps.")
+                self.active_plan = None
+                self.active_plan_id = None
+                self.current_plan_step_index = -1
+            # If a plan is active, for now, we will still run other reactive logic.
+            # This could be changed to suppress/modify reactive logic if a plan needs full control.
+            if self.active_plan:
+                 self.logger.warning(f"Plan '{self.active_plan_id}' is active. Standard reactive logic will also run this cycle. This might need refinement.")
+
+        else: # No active plan, or plan just completed in the previous block. Check for new triggers.
+            if self.active_plan is None and self.active_plan_id is not None: # Indicates a plan just finished
+                self.logger.info(f"Complex plan '{self.active_plan_id}' was marked as completed in this cycle.")
+                self.active_plan_id = None # Clear the ID as the plan is now None
+                self.current_plan_step_index = -1
+
+
+            # Check for conditions that trigger a new complex plan
+            for alert_item_for_plan in active_alerts:
+                alert_type_for_plan = alert_item_for_plan.get("type", "UNKNOWN").upper() # Ensure uppercase for comparison
+                alert_severity_for_plan_str = alert_item_for_plan.get("severity", IncidentSeverityEnum.LOW.value).lower()
+                alert_details_for_plan = alert_item_for_plan.get("details", {})
+
+                is_critical_road_closure_all_lanes = (
+                    alert_type_for_plan == IncidentTypeEnum.ROAD_CLOSURE.value.upper() and # Compare with .value.upper()
+                    alert_severity_for_plan_str == IncidentSeverityEnum.CRITICAL.value and
+                    alert_details_for_plan.get("lanes_affected", "").upper() == "ALL"
+                )
+
+                if is_critical_road_closure_all_lanes:
+                    incident_id_for_plan = alert_item_for_plan.get('id', 'unknown_incident')
+                    self.logger.info(f"COMPLEX SCENARIO TRIGGERED: Critical all-lanes road closure (Alert ID: {incident_id_for_plan}). Activating predefined plan.")
+                    self.active_plan = self._get_hardcoded_hwy_closure_plan(alert_item_for_plan)
+                    if self.active_plan: # Ensure plan was loaded
+                        # Reset status of all steps in the new plan to PENDING
+                        for step in self.active_plan:
+                            step.status = PlanStepStatus.PENDING
+                        self.active_plan_id = f"HWY_CLOSURE_{incident_id_for_plan}"
+                        self.current_plan_step_index = 0
+                        self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps. Starting at step index {self.current_plan_step_index}.")
+                        break
+                    else:
+                        self.logger.warning(f"Failed to load highway closure plan for incident {incident_id_for_plan}.")
+
+        processed_pending_indices: List[int] = []
+                self.active_plan = None
+                self.active_plan_id = None
+                self.current_plan_step_index = -1
+
+            # Check for conditions that trigger a new complex plan
+            for alert_item_for_plan in active_alerts:
+                alert_type_for_plan = alert_item_for_plan.get("type", "UNKNOWN").upper() # Ensure uppercase for comparison
+                alert_severity_for_plan_str = alert_item_for_plan.get("severity", IncidentSeverityEnum.LOW.value).lower()
+                alert_details_for_plan = alert_item_for_plan.get("details", {})
+
+                is_critical_road_closure_all_lanes = (
+                    alert_type_for_plan == IncidentTypeEnum.ROAD_CLOSURE.value.upper() and # Compare with .value.upper()
+                    alert_severity_for_plan_str == IncidentSeverityEnum.CRITICAL.value and
+                    alert_details_for_plan.get("lanes_affected", "").upper() == "ALL"
+                )
+
+                if is_critical_road_closure_all_lanes:
+                    incident_id_for_plan = alert_item_for_plan.get('id', 'unknown_incident')
+                    self.logger.info(f"COMPLEX SCENARIO TRIGGERED: Critical all-lanes road closure (Alert ID: {incident_id_for_plan}). Activating predefined plan.")
+                    self.active_plan = self._get_hardcoded_hwy_closure_plan(alert_item_for_plan)
+                    if self.active_plan: # Ensure plan was loaded
+                        self.active_plan_id = f"HWY_CLOSURE_{incident_id_for_plan}"
+                        self.current_plan_step_index = 0
+                        self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps. Starting at step {self.current_plan_step_index}.")
+                        # Once a plan is activated for a major incident, we might break from checking other alerts for *new* plans.
+                        # The active plan will now be the focus.
+                        break
+                    else:
+                        self.logger.warning(f"Failed to load highway closure plan for incident {incident_id_for_plan}.")
 
         processed_pending_indices: List[int] = []
         for idx, item in enumerate(self.pending_kpi_collection):
@@ -2285,6 +2530,104 @@ async def main_example():
 
     analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]}) # Reset alerts
     logger.info("--- MAIN_EXAMPLE: DMS Activation Logic Demonstration Completed ---")
+
+    # --- Demonstration of Complex Plan Execution Logic ---
+    logger.info("--- MAIN_EXAMPLE: Starting Complex Plan Execution Demonstration ---")
+    agent.action_performance_logs = []
+    agent.pending_kpi_collection = []
+    agent.active_plan = None # Ensure no active plan initially
+    agent.current_plan_step_index = -1
+    agent.active_plan_id = None
+
+    # Ensure relevant mock devices exist and are in a known state for the plan
+    # Plan uses: TS004, DMS_UPSTREAM_NB_01, DMS_UPSTREAM_EB_01
+    if "TS004" in traffic_mock._signals:
+        traffic_mock._signals["TS004"].current_phase = SignalPhaseEnum.GREEN # Start it green to see it change
+        traffic_mock._signals["TS004"].operational_status = SignalOperationalStatusEnum.ONLINE
+    if "DMS_UPSTREAM_NB_01" in dms_mock._dms_states:
+        dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages = []
+        dms_mock._dms_states["DMS_UPSTREAM_NB_01"].operational_status = DmsStatusEnum.ONLINE
+    if "DMS_UPSTREAM_EB_01" in dms_mock._dms_states:
+        dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages = []
+        dms_mock._dms_states["DMS_UPSTREAM_EB_01"].operational_status = DmsStatusEnum.ONLINE
+
+    plan_test_sim_time_base = "2023-01-06T10:00:00Z"
+    current_sim_time_str = plan_test_sim_time_base
+
+    # Create the complex incident alert
+    complex_incident_loc = LocationModel(latitude=34.05, longitude=-118.24, name="HWY 101 Main Segment") # Matches TS002 area
+    mock_complex_alert = {
+        "id": "complex_closure_001", "type": "ROAD_CLOSURE", # Type must be ROAD_CLOSURE
+        "location": complex_incident_loc.model_dump(),
+        "details": {"lanes_affected": "ALL", "description": "Major pileup, all lanes blocked NB on HWY 101"},
+        "severity": IncidentSeverityEnum.CRITICAL.value
+    }
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]})
+
+    # Cycle 1: Plan Activation and Step 1 Execution
+    logger.info("--- Complex Plan Demo: Cycle 1 - Plan Activation & Step 1 ---")
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle1", agent, analytics_mock,
+        kpis={"overall_congestion_level": "HIGH"} # System state
+    )
+    assert agent.active_plan is not None, "Complex plan should be active."
+    assert agent.active_plan_id == f"HWY_CLOSURE_{mock_complex_alert['id']}", "Active plan ID is incorrect."
+    assert agent.current_plan_step_index == 1, "Should have processed step 0 and moved to index 1 (for next cycle's step)."
+    assert agent.active_plan[0].status == PlanStepStatus.COMPLETED, "Plan Step 1 should be marked COMPLETED."
+    assert traffic_mock._signals["TS004"].current_phase == SignalPhaseEnum.RED, "TS004 should be RED by plan."
+    assert dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages is not None and \
+           len(dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages) == 4, "DMS_UPSTREAM_NB_01 should have messages."
+    if dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages: # Check content of first page
+        assert "HWY CLOSED" in dms_mock._dms_states["DMS_UPSTREAM_NB_01"].current_messages[0].text
+    logger.info("Complex Plan Demo: Cycle 1 assertions passed.")
+
+    # Cycle 2: Step 2 Execution
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    logger.info("--- Complex Plan Demo: Cycle 2 - Step 2 ---")
+    # No new alerts, plan should continue
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Keep alert active
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle2", agent, analytics_mock,
+        kpis={"overall_congestion_level": "HIGH"}
+    )
+    assert agent.active_plan is not None, "Plan should still be active."
+    assert agent.current_plan_step_index == 2, "Should have processed step 1 and moved to index 2."
+    assert agent.active_plan[1].status == PlanStepStatus.COMPLETED, "Plan Step 2 should be COMPLETED."
+    assert dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages is not None and \
+           len(dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages) == 3, "DMS_UPSTREAM_EB_01 should have messages."
+    if dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages:
+        assert f"HWY {mock_complex_alert['details']['direction_affected'].upper()} CLOSED AHEAD" in dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages[0].text.upper()
+
+    logger.info("Complex Plan Demo: Cycle 2 assertions passed.")
+
+    # Cycle 3: Step 3 Execution (Monitoring step, no actions)
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    logger.info("--- Complex Plan Demo: Cycle 3 - Step 3 (Monitoring) ---")
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]})
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle3", agent, analytics_mock,
+        kpis={"overall_congestion_level": "HIGH"}
+    )
+    assert agent.active_plan is not None, "Plan should still be active after monitoring step."
+    assert agent.current_plan_step_index == 3, "Should have processed step 2 and moved to index 3 (end of plan)."
+    assert agent.active_plan[2].status == PlanStepStatus.COMPLETED, "Plan Step 3 (Monitoring) should be COMPLETED."
+    logger.info("Complex Plan Demo: Cycle 3 assertions passed.")
+
+    # Cycle 4: Plan should complete
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    logger.info("--- Complex Plan Demo: Cycle 4 - Plan Completion ---")
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Incident might still be active
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle4", agent, analytics_mock,
+        kpis={"overall_congestion_level": "MEDIUM"} # Congestion might be reducing
+    )
+    assert agent.active_plan is None, "Plan should be completed and cleared."
+    assert agent.active_plan_id is None, "Active plan ID should be cleared."
+    assert agent.current_plan_step_index == -1, "Plan step index should be reset."
+    logger.info("Complex Plan Demo: Cycle 4 assertions (plan completion) passed.")
+
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts":[]}) # Reset alerts
+    logger.info("--- MAIN_EXAMPLE: Complex Plan Execution Demonstration Completed ---")
 
     if os.path.exists(EFFECTIVENESS_MEMORY_FILEPATH): os.remove(EFFECTIVENESS_MEMORY_FILEPATH)
     logger.info("--- AgentCore main_example for All Scoring Demonstrations completed ---")
