@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import os
 import random
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern
@@ -45,9 +45,59 @@ class PlanStep(BaseModel):
     description: Optional[str] = None
     actions: List[PlanAction] = Field(default_factory=list)
     status: PlanStepStatus = Field(default=PlanStepStatus.PENDING)
-    duration_seconds: Optional[int] = Field(None, description="If set, step remains active for this duration after actions execute before completing.")
-    step_activation_time: Optional[datetime] = Field(None, description="Timestamp when this step became active.")
+    step_activation_time: Optional[datetime] = Field(None, description="Timestamp when this step's actions were last executed or when it became active waiting for conditions.")
+    completion_logic: str = Field(default="ANY_MET", description="Logic for multiple conditions: 'ANY_MET' or 'ALL_MET'.")
+    completion_conditions: List[StepCompletionCondition] = Field(default_factory=list, description="List of conditions that determine step completion.")
     # Future: Add dependencies, trigger_conditions, completion_criteria
+
+class ConditionType(str, enum.Enum):
+    KPI_THRESHOLD = "kpi_threshold"         # Step completes if a KPI meets a certain threshold
+    EVENT_OCCURRENCE = "event_occurrence"   # Step completes if a specific event/alert is observed
+    TIME_ELAPSED = "time_elapsed"           # Step completes after a certain time has passed since activation
+    MANUAL_ADVANCE = "manual_advance"       # Step completes upon an external manual command (e.g., from UI)
+    # ALL_ACTIONS_SUCCESSFUL = "all_actions_successful" # Implicitly handled, or could be explicit
+
+class KpiCondition(BaseModel):
+    condition_id: str = Field(default_factory=lambda: f"kpi_cond_{uuid4().hex[:6]}")
+    kpi_source_type: str = Field(..., description="Source of the KPI, e.g., 'signal', 'system_kpi', 'incident_area', 'dms_state'")
+    kpi_target_id: Optional[str] = Field(None, description="Specific ID of the target entity (e.g., signal_id, dms_id) if not system-wide.")
+    metric_path: List[str] = Field(..., description="Path to the metric within the KPI data structure, e.g., ['queue_lengths_meters', 'N'] or ['avg_speed_kmh']")
+    operator: str = Field(..., description="Comparison operator, e.g., '>=', '<=', '==', '!='")
+    threshold_value: Union[float, int, str, bool] = Field(..., description="Value to compare the KPI against.")
+    # Example: {"kpi_source_type": "signal", "kpi_target_id": "TS001", "metric_path": ["queue_lengths_meters", "N"], "operator": "<=", "threshold_value": 10}
+
+class EventCondition(BaseModel):
+    condition_id: str = Field(default_factory=lambda: f"event_cond_{uuid4().hex[:6]}")
+    event_type_expected: str = Field(..., description="The type of event/alert to look for (e.g., 'INCIDENT_CLEARED', 'USER_CONFIRM_STEP_X').")
+    event_details_filter: Optional[Dict[str, Any]] = Field(None, description="Key-value pairs to match within the event/alert details. All must match if provided.")
+    # Example: {"event_type_expected": "INCIDENT_CLEARED", "event_details_filter": {"incident_id": "specific_incident_123"}}
+
+class StepCompletionCondition(BaseModel):
+    condition_id: str = Field(default_factory=lambda: f"step_cond_{uuid4().hex[:6]}")
+    description: Optional[str] = Field(None, description="Human-readable description of the condition.")
+    condition_type: ConditionType
+    kpi_details: Optional[KpiCondition] = None
+    event_details: Optional[EventCondition] = None
+    time_elapsed_seconds: Optional[int] = Field(None, description="Time in seconds to wait after step activation for TIME_ELAPSED type.")
+    # timeout_seconds: Optional[int] = Field(None, description="Overall timeout for this condition to be met, if applicable.") # Maybe for later
+
+    @validator('kpi_details', always=True)
+    def check_kpi_details(cls, v, values):
+        if values.get('condition_type') == ConditionType.KPI_THRESHOLD and v is None:
+            raise ValueError("kpi_details must be provided for KPI_THRESHOLD condition type")
+        return v
+
+    @validator('event_details', always=True)
+    def check_event_details(cls, v, values):
+        if values.get('condition_type') == ConditionType.EVENT_OCCURRENCE and v is None:
+            raise ValueError("event_details must be provided for EVENT_OCCURRENCE condition type")
+        return v
+
+    @validator('time_elapsed_seconds', always=True)
+    def check_time_elapsed(cls, v, values):
+        if values.get('condition_type') == ConditionType.TIME_ELAPSED and v is None:
+            raise ValueError("time_elapsed_seconds must be provided for TIME_ELAPSED condition type")
+        return v
 
 # --- Accident Response Strategy Definitions ---
 STRATEGY_ACCIDENT_EXTEND_GREEN_LONG = "STRATEGY_ACCIDENT_EXTEND_GREEN_LONG"
@@ -253,8 +303,14 @@ class AgentCore:
             PlanStep(
                 step_id="HWY_CLOSURE_S3_MONITOR",
                 description="Monitoring phase. Agent will continue standard reactive logic or specific plan monitoring KPIs.",
-                actions=[], # No direct new actions for this step in this simple plan
-                duration_seconds=120 # Simulate a 2-minute monitoring period for this step
+                actions=[],
+                completion_conditions=[
+                    StepCompletionCondition(
+                        condition_id="monitor_duration",
+                        condition_type=ConditionType.TIME_ELAPSED,
+                        time_elapsed_seconds=120 # Simulate a 2-minute monitoring period
+                    )
+                ]
             ),
             # Example of a hypothetical clear step (actions would need to be defined)
             # PlanStep(
@@ -367,38 +423,67 @@ class AgentCore:
                 # self._complete_active_plan(final_status="FAILED_STEP")
                 # return
 
-            # If step has no duration, or all actions succeeded and no duration, mark completed and try to advance.
-            if current_step.duration_seconds is None or current_step.duration_seconds == 0:
-                if current_step.status != PlanStepStatus.FAILED : # Only mark completed if not already failed
-                     current_step.status = PlanStepStatus.COMPLETED
-                self.logger.info(f"Plan Step '{current_step.step_id}' (no duration) status: {current_step.status.value}. Attempting to advance.")
+            # If step has no completion conditions, or all actions succeeded and no conditions, mark completed and try to advance.
+            if not current_step.completion_conditions:
+                if current_step.status != PlanStepStatus.FAILED:
+                    current_step.status = PlanStepStatus.COMPLETED
+                self.logger.info(f"Plan Step '{current_step.step_id}' (no conditions) status: {current_step.status.value}. Attempting to advance.")
                 self.current_plan_step_index += 1
                 if self.current_plan_step_index >= len(self.active_plan):
                     self._complete_active_plan()
-                # else: new current_step will be processed in next cycle if PENDING
+                return # Step processed for this cycle
 
         elif current_step.status == PlanStepStatus.ACTIVE:
-            if current_step.duration_seconds is not None and current_step.step_activation_time is not None:
-                elapsed_time = (now - current_step.step_activation_time).total_seconds()
-                if elapsed_time >= current_step.duration_seconds:
-                    self.logger.info(f"Plan Step '{current_step.step_id}' duration ({current_step.duration_seconds}s) completed.")
-                    current_step.status = PlanStepStatus.COMPLETED
-                    self.current_plan_step_index += 1
-                    if self.current_plan_step_index >= len(self.active_plan):
-                        self._complete_active_plan()
-                    # else: new current_step will be processed in next cycle
-                else:
-                    self.logger.debug(f"Plan Step '{current_step.step_id}' is active, waiting for duration. {elapsed_time:.0f}/{current_step.duration_seconds}s elapsed.")
-            else:
-                # Should not happen if logic is correct: Active step without duration should have been completed.
-                self.logger.warning(f"Plan Step '{current_step.step_id}' is ACTIVE but has no duration or activation time. Marking completed.")
+            if not current_step.completion_conditions: # Should have been caught above if PENDING -> ACTIVE
+                self.logger.warning(f"Plan Step '{current_step.step_id}' is ACTIVE but has no completion_conditions. Marking completed.")
                 current_step.status = PlanStepStatus.COMPLETED
+            else:
+                condition_met_this_cycle = False
+                # For "ANY_MET" logic, if one condition is met, the step is complete.
+                # For "ALL_MET", all conditions must be met (more complex to track over time, not fully implemented here).
+                # Assuming "ANY_MET" for now if multiple conditions are present.
+
+                for condition in current_step.completion_conditions:
+                    if condition.condition_type == ConditionType.TIME_ELAPSED:
+                        if condition.time_elapsed_seconds is not None and current_step.step_activation_time is not None:
+                            elapsed_time = (now - current_step.step_activation_time).total_seconds()
+                            if elapsed_time >= condition.time_elapsed_seconds:
+                                self.logger.info(f"Plan Step '{current_step.step_id}' TIME_ELAPSED condition met ({condition.time_elapsed_seconds}s).")
+                                condition_met_this_cycle = True
+                                break # For ANY_MET logic
+                            else:
+                                self.logger.debug(f"Plan Step '{current_step.step_id}' waiting for TIME_ELAPSED. {elapsed_time:.0f}/{condition.time_elapsed_seconds}s.")
+                        else:
+                             self.logger.warning(f"TIME_ELAPSED condition for step '{current_step.step_id}' is missing time_elapsed_seconds or step_activation_time.")
+                    elif condition.condition_type == ConditionType.KPI_THRESHOLD:
+                        self.logger.debug(f"Plan Step '{current_step.step_id}': KPI_THRESHOLD condition evaluation TBD. Details: {condition.kpi_details}")
+                        # Placeholder: KPI condition evaluation logic would go here
+                        # if evaluate_kpi_condition(condition.kpi_details): condition_met_this_cycle = True; break
+                    elif condition.condition_type == ConditionType.EVENT_OCCURRENCE:
+                        self.logger.debug(f"Plan Step '{current_step.step_id}': EVENT_OCCURRENCE condition evaluation TBD. Details: {condition.event_details}")
+                        # Placeholder: Event condition evaluation logic would go here
+                        # if evaluate_event_condition(condition.event_details): condition_met_this_cycle = True; break
+                    elif condition.condition_type == ConditionType.MANUAL_ADVANCE:
+                         self.logger.debug(f"Plan Step '{current_step.step_id}': MANUAL_ADVANCE condition waiting for external trigger.")
+                         # This would require an external mechanism to set the step to COMPLETED.
+
+                if condition_met_this_cycle:
+                    current_step.status = PlanStepStatus.COMPLETED
+
+            # If step completed (either by condition or immediate if no conditions post-actions)
+            if current_step.status == PlanStepStatus.COMPLETED:
+                self.logger.info(f"Plan Step '{current_step.step_id}' status: {current_step.status.value}. Attempting to advance.")
                 self.current_plan_step_index += 1
                 if self.current_plan_step_index >= len(self.active_plan):
                     self._complete_active_plan()
 
-        # If step is FAILED, COMPLETED, SKIPPED, do nothing more in this cycle for this step.
-        # The index advancement logic above handles moving to the next step or completing the plan.
+        # If step is FAILED or SKIPPED, it typically means manual intervention or a different plan path might be needed.
+        # For now, the plan will just halt if a step fails and its actions don't complete.
+        # If a step is already COMPLETED (from a previous cycle), the logic above will just try to advance current_plan_step_index
+        # if it wasn't advanced in the cycle it completed. This needs to be robust.
+        # The current logic: if a step is PENDING, it's acted upon. If ACTIVE, its conditions are checked.
+        # If COMPLETED/FAILED/SKIPPED already, this method effectively does nothing for that step in this cycle,
+        # relying on index advancement to move to the next PENDING step.
 
     def _complete_active_plan(self, final_status_message: str = "Completed successfully"):
         """Resets plan-related attributes when a plan is finished or terminated."""
@@ -828,98 +913,30 @@ class AgentCore:
         processed_signals_for_incident: Set[str] = set()
 
         # --- Complex Plan Activation & Execution ---
-        if self.active_plan and self.current_plan_step_index >= 0 and self.current_plan_step_index < len(self.active_plan):
-            # Placeholder for plan execution logic (Step 4)
-            current_step_obj = self.active_plan[self.current_plan_step_index]
-            self.logger.info(f"Executing Step '{current_step_obj.step_id}': {current_step_obj.description} of Plan '{self.active_plan_id}'.")
-            current_step_obj.status = PlanStepStatus.ACTIVE
+        if self.active_plan and self.current_plan_step_index >= 0: # current_plan_step_index can be >= len(self.active_plan) if plan just completed
+            if self.current_plan_step_index < len(self.active_plan):
+                self.logger.info(f"Processing active plan '{self.active_plan_id}', step index {self.current_plan_step_index}.")
+                await self._process_active_plan_step()
+            else: # Plan likely just completed, _process_active_plan_step would have called _complete_active_plan
+                self.logger.info(f"Plan '{self.active_plan_id}' appears to have completed all steps (index {self.current_plan_step_index} >= {len(self.active_plan)} steps). Will check for new plan triggers.")
+                # _complete_active_plan should have reset relevant attributes.
 
-            all_actions_successful = True
-            for action_to_execute in current_step_obj.actions:
-                self.logger.info(f"Plan Action: Type='{action_to_execute.action_type}', Targets='{action_to_execute.target_ids}', Params='{action_to_execute.parameters}'")
-                try:
-                    if action_to_execute.action_type == "SET_SIGNAL_PHASE":
-                        for target_id in action_to_execute.target_ids:
-                            phase_val = action_to_execute.parameters.get("phase")
-                            duration = action_to_execute.parameters.get("duration_seconds")
-                            if phase_val:
-                                phase_enum = SignalPhaseEnum(phase_val)
-                                # TODO: Consider adding cooldown override or specific reason for plan actions
-                                response = await self.traffic_signal_service.set_signal_phase(
-                                    signal_id=target_id,
-                                    phase=phase_enum,
-                                    duration_seconds=duration # Can be None
-                                )
-                                if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
-                                    self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} failed: {response.message}")
-                                    all_actions_successful = False
-                            else:
-                                self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} missing 'phase' parameter.")
-                                all_actions_successful = False
-
-                    elif action_to_execute.action_type == "SET_DMS_MESSAGE":
-                        for target_id in action_to_execute.target_ids:
-                            messages_data = action_to_execute.parameters.get("messages", [])
-                            dms_messages = [DmsMessage(**msg_data) for msg_data in messages_data]
-                            duration_mins = action_to_execute.parameters.get("duration_minutes")
-                            if dms_messages:
-                                response = await self.dms_service.set_dms_message(
-                                    dms_id=target_id,
-                                    messages=dms_messages,
-                                    duration_minutes=duration_mins
-                                )
-                                if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
-                                    self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} failed: {response.message}")
-                                    all_actions_successful = False
-                            else:
-                                self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} missing 'messages' parameter or empty.")
-                                all_actions_successful = False
-
-                    # Add other action types here (e.g., CLEAR_DMS_MESSAGE)
-                    elif action_to_execute.action_type == "CLEAR_DMS_MESSAGE":
-                        for target_id in action_to_execute.target_ids:
-                            response = await self.dms_service.clear_dms_message(dms_id=target_id)
-                            if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
-                                self.logger.error(f"Plan Action CLEAR_DMS_MESSAGE for {target_id} failed: {response.message}")
-                                all_actions_successful = False
-                    else:
-                        self.logger.warning(f"Plan Action: Unknown action_type '{action_to_execute.action_type}'")
-                        all_actions_successful = False
-
-                except Exception as e:
-                    self.logger.error(f"Exception executing plan action {action_to_execute.action_type} for targets {action_to_execute.target_ids}: {e}", exc_info=True)
-                    all_actions_successful = False
-
-            current_step_obj.status = PlanStepStatus.COMPLETED if all_actions_successful else PlanStepStatus.FAILED
-            self.logger.info(f"Step '{current_step_obj.step_id}' completed with status: {current_step_obj.status.value}")
-
-            # Simple advancement: move to next step or finish plan
-            self.current_plan_step_index += 1
-            if self.current_plan_step_index >= len(self.active_plan):
-                self.logger.info(f"Complex plan '{self.active_plan_id}' has completed all steps.")
-                self.active_plan = None
+        # Check for new plan triggers ONLY if no plan is currently active or being processed.
+        # _complete_active_plan sets self.active_plan to None.
+        if not self.active_plan:
+            if self.active_plan_id is not None: # Indicates a plan just finished and was cleared by _complete_active_plan
+                self.logger.info(f"Complex plan formerly ID'd as '{self.active_plan_id}' was recently completed and cleared.")
                 self.active_plan_id = None
                 self.current_plan_step_index = -1
-            # If a plan is active, for now, we will still run other reactive logic.
-            # This could be changed to suppress/modify reactive logic if a plan needs full control.
-            if self.active_plan:
-                 self.logger.warning(f"Plan '{self.active_plan_id}' is active. Standard reactive logic will also run this cycle. This might need refinement.")
-
-        else: # No active plan, or plan just completed in the previous block. Check for new triggers.
-            if self.active_plan is None and self.active_plan_id is not None: # Indicates a plan just finished
-                self.logger.info(f"Complex plan '{self.active_plan_id}' was marked as completed in this cycle.")
-                self.active_plan_id = None # Clear the ID as the plan is now None
-                self.current_plan_step_index = -1
-
 
             # Check for conditions that trigger a new complex plan
             for alert_item_for_plan in active_alerts:
-                alert_type_for_plan = alert_item_for_plan.get("type", "UNKNOWN").upper() # Ensure uppercase for comparison
+                alert_type_for_plan = alert_item_for_plan.get("type", "UNKNOWN").upper()
                 alert_severity_for_plan_str = alert_item_for_plan.get("severity", IncidentSeverityEnum.LOW.value).lower()
                 alert_details_for_plan = alert_item_for_plan.get("details", {})
 
                 is_critical_road_closure_all_lanes = (
-                    alert_type_for_plan == IncidentTypeEnum.ROAD_CLOSURE.value.upper() and # Compare with .value.upper()
+                    alert_type_for_plan == IncidentTypeEnum.ROAD_CLOSURE.value.upper() and
                     alert_severity_for_plan_str == IncidentSeverityEnum.CRITICAL.value and
                     alert_details_for_plan.get("lanes_affected", "").upper() == "ALL"
                 )
@@ -927,17 +944,19 @@ class AgentCore:
                 if is_critical_road_closure_all_lanes:
                     incident_id_for_plan = alert_item_for_plan.get('id', 'unknown_incident')
                     self.logger.info(f"COMPLEX SCENARIO TRIGGERED: Critical all-lanes road closure (Alert ID: {incident_id_for_plan}). Activating predefined plan.")
-                    self.active_plan = self._get_hardcoded_hwy_closure_plan(alert_item_for_plan)
-                    if self.active_plan: # Ensure plan was loaded
-                        # Reset status of all steps in the new plan to PENDING
+                    new_plan_steps = self._get_hardcoded_hwy_closure_plan(alert_item_for_plan)
+                    if new_plan_steps:
+                        self.active_plan = new_plan_steps # Assign the list of PlanStep objects
+                        # Reset status of all steps in the new plan to PENDING (already default, but good practice)
                         for step in self.active_plan:
                             step.status = PlanStepStatus.PENDING
                         self.active_plan_id = f"HWY_CLOSURE_{incident_id_for_plan}"
                         self.current_plan_step_index = 0
                         self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps. Starting at step index {self.current_plan_step_index}.")
+                        # Once a plan is activated, break from checking other alerts for *new* plans this cycle.
                         break
                     else:
-                        self.logger.warning(f"Failed to load highway closure plan for incident {incident_id_for_plan}.")
+                        self.logger.warning(f"Failed to load/generate highway closure plan for incident {incident_id_for_plan}.")
 
         processed_pending_indices: List[int] = []
                 self.active_plan = None
@@ -2746,57 +2765,65 @@ async def main_example():
     )
     assert agent.active_plan is not None, "Plan should still be active."
     assert agent.current_plan_step_index == 2, "Should have processed step 1 and moved to index 2."
-    assert agent.active_plan[1].status == PlanStepStatus.COMPLETED, "Plan Step 2 should be COMPLETED."
+    assert agent.active_plan[1].status == PlanStepStatus.COMPLETED, "Plan Step 2 should be marked COMPLETED."
     assert dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages is not None and \
-           len(dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages) == 3, "DMS_UPSTREAM_EB_01 should have messages."
-    if dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages:
-        assert f"HWY {mock_complex_alert['details']['direction_affected'].upper()} CLOSED AHEAD" in dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages[0].text.upper()
-
+           len(dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages) == 3, "DMS_UPSTREAM_EB_01 should have messages from plan step 2."
+    if dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages: # Check content of first page
+        # Example check, adjust if message format from _get_hardcoded_hwy_closure_plan changes
+        assert "HWY CLSD" in dms_mock._dms_states["DMS_UPSTREAM_EB_01"].current_messages[0].text
     logger.info("Complex Plan Demo: Cycle 2 assertions passed.")
 
-    # Cycle 3: Step 3 Execution (HWY_CLOSURE_S3_MONITOR, duration 120s)
-    # This step should become ACTIVE, then wait for 120 simulated seconds.
-    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:02
-    logger.info(f"--- Complex Plan Demo: Cycle 3 - Step 3 Activation (Monitoring) at {current_sim_time_str} ---")
-    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]})
+    # Cycle 3: Step 3 (HWY_CLOSURE_S3_MONITOR) Activation. This step has a TIME_ELAPSED condition.
+    monitor_step_sim_activation_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:02:00Z
+    logger.info(f"--- Complex Plan Demo: Cycle 3 - Step 3 (Monitor) Activation at {monitor_step_sim_activation_time_str} ---")
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Keep alert active
     await main_example_run_with_mock_time(
-        current_sim_time_str, "user_plan_cycle3", agent, analytics_mock,
+        monitor_step_sim_activation_time_str, "user_plan_cycle3_monitor_activation", agent, analytics_mock,
         kpis={"overall_congestion_level": "HIGH"}
     )
     assert agent.active_plan is not None, "Plan should still be active."
-    assert agent.current_plan_step_index == 2, "Should be on step 2 (index for HWY_CLOSURE_S3_MONITOR)."
-    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (Monitoring) should be ACTIVE."
-    assert agent.active_plan[2].step_activation_time is not None, "Step 3 activation time should be set."
-    step3_activation_time = agent.active_plan[2].step_activation_time
-    logger.info(f"Complex Plan Demo: Cycle 3 - Step 3 (Monitoring) is ACTIVE. Activation time: {step3_activation_time.isoformat()}. Duration: {agent.active_plan[2].duration_seconds}s.")
+    assert agent.current_plan_step_index == 2, "Should be at index 2, processing HWY_CLOSURE_S3_MONITOR."
+    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (HWY_CLOSURE_S3_MONITOR) should be ACTIVE."
+    assert agent.active_plan[2].step_activation_time is not None, "Step 3 activation time should be recorded."
+    step3_actual_activation_time = agent.active_plan[2].step_activation_time
+    monitor_duration_seconds = agent.active_plan[2].completion_conditions[0].time_elapsed_seconds
+    assert monitor_duration_seconds == 120, "Monitor step duration not as expected."
+    logger.info(f"Complex Plan Demo: Step 3 ('{agent.active_plan[2].step_id}') is ACTIVE. Activation: {step3_actual_activation_time.isoformat()}, Duration: {monitor_duration_seconds}s.")
 
-    # Simulate time passing, but not enough for duration to complete
-    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(seconds=60)).isoformat().replace("+00:00", "Z") # Advance 60s to 10:03
-    logger.info(f"--- Complex Plan Demo: Cycle 3.1 - Step 3 Still Active (Monitoring) at {current_sim_time_str} ---")
+    # Cycle 3.1: Simulate time passing, but not enough for the monitor step's duration to complete.
+    time_after_partial_wait_str = (step3_actual_activation_time + timedelta(seconds=monitor_duration_seconds - 60)).isoformat().replace("+00:00", "Z") # e.g., 10:02:00Z + 60s = 10:03:00Z
+    logger.info(f"--- Complex Plan Demo: Cycle 3.1 - Step 3 (Monitor) still active after partial wait at {time_after_partial_wait_str} ---")
     await main_example_run_with_mock_time(
-        current_sim_time_str, "user_plan_cycle3.1", agent, analytics_mock,
+        time_after_partial_wait_str, "user_plan_cycle3_monitor_waiting", agent, analytics_mock,
         kpis={"overall_congestion_level": "HIGH"}
     )
     assert agent.active_plan is not None, "Plan should still be active."
-    assert agent.current_plan_step_index == 2, "Still on step 2 (HWY_CLOSURE_S3_MONITOR)."
-    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (Monitoring) should still be ACTIVE."
+    assert agent.current_plan_step_index == 2, "Still on index 2 (HWY_CLOSURE_S3_MONITOR)."
+    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (HWY_CLOSURE_S3_MONITOR) should still be ACTIVE."
+    logger.info("Complex Plan Demo: Cycle 3.1 assertions passed (monitor step still active).")
 
-    # Simulate enough time for duration to complete
-    current_sim_time_str = (step3_activation_time + timedelta(seconds=agent.active_plan[2].duration_seconds + 1)).isoformat().replace("+00:00", "Z") # e.g., 10:02:00 + 121s = 10:04:01
-    logger.info(f"--- Complex Plan Demo: Cycle 3.2 - Step 3 Completion (Monitoring) at {current_sim_time_str} ---")
+    # Cycle 3.2: Simulate enough time for the monitor step's TIME_ELAPSED duration to complete.
+    time_after_full_wait_str = (step3_actual_activation_time + timedelta(seconds=monitor_duration_seconds + 5)).isoformat().replace("+00:00", "Z") # e.g., 10:02:00Z + 125s = 10:04:05Z
+    logger.info(f"--- Complex Plan Demo: Cycle 3.2 - Step 3 (Monitor) completion after full wait at {time_after_full_wait_str} ---")
     await main_example_run_with_mock_time(
-        current_sim_time_str, "user_plan_cycle3.2", agent, analytics_mock,
+        time_after_full_wait_str, "user_plan_cycle3_monitor_completion", agent, analytics_mock,
         kpis={"overall_congestion_level": "HIGH"}
     )
-    assert agent.active_plan is not None, "Plan should still be active as it moves to completion."
-    assert agent.current_plan_step_index == 3, "Should have processed step 2 (index) and moved to index 3 (end of plan)."
-    assert agent.active_plan[2].status == PlanStepStatus.COMPLETED, "Plan Step 3 (Monitoring) should now be COMPLETED."
-    logger.info("Complex Plan Demo: Cycle 3 (timed monitoring step) assertions passed.")
+    assert agent.active_plan is not None, "Plan should ideally still be active as it transitions step, or None if it was the last step."
+    # If HWY_CLOSURE_S3_MONITOR was the last step with conditions, plan might complete.
+    # The plan has 3 steps. HWY_CLOSURE_S3_MONITOR is index 2.
+    # After it completes, current_plan_step_index should become 3.
+    assert agent.current_plan_step_index == 3, f"Should have advanced past step 2. Current index: {agent.current_plan_step_index}"
+    assert agent.active_plan[2].status == PlanStepStatus.COMPLETED, "Plan Step 3 (HWY_CLOSURE_S3_MONITOR) should now be COMPLETED."
+    logger.info("Complex Plan Demo: Cycle 3.2 assertions passed (monitor step completed, index advanced).")
 
-    # Cycle 4: Plan should complete as all steps are done
-    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:05:01
+    current_sim_time_str = time_after_full_wait_str # Update current_sim_time_str for next cycle
+
+    # Cycle 4: Plan should complete processing as all steps are done.
+    # Since current_plan_step_index is 3, and len(active_plan) is 3, _process_active_plan_step will call _complete_active_plan.
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:05:05Z
     logger.info(f"--- Complex Plan Demo: Cycle 4 - Plan Completion Check at {current_sim_time_str} ---")
-    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Incident might still be active, but plan should finish
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Incident might still be active
     await main_example_run_with_mock_time(
         current_sim_time_str, "user_plan_cycle4", agent, analytics_mock,
         kpis={"overall_congestion_level": "MEDIUM"} # Congestion might be reducing
