@@ -44,7 +44,9 @@ class PlanStep(BaseModel):
     step_id: str
     description: Optional[str] = None
     actions: List[PlanAction] = Field(default_factory=list)
-    status: PlanStepStatus = PlanStepStatus.PENDING
+    status: PlanStepStatus = Field(default=PlanStepStatus.PENDING)
+    duration_seconds: Optional[int] = Field(None, description="If set, step remains active for this duration after actions execute before completing.")
+    step_activation_time: Optional[datetime] = Field(None, description="Timestamp when this step became active.")
     # Future: Add dependencies, trigger_conditions, completion_criteria
 
 # --- Accident Response Strategy Definitions ---
@@ -251,14 +253,166 @@ class AgentCore:
             PlanStep(
                 step_id="HWY_CLOSURE_S3_MONITOR",
                 description="Monitoring phase. Agent will continue standard reactive logic or specific plan monitoring KPIs.",
-                actions=[] # No direct new actions; this step implies a period of waiting/monitoring
-                           # Transitions from this step would be based on incident status updates or KPIs.
+                actions=[], # No direct new actions for this step in this simple plan
+                duration_seconds=120 # Simulate a 2-minute monitoring period for this step
             ),
-            # Plan completion (clearing DMS, signals) would be handled by a separate trigger or plan,
-            # e.g., when the incident is cleared. This template focuses on initial response.
+            # Example of a hypothetical clear step (actions would need to be defined)
+            # PlanStep(
+            #     step_id="HWY_CLOSURE_S4_CLEAR",
+            #     description="Clear DMS messages and normalize signals after incident resolution.",
+            #     actions=[
+            #         PlanAction(action_type="CLEAR_DMS_MESSAGE", target_ids=[primary_dms_id]),
+            #         PlanAction(action_type="CLEAR_DMS_MESSAGE", target_ids=[secondary_dms_id]),
+            #         # Action to revert signal TS004 might be complex:
+            #         # e.g., set to a default plan, or remove override to allow normal logic.
+            #         # For now, this step is illustrative.
+            #     ],
+            #     duration_seconds=0 # Immediate actions
+            # )
         ]
         self.logger.info(f"Generated plan '{self.active_plan_id}' with {len(plan_steps)} steps for incident {incident_id}.")
         return plan_steps
+
+    async def _execute_plan_action(self, plan_action: PlanAction) -> bool:
+        """Executes a single PlanAction and returns True if successful, False otherwise."""
+        self.logger.info(f"Executing Plan Action: Type='{plan_action.action_type}', Targets='{plan_action.target_ids}', Params='{plan_action.parameters}'")
+        try:
+            if plan_action.action_type == "SET_SIGNAL_PHASE":
+                for target_id in plan_action.target_ids:
+                    phase_val = plan_action.parameters.get("phase")
+                    duration = plan_action.parameters.get("duration_seconds")
+                    if phase_val:
+                        phase_enum = SignalPhaseEnum(phase_val)
+                        response = await self.traffic_signal_service.set_signal_phase(
+                            signal_id=target_id, phase=phase_enum, duration_seconds=duration
+                        )
+                        if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                            self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} failed: {response.message}")
+                            return False
+                    else:
+                        self.logger.error(f"Plan Action SET_SIGNAL_PHASE for {target_id} missing 'phase' parameter.")
+                        return False
+
+            elif plan_action.action_type == "SET_DMS_MESSAGE":
+                for target_id in plan_action.target_ids:
+                    messages_data = plan_action.parameters.get("messages", [])
+                    dms_messages = [DmsMessage(**msg_data) for msg_data in messages_data] # Assumes msg_data is dict
+                    duration_mins = plan_action.parameters.get("duration_minutes")
+                    if dms_messages:
+                        response = await self.dms_service.set_dms_message(
+                            dms_id=target_id, messages=dms_messages, duration_minutes=duration_mins
+                        )
+                        if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                            self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} failed: {response.message}")
+                            return False
+                    else:
+                        self.logger.error(f"Plan Action SET_DMS_MESSAGE for {target_id} missing 'messages' or empty.")
+                        return False
+
+            elif plan_action.action_type == "CLEAR_DMS_MESSAGE":
+                for target_id in plan_action.target_ids:
+                    response = await self.dms_service.clear_dms_message(dms_id=target_id)
+                    if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
+                        self.logger.error(f"Plan Action CLEAR_DMS_MESSAGE for {target_id} failed: {response.message}")
+                        return False
+            else:
+                self.logger.warning(f"Plan Action: Unknown action_type '{plan_action.action_type}'")
+                return False
+
+            # Log successful action execution to ActionPerformanceLog if needed (simplified for now)
+            # This could be expanded to create more detailed logs for plan actions
+            self.action_performance_logs.append(ActionPerformanceLog(
+                action_timestamp=datetime.utcnow(), # Mocked time in tests
+                action_type=f"PLAN_{self.active_plan_id}_{plan_action.action_type}", # Prefix to distinguish from reactive
+                target_ids=plan_action.target_ids,
+                action_parameters=plan_action.parameters,
+                # Effectiveness for plan actions might be assessed at plan level or step level later
+            ))
+
+        except Exception as e:
+            self.logger.error(f"Exception executing plan action {plan_action.action_type} for targets {plan_action.target_ids}: {e}", exc_info=True)
+            return False
+        return True
+
+    async def _process_active_plan_step(self):
+        if not self.active_plan or \
+           self.current_plan_step_index < 0 or \
+           self.current_plan_step_index >= len(self.active_plan):
+            self.logger.debug("No active plan or invalid step index for processing.")
+            return
+
+        current_step = self.active_plan[self.current_plan_step_index]
+        now = datetime.utcnow() # Use mocked time in tests
+
+        if current_step.status == PlanStepStatus.PENDING:
+            self.logger.info(f"Activating Plan Step '{current_step.step_id}': {current_step.description}")
+            current_step.status = PlanStepStatus.ACTIVE
+            current_step.step_activation_time = now
+
+            step_actions_all_successful = True
+            if not current_step.actions: # If a step has no actions (e.g. a pure monitoring/wait step)
+                 self.logger.info(f"Plan Step '{current_step.step_id}' has no actions to execute directly.")
+            else:
+                for action in current_step.actions:
+                    success = await self._execute_plan_action(action)
+                    if not success:
+                        step_actions_all_successful = False
+                        # Decide on plan failure strategy: halt plan, or just mark step failed and continue?
+                        # For now, mark step failed and let plan continue to next step unless logic changes.
+
+            if not step_actions_all_successful:
+                current_step.status = PlanStepStatus.FAILED
+                self.logger.error(f"Plan Step '{current_step.step_id}' failed due to action failure.")
+                # Optionally, could halt the entire plan here:
+                # self._complete_active_plan(final_status="FAILED_STEP")
+                # return
+
+            # If step has no duration, or all actions succeeded and no duration, mark completed and try to advance.
+            if current_step.duration_seconds is None or current_step.duration_seconds == 0:
+                if current_step.status != PlanStepStatus.FAILED : # Only mark completed if not already failed
+                     current_step.status = PlanStepStatus.COMPLETED
+                self.logger.info(f"Plan Step '{current_step.step_id}' (no duration) status: {current_step.status.value}. Attempting to advance.")
+                self.current_plan_step_index += 1
+                if self.current_plan_step_index >= len(self.active_plan):
+                    self._complete_active_plan()
+                # else: new current_step will be processed in next cycle if PENDING
+
+        elif current_step.status == PlanStepStatus.ACTIVE:
+            if current_step.duration_seconds is not None and current_step.step_activation_time is not None:
+                elapsed_time = (now - current_step.step_activation_time).total_seconds()
+                if elapsed_time >= current_step.duration_seconds:
+                    self.logger.info(f"Plan Step '{current_step.step_id}' duration ({current_step.duration_seconds}s) completed.")
+                    current_step.status = PlanStepStatus.COMPLETED
+                    self.current_plan_step_index += 1
+                    if self.current_plan_step_index >= len(self.active_plan):
+                        self._complete_active_plan()
+                    # else: new current_step will be processed in next cycle
+                else:
+                    self.logger.debug(f"Plan Step '{current_step.step_id}' is active, waiting for duration. {elapsed_time:.0f}/{current_step.duration_seconds}s elapsed.")
+            else:
+                # Should not happen if logic is correct: Active step without duration should have been completed.
+                self.logger.warning(f"Plan Step '{current_step.step_id}' is ACTIVE but has no duration or activation time. Marking completed.")
+                current_step.status = PlanStepStatus.COMPLETED
+                self.current_plan_step_index += 1
+                if self.current_plan_step_index >= len(self.active_plan):
+                    self._complete_active_plan()
+
+        # If step is FAILED, COMPLETED, SKIPPED, do nothing more in this cycle for this step.
+        # The index advancement logic above handles moving to the next step or completing the plan.
+
+    def _complete_active_plan(self, final_status_message: str = "Completed successfully"):
+        """Resets plan-related attributes when a plan is finished or terminated."""
+        self.logger.info(f"Complex plan '{self.active_plan_id}' is now complete. Final status: {final_status_message}")
+        # Optionally, perform any final logging or cleanup related to the plan
+        # For example, log all step statuses:
+        if self.active_plan:
+            for step in self.active_plan:
+                self.logger.info(f"  Plan '{self.active_plan_id}' - Step '{step.step_id}' final status: {step.status.value}")
+
+        self.active_plan = None
+        self.active_plan_id = None
+        self.current_plan_step_index = -1
+        # Potentially notify other systems or log overall plan outcome/effectiveness if measurable
 
     def _load_effectiveness_memory(self) -> Dict[str, List[float]]:
         if not os.path.exists(self.effectiveness_memory_filepath):
@@ -2600,23 +2754,49 @@ async def main_example():
 
     logger.info("Complex Plan Demo: Cycle 2 assertions passed.")
 
-    # Cycle 3: Step 3 Execution (Monitoring step, no actions)
-    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
-    logger.info("--- Complex Plan Demo: Cycle 3 - Step 3 (Monitoring) ---")
+    # Cycle 3: Step 3 Execution (HWY_CLOSURE_S3_MONITOR, duration 120s)
+    # This step should become ACTIVE, then wait for 120 simulated seconds.
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:02
+    logger.info(f"--- Complex Plan Demo: Cycle 3 - Step 3 Activation (Monitoring) at {current_sim_time_str} ---")
     analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]})
     await main_example_run_with_mock_time(
         current_sim_time_str, "user_plan_cycle3", agent, analytics_mock,
         kpis={"overall_congestion_level": "HIGH"}
     )
-    assert agent.active_plan is not None, "Plan should still be active after monitoring step."
-    assert agent.current_plan_step_index == 3, "Should have processed step 2 and moved to index 3 (end of plan)."
-    assert agent.active_plan[2].status == PlanStepStatus.COMPLETED, "Plan Step 3 (Monitoring) should be COMPLETED."
-    logger.info("Complex Plan Demo: Cycle 3 assertions passed.")
+    assert agent.active_plan is not None, "Plan should still be active."
+    assert agent.current_plan_step_index == 2, "Should be on step 2 (index for HWY_CLOSURE_S3_MONITOR)."
+    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (Monitoring) should be ACTIVE."
+    assert agent.active_plan[2].step_activation_time is not None, "Step 3 activation time should be set."
+    step3_activation_time = agent.active_plan[2].step_activation_time
+    logger.info(f"Complex Plan Demo: Cycle 3 - Step 3 (Monitoring) is ACTIVE. Activation time: {step3_activation_time.isoformat()}. Duration: {agent.active_plan[2].duration_seconds}s.")
 
-    # Cycle 4: Plan should complete
-    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
-    logger.info("--- Complex Plan Demo: Cycle 4 - Plan Completion ---")
-    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Incident might still be active
+    # Simulate time passing, but not enough for duration to complete
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(seconds=60)).isoformat().replace("+00:00", "Z") # Advance 60s to 10:03
+    logger.info(f"--- Complex Plan Demo: Cycle 3.1 - Step 3 Still Active (Monitoring) at {current_sim_time_str} ---")
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle3.1", agent, analytics_mock,
+        kpis={"overall_congestion_level": "HIGH"}
+    )
+    assert agent.active_plan is not None, "Plan should still be active."
+    assert agent.current_plan_step_index == 2, "Still on step 2 (HWY_CLOSURE_S3_MONITOR)."
+    assert agent.active_plan[2].status == PlanStepStatus.ACTIVE, "Plan Step 3 (Monitoring) should still be ACTIVE."
+
+    # Simulate enough time for duration to complete
+    current_sim_time_str = (step3_activation_time + timedelta(seconds=agent.active_plan[2].duration_seconds + 1)).isoformat().replace("+00:00", "Z") # e.g., 10:02:00 + 121s = 10:04:01
+    logger.info(f"--- Complex Plan Demo: Cycle 3.2 - Step 3 Completion (Monitoring) at {current_sim_time_str} ---")
+    await main_example_run_with_mock_time(
+        current_sim_time_str, "user_plan_cycle3.2", agent, analytics_mock,
+        kpis={"overall_congestion_level": "HIGH"}
+    )
+    assert agent.active_plan is not None, "Plan should still be active as it moves to completion."
+    assert agent.current_plan_step_index == 3, "Should have processed step 2 (index) and moved to index 3 (end of plan)."
+    assert agent.active_plan[2].status == PlanStepStatus.COMPLETED, "Plan Step 3 (Monitoring) should now be COMPLETED."
+    logger.info("Complex Plan Demo: Cycle 3 (timed monitoring step) assertions passed.")
+
+    # Cycle 4: Plan should complete as all steps are done
+    current_sim_time_str = (datetime.fromisoformat(current_sim_time_str.replace("Z","+00:00")) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z") # e.g., 10:05:01
+    logger.info(f"--- Complex Plan Demo: Cycle 4 - Plan Completion Check at {current_sim_time_str} ---")
+    analytics_mock.get_critical_alert_summary = AsyncMock(return_value={"active_alerts": [mock_complex_alert]}) # Incident might still be active, but plan should finish
     await main_example_run_with_mock_time(
         current_sim_time_str, "user_plan_cycle4", agent, analytics_mock,
         kpis={"overall_congestion_level": "MEDIUM"} # Congestion might be reducing
