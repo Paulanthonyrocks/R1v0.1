@@ -39,5 +39,10 @@ service cloud.firestore {
     match /configurations/{configId} {
       allow read, write: if hasRole('admin'); // Only admins can manage configurations
     }
+
+    // Rules for feeds collection
+    match /feeds/{feedId} {
+      allow read: if isAuthenticated(); // Authenticated users can read feeds
+    }
   }
 }

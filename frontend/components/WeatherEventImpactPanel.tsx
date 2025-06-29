@@ -117,7 +117,7 @@ const WeatherEventImpactPanel: React.FC = () => {
                 <p>End: {new Date(impact.endTime).toLocaleString()}</p>
               )}
               {impact.type === 'weather' && impact.details && (
-                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-primary tracking-normal">
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-primary tracking-normal font-lcd">
                   <p>Wind: {(impact.details as WeatherData).wind_speed} km/h</p>
                   <p>Precipitation: {(impact.details as WeatherData).precipitation_chance}%</p>
                 </div>

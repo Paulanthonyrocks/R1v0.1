@@ -45,7 +45,7 @@ class FrameTimer:
 
 # --- FrameReader ---
 class FrameReader:
-    def __init__(self, source: Any, buffer_size: int = 2, target_fps: Optional[int] = None):
+    def __init__(self, source: Any, buffer_size: int = 5, target_fps: Optional[int] = 10):
         self.source_name = str(source)
         self.target_fps = target_fps
         self.is_webcam = False
@@ -83,7 +83,7 @@ class FrameReader:
         elif self.target_fps and self.target_fps != self.source_fps:
             logger.warning(f"Target FPS {self.target_fps} differs from source FPS {self.source_fps}. Frame dropping/duplication may occur if not handled by reader logic.")
 
-        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=30) # Type hint for clarity
+        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=50) # Increased queue size
         self.stop_event = threading.Event()
         self._end_of_video_flag = False # Internal flag
         self.state_lock = threading.Lock() # For thread-safe access to _end_of_video_flag
@@ -102,7 +102,7 @@ class FrameReader:
             self._end_of_video_flag = value
 
     def _update_loop(self):
-        max_read_fails = 10
+        max_read_fails = 100
         consecutive_fails = 0
         last_read_time = time.monotonic()
 
@@ -119,18 +119,21 @@ class FrameReader:
                 if ret:
                     consecutive_fails = 0 # Reset fail counter on successful read
                     if self.frame_queue.full():
+                        # If the queue is full, wait a bit for the consumer to catch up
+                        # This prevents discarding frames too aggressively and allows for backpressure
+                        logger.warning(f"FrameReader queue for '{self.source_name}' is full. Waiting for space...")
                         try:
-                            self.frame_queue.get_nowait() # Discard oldest frame if queue is full
-                            logger.warning(f"FrameReader queue for '{self.source_name}' was full. Discarded oldest frame.")
-                        except queue.Empty:
-                            pass # Should not happen if full() is true, but good practice
-
-                    # Put a copy of the frame into the queue
-                    try:
-                        self.frame_queue.put((self.frame_index, frame.copy()), timeout=0.1) # Short timeout
+                            # Wait with a timeout to avoid blocking indefinitely
+                            self.frame_queue.put((self.frame_index, frame.copy()), timeout=1.0)
+                            self.frame_index += 1
+                        except queue.Full:
+                            logger.warning(f"FrameReader queue for '{self.source_name}' still full after waiting. Discarding frame {self.frame_index}.")
+                            # Discard the current frame if still full after waiting
+                            pass
+                    else:
+                        # Put a copy of the frame into the queue
+                        self.frame_queue.put((self.frame_index, frame.copy()))
                         self.frame_index += 1
-                    except queue.Full:
-                        logger.warning(f"FrameReader queue for '{self.source_name}' still full after trying to make space. Frame {self.frame_index} lost.")
 
                 else: # ret is False
                     consecutive_fails += 1
@@ -139,12 +142,7 @@ class FrameReader:
                         logger.error(f"FrameReader '{self.source_name}': Max read fails reached. Assuming end of video or hardware issue.")
                         self.end_of_video = True
                         break
-                    time.sleep(0.05) # Wait a bit before retrying
-                    # Check if it's a video file and we've reached the end
-                    if not self.is_webcam and self.cap.get(cv2.CAP_PROP_POS_FRAMES) >= self.cap.get(cv2.CAP_PROP_FRAME_COUNT):
-                        logger.info(f"FrameReader '{self.source_name}': Reached end of video file.")
-                        self.end_of_video = True
-                        break
+                    time.sleep(0.1) # Wait a bit before retrying
             except Exception as e:
                 logger.error(f"FrameReader thread error in '{self.source_name}': {e}", exc_info=True)
                 self.end_of_video = True # Signal error/end

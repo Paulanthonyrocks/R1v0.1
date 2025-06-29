@@ -8,11 +8,10 @@ import random
 from datetime import datetime, timezone # Added datetime
 
 # Configuration - Default values, can be overridden by environment variables
-DEFAULT_KAFKA_BROKER = 'localhost:9092'
-DEFAULT_KAFKA_TOPIC = 'raw_traffic_data'
+import config
 
-KAFKA_BROKER = os.environ.get('KAFKA_BROKER_URL', DEFAULT_KAFKA_BROKER)
-KAFKA_TOPIC = os.environ.get('KAFKA_TRAFFIC_TOPIC', DEFAULT_KAFKA_TOPIC)
+KAFKA_BROKER = config.KAFKA_BROKERS[0] # Assuming first broker in list
+KAFKA_TOPIC = config.KAFKA_RAW_TOPIC
 
 def generate_dummy_traffic_data(sensor_id, latitude, longitude):
     """Generates dummy traffic data with ISO timestamp."""

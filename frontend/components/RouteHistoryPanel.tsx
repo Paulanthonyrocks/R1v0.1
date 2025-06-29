@@ -150,7 +150,7 @@ const RouteHistoryPanel: React.FC = () => {
                     <span className="capitalize text-primary tracking-normal">{entry.trafficImpact}</span>
                   </div>
                 </td>
-                <td className="p-2 border border-primary">{entry.weatherImpact || '-'}</td> {/* Themed border */}
+                <td className="p-2 border border-primary font-lcd">{entry.weatherImpact || '-'}</td> {/* Themed border */}
               </tr>
             ))}
           </tbody>

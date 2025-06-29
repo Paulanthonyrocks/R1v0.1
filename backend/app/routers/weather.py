@@ -17,7 +17,7 @@ async def get_current_weather(
     weather_service: WeatherService = Depends(get_weather_service_api),
     current_user: dict = Depends(get_current_active_user)
 ):
-    """Get current weather conditions"""
+    logger.info(f"GET /weather/current endpoint called by user: {current_user.get('username')} for lat: {lat}, lon: {lon}")
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)
     except Exception as e:

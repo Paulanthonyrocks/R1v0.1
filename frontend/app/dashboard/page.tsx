@@ -6,6 +6,8 @@
 
 import React, { useEffect, useState } from 'react';
 import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
+import { Signal, BatteryFull } from 'lucide-react'; // Import Signal and BatteryFull icons
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
@@ -15,14 +17,23 @@ import {
 } from 'lucide-react'; // Import Lucide icons & new status icons
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed
 import { WS_URL } from '@/lib/hook';
+import { BackendCongestionNodeData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
-  const { kpis, alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
+  const { /* kpis, */ alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
   // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
+
+  // State for REST API congestion index
+  const [congestionIndex, setCongestionIndex] = useState<number | null>(null);
+
+  // State for REST API KPIs
+  const [averageSpeed, setAverageSpeed] = useState<number | null>(null);
+  const [activeIncidents, setActiveIncidents] = useState<number | null>(null); // Placeholder, see note below
+  const [totalFlow, setTotalFlow] = useState<number | null>(null);
 
   useEffect(() => {
     // Start WebSocket connection on component mount
@@ -68,101 +79,186 @@ const DashboardPage: React.FC = () => {
     );
   }
 
+  useEffect(() => {
+    // Fetch congestion data from backend REST API
+    const fetchKpisFromApi = async () => {
+      try {
+        const res = await fetch('/api/v1/analytics/nodes/congestion');
+        if (!res.ok) throw new Error('Failed to fetch congestion data');
+        const data = await res.json();
+        if (Array.isArray(data.nodes) && data.nodes.length > 0) {
+          // Congestion Index
+          const scores = data.nodes
+            .map((n: BackendCongestionNodeData) => typeof n.congestion_score === 'number' ? n.congestion_score : null)
+            .filter((v: number | null) => v !== null);
+          if (scores.length > 0) {
+            const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
+            setCongestionIndex(Number(avg.toFixed(1)));
+          } else {
+            setCongestionIndex(null);
+          }
+          // Average Speed
+          const speeds = data.nodes
+            .map((n: BackendCongestionNodeData) => typeof n.average_speed === 'number' ? n.average_speed : null)
+            .filter((v: number | null) => v !== null);
+          if (speeds.length > 0) {
+            const avgSpeed = speeds.reduce((a: number, b: number) => a + b, 0) / speeds.length;
+            setAverageSpeed(Number(avgSpeed.toFixed(1)));
+          } else {
+            setAverageSpeed(null);
+          }
+          // Total Flow (sum of vehicle_count)
+          const vehicleCounts = data.nodes
+            .map((n: BackendCongestionNodeData) => typeof n.vehicle_count === 'number' ? n.vehicle_count : null)
+            .filter((v: number | null) => v !== null);
+          if (vehicleCounts.length > 0) {
+            const total = vehicleCounts.reduce((a: number, b: number) => a + b, 0);
+            setTotalFlow(total);
+          } else {
+            setTotalFlow(null);
+          }
+          // Active Incidents: Not available in this endpoint, so keep using kpis or set to null
+          setActiveIncidents(null); // Or use another endpoint if available
+        } else {
+          setCongestionIndex(null);
+          setAverageSpeed(null);
+          setTotalFlow(null);
+          setActiveIncidents(null);
+        }
+      } catch {
+        setCongestionIndex(null);
+        setAverageSpeed(null);
+        setTotalFlow(null);
+        setActiveIncidents(null);
+      }
+    };
+    fetchKpisFromApi();
+    const interval = setInterval(fetchKpisFromApi, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <AuthGuard requiredRole={UserRole.PLANNER}> {/* Wrap content with AuthGuard and specify required role */}
-      <div className="p-4 text-matrix">
-        <h1 className="text-2xl font-bold mb-4 uppercase tracking-normal">Dashboard</h1> {/* Added tracking-normal */}
+    <AuthGuard requiredRole={UserRole.PLANNER}>
+      <div className="bg-lcd-text text-lcd-bg font-lcd flex flex-col min-h-screen w-full">
+        {/* Dashboard Status Bar */}
+        <header className="bg-lcd-bg text-lcd-text font-lcd flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center space-x-2 cursor-pointer">
+                <Signal size={20} />
+                <span className="font-lcd matrix-glow">DASHBOARD</span>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="matrix-card">
+              <DropdownMenuItem asChild>
+                <a href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/history" className="w-full tracking-normal font-lcd matrix-glow">ROUTE HISTORY</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/impacts" className="w-full tracking-normal font-lcd matrix-glow">WEATHER & EVENTS</a>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center space-x-2">
+            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <BatteryFull size={20} />
+          </div>
+        </header>
 
-        {/* Navigation Links */}
-        <nav className="mb-6 flex gap-4">
-          <a href="/preferences" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Preferences</a>
-          <a href="/history" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Route History</a>
-          <a href="/impacts" className="px-3 py-1 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition">Weather & Events</a>
-        </nav>
+        <main className="flex-1 p-4">
+          <h1 className="text-2xl font-bold mb-4 uppercase tracking-widest text-center font-lcd matrix-glow text-lcd-bg">DASHBOARD OVERVIEW</h1>
 
-        {/* Real-time Analytics Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <StatCard
-            title="Congestion Index"
-            value={`${typeof kpis?.congestion_index === 'number' ? kpis.congestion_index : '--'}%`}
-            icon={Activity}
-            statusIcon={getCongestionStatusIcon(typeof kpis?.congestion_index === 'number' ? kpis.congestion_index : undefined)}
-            change="N/A"
-            changeText="Change data not available"
-          />
-          <StatCard
-            title="Average Speed"
-            value={`${typeof kpis?.average_speed_kmh === 'number' ? kpis.average_speed_kmh : '--'} km/h`}
-            icon={Zap}
-            statusIcon={getSpeedStatusIcon(typeof kpis?.average_speed_kmh === 'number' ? kpis.average_speed_kmh : undefined)}
-            change="N/A"
-            changeText="Change data not available"
-          />
-          <StatCard
-            title="Active Incidents"
-            value={`${typeof kpis?.active_incidents_count === 'number' ? kpis.active_incidents_count : '--'}`}
-            icon={AlertTriangle}
-            statusIcon={getIncidentStatusIcon(typeof kpis?.active_incidents_count === 'number' ? kpis.active_incidents_count : undefined)}
-            change="N/A"
-            changeText="Change data not available"
-          />
-          <StatCard
-            title="Total Flow"
-            value={`${typeof kpis?.total_flow === 'number' ? kpis.total_flow : '--'} vehicles/hr`}
-            icon={Users}
-            change="N/A"
-            changeText="Change data not available"
-          />
-        </div>
-
-        {/* Sample Video Feed */}
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold mb-2 tracking-normal">Sample Video Feed</h2>
-          <div className="w-full aspect-video rounded border border-primary pixel-drop-shadow overflow-hidden">
-            <SurveillanceFeed
-              feed={{
-                id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/video/sample-video/stream', fps: 30
-              }}
+          {/* Real-time Analytics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6 matrix-card">
+            <StatCard
+              title="Congestion Index"
+              value={`${congestionIndex !== null ? congestionIndex : '--'}%`}
+              icon={Activity}
+              statusIcon={getCongestionStatusIcon(typeof congestionIndex === 'number' ? congestionIndex : undefined)}
+              change="N/A"
+              changeText="Change data not available"
+            />
+            <StatCard
+              title="Average Speed"
+              value={`${averageSpeed !== null ? averageSpeed : '--'} km/h`}
+              icon={Zap}
+              statusIcon={getSpeedStatusIcon(typeof averageSpeed === 'number' ? averageSpeed : undefined)}
+              change="N/A"
+              changeText="Change data not available"
+            />
+            <StatCard
+              title="Active Incidents"
+              value={`${activeIncidents !== null ? activeIncidents : '--'}`}
+              icon={AlertTriangle}
+              statusIcon={getIncidentStatusIcon(typeof activeIncidents === 'number' ? activeIncidents : undefined)}
+              change="N/A"
+              changeText="Change data not available"
+            />
+            <StatCard
+              title="Total Flow"
+              value={`${totalFlow !== null ? totalFlow : '--'} vehicles/hr`}
+              icon={Users}
+              change="N/A"
+              changeText="Change data not available"
             />
           </div>
-        </div>
 
-        {/* Live Alerts Section */}
-        <div className="mb-6 bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <h2 className="text-xl font-semibold mb-3 tracking-normal">Live Alerts</h2> {/* Added tracking-normal */}
-          {!isReady && <p className="text-muted-foreground tracking-normal">Connecting to live alerts...</p>} {/* Added tracking-normal */}
-          {isReady && alerts.length === 0 && <p className="text-muted-foreground tracking-normal">No new alerts.</p>} {/* Added tracking-normal */}
-          {isReady && alerts.length > 0 && (
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {alerts.slice(-10).reverse().map((alert) => (
-                <AnomalyItem
-                  key={alert.id || new Date(alert.timestamp).toISOString()} // Assuming alert has an id, fallback to timestamp
-                  timestamp={new Date(alert.timestamp).toLocaleString()}
-                  severity={alert.severity || 'info'} // Assuming severity exists
-                  message={alert.message}
-                  location={
-                    alert.details && typeof alert.details === 'object' && isLatLng(alert.details.location)
-                      ? `Lat: ${alert.details.location.latitude}, Lon: ${alert.details.location.longitude}`
-                      : 'N/A'
-                  }
-                  details={typeof alert.details === 'object' ? alert.details : undefined}
+          {/* Sample Video Feed */}
+          <div className="mb-4 matrix-card p-4">
+            <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">SAMPLE VIDEO FEED</h2>
+            <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card" style={{whiteSpace: 'nowrap'}}>
+              <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
+                <SurveillanceFeed
+                  feed={{
+                    id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/video/sample-video/stream', fps: 30
+                  }}
                 />
-              ))}
+              </div>
+              {/* Add more <div> blocks here for additional feeds if needed */}
             </div>
-          )}
-        </div>
-
-        {/* WebSocket debug/messages (optional, using debugMessages now) */}
-        <div className="bg-card p-4 rounded border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <h2 className="text-xl font-semibold mb-2 tracking-normal">WebSocket Connection Status (Debug)</h2> {/* Added tracking-normal */}
-          <div className="max-h-60 overflow-y-auto text-sm text-muted-foreground">
-              {debugMessages.slice(-10).map((msg, index) => (
-                  <p key={index} className="mb-1 break-all tracking-normal">{msg}</p> /* Added tracking-normal */
-              ))}
-              {debugMessages.length === 0 && <p className="text-muted-foreground tracking-normal">Monitoring connection...</p>} {/* Added tracking-normal */}
           </div>
-        </div>
 
+          {/* Live Alerts Section */}
+          <div className="mb-6 matrix-card p-4">
+            <h2 className="text-xl font-semibold mb-3 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">LIVE ALERTS</h2>
+            {!isReady && <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">CONNECTING TO LIVE ALERTS...</p>}
+            {isReady && alerts.length === 0 && <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">NO NEW ALERTS.</p>}
+            {isReady && alerts.length > 0 && (
+              <div className="space-y-3 max-h-96 overflow-y-auto matrix-card">
+                {alerts.slice(-10).reverse().map((alert) => (
+                  <AnomalyItem
+                    key={alert.id || new Date(alert.timestamp).toISOString()}
+                    timestamp={new Date(alert.timestamp).toLocaleString()}
+                    severity={alert.severity || 'info'}
+                    message={alert.message}
+                    location={
+                      alert.details && typeof alert.details === 'object' && isLatLng(alert.details.location)
+                        ? `Lat: ${alert.details.location.latitude}, Lon: ${alert.details.location.longitude}`
+                        : 'N/A'
+                    }
+                    details={typeof alert.details === 'object' ? alert.details : undefined}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* WebSocket debug/messages (optional, using debugMessages now) */}
+          <div className="matrix-card p-4">
+            <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">WEBSOCKET CONNECTION STATUS (DEBUG)</h2>
+            <div className="max-h-60 overflow-y-auto text-sm font-lcd">
+                {debugMessages.slice(-10).map((msg, index) => (
+                    <p key={index} className="mb-1 break-all tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">{msg}</p>
+                ))}
+                {debugMessages.length === 0 && <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">MONITORING CONNECTION...</p>}
+            </div>
+          </div>
+        </main>
       </div>
     </AuthGuard>
   );

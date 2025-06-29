@@ -2,7 +2,7 @@
 import os
 
 # Kafka Configuration
-KAFKA_BROKERS = os.getenv('KAFKA_BROKERS', 'localhost:9092').split(',')
+KAFKA_BROKERS = os.getenv('KAFKA_BROKERS', 'dummy_kafka:9092').split(',') # Changed to dummy for local testing
 KAFKA_RAW_TOPIC = os.getenv('KAFKA_RAW_TOPIC', 'raw_traffic_data')
 KAFKA_GROUP_ID = os.getenv('KAFKA_GROUP_ID', 'traffic_processor_group') # Changed for clarity
 KAFKA_AUTO_OFFSET_RESET = os.getenv('KAFKA_AUTO_OFFSET_RESET', 'earliest')

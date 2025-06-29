@@ -85,6 +85,7 @@ async def get_analysis_trends(
     end_date: datetime = Query(..., description="End date for trend summary (ISO 8601 format)"),
     analytics_svc: AnalyticsService = Depends(get_as)
 ) -> traffic.AggregatedTrafficTrend:
+    logger.info(f"GET /trends endpoint called for region: {region_id}, start_date: {start_date}, end_date: {end_date}")
     """
     Placeholder: Generates a traffic trend summary for a given region and time period.
     The old functionality of querying pre-aggregated trends from DB can be a separate endpoint or refined.
@@ -105,6 +106,7 @@ async def detect_anomalies(
     request_data: AnomalyDetectionRequest = Body(...),
     analytics_svc: AnalyticsService = Depends(get_as)
 ) -> List[traffic.IncidentReport]:
+    logger.info(f"POST /detect-anomalies endpoint called with {len(request_data.traffic_data_points)} data points.")
     incidents = await analytics_svc.detect_traffic_anomalies(request_data.traffic_data_points)
     # Optionally, these incidents could be saved to a database here or by the service.
     return incidents
@@ -120,6 +122,7 @@ async def predict_incident_likelihood_endpoint(
     request_data: IncidentPredictionRequest = Body(...),
     analytics_svc: AnalyticsService = Depends(get_as)
 ) -> Dict[str, Any]:
+    logger.info(f"POST /predict-incident-likelihood endpoint called for location: {request_data.location.dict()}")
     prediction = await analytics_svc.predict_incident_likelihood(request_data.location, request_data.prediction_time)
     return prediction
 

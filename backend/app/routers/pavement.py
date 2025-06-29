@@ -15,9 +15,7 @@ async def analyze_pavement(
     image: UploadFile = File(...),
     current_user: dict = Depends(get_current_active_user)
 ):
-    """
-    Analyze pavement image for distresses and defects
-    """
+    logger.info(f"POST /api/pavement/analyze endpoint called by user: {current_user.get('username')}")
     try:
         contents = await image.read()
         results = await analyze_pavement_image(contents)

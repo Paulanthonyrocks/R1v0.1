@@ -29,10 +29,15 @@ class OptimizedRoute:
     congestion_probability: float
     recommendations: List[str]
 
+import pandas as pd
+
+class DataCache:
+    def get_statistics(self, latitude, longitude, hours):
+        # Dummy implementation for now
+        return {"average_speed": 50.0, "typical_congestion": 0.2}
+
 class RouteOptimizer:
     def __init__(self, traffic_predictor, data_cache):
-        self.traffic_predictor = traffic_predictor
-        self.data_cache = data_cache
         self.road_graph = nx.DiGraph()
         self._initialize_road_graph()
 
@@ -70,19 +75,33 @@ class RouteOptimizer:
                                 end_lon: float,
                                 prediction_time: datetime) -> Dict[str, Any]:
         """Predict traffic conditions for a route segment"""
-        # Get historical data for the segment
-        segment_stats = self.data_cache.get_statistics(
-            latitude=(start_lat + end_lat) / 2,
-            longitude=(start_lon + end_lon) / 2,
-            hours=24
-        )
-
-        # Get prediction for the segment
-        prediction = self.traffic_predictor.predict_incident_likelihood({
+        # Create a dummy DataFrame for prediction
+        # In a real scenario, these values would come from actual sensor data or external APIs
+        input_data = {
+            'sensor_id': 'dummy_sensor',
+            'timestamp': prediction_time,
             'latitude': (start_lat + end_lat) / 2,
             'longitude': (start_lon + end_lon) / 2,
-            'prediction_time': prediction_time
-        })
+            'vehicle_count': 50,  # Placeholder
+            'average_speed': 40.0, # Placeholder
+            'congestion_level': 3.0, # Placeholder
+            'congestion_score': 50.0, # Placeholder
+            'processing_timestamp': datetime.now(),
+            'status': 'simulated',
+            'hour_of_day': prediction_time.hour,
+            'day_of_week': prediction_time.weekday(),
+            'is_weekend': prediction_time.weekday() >= 5,
+            'road_type': 'major_artery', # Placeholder
+            'weather_conditions_temperature': 20.0, # Placeholder
+            'weather_conditions_precipitation': 0.0, # Placeholder
+            'truck_percentage': 0.15, # Placeholder
+            'is_outlier': False,
+            'incident_occurred': 0 # Placeholder
+        }
+        input_df = pd.DataFrame([input_data])
+
+        # Get prediction for the segment
+        prediction = self.traffic_predictor.predict_incident_likelihood(input_df)
 
         # Calculate segment metrics
         base_duration = self._calculate_base_duration(
@@ -92,11 +111,18 @@ class RouteOptimizer:
         congestion_factor = 1.0 + (prediction['incident_likelihood'] * 2)
         predicted_duration = base_duration * congestion_factor
 
+        # Get typical conditions from data cache
+        typical_conditions = self.data_cache.get_statistics(
+            latitude=(start_lat + end_lat) / 2,
+            longitude=(start_lon + end_lon) / 2,
+            hours=1 # Example: get stats for the next hour
+        )
+
         return {
             'predicted_duration_mins': predicted_duration,
             'congestion_score': prediction['incident_likelihood'],
             'confidence': prediction.get('confidence_score', 0.7),
-            'typical_conditions': segment_stats
+            'typical_conditions': typical_conditions
         }
 
     def _calculate_base_duration(self, 

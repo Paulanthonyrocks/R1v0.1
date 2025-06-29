@@ -27,8 +27,7 @@ class ActiveWebSocketConnection:
         self.subscriptions: Set[str] = set()
         self.auth_pending: bool = True
 
-    async def accept(self):
-        await self.websocket.accept()
+    
 
     async def send_text(self, text: str):
         await self.websocket.send_text(text)
@@ -37,7 +36,9 @@ class ActiveWebSocketConnection:
         """Sends a Pydantic model as JSON over WebSocket."""
         try:
             if self.websocket.client_state == WebSocketState.CONNECTED:
+                logger.debug(f"Client {self.client_id}: Before send_json. WebSocket state: {self.websocket.client_state}")
                 await self.websocket.send_json(message.model_dump(mode='json'))
+                logger.debug(f"Client {self.client_id}: After send_json. WebSocket state: {self.websocket.client_state}")
             else:
                 logger.warning(f"Attempted to send to non-connected websocket: {self.client_id}, state: {self.websocket.client_state}")
         except Exception as e: # Catch potential errors if socket is already closed
@@ -74,7 +75,7 @@ class ActiveWebSocketConnection:
             logger.error(f"Failed to decode JSON message from {self.client_id}: {data_raw}")
             await self.send_json_model(
                 WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     payload=ErrorNotification(
                         code="INVALID_JSON",
                         message="Invalid JSON format."
@@ -86,7 +87,7 @@ class ActiveWebSocketConnection:
             logger.error(f"Error processing incoming message from {self.client_id}: {e}", exc_info=True)
             await self.send_json_model(
                 WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     payload=ErrorNotification(
                         code="MESSAGE_PROCESSING_ERROR",
                         message="Could not process message."
@@ -103,7 +104,7 @@ class ActiveWebSocketConnection:
             logger.warning(f"Invalid WebSocketMessage structure from {self.client_id}: {data}. Error: {e}")
             await self.send_json_model(
                 WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     payload=ErrorNotification(
                         code="INVALID_MESSAGE_STRUCTURE",
                         message=f"Invalid message structure: {str(e)}"
@@ -133,7 +134,7 @@ class ActiveWebSocketConnection:
                     logger.warning(f"Client {self.client_id} authentication failed.")
                     await self.send_json_model(
                         WebSocketMessage(
-                            event_type=WebSocketMessageTypeEnum.ERROR,
+                            event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                             payload=ErrorNotification(
                                 code="AUTH_FAILED",
                                 message="Authentication failed. Invalid token."
@@ -145,7 +146,7 @@ class ActiveWebSocketConnection:
             else:
                 await self.send_json_model(
                     WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
+                        event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                         payload=ErrorNotification(
                             code="AUTH_TOKEN_MISSING",
                             message="Authentication token missing."
@@ -159,7 +160,7 @@ class ActiveWebSocketConnection:
             logger.warning(f"Client {self.client_id} attempted action before authentication. Message: {message.event_type}")
             await self.send_json_model(
                 WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     payload=ErrorNotification(
                         code="AUTH_REQUIRED",
                         message="Authentication required before sending other messages."
@@ -186,7 +187,7 @@ class ActiveWebSocketConnection:
             else:
                  await self.send_json_model(
                     WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
+                        event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                         payload=ErrorNotification(code="INVALID_SUBSCRIPTION_TOPIC", message="Invalid or missing topic for subscription.")
                     )
                 )
@@ -208,7 +209,7 @@ class ActiveWebSocketConnection:
             else:
                 await self.send_json_model(
                     WebSocketMessage(
-                        event_type=WebSocketMessageTypeEnum.ERROR,
+                        event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                         payload=ErrorNotification(code="INVALID_UNSUBSCRIPTION_TOPIC", message="Invalid, missing, or not subscribed topic for unsubscription.")
                     )
                 )
@@ -242,7 +243,7 @@ class ActiveWebSocketConnection:
                      logger.warning(f"Failed to refresh feed {feed_id} as requested by {self.client_id}: {e}")
                      await self.send_json_model(
                         WebSocketMessage(
-                            event_type=WebSocketMessageTypeEnum.ERROR,
+                            event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                             payload=ErrorNotification(code="FEED_REFRESH_FAILED", message=f"Failed to refresh feed {feed_id}: {e}")
                         )
                     )
@@ -250,7 +251,7 @@ class ActiveWebSocketConnection:
                      logger.error(f"Failed to get FeedManager to refresh feed {feed_id}: {e}", exc_info=True)
                      await self.send_json_model(
                         WebSocketMessage(
-                            event_type=WebSocketMessageTypeEnum.ERROR,
+                            event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                             payload=ErrorNotification(code="INTERNAL_ERROR", message="Server error attempting to refresh feed.")
                         )
                     )
@@ -261,7 +262,7 @@ class ActiveWebSocketConnection:
             logger.warning(f"Unhandled message type from {self.client_id}: {message.event_type}")
             await self.send_json_model(
                  WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.ERROR,
+                    event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     payload=ErrorNotification(code="UNHANDLED_MESSAGE_TYPE", message=f"Message type '{message.event_type}' not handled.")
                 )
             )
@@ -275,13 +276,25 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, client_id: str):
         connection = ActiveWebSocketConnection(websocket, client_id, self)
         try:
-            await connection.accept()
             self.active_connections[client_id] = connection
             logger.info(f"Client {client_id} connected. Total connections: {len(self.active_connections)}")
+
+            # Send initial feed status to the newly connected client
+            try:
+                feed_manager = get_feed_manager()
+                initial_statuses = await feed_manager.get_all_statuses()
+                message = WebSocketMessage(
+                    event_type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
+                    payload={"feeds": [status.model_dump() for status in initial_statuses]}
+                )
+                await connection.send_json_model(message)
+                logger.info(f"Sent initial feed statuses to client {client_id}")
+            except Exception as e:
+                logger.error(f"Failed to send initial feed status to {client_id}: {e}", exc_info=True)
+
         except WebSocketDisconnect:
             logger.warning(f"Client {client_id} disconnected before connection could be fully established.")
-            # Ensure no lingering connection object if accept fails
-            if client_id in self.active_connections: # Should not happen if accept is first
+            if client_id in self.active_connections:
                 del self.active_connections[client_id]
             # Optionally call connection.close() if it has resources to clean up even without full connect
             # await connection.close() # This would trigger disconnect again, so be careful
@@ -335,7 +348,7 @@ class ConnectionManager:
                 if specific_topic in connection.subscriptions:
                     should_send = True
             else: # Broadcast to all (potentially filtered by auth status)
-                if not connection.auth_pending or message.event_type in [WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, WebSocketMessageTypeEnum.ERROR, WebSocketMessageTypeEnum.PONG]:
+                if not connection.auth_pending or message.event_type in [WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, WebSocketMessageTypeEnum.ERROR_NOTIFICATION, WebSocketMessageTypeEnum.PONG]:
                     should_send = True
 
             if should_send:

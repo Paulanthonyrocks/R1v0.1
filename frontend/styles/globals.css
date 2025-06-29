@@ -1,7 +1,8 @@
 /* styles/globals.css */
 
 /* --- Font Imports (Keep at the very top) --- */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
 /* @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap'); */ /* If you need this too */
 
 /* --- Tailwind Directives (Immediately after imports) --- */
@@ -31,28 +32,33 @@
     /* --- Neon Blue (Example, ensure you define it if neon-text class is used) --- */
     --neon-blue-hsl: 197 100% 50%; /* HSL for #00f7ff */ /* This can remain, not core to the theme */
 
+    /* --- Retro LCD Variables --- */
+    --lcd-bg: #b6ffb0; /* Classic LCD green */
+    --lcd-text: #222; /* LCD black */
+    --lcd-scanline: rgba(0,0,0,0.08);
+    --lcd-grid: rgba(0,0,0,0.04);
+    --font-lcd: 'VT323', 'Share Tech Mono', monospace;
+
 
     /* --- Font Definitions --- */
     /* The @import is now at the top of the file */
-    --font-matrix: "IBM Plex Mono", "Courier New", monospace; /* Combined with fallback */
+    --font-matrix: "Press Start 2P", "VT323", "Share Tech Mono", monospace; /* Combined with fallback */
     /* --font-sans: "Inter", sans-serif; */     /* Define if using Inter or another sans-serif */
 
     /* --- Layout & Radius --- */
     --radius: 0.625rem;             /* Base border radius (approx 10px) */
 
     /* --- Shadcn Variable Mapping --- */
-    --background: var(--matrix-bg);            /* Green */
-    --foreground: var(--matrix-text);          /* Black */
-    --card: var(--matrix-bg);                  /* Card background is green */
-    --card-foreground: var(--matrix-text);     /* Card text is black */
-    --popover: var(--matrix-bg);               /* Popover background is green */
-    --popover-foreground: var(--matrix-text);  /* Popover text is black */
+    --background: var(--lcd-bg);
+    --foreground: var(--lcd-text);
+    --card: var(--lcd-bg);
+    --card-foreground: var(--lcd-text);
 
-    --primary: var(--matrix-text);             /* Primary elements (e.g. button bg) are black */
-    --primary-foreground: var(--matrix-bg);    /* Text on primary elements is green */
+    --primary: var(--lcd-text);
+    --primary-foreground: var(--lcd-bg);
 
-    --secondary: var(--matrix-text);           /* Secondary elements are black */
-    --secondary-foreground: var(--matrix-bg);  /* Text on secondary elements is green */
+    --secondary: var(--lcd-bg);
+    --secondary-foreground: var(--lcd-text);
 
     --muted: var(--matrix-text);               /* Muted elements (often backgrounds) are black */
     --muted-foreground: var(--matrix-text);    /* Muted text (e.g., card descriptions) is black for visibility on non-muted backgrounds */
@@ -96,147 +102,153 @@
 
   /* --- Base Body Styles --- */
   body {
-    background-image:
-      linear-gradient(to bottom,
-          hsl(var(--background-start)),
-          hsl(var(--background-end)));
-    background-color: hsl(var(--background)); /* Fallback or base */
-    color: hsl(var(--foreground));
-    font-family: var(--font-matrix);
-
-    @apply antialiased text-sm font-light tracking-wider uppercase;
-    
+    background: var(--lcd-bg);
+    color: var(--lcd-text);
+    font-family: var(--font-lcd);
+    @apply antialiased text-base font-normal tracking-wider;
     min-height: 100vh;
     overflow-x: hidden;
+    position: relative;
   }
 
-  /* Noise effect overlay on body */
+  /* LCD Scanlines */
   body::before {
-      content: "";
-      position: fixed; /* Fixed to viewport */
-      top: 0;
-      left: 0;
-      width: 100vw; /* Cover full viewport width */
-      height: 100vh; /* Cover full viewport height */
-      background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACVSURBVChTY2AYYNgLxIuJv+T/n4eBgSEAAAEcBA/x6c22AAAAAElFTkSuQmCC");
-      background-repeat: repeat;
-      opacity: var(--noise-opacity);
-      pointer-events: none;
-      z-index: -1; /* Behind content but above body's direct background */
-  }
-
-  /* --- Custom Scrollbars (Themed) --- */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: hsl(var(--matrix-bg));
-  }
-  ::-webkit-scrollbar-thumb {
-    background: hsl(var(--matrix-dark));
-    border-radius: 3px; /* Use a fixed value or var(--radius) if it makes sense */
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--matrix-light));
-  }
-
-  * {
-    -ms-overflow-style: -ms-autohiding-scrollbar;
-  }
-
-  @media (pointer: coarse) {
-    ::-webkit-scrollbar {
-      display: none;
-    }
-    * {
-      -ms-overflow-style: none;
-    }
-  }
-}
-
-/* --- Components Layer: Custom reusable component classes --- */
-@layer components {
-  .matrix-glow-card {
-    @apply border overflow-hidden rounded-md;
-    @apply glossy-gradient; /* Use the glossy-gradient class */
-    border-color: hsl(var(--border)); /* Keep border color */
-    border-radius: var(--radius);
-    box-shadow: none; /* Remove box shadow */
-    @apply transition-all duration-200;
-  }
-  .matrix-glow-card:hover {
-    box-shadow: none; /* Remove box shadow on hover */
-  }
-
- .glossy-gradient {
-    background: linear-gradient( /* Adjusted for frosted glass effect */
+    content: "";
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    background: repeating-linear-gradient(
       to bottom,
-      hsla(var(--matrix-panel), 0.6) 0%, /* More transparent start */
-      hsla(var(--matrix-light), 0.1) 50%, /* Very transparent middle */
-      hsla(var(--matrix-panel), 0.6) 100% /* More transparent end */
+      transparent 0px,
+      transparent 2px,
+      var(--lcd-scanline) 2px,
+      var(--lcd-scanline) 4px
     );
-    -webkit-backdrop-filter: blur(8px); /* Safari support */
-    backdrop-filter: blur(8px); /* Stronger blur for frosted effect */
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* LCD Pixel Grid */
+  body::after {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    background: repeating-linear-gradient(90deg, var(--lcd-grid) 0px, var(--lcd-grid) 1px, transparent 1px, transparent 6px),
+                repeating-linear-gradient(var(--lcd-grid) 0px, var(--lcd-grid) 1px, transparent 1px, transparent 6px);
+    pointer-events: none;
+    z-index: 2;
   }
 
-  /* .matrix-card from previous iteration, seems redundant with matrix-glow-card or Shadcn mapping.
-     If you need a simpler card without glow: */
-  .simple-matrix-card {
-    @apply p-6 rounded-md border; /* Tailwind p-6 is 1.5rem */
-    background-color: hsl(var(--card));
-    border-color: hsl(var(--border));
-    border-radius: var(--radius);
+  .static-noise::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JQAACBkAUgYx6QAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPqMAAAAABlBMVEUAAAD///93MnP+AAAAAWJLR0R/eCivNwAAABxJREFUOE9jYGBgYJjAwMDBwMDBwMDYwAAABQoBAAABJgBw10QyXAAAAABJRU5ErkJggg==") repeat 0 0;
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 3;
+    animation: static-animation 0.2s infinite;
   }
 
-
-  .matrix-input,
-  .matrix-button { /* Combined for base styling, button gets more specific overrides below */
-    @apply border rounded-md px-3 py-1; /* py-1 might be too small for buttons */
-    border-color: hsl(var(--input)); /* --input for border as per Shadcn */
-    background-color: hsl(var(--matrix-panel)); /* Using matrix-panel for a darker input bg */
-    color: hsl(var(--foreground));
-    border-radius: var(--radius);
-    transition: background-color var(--transition-duration), border-color var(--transition-duration), box-shadow var(--transition-duration);
-    box-shadow: 0 0 1px hsla(var(--matrix), 0.2);
-  }
-  .matrix-input:focus,
-  .matrix-button:focus { /* Combined focus */
-    outline: none;
-    border-color: hsl(var(--ring)); /* Using --ring for focus border, as per Shadcn */
-    box-shadow: 0 0 0 1px hsl(var(--ring)); /* Shadcn-like ring */
-  }
-  .matrix-input:hover,
-  .matrix-button:hover { /* Combined hover */
-    border-color: hsl(var(--matrix-light));
-    box-shadow: 0 0 2px hsla(var(--matrix), 0.3);
-  }
-  .matrix-input:disabled,
-  .matrix-button:disabled { /* Combined disabled styling, primarily for buttons now */
-    background-color: hsl(var(--muted)); /* Black background for disabled buttons */
-    border-color: hsl(var(--muted)); /* Black border */
-    color: hsl(var(--matrix-bg)); /* Green text for contrast on black bg */
-    cursor: not-allowed;
-    box-shadow: none;
-    opacity: 0.7; /* General opacity for disabled buttons */
-  }
-  /* Specific override for .matrix-input:disabled for better 1-bit experience */
-  .matrix-input:disabled {
-    background-color: hsl(var(--matrix-panel)); /* Green background */
-    border-color: hsl(var(--input)); /* Black border */
-    color: hsla(var(--matrix-text), 0.5); /* 50% transparent black text */
-    opacity: 1; /* Override opacity from combined rule if needed, or manage separately */
-  }
-  .matrix-input::placeholder {
-      color: hsl(var(--muted-foreground));
+  /* Remove all glass/frosted/glossy effects */
+  .glossy-gradient, .glossy-gradient::before, .matrix-glow-card {
+    background: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--lcd-text) !important;
+    box-shadow: none !important;
   }
 
+  /* LCD Card Style */
+  .matrix-card, .matrix-glow-card, .simple-matrix-card {
+    background: var(--lcd-bg) !important; /* Default to light green */
+    color: var(--lcd-text) !important; /* Text is black by default */
+    border: 1.5px solid var(--lcd-text) !important; /* Black border by default */
+    border-radius: 0 !important;
+    font-family: var(--font-lcd) !important;
+    box-shadow: none !important;
+    text-shadow: 0 0 2px var(--lcd-text), 0 0 8px var(--lcd-text); /* Black glow for text */
+    transition: all 0.1s ease-out; /* Subtle transition for hover effects */
+  }
+  .matrix-card:hover, .matrix-glow-card:hover, .simple-matrix-card:hover {
+    background: var(--lcd-text) !important; /* Turn black on hover */
+    color: var(--lcd-bg) !important; /* Text turns light green on hover */
+    box-shadow: 0 0 0 1.5px var(--lcd-bg), 0 0 8px var(--lcd-bg) !important; /* Green glow on hover */
+  }
+
+  /* LCD Button/Input Style */
+  .matrix-button, .matrix-input {
+    background: var(--lcd-bg) !important;
+    color: var(--lcd-text) !important;
+    border: 1.5px solid var(--lcd-text) !important;
+    border-radius: 0 !important;
+    font-family: var(--font-lcd) !important;
+    text-shadow: 0 0 1px var(--lcd-text), 0 0 4px var(--lcd-text); /* Updated for LCD glow */
+    box-shadow: none !important;
+    transition: all 0.1s ease-out; /* Subtle transition for hover effects */
+  }
+  .matrix-button:hover, .matrix-input:focus {
+    background: #d0ffd0 !important;
+    border-color: #222 !important;
+    text-shadow: 0 0 2px #fff, 0 0 8px #b6ffb0 !important; /* Enhanced glow on hover/focus */
+  }
+  .matrix-button:active {
+    background: #a0e6a0 !important; /* Slightly darker green on active */
+    border-color: #222 !important;
+    text-shadow: 0 0 1px #fff, 0 0 4px #b6ffb0 !important; /* Reduced glow on active */
+  }
+
+  /* LCD Text Glow */
+  .matrix-glow, .matrix-card__title, .matrix-card__content, .matrix-card__icon {
+    text-shadow: 0 0 1px var(--lcd-text), 0 0 4px var(--lcd-text); /* Sharper, more defined glow */
+    font-family: var(--font-lcd) !important;
+    animation: lcd-glow 3s ease-in-out infinite alternate; /* Apply subtle flickering animation */
+  }
+
+  /* Remove border radius and glass from nav */
+  .nav-bar, nav {
+    border-radius: 0 !important;
+    background: var(--lcd-bg) !important;
+    border: 1.5px solid var(--lcd-text) !important;
+    box-shadow: none !important;
+  }
+
+  /* Remove any remaining glassmorphism or shadow from all cards */
+  .card, .card * {
+    background: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  /* Remove any remaining frosted glass from popovers, modals, etc. */
+  .popover, .modal, .dialog {
+    background: var(--lcd-bg) !important;
+    border: 1.5px solid var(--lcd-text) !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  /* LCD style for progress bar */
+  .matrix-progress-bar {
+    background: #a0e6a0 !important;
+    border: 1.5px solid var(--lcd-text) !important;
+    border-radius: 0 !important;
+  }
+  .matrix-progress-bar__fill {
+    background: var(--lcd-text) !important;
+    border-radius: 0 !important;
+  }
+
+  /* LCD style for links */
   .matrix-link {
-    color: hsl(var(--primary)); /* Use HSL for consistency */
-    @apply transition-colors;
+    color: var(--lcd-text) !important;
+    text-shadow: 0 0 2px #fff, 0 0 8px #b6ffb0;
+    font-family: var(--font-lcd) !important;
   }
   .matrix-link:hover {
-    color: hsl(var(--matrix-light));
+    color: #222 !important;
+    text-decoration: underline;
   }
 
   /* Custom Scanlines Effect */
@@ -538,6 +550,14 @@
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); /* Added text shadow support */
   }
 
+  .image-rendering-pixelated {
+    image-rendering: pixelated;
+  }
+
+  .filter-contrast-125 {
+    filter: contrast(1.25);
+  }
+
   /* Scanlines for specific content areas */
   .content-area-scanlines {
     position: relative;
@@ -559,6 +579,36 @@
     background-size: 100% 3px; /* Updated background-size */
     pointer-events: none;
     z-index: 0; /* Updated z-index */
+  }
+
+  .menu-item-active {
+    animation: lcd-glow 1.5s ease-in-out infinite;
+  }
+
+  .menu-item-hover-glow:hover {
+    box-shadow: 0 0 0 2px var(--lcd-text), 0 0 12px 4px var(--lcd-text); /* More prominent pixelated glow on hover */
+  }
+
+  /* Custom Scrollbar Styles */
+  ::-webkit-scrollbar {
+    width: 8px; /* width of the entire scrollbar */
+    height: 8px; /* height of horizontal scrollbar */
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--lcd-bg); /* color of the tracking area */
+    border: 1px solid var(--lcd-text);
+    border-radius: 0; /* sharp corners */
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--lcd-text); /* color of the scroll thumb */
+    border-radius: 0; /* sharp corners */
+    border: 1px solid var(--lcd-bg); /* creates padding around scroll thumb */
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #444; /* darker thumb on hover */
   }
 }
 
@@ -601,97 +651,24 @@
     50% { opacity: 1; }
 }
 
-/* --- Responsive Overrides (Should also be at global scope or within layers carefully) --- */
-/* Keep these as they were, they primarily adjust Tailwind grid/flex */
-@media (max-width: 768px) {
-    .hero-content {
-        flex-direction: column;
-    }
-    .hero-text {
-        width: 100% !important; /* Important might be needed if Tailwind utilities have higher specificity */
-        padding: 0 1rem;
-    }
-    .feature-grid {
-        grid-template-columns: 1fr !important;
-    }
-    .parallax-bg {
-        background-attachment: scroll;
-    }
-    /* Hiding complex ::before/::after on mobile can improve performance */
-    .smart-city-bg::before,
-    .process-bg::before,
-    .process-bg::after {
-        display: none;
-    }
+@keyframes static-animation {
+  0% { background-position: 0 0; }
+  100% { background-position: 100% 100%; }
 }
 
-/* --- Reduced Motion Preferences --- */
-@media (prefers-reduced-motion: reduce) {
-  /* Disable animations */
-  .matrix-code,
-  .pulse,
-  .float,
-  .road-animation::after,
-  .demo-cell::after,
-  .demo-graph-line,
-  .data-node,
-  .demo-stat {
-    animation: none !important;
-  }
+@keyframes screen-flicker {
+  0%, 100% { background-position: 0 0; }
+  50% { background-position: 1px 1px; }
+}
 
-  /* For elements animated by matrixFall, adjust their static state */
-  .matrix-code {
-    opacity: 0.05 !important; /* Static, subtle visibility */
-    transform: none !important; /* Remove any transform from animation */
-  }
+@keyframes lcd-glow {
+  0%, 100% { text-shadow: 0 0 1px var(--lcd-text), 0 0 4px var(--lcd-text); }
+  25% { text-shadow: 0 0 0.5px var(--lcd-text), 0 0 2px var(--lcd-text); }
+  50% { text-shadow: 0 0 2px var(--lcd-text), 0 0 8px var(--lcd-text); }
+  75% { text-shadow: 0 0 0.8px var(--lcd-text), 0 0 3px var(--lcd-text); }
+}
 
-  /* For elements that use float, ensure they are not offset */
-  .float {
-    transform: none !important;
-  }
-
-  /* For roadScan, hide the element if animation is its primary purpose */
-  .road-animation::after {
-    display: none !important;
-  }
-
-  /* Disable transitions */
-  .scroll-transition,
-  .feature-underline,
-  .matrix-input,
-  .matrix-button,
-  .matrix-glow-card,
-  .matrix-link,
-  .matrix-progress-bar__fill { /* Added progress bar fill */
-    transition: none !important;
-  }
-
-  /* Ensure scroll-transition elements are immediately visible */
-  .scroll-transition {
-    opacity: 1 !important;
-    transform: translateY(0) !important;
-  }
-
-  /* Ensure feature-underline is fully visible if it's part of a static state */
-  .matrix-glow-card:hover .feature-underline, /* If hover is still desired without transition */
-  .feature-underline { /* Or make it always full width if appropriate */
-    width: 100% !important; /* Assuming it should be visible */
-  }
-
-  /* Remove hover effects that rely on transition for .matrix-glow-card */
-  .matrix-glow-card:hover {
-    box-shadow: 0 0 1px 1px hsla(var(--matrix-light), 0.2), /* Static shadow from non-hover state */
-                0 0 2px 1px hsla(var(--matrix), 0.2);
-  }
-
-  /* Remove hover effects for inputs and buttons that rely on transition */
-  .matrix-input:hover,
-  .matrix-button:hover {
-    border-color: hsl(var(--input)); /* Revert to base border color */
-    box-shadow: 0 0 1px hsla(var(--matrix), 0.2); /* Revert to base box shadow */
-  }
-   .matrix-button:hover { /* Specific for button if its hover is different */
-    background-color: hsl(var(--primary)); /* Revert to base background */
-    border-color: hsl(var(--primary));
-  }
+@keyframes loading-bar {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
 }

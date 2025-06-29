@@ -191,8 +191,7 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
 
     ws.onerror = (event) => {
       console.error('WebSocket error event occurred:', event);
-      // Error doesn't always trigger close, but we'll handle reconnect in onclose
-      // setError(`WebSocket error occurred.`); // Optionally set error immediately
+      setError(`WebSocket error occurred. Check console for details.`); // Set a user-friendly error message
       setIsConnected(false); // Assume disconnect on error
     };
 

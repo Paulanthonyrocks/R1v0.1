@@ -58,19 +58,20 @@ const AnomalyItem = React.memo((props: AnomalyItemProps) => {
       onClick={handleSelect}
       onKeyDown={handleKeyDown}
       className={cn(
-        'p-4 flex items-start gap-4 cursor-pointer hover:bg-muted/50 transition-colors duration-150', // Use theme hover
-        'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:bg-muted/60 rounded-sm' // Use focus-visible
+        'group p-4 flex items-start gap-4 cursor-pointer bg-lcd-bg text-lcd-text transition-colors duration-150 matrix-glow', // Default to light green background, black text, with glow
+        'hover:bg-lcd-text hover:text-lcd-bg', // On hover, black background, light green text
+        'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:bg-lcd-text focus-visible:text-lcd-bg rounded-none' // Focus visible matches hover
       )}
     >
-      <Badge variant="default" className={cn(config.styleClass, 'h-6 px-2 flex items-center flex-shrink-0 font-semibold tracking-normal')}> {/* Added tracking-normal, flex, items-center */}
-        <IconComponent className="mr-1.5 h-3 w-3" /> {/* Icon color will be text-primary-foreground (green) due to Badge style */}
+      <Badge variant="default" className={cn(config.styleClass, 'h-6 px-2 flex items-center flex-shrink-0 font-semibold tracking-normal rounded-none font-lcd matrix-glow', 'group-hover:bg-lcd-bg group-hover:text-lcd-text')}>
+        <IconComponent className="mr-1.5 h-3 w-3" />
         {config.text}
       </Badge>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate tracking-normal" title={message}>{message}</p> {/* Added tracking-normal */}
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5 tracking-normal"> {/* Added tracking-normal */}
+        <p className="text-sm font-medium text-lcd-text group-hover:text-lcd-bg truncate tracking-normal font-lcd matrix-glow" title={message}>{message}</p>
+        <div className="flex items-center gap-2 text-[10px] text-lcd-text group-hover:text-lcd-bg mt-0.5 tracking-normal font-lcd matrix-glow">
           <span>{displayTime}</span>
-          {feed_id && <span>• Feed {feed_id}</span>}
+          {feed_id && <span>• FEED {feed_id}</span>}
           {/* Display location/description if available */}
           {rest.location && <span title={rest.location}>• {rest.location.substring(0, 20)}{rest.location.length > 20 ? '...' : ''}</span>}
           {rest.description && <span title={rest.description}>• {rest.description.substring(0, 30)}{rest.description.length > 30 ? '...' : ''}</span>}

@@ -34,6 +34,7 @@ class LicensePlatePreprocessor:
         # Ensure kernels are numpy arrays with correct dtype
         self.morph_kernel = np.array(self.config.get("morph_kernel", [[1,1,1],[1,1,1],[1,1,1]]), dtype=np.uint8)
         self.sharpen_kernel = np.array(self.config.get("sharpen_kernel", [[-1,-1,-1],[-1,9,-1],[-1,-1,-1]]), dtype=np.float32)
+        self.min_roi_size = self.config.get("min_roi_size", 100) # Default to 100 if not specified
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -63,19 +64,28 @@ class LicensePlatePreprocessor:
 
         logger.debug(f"Attempting Gemini OCR call for ROI of shape {image_roi.shape}")
         try:
-            pil_image = Image.fromarray(cv2.cvtColor(image_roi, cv2.COLOR_BGR2RGB))
+            # --- Grayscale and Contrast Enhancement for OCR ---
+            if len(image_roi.shape) == 3:
+                gray_roi = cv2.cvtColor(image_roi, cv2.COLOR_BGR2GRAY)
+            else:
+                gray_roi = image_roi # Assume already grayscale
+
+            # Apply Contrast Limited Adaptive Histogram Equalization (CLAHE)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced_roi = clahe.apply(gray_roi)
+            # -------------------------------------------------
+
+            pil_image = Image.fromarray(enhanced_roi)
             img_byte_arr = io.BytesIO()
-            pil_image.save(img_byte_arr, format='JPEG', quality=90) # Good quality JPEG
+            pil_image.save(img_byte_arr, format='JPEG', quality=95) # Use high quality JPEG for OCR
             img_bytes = img_byte_arr.getvalue()
 
             image_part = {"mime_type": "image/jpeg", "data": img_bytes}
-            # Updated prompt based on common best practices for Gemini Vision for this task
             prompt_parts = [
                 image_part,
                 "Identify and extract the license plate number from this image. Provide only the license plate characters (alphanumeric). Do not include any additional text, labels, or explanations. If multiple plates are visible, focus on the largest and clearest one. If no license plate is clearly visible or readable, respond with an empty string.",
             ]
 
-            # Assuming generate_content is the correct method for gemini-pro-vision
             response = self.model.generate_content(prompt_parts)
 
             ocr_text = ""
@@ -84,7 +94,6 @@ class LicensePlatePreprocessor:
             elif response and response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 ocr_text = response.candidates[0].content.parts[0].text.strip()
 
-            # Post-process to keep only alphanumeric, uppercase
             ocr_text = ''.join(filter(str.isalnum, ocr_text)).upper()
 
             if ocr_text:
@@ -92,13 +101,13 @@ class LicensePlatePreprocessor:
             else:
                 logger.debug("Gemini OCR: No plate found or empty result after processing.")
 
-            self.last_api_error_time = 0 # Reset cool-down on success
+            self.last_api_error_time = 0
             return ocr_text
 
         except (genai.types.BlockedPromptException, genai.types.StopCandidateException) as safety_error:
             logger.warning(f"Gemini content safety issue: {safety_error}")
-            self.last_api_error_time = time.monotonic() # Start cool-down
-            return "" # Not retryable by Tenacity for this type of error
+            self.last_api_error_time = time.monotonic()
+            return ""
         except (google_api_exceptions.PermissionDenied,
                 google_api_exceptions.ResourceExhausted,
                 google_api_exceptions.DeadlineExceeded,
@@ -109,11 +118,11 @@ class LicensePlatePreprocessor:
                 ConnectionError,
                 TimeoutError) as retryable_error:
             logger.warning(f"Gemini API/network error (will be retried by tenacity): {type(retryable_error).__name__} - {retryable_error}")
-            self.last_api_error_time = time.monotonic() # Start cool-down after retries eventually fail
-            raise # Re-raise for tenacity to handle retries
+            self.last_api_error_time = time.monotonic()
+            raise
         except Exception as e:
             logger.error(f"Unexpected error during Gemini OCR call: {e}", exc_info=True)
-            self.last_api_error_time = time.monotonic() # Start cool-down
+            self.last_api_error_time = time.monotonic()
             return ""
 
     def _preprocess_for_tesseract(self, roi: np.ndarray) -> Optional[np.ndarray]:

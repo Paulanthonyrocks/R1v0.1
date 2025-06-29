@@ -41,12 +41,28 @@ export const useRealtimeUpdates = (url: string): RealtimeUpdates & { feeds: Feed
     };
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data) as { kpis?: KPIData; alerts?: AlertData[]; feeds?: FeedStatusData[] };
-        if (data.kpis) setKpis(data.kpis);
-        if (data.alerts) setAlerts(data.alerts);
-        if (data.feeds) setFeeds(data.feeds);
-      } catch {
-        // Ignore parse errors
+        const message = JSON.parse(event.data);
+        if (message.event_type === 'FEED_STATUS_UPDATE') {
+          const updatedFeed = message.payload.feed_status_data;
+          setFeeds(prevFeeds => {
+            const feedIndex = prevFeeds.findIndex(f => f.feed_id === updatedFeed.feed_id);
+            if (feedIndex > -1) {
+              const newFeeds = [...prevFeeds];
+              newFeeds[feedIndex] = updatedFeed;
+              return newFeeds;
+            }
+            return [...prevFeeds, updatedFeed];
+          });
+        } else if (message.payload && message.payload.feeds) {
+          // This handles the initial bulk feed update
+          setFeeds(message.payload.feeds);
+        }
+
+        if (message.kpis) setKpis(message.kpis);
+        if (message.alerts) setAlerts(prevAlerts => [...prevAlerts, ...message.alerts]);
+
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
       }
     };
   }, [url]);

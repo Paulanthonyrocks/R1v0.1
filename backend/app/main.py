@@ -7,8 +7,10 @@ import time
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
+from app.middleware.logging_middleware import LoggingMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import json
 import firebase_admin
@@ -31,7 +33,7 @@ from app.routers import (
 )
 from . import api
 # Initializers/Getters - Import config initializer now
-from .config import initialize_config, get_current_config  # Import config init/getter
+from .config import load_config, get_current_config, initialize_config  # Import config init/getter
 from .database import initialize_database, close_database, get_database_manager
 from .services import initialize_services, shutdown_services, get_connection_manager, get_analytics_service
 from app.utils.service_getters import get_feed_manager # Import get_feed_manager from the new utility file
@@ -39,8 +41,7 @@ from .services.services import health_check as services_health_check # Import di
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification # Added imports
 from app.tasks.prediction_scheduler import PredictionScheduler # Import the new scheduler
 # Logging will be reconfigured by initialize_config
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.main")
 
 # --- FastAPI App Instance ---
 app = FastAPI(
@@ -78,6 +79,51 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail, "type": "HTTP Exception"}
+    )
+
+@app.exception_handler(ResourceNotFound)
+async def resource_not_found_exception_handler(request: Request, exc: ResourceNotFound):
+    trace_id = str(uuid.uuid4())
+    logger.warning(f"Resource Not Found (Trace ID: {trace_id}): {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "Resource Not Found", "trace_id": trace_id}
+    )
+
+@app.exception_handler(OperationFailed)
+async def operation_failed_exception_handler(request: Request, exc: OperationFailed):
+    trace_id = str(uuid.uuid4())
+    logger.error(f"Operation Failed (Trace ID: {trace_id}): {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "Operation Failed", "trace_id": trace_id}
+    )
+
+@app.exception_handler(BadRequest)
+async def bad_request_exception_handler(request: Request, exc: BadRequest):
+    trace_id = str(uuid.uuid4())
+    logger.warning(f"Bad Request (Trace ID: {trace_id}): {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "Bad Request", "trace_id": trace_id}
+    )
+
+@app.exception_handler(Unauthorized)
+async def unauthorized_exception_handler(request: Request, exc: Unauthorized):
+    trace_id = str(uuid.uuid4())
+    logger.warning(f"Unauthorized Access (Trace ID: {trace_id}): {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "Unauthorized", "trace_id": trace_id}
+    )
+
+@app.exception_handler(Forbidden)
+async def forbidden_exception_handler(request: Request, exc: Forbidden):
+    trace_id = str(uuid.uuid4())
+    logger.warning(f"Forbidden Access (Trace ID: {trace_id}): {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "type": "Forbidden", "trace_id": trace_id}
     )
 
 # --- Event Handlers ---
@@ -146,7 +192,7 @@ async def startup_event():
 
     # 4. Initialize Services, including ConnectionManager
     try:
-        initialize_services(loaded_config, logger=logger)
+        await initialize_services(loaded_config, logger=logger)
         # Store ConnectionManager instance in app.state for direct access
         app.state.connection_manager = get_connection_manager() 
         # Initialize prediction log table after services are initialized
@@ -161,20 +207,14 @@ async def startup_event():
         raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
 
 
-    # Attempt to start the sample feed automatically
+    # Trigger the initial check for the sample feed.
     try:
         fm = get_feed_manager()
-        sample_feed_id = 'Feed_1_Sample_Video' # Assuming this is the ID from backend logs
-        logger.info(f"Attempting to start sample feed: {sample_feed_id}")
-        success = await fm.start_feed(sample_feed_id)
-        if success:
-            logger.info(f"Sample feed '{sample_feed_id}' started successfully on startup.")
-        else:
-            # This might happen if the feed is already running or in an unexpected state
-            status_data = await fm.get_feed_status(sample_feed_id)
-            logger.warning(f"Failed to explicitly start sample feed '{sample_feed_id}' on startup. Current status: {status_data.status if status_data else 'Unknown'}. Message: {status_data.status_message if status_data else 'N/A'}")
+        logger.info("Triggering initial sample feed check...")
+        await fm._check_and_manage_sample_feed()
+        logger.info("Initial sample feed check completed.")
     except Exception as e:
-        logger.error(f"An error occurred while trying to start sample feed on startup: {e}", exc_info=True)
+        logger.error(f"An error occurred during the initial sample feed check: {e}", exc_info=True)
 
 
     # 5. Initialize Prediction Scheduler
@@ -234,6 +274,7 @@ origins = [
     "http://localhost:3000",  # Frontend port
 ]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(LoggingMiddleware)
 
 
 # --- Include API Routers ---
@@ -241,7 +282,7 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 try:
     app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
-    app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+    app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
@@ -283,6 +324,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         await websocket.close(code=1011, reason="ConnectionManager not initialized in app.state")
         return
 
+    await websocket.accept()
     # The actual connection object (ActiveWebSocketConnection) is created inside manager.connect
     await manager.connect(websocket, client_id)
     # At this point, manager.active_connections[client_id] should be the ActiveWebSocketConnection instance
@@ -303,7 +345,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         while True:
             # The websocket.receive_text() or receive_json() call will raise WebSocketDisconnect
             # if the client disconnects.
+            logger.debug(f"Client {client_id}: Before receive_text. WebSocket state: {websocket.client_state}")
             data_raw = await websocket.receive_text() # Or receive_json() if clients always send JSON
+            logger.debug(f"Client {client_id}: Received data. WebSocket state: {websocket.client_state}")
             # active_connection should be self.active_connections.get(client_id) from manager
             # which is now passed to handle_incoming_message.
             # No, handle_incoming_message is a method of ActiveWebSocketConnection itself.
@@ -321,7 +365,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         # Attempt to close the connection gracefully from server-side if an error occurs
         if active_connection and active_connection.websocket.client_state == WebSocketState.CONNECTED:
             error_payload = ErrorNotification(code="UNEXPECTED_SERVER_ERROR", message=str(e))
-            ws_msg = WebSocketMessage(event_type=WebSocketMessageTypeEnum.ERROR, payload=error_payload)
+            ws_msg = WebSocketMessage(event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, payload=error_payload)
             try:
                 await active_connection.send_json_model(ws_msg)
             except Exception as send_err:
@@ -342,7 +386,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 @app.get("/api/v1/sample-video")
 def get_sample_video():
     """Serve the sample video file directly"""
-    video_path = Path(__file__).parent / "data" / "sample_traffic.mp4"
+    video_path = Path(__file__).parent.parent.parent / "frontend" / "public" / "sample_traffic.mp4"
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Sample video file not found")
     return FileResponse(str(video_path), media_type="video/mp4")

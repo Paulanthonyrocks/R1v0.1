@@ -8,6 +8,7 @@ import numpy as np # For calculations in KPI summary
 from typing import List, Optional, Dict, Any, Union # Added Union
 from datetime import datetime, timedelta, timezone
 import random
+from pathlib import Path # Added for Path object
 
 from app.models.traffic import TrafficData, AggregatedTrafficTrend, IncidentReport, IncidentTypeEnum, IncidentSeverityEnum, LocationModel
 from app.models.alerts import Alert, AlertSeverityEnum # Keep AlertSeverityEnum
@@ -71,18 +72,13 @@ class AnalyticsService:
         self._data_cache = TrafficDataCache(
             max_history_hours=self.config.get("data_retention_hours", 24)
         )
-        
-        # For periodic node congestion broadcasts
-        self._node_congestion_broadcast_interval_seconds = self.config.get("node_congestion_broadcast_interval", 10)
-        self._node_congestion_task: Optional[asyncio.Task] = None
-        self._stop_node_congestion_event: Optional[asyncio.Event] = None
-
-        # For periodic prediction correlation
-        self._prediction_correlation_interval_seconds = self.config.get("prediction_correlation_interval_seconds", 300) # Default 5 minutes
-        self._prediction_correlation_task: Optional[asyncio.Task] = None
-        self._stop_prediction_correlation_event: Optional[asyncio.Event] = None
-
         logger.info("AnalyticsService initialized with ML components, DatabaseManager, and background task setup.")
+        self._node_congestion_task = None
+        self._stop_node_congestion_event = None
+        self._prediction_correlation_task = None
+        self._stop_prediction_correlation_event = None
+        self._node_congestion_broadcast_interval_seconds = self.config.get("node_congestion_broadcast_interval_seconds", 60)
+        self._prediction_correlation_interval_seconds = self.config.get("prediction_correlation_interval_seconds", 300)
         
     def _update_traffic_data(self, data_point: TrafficData):
         """Update both recent data cache and trigger prediction updates"""

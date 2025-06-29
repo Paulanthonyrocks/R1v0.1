@@ -52,52 +52,52 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     return (
         <Card
             className={cn(
-                "matrix-glow-card overflow-hidden",
+                "matrix-glow-card overflow-hidden group", // Added 'group' class here
                 "cursor-pointer",
-                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none" // Added focus state
+                "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none", // Added focus state
+                "font-lcd matrix-glow"
             )}
             onClick={isToggling ? undefined : toggleFeed}
-            tabIndex={0} // Make it focusable
+            tabIndex={0}
         >
-            {/* Wrap the main content in a single parent div */}
             <div className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden"> {/* Added overflow-hidden */}
                 {/* Display the video image or placeholder */}
                 {image ? ( 
-                    <img src={image} alt={`${feedName} Feed`} className="w-full h-full object-cover" />
+                    <img src={image} alt={`${feedName} Feed`} className="w-full h-full object-cover image-rendering-pixelated filter-contrast-125" />
                 ) : (
                      <div className="absolute inset-0 flex items-center justify-center opacity-30">
-                         <Eye className="text-primary-foreground text-4xl" />
+                         <Eye className="text-lcd-bg group-hover:text-lcd-text text-4xl" />
                      </div>
                 )}
 
                 {/* Loading state overlay */}
                 {(isToggling || isStreamLoading) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                        <Loader2 className="text-primary-foreground animate-spin h-10 w-10" /> {/* Changed text-white to text-primary-foreground */}
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10 rounded-none">
+                        <Loader2 className="text-lcd-bg group-hover:text-lcd-text animate-spin h-10 w-10" />
                     </div> // Corrected closing tag
                 )}
 
                 {/* Stream error overlay */}
                 {streamError && !isToggling && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-card">
-                        <AlertTriangle className="text-primary text-3xl mb-1" /> {/* Changed text-destructive to text-primary */}
-                        <p className="text-xs text-primary text-center tracking-normal">Video feed unavailable</p> {/* Changed text-destructive to text-primary, added tracking-normal */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-lcd-text rounded-none">
+                        <AlertTriangle className="text-lcd-bg group-hover:text-lcd-text text-3xl mb-1" />
+                        <p className="text-lcd-bg group-hover:text-lcd-text text-center tracking-normal font-lcd matrix-glow">VIDEO FEED UNAVAILABLE</p>
                     </div>
                 )}
 
                 {/* FPS Badge */}
                 {status === 'running' && typeof fps === 'number' && !isToggling && !isStreamLoading && !streamError && (
-                  <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-primary-foreground/80 backdrop-blur-sm tracking-normal"> {/* Changed text-white, added tracking-normal, reduced opacity slightly */}
-                    {fps} FPS
+                  <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-primary-foreground/80 group-hover:text-lcd-text backdrop-blur-sm tracking-normal rounded-none font-lcd matrix-glow"> {/* Changed text-white, added tracking-normal, reduced opacity slightly, removed rounded, font-lcd */}
+                    {fps}
                   </Badge>
                 )}
                 <Badge
                     variant={status === 'running' ? "default" : "outline"}
                     className={cn(
-                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5 tracking-normal", // Added tracking-normal
+                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5 tracking-normal rounded-none font-lcd matrix-glow",
                         status === 'running'
                             ? "bg-primary text-primary-foreground animate-matrix-pulse"
-                            : "bg-card text-primary", // Changed non-LIVE status badge style
+                            : "bg-lcd-text text-lcd-bg", // Changed non-LIVE status badge style
                     )}
                 >
                     {status === 'running' ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
@@ -105,23 +105,23 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
 
                 {/* Metrics Overlay */}
                  {metrics && status === 'running' && !isToggling && !isStreamLoading && !streamError && (
-                     <div className="absolute top-1.5 right-1.5 text-xs text-primary-foreground/80 bg-black/50 px-1.5 py-0.5 rounded backdrop-blur-sm tracking-normal flex flex-col items-end">
-                        <span>Veh: {metrics.total_vehicles ?? '--'}</span>
-                        <span>Avg Speed: {metrics.average_speed_kmh ?? '--'} km/h</span>
+                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow">
+                        <span>VEH: {metrics.total_vehicles ?? '--'}</span>
+                        <span>AVG SPEED: {metrics.average_speed_kmh ?? '--'} KM/H</span>
                      </div>
                  )}
                  {/* Refresh Button */}
                 {!isToggling && !isStreamLoading && ( // Only show when not toggling or loading
                     <button
-                        className="absolute bottom-1.5 left-1.5 text-primary-foreground/80 hover:text-primary transition-colors z-20 p-1 rounded-full bg-black/50 backdrop-blur-sm"
+                        className="absolute bottom-1.5 left-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
                         onClick={(e) => { e.stopPropagation(); handleRefreshFeed(); }} // Stop click event from propagating to card toggle
                     >
                         <RotateCw size={14} />
                     </button>)}
             </div>
-            <CardContent className="p-2">
-                <h4 className="font-medium text-xs truncate text-foreground group-hover:text-matrix-light transition-colors tracking-normal">{component_name}</h4> {/* Added tracking-normal */}
-                <p className="text-[10px] text-muted-foreground truncate tracking-normal">{component_node}</p> {/* Added tracking-normal */}
+            <CardContent className="p-2 rounded-none">
+                <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>
+                <p className="text-[10px] text-lcd-bg group-hover:text-lcd-text transition-colors truncate tracking-normal font-lcd matrix-glow">{component_node}</p>
             </CardContent>
         </Card>
     );

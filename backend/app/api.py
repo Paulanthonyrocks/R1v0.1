@@ -40,38 +40,9 @@ from app.routers.analytics import router as analytics_router
 router = APIRouter()
 
 @router.get("/v1/feeds", response_model=List[FeedStatusData])
-async def get_feeds():
-    """Test endpoint to get the list of feeds. Uses the new comprehensive FeedStatusData model."""
-    test_feeds_data = [
-        FeedStatusData(
-            feed_id="feed1", 
-            config=FeedConfigInfo(name="Feed One", source_type="test_source", source_identifier="source1"), 
-            status=FeedOperationalStatusEnum.RUNNING,
-            status_message="Processing normally.",
-            start_time=datetime.utcnow(),
-            latest_metrics={"fps": 30}
-        ),
-        FeedStatusData(
-            feed_id="feed2", 
-            config=FeedConfigInfo(name="Feed Two", source_type="test_source", source_identifier="source2"), 
-            status=FeedOperationalStatusEnum.STOPPED,
-            status_message="Manually stopped."
-        ),
-        FeedStatusData(
-            feed_id="feed3", 
-            config=FeedConfigInfo(name="Feed Three", source_type="test_source", source_identifier="source3"), 
-            status=FeedOperationalStatusEnum.STARTING,
-            status_message="Initializing feed processor..."
-        ),
-        FeedStatusData(
-            feed_id="feed4", 
-            config=FeedConfigInfo(name="Feed Error", source_type="test_source", source_identifier="source4_error"), 
-            status=FeedOperationalStatusEnum.ERROR,
-            status_message="Failed to connect to source.",
-            error_details="Connection timeout after 3 attempts."
-        ),
-    ]
-    return test_feeds_data
+async def get_feeds(feed_manager: FeedManager = Depends(get_feed_manager)):
+    """Get the list of all feeds with their current status."""
+    return await feed_manager.get_all_statuses()
 
 @router.get("/v1/sample-feed-data")
 async def get_sample_feed_data(feed_manager: FeedManager = Depends(get_feed_manager)) -> Dict[str, Any]:
@@ -233,5 +204,3 @@ async def test_auth(current_user: dict = Depends(get_current_active_user)):
         }
     }
 
-app = FastAPI()
-app.include_router(analytics_router, prefix="/v1/analytics")

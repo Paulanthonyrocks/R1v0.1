@@ -104,15 +104,30 @@ def calculate_congestion_score(vehicle_count: int, average_speed: float) -> floa
         congestion_score = min((vehicle_count / average_speed) * 10, 100)
     return round(congestion_score, 2)
 
+def enrich_data(raw_data_model: RawTrafficDataInputModel) -> dict:
+    """Enriches raw data with additional features."""
+    timestamp = raw_data_model.timestamp
+    return {
+        "hour_of_day": timestamp.hour,
+        "day_of_week": timestamp.weekday(),
+        "is_weekend": timestamp.weekday() >= 5,
+        "road_type": "major_artery",  # Placeholder
+        "weather_conditions": {"temperature": 25.0, "precipitation": 0.0},  # Placeholder
+        "truck_percentage": 0.1,  # Placeholder
+        "is_outlier": False,  # Placeholder
+    }
+
 def process_raw_data(raw_data_model: RawTrafficDataInputModel) -> ProcessedTrafficDataDBModel:
     congestion_score = calculate_congestion_score(
         raw_data_model.vehicle_count,
         raw_data_model.average_speed
     )
+    enriched_data = enrich_data(raw_data_model)
     processed_data = ProcessedTrafficDataDBModel(
         **raw_data_model.model_dump(),
         congestion_score=congestion_score,
-        processing_timestamp=datetime.now(timezone.utc)
+        processing_timestamp=datetime.now(timezone.utc),
+        **enriched_data
     )
     return processed_data
 

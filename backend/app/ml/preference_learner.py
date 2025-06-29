@@ -14,7 +14,7 @@ from app.models.routing import (
     RoutePreferenceType
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.ml")
 
 class UserPreferenceLearner:
     def __init__(self):

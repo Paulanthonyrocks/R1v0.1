@@ -21,6 +21,8 @@ export interface AlertData {
   feed_id?: string | null;
   message: string;
   description?: string;
+  latitude?: number; // Added latitude
+  longitude?: number; // Added longitude
   location?: string; // This is a simple string; backend might send structured location in details.
   acknowledged?: boolean; // For WebSocket updates on acknowledgement status
   details?: Record<string, unknown>; // To capture full details from WebSocket if needed

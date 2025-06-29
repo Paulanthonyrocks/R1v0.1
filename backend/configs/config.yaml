@@ -2,7 +2,7 @@
 # Example Configuration for Route One Hub Backend
 
 # --- General Settings ---
-fps: 30 # Target processing FPS (workers might adjust dynamically)
+fps: 10 # Target processing FPS (workers might adjust dynamically)
 speed_limit: 60 # Speed limit in km/h for 'speeding' classification
 
 # --- Firebase Configuration ---
@@ -13,9 +13,88 @@ firebase_admin:
 
 # --- Logging Configuration ---
 logging:
-  level: INFO # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  log_path: ./logs/backend_app.log # Path for file logging (ensure directory exists)
-  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" # Optional format string
+  version: 1
+  disable_existing_loggers: False
+  formatters:
+    standardFormatter:
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  handlers:
+    consoleHandler:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: standardFormatter
+      stream: ext://sys.stdout
+    mainFileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: INFO
+      formatter: standardFormatter
+      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_main.log
+      maxBytes: 10485760 # 10 MB
+      backupCount: 5
+    workerFileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: INFO
+      formatter: standardFormatter
+      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_worker.log
+      maxBytes: 10485760 # 10 MB
+      backupCount: 5
+    databaseFileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: INFO
+      formatter: standardFormatter
+      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_database.log
+      maxBytes: 10485760 # 10 MB
+      backupCount: 5
+    servicesFileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: INFO
+      formatter: standardFormatter
+      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_services.log
+      maxBytes: 10485760 # 10 MB
+      backupCount: 5
+    mlFileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: INFO
+      formatter: standardFormatter
+      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_ml.log
+      maxBytes: 10485760 # 10 MB
+      backupCount: 5
+  loggers:
+    # Root logger
+    '':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
+      propagate: True
+    # Specific logger for the main application
+    'app.main':
+      handlers: [consoleHandler, mainFileHandler]
+      level: DEBUG
+      propagate: False # Prevent messages from being handled by root logger as well
+    # Logger for processing workers (their loggers will be named 'Process-feed_id')
+    'Process':
+      handlers: [workerFileHandler]
+      level: INFO
+      propagate: False # Prevent messages from being handled by root logger
+    # Logger for database operations
+    'app.database':
+      handlers: [consoleHandler, databaseFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for service operations
+    'app.services':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for machine learning operations
+    'app.ml':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for WebSocket connection manager
+    'app.websocket.connection_manager':
+      handlers: [consoleHandler, mainFileHandler] # Using mainFileHandler for now, can create a separate one if needed
+      level: DEBUG
+      propagate: False
 
 # --- Database Configuration ---
 database:
@@ -49,21 +128,21 @@ feed_manager:
 
 # --- Video Input / Worker Configuration ---
 video_input:
-  sample_video: ./data/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
+  sample_video: ../frontend/public/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
   webcam_index: 0 # Default index if source is "webcam" or "webcam:N" is invalid
-  webcam_buffer_size: 1 # Camera buffer size (increase might help with frame drops on some systems)
+  webcam_buffer_size: 20 # Camera buffer size (increase might help with frame drops on some systems)
   max_queue_size: 100 # Max size for the frame queue between worker and manager
 
 # --- Vehicle Detection (YOLO & Tracking) ---
 vehicle_detection:
   model_path: ./models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
-  frame_resolution: [640, 480] # Target resolution for processing [width, height]
+  frame_resolution: [480, 360] # Target resolution for processing [width, height]
   vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
   confidence_threshold: 0.4 # Minimum detection confidence
   proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
   track_timeout: 10 # Seconds before a track is considered stale and removed
-  max_active_tracks: 75 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 640 # Image size for YOLO model inference
+  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
+  yolo_imgsz: 240 # Image size for YOLO model inference
   skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
 
 # --- Kalman Filter Parameters ---
@@ -104,6 +183,9 @@ ocr_engine:
   ocr_interval: 10 # Minimum seconds between Gemini OCR attempts *per vehicle*
   gemini_max_retries: 3 # Max retries for Gemini API calls
   gemini_retry_delay: 1.0 # Initial delay (seconds) before retrying Gemini
+  min_ocr_bbox_height: 50
+  min_ocr_bbox_width: 100
+  ocr_sweet_spot_y_start: 0.5
   # --- ROI Adjustment for OCR ---
   # Factors applied to vehicle bounding box to isolate potential plate region
   # Values are proportions (0.0 to 1.0)
@@ -123,7 +205,7 @@ perspective_calibration:
 
 # --- Performance & Resource Limits ---
 performance:
-  gpu_acceleration: true # Enable GPU for YOLO detection/tracking if available
+  gpu_acceleration: false # Enable GPU for YOLO detection/tracking if available
   memory_limit_percent: 85 # Max virtual memory % before blocking new feeds
   cpu_limit_percent: 90 # Optional: Max CPU % before potentially reducing worker FPS
 
@@ -139,6 +221,15 @@ vis_options_default:
 # --- Interface / Worker Communication ---
 interface:
   camera_warmup_time: 0.5 # Seconds to wait after initializing camera source
+
+# --- Region of Interest (ROI) Processing ---
+roi_processing:
+  enabled: true
+  # Defines the rectangle to keep for processing, in [x1, y1, x2, y2] format.
+  # Any part of the video frame outside this rectangle will be ignored by the model.
+  # This is highly recommended for static cameras to focus only on the road.
+  # Example for a 640x480 stream: [0, 200, 640, 480] would crop the top 200 pixels.
+  crop_rect: [0, 180, 640, 480] # Default for 640x480, crops top area
 
 # --- Pavement Analysis Configuration ---
 pavement_analysis:

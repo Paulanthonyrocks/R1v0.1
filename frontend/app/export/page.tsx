@@ -148,7 +148,7 @@ const ExportPage: React.FC = () => {
         {dataPreview && (
           <div className="mt-4">
             <h3 className="text-lg text-primary tracking-normal">Data Preview</h3> {/* Added text-primary tracking-normal */}
-            <p className="text-matrix-muted-text tracking-normal">{dataPreview}</p> {/* Added tracking-normal */}
+            <p className="text-matrix-muted-text tracking-normal font-lcd">{dataPreview}</p> {/* Added tracking-normal */}
           </div>
         )}
       </MatrixCard>

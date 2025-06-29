@@ -3,8 +3,12 @@ from datetime import datetime, timedelta
 from typing import List
 from app.dependencies import get_feed_manager, get_current_active_user
 from app.services.feed_manager import FeedManager
+from app.models.common import APIResponse
+from app.exceptions import OperationFailed
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Mock incident data for demo fallback
 MOCK_INCIDENTS = [
@@ -44,6 +48,7 @@ async def get_incidents(
     current_user: dict = Depends(get_current_active_user),
     fm: FeedManager = Depends(get_feed_manager)
 ) -> List[dict]:
+    logger.info(f"GET /incidents endpoint called by user: {current_user.get('username')}")
     """
     Get all active incidents from the feed manager. Falls back to mock data if no live incidents.
     Requires authentication.

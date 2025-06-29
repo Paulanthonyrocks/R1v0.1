@@ -46,7 +46,7 @@ def detect_distresses_ml(image: np.ndarray, model: YOLO) -> List[Dict[str, Any]]
     """
     try:
         # Run inference
-        results = model(image, conf=0.25)  # Lower confidence threshold for testing
+        results = model(image, conf=0.25, imgsz=256)  # Lower confidence threshold for testing
         
         detections = []
         for r in results[0]:  # Process first image's results

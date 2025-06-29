@@ -14,6 +14,8 @@ class Alert(BaseModel):
     severity: AlertSeverityEnum = Field(..., example=AlertSeverityEnum.WARNING, description="Severity level of the alert")
     feed_id: Optional[str] = Field(None, example="cam_feed_003", description="Identifier of the feed that generated the alert, if applicable")
     message: str = Field(..., example="Unusual traffic congestion detected on Main St.", description="A concise message describing the alert")
+    latitude: Optional[float] = Field(None, example=34.0522, description="Latitude of the alert location, if applicable")
+    longitude: Optional[float] = Field(None, example=-118.2437, description="Longitude of the alert location, if applicable")
     details: Optional[Dict[str, Any]] = Field(None, example={"average_speed_kmh": 10, "expected_speed_kmh": 50}, description="Optional dictionary containing detailed information or metrics related to the alert")
     acknowledged: bool = Field(default=False, description="Whether the alert has been acknowledged by a user or system")
     acknowledged_by: Optional[str] = Field(None, example="user_admin_01", description="Identifier of the user/system that acknowledged the alert")

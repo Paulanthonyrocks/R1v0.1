@@ -40,6 +40,7 @@ async def get_current_config(
     config: Dict[str, Any] = Depends(get_config),
     current_user: dict = Depends(get_current_admin) # Protected
 ) -> Dict[str, Any]:
+    logger.info(f"GET /config endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}")
     """
     Endpoint to retrieve the active configuration. Requires authentication.
     Sensitive keys like API keys will be masked.
@@ -56,6 +57,7 @@ async def get_current_config(
     description="Triggers the backend to reload its configuration from the config.yaml file.",
 )
 async def reload_configuration(current_user: dict = Depends(get_current_admin)) -> StandardResponse: # Protected
+    logger.info(f"POST /config/reload endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}")
     """
     Endpoint to trigger a configuration reload. Requires authentication.
     Note: This reloads the config into memory; running processes

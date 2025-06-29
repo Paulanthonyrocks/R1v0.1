@@ -7,7 +7,8 @@ import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
 import dynamic from 'next/dynamic';
 import MatrixButton from "@/components/MatrixButton";
-import { Check, X, AlertTriangle, Sigma, InfoIcon as LucideInfoIcon } from 'lucide-react'; // Import icons, aliased InfoIcon
+import { Check, X, AlertTriangle, Sigma, InfoIcon as LucideInfoIcon, Signal, BatteryFull, Clock } from 'lucide-react'; // Import icons, aliased InfoIcon
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 
 import axios from 'axios'; // Keep axios for mutations
 // import useSWR from 'swr'; // Remove SWR
@@ -17,7 +18,7 @@ import { UserRole } from '@/lib/auth/roles'; // Import UserRole from correct pat
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import { AlertData, Anomaly, LocationTuple } from '@/lib/types'; // Import Anomaly and LocationTuple from lib/types
 import AnomalyDetailModal from '@/components/anomalies/AnomalyDetailModal'; // Anomaly types removed from this import
-import ToastContainer, { ToastMessage } from '@/components/ui/ToastContainer';
+import { useToast } from '@/components/ui/toast';
 import { WS_URL } from '@/lib/hook';
 
 // Modified AnomalyMapProps to include onMarkerClick and activeAnomalyId
@@ -115,15 +116,14 @@ type SortOrder = "newest" | "oldest";
 // const fetcher = (url: string) => axios.get(url).then((res: AxiosResponse<Anomaly[]>) => res.data); // SWR fetcher removed
 
 const AnomaliesPage = () => {
-  // const { data, error, isLoading, mutate } = useSWR<Anomaly[]>('/api/anomalies', fetcher); // SWR removed
   const { alerts: wsAlerts, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
+  const { showToast } = useToast();
 
   const [allAnomalies, setAllAnomalies] = useState<Anomaly[]>([]);
   const [pageLoading, setPageLoading] = useState(true); // Initial loading state
 
   const [selectedSeverity, setSelectedSeverity] = useState<SeverityFilter>(ALL_SEVERITIES);
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [selectedAnomalyForModal, setSelectedAnomalyForModal] = useState<Anomaly | null>(null);
   const [highlightedAnomalyId, setHighlightedAnomalyId] = useState<number | null>(null);
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -151,12 +151,7 @@ const AnomaliesPage = () => {
     });
   }, [wsAlerts]); // Remove allAnomalies from dependency array
 
-  const addToast = (message: string, type: 'success' | 'error') => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => removeToast(id), 3000);
-  };
-  const removeToast = (id: number) => setToasts(prev => prev.filter(toast => toast.id !== id));
+  
 
   // const allAnomalies: Anomaly[] = data || []; // Now using state `allAnomalies`
 
@@ -193,13 +188,13 @@ const AnomaliesPage = () => {
     try {
       // Use the new endpoint and request body structure
       await axios.patch(`/api/alerts/${anomalyId}/acknowledge`, { acknowledged: true });
-      addToast("Anomaly acknowledged successfully!", "success");
+      showToast("Anomaly acknowledged successfully!", "success");
       // UI is optimistically updated. WebSocket broadcast from backend will confirm to other clients.
       // If this client needs to be sure it has the absolute latest from DB (e.g. other fields changed by backend),
       // then a refetch or specific update from a WS message confirming the PATCH would be needed.
       // For now, optimistic update + WS broadcast to others is the flow.
     } catch {
-      addToast("Failed to acknowledge anomaly.", "error");
+      showToast("Failed to acknowledge anomaly.", "error");
       setAllAnomalies(prev => prev.map(anomaly =>
         anomaly.id === anomalyId ? { ...anomaly, resolved: false } : anomaly
       ));
@@ -213,7 +208,7 @@ const AnomaliesPage = () => {
     try {
       // Use the new endpoint
       await axios.delete(`/api/alerts/${anomalyId}`);
-      addToast("Anomaly dismissed successfully.", "success");
+      showToast("Anomaly dismissed successfully!", "success");
       // No SWR mutate. UI is optimistically updated.
       // WebSocket broadcast from backend will inform other clients.
     } catch {
@@ -258,8 +253,44 @@ const AnomaliesPage = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.AGENCY}>
-      <div className="p-4">
-        <ToastContainer toasts={toasts} removeToast={removeToast} />
+      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
+        {/* Status Bar */}
+        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center space-x-2 cursor-pointer">
+                <Signal size={20} />
+                <span className="font-lcd matrix-glow">ANOMALIES</span>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="matrix-card">
+              <DropdownMenuItem asChild>
+                <a href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow">DASHBOARD</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/dashboard/map" className="w-full tracking-normal font-lcd matrix-glow">LIVE MAP</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/dashboard/logs" className="w-full tracking-normal font-lcd matrix-glow">SYSTEM LOGS</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/dashboard/analytics" className="w-full tracking-normal font-lcd matrix-glow">ANALYTICS</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/dashboard/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</a>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center space-x-2">
+            <Clock size={20} />
+            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <BatteryFull size={20} />
+          </div>
+        </header>
+        <div className="p-4">
         <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
 
         <h1 className="text-2xl font-bold mb-4 uppercase text-matrix tracking-normal">Detected Anomalies</h1> {/* Added tracking-normal */}
@@ -359,12 +390,13 @@ const AnomaliesPage = () => {
             </div>
           </>
         ) : (
-          <div className="text-center text-matrix-muted py-10 tracking-normal"> {/* Added tracking-normal */}
+          <div className="text-center text-matrix-muted py-10 tracking-normal font-lcd"> {/* Added tracking-normal */}
             {allAnomalies.length === 0 ? "No anomalies detected." : "No anomalies match the current filters."}
           </div>
         )}
         {/* TODO: Form for reporting new anomalies could be triggered here */}
       </div>
+    </div>
     </AuthGuard>
  )
 };

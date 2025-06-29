@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pathlib import Path
 import logging
@@ -10,14 +10,19 @@ from ..utils.visualization import visualize_data
 from ..utils.monitoring import TrafficMonitor
 import cv2
 import yaml
+from app.exceptions import ResourceNotFound, OperationFailed
+from app.models.common import APIResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get("/sample-video/stream")
 async def stream_video(current_user: dict = Depends(get_current_active_user)):
-    """Stream the sample video with full core module analytics and overlays"""
-    video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
+    logger.info(f"GET /video/sample-video/stream endpoint called by user: {current_user.get('username')}")
+    video_path = Path(__file__).parent.parent.parent.parent / "frontend" / "public" / "sample_traffic.mp4"
+    if not video_path.exists():
+        logger.error(f"Sample video file not found at expected path: {video_path.resolve()}")
+        raise ResourceNotFound(detail=f"Sample video file not found at {video_path.resolve()}")
     config_path = Path(__file__).parent.parent.parent / "configs" / "config.yaml"
     try:
         # Load config
@@ -37,9 +42,11 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         vis_options = {"Tracked Vehicles", "Vehicle Data"} # Commented out "Lane Density Overlay", "Grid Overlay"
         # vis_options = {"Tracked Vehicles", "Vehicle Data", "Lane Density Overlay", "Grid Overlay"}
 
+        logger.info(f"Attempting to open video file: {video_path.resolve()}")
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            raise FileNotFoundError(f"Sample video file not found at {video_path}")
+            logger.error(f"Failed to open video file: {video_path.resolve()}. Check codecs or file integrity.")
+            raise OperationFailed(detail=f"Failed to open video file for streaming at {video_path.resolve()}")
         def generate_frames():
             frame_index = 0
             while True:
@@ -99,16 +106,16 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
             generate_frames(),
             media_type="multipart/x-mixed-replace;boundary=frame"
         )
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Sample video file not found")
+    except ResourceNotFound:
+        raise
     except Exception as e:
-        logger.error(f"Error streaming video: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error streaming video: {e}", exc_info=True)
+        raise OperationFailed(detail=f"Error streaming video: {e}")
 
-@router.get("/sample-video/kpis")
+@router.get("/sample-video/kpis", response_model=APIResponse[dict])
 async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
-    """Get the latest KPIs from the video feed without the video stream"""
-    video_path = Path(__file__).parent.parent / "data" / "sample_traffic.mp4"
+    logger.info(f"GET /video/sample-video/kpis endpoint called by user: {current_user.get('username')}")
+    video_path = Path(__file__).parent.parent.parent.parent / "frontend" / "public" / "sample_traffic.mp4"
     
     try:
         video_manager = VideoManager.get_instance()
@@ -116,10 +123,10 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         
         # Get one frame of KPIs
         data = next(processor.get_frame_generator())
-        return JSONResponse(content=data["kpis"])
+        return APIResponse.success(data=data["kpis"], message="Successfully retrieved video KPIs.")
         
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Sample video file not found")
+        raise ResourceNotFound(detail="Sample video file not found")
     except Exception as e:
-        logger.error(f"Error getting video KPIs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting video KPIs: {e}", exc_info=True)
+        raise OperationFailed(detail=f"Error getting video KPIs: {e}")

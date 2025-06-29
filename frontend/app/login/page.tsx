@@ -106,7 +106,7 @@ const LoginPage: React.FC = () => {
         </form>
         <p className="text-center text-sm mt-4 tracking-normal"> {/* Added tracking-normal */}
           Don&apos;t have an account?{' '}
-          <a href="/signup" className="text-primary hover:underline tracking-normal"> {/* Added tracking-normal */}
+          <a href="/signup" className="text-primary hover:underline tracking-normal font-lcd"> {/* Added tracking-normal */}
             Sign up
           </a>
         </p>

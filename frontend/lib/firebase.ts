@@ -4,13 +4,6 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { Auth, getAuth } from 'firebase/auth';
 import { Firestore, getFirestore } from 'firebase/firestore';
 
-// Debug logging for environment variables
-console.log('Environment Variables Check:', {
-  NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'missing',
-  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'missing',
-  NODE_ENV: process.env.NODE_ENV || 'missing'
-});
-
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -20,13 +13,6 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
-
-// Debug logging
-console.log('Firebase config:', {
-  apiKey: firebaseConfig.apiKey ? '**exists**' : '**missing**',
-  authDomain: firebaseConfig.authDomain ? '**exists**' : '**missing**',
-  projectId: firebaseConfig.projectId ? '**exists**' : '**missing**',
-});
 
 let app: FirebaseApp;
 try {

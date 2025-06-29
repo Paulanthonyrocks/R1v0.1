@@ -4,7 +4,7 @@ from app.utils import DatabaseManager as DBManagerClass, load_config, ConfigErro
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.database")
 
 db_manager_instance: Optional[DBManagerClass] = None
 
@@ -32,8 +32,7 @@ async def close_database():
     if db_manager_instance:
         try:
             logger.info("Closing database connections from app.database...")
-            await db_manager_instance.close_async()  # Close async connections
-            db_manager_instance.close()  # Close sync connections
+            db_manager_instance.close()  # Close all connections
             db_manager_instance = None
         except Exception as e:
             logger.error(f"Error closing database from app.database: {e}")

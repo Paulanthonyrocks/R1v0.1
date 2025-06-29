@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from collections import defaultdict
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.ml")
 
 class TrafficDataCache:
     def __init__(self, max_history_hours: int = 24):

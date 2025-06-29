@@ -1,13 +1,14 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/config.py
 
 import logging
+import logging.config # Import logging.config
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 # Assuming load_config is defined in utils.utils
 from app.utils import load_config, ConfigError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.config") # Use specific logger name
 
 # Module-level variable to hold the loaded configuration
 _config_instance: Optional[Dict[str, Any]] = None
@@ -34,16 +35,18 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
         # --- Reconfigure Logging Here (Centralized) ---
         # It's good practice to configure logging as soon as config is loaded
-        log_level_str = _config_instance.get('logging', {}).get('level', 'INFO').upper()
-        log_level = getattr(logging, log_level_str, logging.INFO)
-        # Configure root logger
-        logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
-        # Apply level to specific app loggers if needed
-        logging.getLogger('app').setLevel(log_level)
-        # Apply to uvicorn loggers if desired (optional)
-        # logging.getLogger('uvicorn.access').setLevel(log_level)
-        # logging.getLogger('uvicorn.error').setLevel(log_level)
-        logger.info(f"Logging level set to: {log_level_str} based on loaded configuration.")
+        print("Attempting to configure logging with dictConfig...")
+        try:
+            logging.config.dictConfig(_config_instance['logging'])
+            print("Logging configured successfully using dictConfig.")
+            logger.info("Logging configured successfully using dictConfig.")
+        except Exception as e:
+            print(f"Failed to configure logging with dictConfig: {e}")
+            logger.error(f"Failed to configure logging with dictConfig: {e}", exc_info=True)
+            # Fallback to basic config if dictConfig fails
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            print("Falling back to basic logging configuration.")
+            logger.warning("Falling back to basic logging configuration.")
         # --- End Logging Reconfiguration ---
 
         return _config_instance

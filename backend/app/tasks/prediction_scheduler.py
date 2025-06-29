@@ -9,7 +9,7 @@ from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, GeneralNotification
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.tasks.prediction_scheduler")
 
 class PredictionScheduler:
     def __init__(self, analytics_service: AnalyticsService, prediction_interval_minutes: int = 15):

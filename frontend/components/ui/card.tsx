@@ -7,8 +7,12 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "glossy-gradient", // Add the glossy-gradient class here
-        "text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm backdrop-blur-sm", // Removed bg-card/80
+        "text-card-foreground flex flex-col gap-6 border py-6 shadow-sm", // Removed glossy-gradient, rounded-xl, backdrop-blur-sm
+        "border-lcd-text", // Explicitly set border color
+        "font-lcd", // Apply LCD font
+        "shadow-none", // Remove default shadow
+        "pixel-drop-shadow", // Apply pixel drop shadow
+        "rounded-none", // Remove rounded corners
         className
       )}
       {...props}
@@ -21,7 +25,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-1.5 px-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6",
+        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-1.5 px-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6 font-lcd matrix-glow",
         className
       )}
       {...props}
@@ -33,7 +37,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn("leading-none font-semibold uppercase text-center tracking-normal", className)}
+      className={cn("leading-none font-semibold uppercase text-center tracking-normal font-lcd matrix-glow", className)}
       {...props}
     />
   )
@@ -43,7 +47,7 @@ function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-description"
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground text-sm font-lcd matrix-glow", className)}
       {...props}
     />
   )

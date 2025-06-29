@@ -20,7 +20,7 @@ except ImportError:
     LicensePlatePreprocessor = None
 
 # Logging setup
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.core.core_module")
 
 class CoreModule:
     vehicle_id_counter = 1 # Counter remains class-level, reset for each process instance
@@ -68,7 +68,7 @@ class CoreModule:
                  # This might need adjustment based on exact project layout
                  # If utils.py is guaranteed to be co-located with app.py:
                  # app_dir = Path(__file__).parent.parent.resolve() # Go up one level if core_module is in a subdir
-                 app_dir = Path(__file__).parent.resolve() # Assumes co-location for simplicity
+                 app_dir = Path(__file__).parent.parent.parent.parent.resolve() # Go up to project root
                  matrix_path = app_dir / matrix_path
             if matrix_path.exists():
                 try:
@@ -159,7 +159,19 @@ class CoreModule:
             img_size = self.yolo_imgsz
             if not isinstance(img_size, int) or img_size <= 0: img_size = 640
 
-            results = self.model.predict(frame, conf=confidence_threshold, imgsz=img_size, classes=self.vehicle_class_ids, max_det=self.max_active_tracks, verbose=False)
+            # --- ROI Processing ---
+            roi_cfg = self.config.get('roi_processing', {})
+            roi_enabled = roi_cfg.get('enabled', False)
+            crop_rect = roi_cfg.get('crop_rect', [0, 0, frame.shape[1], frame.shape[0]])
+            
+            if roi_enabled:
+                x1, y1, x2, y2 = crop_rect
+                processed_frame = frame[y1:y2, x1:x2]
+            else:
+                processed_frame = frame
+            # ---------------------
+
+            results = self.model.predict(processed_frame, conf=confidence_threshold, imgsz=img_size, classes=self.vehicle_class_ids, max_det=self.max_active_tracks, verbose=False)
 
             for r in results:
                 boxes = r.boxes
@@ -170,7 +182,16 @@ class CoreModule:
                     if cls not in self.vehicle_class_ids: continue
 
                     xyxy = box.xyxy[0].tolist()
-                    x1, y1, x2, y2 = map(int, xyxy)
+                    
+                    # --- Translate coordinates back if ROI is enabled ---
+                    if roi_enabled:
+                        x1_orig, y1_orig, x2_orig, y2_orig = map(int, xyxy)
+                        x1, y1 = x1_orig + crop_rect[0], y1_orig + crop_rect[1]
+                        x2, y2 = x2_orig + crop_rect[0], y2_orig + crop_rect[1]
+                    else:
+                        x1, y1, x2, y2 = map(int, xyxy)
+                    # --------------------------------------------------
+
                     center_x = (x1 + x2) / 2
                     center_y = (y1 + y2) / 2
                     vehicle_bbox = [x1, y1, x2, y2]
@@ -304,23 +325,51 @@ class CoreModule:
 
             self._classify_behavior(track) # Classify based on new speed/state
 
-            # --- Access ocr_cfg using self.ocr_cfg ---
+            # --- Access ocr_cfg using self.ocr_cfg --
             ocr_interval_frames = int(self.fps * self.ocr_cfg.get('ocr_interval', 15))
             max_ocr_attempts = 3
             if (track['license_plate'] == "Unknown" and
                 self.preprocessor and
                 track.get('plate_attempts', 0) < max_ocr_attempts and
                 frame_index % max(1, ocr_interval_frames) == 0):
-                 logger.debug(f"Attempting OCR for vehicle {track['vehicle_id']} (Attempt {track.get('plate_attempts', 0) + 1})")
-                 plate_text = self._ocr_license_plate(frame, track['bbox'])
-                 # Check for various "unknown" responses before assigning
-                 if plate_text not in ["Unknown", "Unknown (Error)", "Unknown (BadROI)", "Unknown (SmallROI)", "Unknown (NoPrep)", "Unknown (RetryFail)", "Unknown (Refused)", "Unknown (Blocked)", "Unknown (GenFail)", "Unknown (InvalidResp)", "Unknown (OCRError)", "Unknown (PreprocFail)", "Unknown (TessFail)", "Unknown (NoTess)", "Unknown (TessError)", None]:
-                      track['license_plate'] = plate_text
-                      logger.info(f"OCR Success for {track['vehicle_id']}: {plate_text}")
-                 track['plate_attempts'] = track.get('plate_attempts', 0) + 1
+                
+                # --- Selective OCR Trigger ---
+                if self._is_roi_optimal_for_ocr(track['bbox']):
+                    logger.debug(f"Attempting OCR for vehicle {track['vehicle_id']} (Attempt {track.get('plate_attempts', 0) + 1})")
+                    
+                    # --- Asynchronous OCR (Placeholder) ---
+                    # In a real implementation, this would be offloaded to a separate process or thread pool
+                    # For now, we'll call it directly but structure it as if it were async
+                    plate_text = self._ocr_license_plate(frame, track['bbox'])
+                    
+                    if plate_text not in ["Unknown", "Unknown (Error)", "Unknown (BadROI)", "Unknown (SmallROI)", "Unknown (NoPrep)", "Unknown (RetryFail)", "Unknown (Refused)", "Unknown (Blocked)", "Unknown (GenFail)", "Unknown (InvalidResp)", "Unknown (OCRError)", "Unknown (PreprocFail)", "Unknown (TessFail)", "Unknown (NoTess)", "Unknown (TessError)", None]:
+                        track['license_plate'] = plate_text
+                        logger.info(f"OCR Success for {track['vehicle_id']}: {plate_text}")
+                    track['plate_attempts'] = track.get('plate_attempts', 0) + 1
 
         except Exception as e:
             logger.error(f"Error updating track {track.get('vehicle_id', 'N/A')}: {e}", exc_info=True)
+
+    def _is_roi_optimal_for_ocr(self, bbox: List[int]) -> bool:
+        """
+        Checks if the vehicle's bounding box is in an optimal position and size for OCR.
+        This is a placeholder for a more sophisticated implementation.
+        """
+        # Example: Only attempt OCR if the bounding box is in the lower half of the frame
+        # and has a certain minimum size.
+        x1, y1, x2, y2 = bbox
+        frame_height = self.config.get('vehicle_detection', {}).get('frame_resolution', [640, 480])[1]
+        bbox_height = y2 - y1
+        bbox_width = x2 - x1
+
+        # --- Add these to config.yaml for tunability ---
+        min_ocr_bbox_height = self.ocr_cfg.get('min_ocr_bbox_height', 50)
+        min_ocr_bbox_width = self.ocr_cfg.get('min_ocr_bbox_width', 100)
+        ocr_sweet_spot_y_start = frame_height * self.ocr_cfg.get('ocr_sweet_spot_y_start', 0.5)
+
+        if y2 > ocr_sweet_spot_y_start and bbox_height > min_ocr_bbox_height and bbox_width > min_ocr_bbox_width:
+            return True
+        return False
 
     def _classify_behavior(self, track: Dict) -> None:
         current_speed_kmh = track['speed']
@@ -396,7 +445,7 @@ class CoreModule:
 
             if roi_x_start >= roi_x_end or roi_y_start >= roi_y_end: return "Unknown (BadROI)"
             roi = frame[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
-            if roi.size < self.preprocessor.min_roi_size: return "Unknown (SmallROI)"
+            if (roi.shape[0] * roi.shape[1]) < self.preprocessor.min_roi_size: return "Unknown (SmallROI)"
             return self.preprocessor.preprocess_and_ocr(roi)
         except Exception as e:
             logger.error(f"OCR processing failed: {e}", exc_info=True)

@@ -43,6 +43,7 @@ async def get_alerts(
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
     current_user: dict = Depends(get_current_active_user)
 ) -> AlertsResponse:
+    logger.info(f"GET /alerts endpoint called by user: {current_user.get('username')}")
     """
     Endpoint to fetch alerts with filtering and pagination. Requires authentication.
     """

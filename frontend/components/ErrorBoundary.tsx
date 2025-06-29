@@ -56,25 +56,24 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       // You can render any custom fallback UI
       return (
         <div className={cn(
-            'p-4 bg-destructive/10 text-destructive-foreground border border-destructive rounded-md flex flex-col sm:flex-row items-center gap-3',
-            // FIX: Access props via `this.props` in class components
+            'matrix-card p-4 flex flex-col sm:flex-row items-center gap-3 font-lcd matrix-glow',
             this.props.fallbackClassName
          )}>
-          <AlertTriangle  className="h-6 w-6 flex-shrink-0 text-destructive" />
+          <AlertTriangle  className="h-6 w-6 flex-shrink-0 text-lcd-text" />
           <div className="flex-1 text-center sm:text-left">
-            <p className="font-semibold">Something went wrong</p>
+            <p className="font-semibold font-lcd matrix-glow">Something went wrong</p>
             {/* Check if state.error is not null before accessing properties */}
-            <p className="text-sm mt-1">
+            <p className="text-sm mt-1 font-lcd matrix-glow">
                 {this.state.error?.message || 'An unexpected error occurred while rendering this section.'}
             </p>
             {/* Check if state.error is not null before accessing properties */}
             {process.env.NODE_ENV === 'development' && this.state.error?.stack && (
-                <pre className="mt-2 text-xs overflow-auto max-h-20 bg-black/20 p-2 rounded">
+                <pre className="mt-2 text-xs overflow-auto max-h-20 bg-lcd-text/10 p-2 rounded-none font-lcd matrix-glow">
                     {this.state.error.stack}
                 </pre>
             )}
           </div>
-          <Button variant="destructive" size="sm" onClick={this.resetError} className="mt-2 sm:mt-0">
+          <Button variant="default" size="sm" onClick={this.resetError} className="mt-2 sm:mt-0">
             Try Again
           </Button>
         </div>

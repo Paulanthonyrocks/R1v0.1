@@ -24,7 +24,7 @@ from app.utils.service_getters import get_feed_manager # Import the moved getter
 feed_manager_instance: Optional[FMClass] = None # Keep FeedManager instance global if needed outside initialize_services
 
 
-def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accept logger as argument
+async def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accept logger as argument
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, \
            _analytics_service_instance, _route_optimization_service_instance, \
            _personalized_routing_service_instance, _weather_service_instance, _event_service_instance
@@ -49,6 +49,8 @@ def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accep
             # Inject connection manager if both initialized
             if connection_manager_instance:
                  feed_manager_instance.set_connection_manager(connection_manager_instance)
+            # Initialize shared multiprocessing values after app startup
+            feed_manager_instance.initialize_shared_values()
             logger.info("FeedManager initialized via app.services.")
         except Exception as e:
             logger.error(f"Failed to initialize FeedManager in app.services: {e}", exc_info=True)
@@ -76,6 +78,8 @@ def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accep
         connection_manager=connection_manager_instance,
         database_manager=db_manager # Add this line
     )
+    
+    
     _route_optimization_service_instance = RouteOptimizationService(
         traffic_predictor=_analytics_service_instance._traffic_predictor,
         data_cache=_analytics_service_instance._data_cache
@@ -124,14 +128,14 @@ def get_connection_manager() -> ConnectionManager:
 def get_traffic_signal_service() -> TrafficSignalService:
     if _traffic_signal_service_instance is None:
         # This path should ideally not be taken if initialize_services is called at startup.
-        logger = logging.getLogger(__name__) # Ensure logger is defined here too
+        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("TrafficSignalService accessed before initialization!")
         raise RuntimeError("TrafficSignalService not initialized.")
     return _traffic_signal_service_instance
 
 def get_analytics_service() -> AnalyticsService: # New getter
     if _analytics_service_instance is None:
-        logger = logging.getLogger(__name__) # Ensure logger is defined here too
+        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("AnalyticsService accessed before initialization!")
         raise RuntimeError("AnalyticsService not initialized.")
     return _analytics_service_instance
@@ -139,7 +143,7 @@ def get_analytics_service() -> AnalyticsService: # New getter
 def get_route_optimization_service() -> RouteOptimizationService:
     """Get the route optimization service instance"""
     if _route_optimization_service_instance is None:
-        logger = logging.getLogger(__name__) # Ensure logger is defined here too
+        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("RouteOptimizationService accessed before initialization!")
         raise RuntimeError("RouteOptimizationService not initialized.")
     return _route_optimization_service_instance
@@ -152,7 +156,7 @@ def get_personalized_routing_service() -> Optional[PersonalizedRoutingService]:
 def get_weather_service() -> WeatherService:
     """Get the weather service instance"""
     if _weather_service_instance is None:
-        logger = logging.getLogger(__name__) # Ensure logger is defined here too
+        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("WeatherService accessed before initialization!")
         raise RuntimeError("WeatherService not initialized")
     return _weather_service_instance
@@ -160,13 +164,13 @@ def get_weather_service() -> WeatherService:
 def get_event_service() -> EventService:
     """Get the event service instance"""
     if _event_service_instance is None:
-        logger = logging.getLogger(__name__) # Ensure logger is defined here too
+        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("EventService accessed before initialization!")
         raise RuntimeError("EventService not initialized")
     return _event_service_instance
 
 async def shutdown_services(): # Make async for feed manager shutdown
-    logger = logging.getLogger(__name__) # Ensure logger is defined here too
+    logger = logging.getLogger("app.services") # Ensure logger is defined here too
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance, _route_optimization_service_instance
     logger.info("Shutting down application services...")
     if connection_manager_instance:
@@ -193,9 +197,9 @@ async def shutdown_services(): # Make async for feed manager shutdown
         await _traffic_signal_service_instance.close() # Call its close method
         _traffic_signal_service_instance = None
     
-    # No specific shutdown for AnalyticsService for now, unless it holds resources like DB connections directly
     if _analytics_service_instance:
-        logger.info("AnalyticsService does not require explicit shutdown currently.")
+        logger.info("Shutting down AnalyticsService background tasks...")
+        await _analytics_service_instance.stop_background_tasks()
         _analytics_service_instance = None
 
     # Clear route optimization service
@@ -205,7 +209,7 @@ async def shutdown_services(): # Make async for feed manager shutdown
 
 async def health_check() -> Dict[str, Any]:
     """Performs a health check on critical services."""
-    logger = logging.getLogger(__name__) # Ensure logger is defined here too
+    logger = logging.getLogger("app.services") # Ensure logger is defined here too
     # Basic health check, can be expanded
     # For FeedManager, you might check if the result reader task is alive
     # For Database, you might do a simple query

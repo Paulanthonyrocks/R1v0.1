@@ -32,6 +32,7 @@ async def optimize_route(
     optimization_service: RouteOptimizationService = Depends(get_route_optimization_service),
     _: Dict = Depends(get_current_active_user)  # Ensure user is authenticated
 ) -> Dict[str, Any]:
+    logger.info(f"POST /optimize endpoint called by user: {_.get('uid')}")
     """Get an optimized route with traffic predictions"""
     try:
         return await optimization_service.get_optimized_route(

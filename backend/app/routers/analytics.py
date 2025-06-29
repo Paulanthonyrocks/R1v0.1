@@ -10,6 +10,8 @@ from app.dependencies import get_analytics_service # Assuming this will be creat
 from app.services.feed_manager import FeedManager # Keep for existing endpoint
 from app.models.websocket import GlobalRealtimeMetrics # Keep for existing endpoint
 from app.dependencies import get_feed_manager, get_current_active_user # Keep for existing endpoint
+from app.models.common import APIResponse
+from app.exceptions import OperationFailed
 
 import logging
 
@@ -74,14 +76,15 @@ class AllNodesCongestionResponse(BaseModel):
 
 @router.get(
     "/realtime",
-    response_model=GlobalRealtimeMetrics,
+    response_model=APIResponse[GlobalRealtimeMetrics],
     summary="Get Real-Time Analytics Metrics",
     description="Returns the latest real-time analytics metrics for the dashboard, including congestion index, average speed, active incidents, and feed statuses."
 )
 async def get_realtime_analytics(
     current_user: dict = Depends(get_current_active_user),
     fm: FeedManager = Depends(get_feed_manager)
-) -> GlobalRealtimeMetrics:
+) -> APIResponse[GlobalRealtimeMetrics]:
+    logger.info(f"GET /analytics/realtime endpoint called by user: {current_user.get('username')}")
     """
     Returns the latest global real-time analytics metrics for the dashboard.
     Requires authentication.
@@ -141,10 +144,10 @@ async def get_realtime_analytics(
                     "stopped": idle_feeds
                 }
             )
-        return metrics_payload
+        return APIResponse.success(data=metrics_payload, message="Successfully retrieved real-time analytics metrics.")
     except Exception as e:
-        logger.error(f"Failed to compute real-time analytics: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to compute real-time analytics metrics.")
+        logger.error(f"Failed to compute real-time analytics: {e}", exc_info=True)
+        raise OperationFailed(detail="Failed to compute real-time analytics metrics.")
 
 def calculate_congestion_index(feeds: list) -> float:
     """Calculate global congestion index from all active feeds"""
@@ -156,14 +159,15 @@ def calculate_congestion_index(feeds: list) -> float:
 
 @router.get(
     "/nodes/congestion",
-    response_model=AllNodesCongestionResponse, # Using the wrapper model
+    response_model=APIResponse[AllNodesCongestionResponse], # Using the wrapper model
     summary="Get Congestion Data for All Monitored Nodes",
     description="Returns a list of all monitored locations/nodes with their latest congestion data, including vehicle count, average speed, and congestion score."
 )
 async def get_all_nodes_congestion_data(
     current_user: dict = Depends(get_current_active_user), # Assuming authentication is needed
     analytics_service: AnalyticsService = Depends(get_analytics_service) # Dependency injection
-) -> AllNodesCongestionResponse:
+) -> APIResponse[AllNodesCongestionResponse]:
+    logger.info(f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('username')}")
     """
     Retrieves the latest congestion data for all monitored nodes.
     Each node's data includes its ID, name, coordinates, congestion score,
@@ -176,10 +180,7 @@ async def get_all_nodes_congestion_data(
 
         # node_data_list from AnalyticsService is List[Dict[str, Any]]
         # Pydantic will validate each item against NodeCongestionData
-        return AllNodesCongestionResponse(nodes=node_data_list)
+        return APIResponse.success(data=AllNodesCongestionResponse(nodes=node_data_list), message="Successfully retrieved node congestion data.")
     except Exception as e:
         logger.error(f"Error retrieving all nodes congestion data: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve node congestion data."
-        )
+        raise OperationFailed(detail="Failed to retrieve node congestion data.")

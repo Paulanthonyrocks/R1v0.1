@@ -30,8 +30,8 @@ const DropdownMenuContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground pixel-drop-shadow data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
-        // Removed default shadow-md if it was there, and added pixel-drop-shadow
+        "z-50 min-w-[8rem] overflow-hidden rounded-none border-2 border-lcd-text bg-lcd-bg p-1 text-lcd-text pixel-drop-shadow data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2", // Removed font-lcd matrix-glow from here
+
         className
       )}
       {...props}
@@ -48,7 +48,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "flex cursor-default select-none align-middle items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "flex cursor-default select-none align-middle items-center rounded-none px-2 py-1.5 text-sm outline-none focus:bg-lcd-text focus:text-lcd-bg data-[disabled]:pointer-events-none data-[disabled]:opacity-50 font-lcd matrix-glow",
       className
     )}
     {...props}
@@ -67,7 +67,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none align-middle items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+      "flex cursor-default select-none align-middle items-center rounded-none px-2 py-1.5 text-sm outline-none focus:bg-lcd-text focus:text-lcd-bg data-[state=open]:bg-lcd-text data-[state=open]:text-lcd-bg font-lcd matrix-glow",
       inset && "pl-8",
       className
     )}
@@ -87,8 +87,7 @@ const DropdownMenuSubContent = React.forwardRef<
   <DropdownMenuPrimitive.SubContent
     ref={ref}
     className={cn(
-      "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground pixel-drop-shadow data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
-      // Added pixel-drop-shadow to SubContent as well for consistency
+      "z-50 min-w-[8rem] overflow-hidden rounded-none border-2 border-lcd-text bg-lcd-bg p-1 text-lcd-text pixel-drop-shadow data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 font-lcd matrix-glow",
       className
     )}
     {...props}

@@ -109,15 +109,14 @@ const UserPreferencesPanel: React.FC = () => {
         </label>
       </div>
       <div className="mb-2">
-        <label>
+        <label className="text-primary font-lcd">
           Preferred Departure Time:
           <input
             type="time"
             name="preferredDepartureTime"
             value={prefs.routePreferences.preferredDepartureTime || ''}
             onChange={handleChange}
-            className="ml-2 border rounded px-2"
-          />
+            className="ml-2 matrix-input px-2" />
         </label>
       </div>
       <div className="mb-2">
@@ -154,13 +153,13 @@ const UserPreferencesPanel: React.FC = () => {
           />
           Include Weather
         </label>
-        <label className="ml-4">
+        <label className="ml-4 text-primary font-lcd">
           <input
             type="checkbox"
             name="includeEvents"
             checked={prefs.trafficAlerts.includeEvents}
-            onChange={e => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: e.target.checked } })}
-          />
+            onChange={e => setPrefs({ ...prefs.trafficAlerts, includeEvents: e.target.checked })}
+            className="matrix-input" />
           Include Events
         </label>
       </div>

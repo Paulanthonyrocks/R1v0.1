@@ -39,6 +39,8 @@ from fastapi.responses import JSONResponse
 from app.dependencies import get_feed_manager, get_current_active_user, get_current_active_user_optional, get_current_admin
 # Import Services
 from app.services.feed_manager import FeedManager, FeedNotFoundError, FeedOperationError, ResourceLimitError
+from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
+from app.models.common import APIResponse
 import logging
 
 # Configure logging (optional, can be configured globally in main.py)
@@ -50,29 +52,32 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=List[FeedStatus],
+    response_model=APIResponse[List[FeedStatus]],
     summary="Get Status of All Feeds",
     description="Retrieves the current status, source, FPS, and potential errors for all known feeds.",
 )
 async def get_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_active_user)
-) -> List[FeedStatus]:
+    current_user: Optional[dict] = Depends(get_current_active_user_optional)
+) -> APIResponse[List[FeedStatus]]:
     """
     Endpoint to get the status of all registered feeds.
     """
     logger.info(f'Received request for get_feeds_status')
-    logger.info(f"User {current_user.get('uid', 'unknown_user_uid')} requested status of all feeds.")
+    if current_user:
+        logger.info(f"User {current_user.get('uid', 'unknown_user_uid')} requested status of all feeds.")
+    else:
+        logger.info("Anonymous user requested status of all feeds.")
     try:
-        statuses = await fm.get_all_feed_statuses() # Assume async method
-        return statuses
+        statuses = await fm.get_all_statuses()
+        return APIResponse.success(data=statuses, message="Successfully retrieved feed statuses.")
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve feed statuses")
+        logger.error(f"Failed to retrieve feed statuses: {e}", exc_info=True)
+        raise OperationFailed(detail="Failed to retrieve feed statuses.")
 
 @router.post(
     "/",
-    response_model=FeedCreateResponse,
+    response_model=APIResponse[FeedCreateResponse],
     status_code=status.HTTP_201_CREATED,
     summary="Add and Start a New Feed",
     description="Adds a new feed source and initiates the processing task.",
@@ -81,36 +86,37 @@ async def add_and_start_feed(
     request: FeedCreateRequest,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_admin)
-) -> FeedCreateResponse:
+) -> APIResponse[FeedCreateResponse]:
+    logger.info(f"POST /feeds endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')} to add feed: {request.source}")
     """
     Endpoint to add a new feed source and attempt to start it. Requires authentication.
     """
     logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to add feed: {request.source}")
     try:
-        feed_id = await fm.add_feed(feed_config=request.model_dump()) # Pass the whole request or specific fields
+        feed_id = await fm.add_feed(feed_config=request.model_dump())
         if not feed_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to add feed.")
+            raise OperationFailed(detail="Failed to add feed: No feed ID returned.")
         
-        # Attempt to start the feed immediately
         start_success = await fm.start_feed(feed_id)
-        current_status = await fm.get_feed_status(feed_id) # Get FeedStatusData object
+        current_status = await fm.get_feed_status(feed_id)
         
-        return FeedCreateResponse(
-            feed_id=feed_id, 
-            message=f"Feed '{request.name}' added. Start attempt: {'successful' if start_success else 'failed'}.",
+        response_data = FeedCreateResponse(
+            id=feed_id, 
+            message=f"Feed '{request.name_hint or request.source}' added. Start attempt: {'successful' if start_success else 'failed'}.",
             initial_status=current_status.status if current_status else "error"
         )
+        return APIResponse.success(data=response_data, message="Feed added and start initiated.")
     except ResourceLimitError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
-    except ValueError as e: # E.g., invalid source format
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise Forbidden(detail=str(e))
+    except ValueError as e:
+        raise BadRequest(detail=str(e))
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to start feed: {e}")
+        logger.error(f"Failed to add and start feed: {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to add and start feed: {e}")
 
 @router.post(
     "/{feed_id}/start",
-    response_model=FeedStatus,
+    response_model=APIResponse[FeedStatus],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start an Existing Stopped Feed",
 )
@@ -118,7 +124,8 @@ async def start_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_active_user)
-) -> FeedStatus:
+) -> APIResponse[FeedStatus]:
+    logger.info(f"POST /feeds/{feed_id}/start endpoint called by user: {current_user.get('uid', 'unknown_user_uid')}")
     """
     Endpoint to start a feed that is currently stopped. Requires authentication.
     """
@@ -128,33 +135,33 @@ async def start_feed(
         if not success:
             current_status = await fm.get_feed_status(feed_id)
             error_msg = current_status.error_details if current_status else "Unknown error during start."
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to start feed {feed_id}: {error_msg}")
+            raise OperationFailed(detail=f"Failed to start feed {feed_id}: {error_msg}")
         
-        # Return the updated status of the feed
         updated_status = await fm.get_feed_status(feed_id)
         if not updated_status:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed {feed_id} not found after start attempt.")
-        return updated_status
+            raise ResourceNotFound(detail=f"Feed {feed_id} not found after start attempt.")
+        return APIResponse.success(data=updated_status, message=f"Feed {feed_id} started successfully.")
     except FeedNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed ID '{feed_id}' not found.")
-    except FeedOperationError as e: # e.g., already running
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise ResourceNotFound(detail=f"Feed ID '{feed_id}' not found.")
+    except FeedOperationError as e:
+        raise BadRequest(detail=str(e))
     except ResourceLimitError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+        raise Forbidden(detail=str(e))
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to start feed '{feed_id}': {e}")
+        logger.error(f"Failed to start feed '{feed_id}': {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to start feed '{feed_id}': {e}")
 
 @router.post(
     "/{feed_id}/stop",
-    response_model=FeedStatus,
+    response_model=APIResponse[FeedStatus],
     summary="Stop a Running Feed",
 )
 async def stop_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_active_user)
-) -> FeedStatus:
+) -> APIResponse[FeedStatus]:
+    logger.info(f"POST /feeds/{feed_id}/stop endpoint called by user: {current_user.get('uid', 'unknown_user_uid')}")
     """
     Endpoint to stop a feed that is currently running or starting. Requires authentication.
     """
@@ -164,23 +171,23 @@ async def stop_feed(
         if not success:
             current_status = await fm.get_feed_status(feed_id)
             error_msg = current_status.error_details if current_status else "Unknown error during stop."
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to stop feed {feed_id}: {error_msg}")
+            raise OperationFailed(detail=f"Failed to stop feed {feed_id}: {error_msg}")
 
         updated_status = await fm.get_feed_status(feed_id)
         if not updated_status:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed {feed_id} not found after stop attempt.")
-        return updated_status
+            raise ResourceNotFound(detail=f"Feed {feed_id} not found after stop attempt.")
+        return APIResponse.success(data=updated_status, message=f"Feed {feed_id} stopped successfully.")
     except FeedNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed ID '{feed_id}' not found.")
-    except FeedOperationError as e: # e.g., already stopped
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise ResourceNotFound(detail=f"Feed ID '{feed_id}' not found.")
+    except FeedOperationError as e:
+        raise BadRequest(detail=str(e))
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to stop feed '{feed_id}': {e}")
+        logger.error(f"Failed to stop feed '{feed_id}': {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to stop feed '{feed_id}': {e}")
 
 @router.post(
     "/{feed_id}/restart",
-    response_model=StandardResponse,
+    response_model=APIResponse[StandardResponse],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Restart a Feed",
 )
@@ -188,44 +195,45 @@ async def restart_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_admin)
-) -> StandardResponse:
+) -> APIResponse[StandardResponse]:
+    logger.info(f"POST /feeds/{feed_id}/restart endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}")
     """
     Endpoint to stop and then start a feed. Requires authentication.
     """
     logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to restart feed: {feed_id}")
     try:
         await fm.restart_feed(feed_id)
-        return StandardResponse(message=f"Feed '{feed_id}' restart initiated.")
+        return APIResponse.success(message=f"Feed '{feed_id}' restart initiated.")
     except FeedNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed ID '{feed_id}' not found.")
+        raise ResourceNotFound(detail=f"Feed ID '{feed_id}' not found.")
     except ResourceLimitError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+        raise Forbidden(detail=str(e))
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to restart feed '{feed_id}': {e}")
+        logger.error(f"Failed to restart feed '{feed_id}': {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to restart feed '{feed_id}': {e}")
 
 
 @router.post(
     "/stop-all",
-    response_model=StandardResponse,
+    response_model=APIResponse[StandardResponse],
     summary="Stop All Active Feeds",
 )
 async def stop_all_feeds(
     fm: FeedManager = Depends(get_feed_manager),
     current_user: dict = Depends(get_current_admin)
-) -> StandardResponse:
+) -> APIResponse[StandardResponse]:
     """
     Endpoint to stop all feeds that are currently running or starting. Requires authentication.
     """
     logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to stop all feeds.")
     try:
         await fm.stop_all_feeds()
-        return StandardResponse(message="Stopping all feeds initiated.")
+        return APIResponse.success(message="Stopping all feeds initiated.")
     except Exception as e:
-        # Log the exception e
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to stop all feeds: {e}")
+        logger.error(f"Failed to stop all feeds: {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to stop all feeds: {e}")
 
-@router.delete("/{feed_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a Specific Feed")
+@router.delete("/{feed_id}", status_code=status.HTTP_200_OK, response_model=APIResponse[None], summary="Delete a Specific Feed")
 async def delete_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
@@ -235,38 +243,39 @@ async def delete_feed(
     Endpoint to delete a specific feed. Requires authentication.
     """
     logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to delete feed: {feed_id}")
-    success = await fm.remove_feed(feed_id)
-    if not success:
-        # Check if feed still exists to determine 404 vs 500
-        if await fm.get_feed_status(feed_id):
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete feed {feed_id}. It might be in use or encountered an error during removal.")
-        else:
-            # If status is None, it's already gone or never existed.
-            # HTTP_204_NO_CONTENT implies success even if it was already gone.
-            # However, if fm.remove_feed returned False because it wasn't found, this is okay.
-            # If it returned False for another reason while feed existed, the 500 above is better.
-            # For simplicity, if not found and remove_feed said False, it's effectively a 204 or 404.  
-            # The `status_code=status.HTTP_204_NO_CONTENT` handles the success case (even if already gone).
-            # If remove_feed specifically indicates not_found vs other error, we could return 404.
-            pass # Let it return 204 if not found by remove_feed
-    return # No content on success
+    try:
+        success = await fm.remove_feed(feed_id)
+        if not success:
+            # If remove_feed returns False, it could be because the feed wasn't found
+            # or another internal error. We check if it still exists to differentiate.
+            if await fm.get_feed_status(feed_id):
+                raise OperationFailed(detail=f"Failed to delete feed {feed_id}. It might be in use or encountered an error during removal.")
+            else:
+                # If it doesn't exist, it's effectively a successful deletion from the client's perspective
+                return APIResponse.success(message=f"Feed {feed_id} already deleted or not found.")
+        return APIResponse.success(message=f"Feed {feed_id} deleted successfully.")
+    except FeedNotFoundError:
+        raise ResourceNotFound(detail=f"Feed ID '{feed_id}' not found.")
+    except Exception as e:
+        logger.error(f"Failed to delete feed '{feed_id}': {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to delete feed '{feed_id}': {e}")
 
-@router.get("/{feed_id}", response_model=FeedStatus, summary="Get Status of a Specific Feed")
+@router.get("/{feed_id}", response_model=APIResponse[FeedStatus], summary="Get Status of a Specific Feed")
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[dict] = Depends(get_current_active_user_optional) # Optional auth
-) -> FeedStatus:
+    current_user: Optional[dict] = Depends(get_current_active_user_optional)
+) -> APIResponse[FeedStatus]:
     """Endpoint to get the current status of a specific feed."""
     if current_user:
         logger.info(f"User {current_user.get('uid', 'unknown_user_uid')} requesting status for feed {feed_id}")
     else:
         logger.info(f"Anonymous user requesting status for feed {feed_id}")
         
-    feed_status = await fm.get_feed_status(feed_id) # This method needs to be implemented in FeedManager
+    feed_status = await fm.get_feed_status(feed_id)
     if not feed_status:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Feed with ID '{feed_id}' not found.")
-    return feed_status
+        raise ResourceNotFound(detail=f"Feed with ID '{feed_id}' not found.")
+    return APIResponse.success(data=feed_status, message=f"Successfully retrieved status for feed {feed_id}.")
 
 @router.get("/{feed_id}/kpis", summary="Get latest KPIs for a specific feed")
 async def get_feed_kpis(

@@ -10,6 +10,7 @@ async def get_route_history_analytics(
     current_user: dict = Depends(get_current_active_user),
     limit: int = Query(20, ge=1, le=100)
 ) -> Dict[str, Any]:
+    logger.info(f"GET /route-history/analytics endpoint called by user: {current_user.get('username')}")
     """
     Returns analytics on the user's route history, such as most common routes, time-of-day patterns, etc.
     """

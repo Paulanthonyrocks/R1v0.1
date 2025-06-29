@@ -37,6 +37,7 @@ async def get_personalized_route(
     current_user: Dict = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service)
 ) -> PersonalizedRouteResponse:
+    logger.info(f"POST /personalized endpoint called by user: {current_user.get('uid')}")
     """Get a personalized route based on user preferences"""
     try:
         # Ensure the user_id matches the authenticated user
@@ -65,6 +66,7 @@ async def record_route_history(
     current_user: Dict = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service)
 ) -> Dict[str, str]:
+    logger.info(f"POST /history endpoint called by user: {current_user.get('uid')}")
     """Record a route in user's history"""
     try:
         # Ensure the user_id matches the authenticated user
@@ -93,6 +95,7 @@ async def get_user_profile(
     current_user: Dict = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service)
 ) -> UserRoutingProfile:
+    logger.info(f"GET /profile endpoint called by user: {current_user.get('uid')}")
     """Get user's routing profile"""
     try:
         return await routing_service.get_user_profile(current_user['uid'])
@@ -113,6 +116,7 @@ async def get_route_history(
     current_user: Dict = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service)
 ) -> List[RouteHistoryEntry]:
+    logger.info(f"GET /history endpoint called by user: {current_user.get('uid')}")
     """Get user's route history"""
     try:
         return await routing_service.get_user_route_history(

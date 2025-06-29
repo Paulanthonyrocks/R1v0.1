@@ -10,7 +10,7 @@ from app.services.analytics_service import AnalyticsService
 from app.models.traffic import LocationModel
 from app.models.websocket import UserSpecificConditionAlert
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.core.agent_core")
 
 PREDICTIVE_ALERT_LIKELIHOOD_THRESHOLD = 60 # Define constant
 

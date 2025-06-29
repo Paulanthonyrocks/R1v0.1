@@ -15,7 +15,7 @@ async def get_current_events(
     current_user: dict = Depends(get_current_active_user),
     event_service: EventService = Depends(get_event_service_api)
 ):
-    """Get current events affecting routes"""
+    logger.info(f"GET /events/current endpoint called by user: {current_user.get('username')}")
     try:
         return await event_service.get_events()
     except Exception as e:
@@ -34,7 +34,7 @@ async def get_event_impacts(
     current_user: dict = Depends(get_current_active_user),
     event_service: EventService = Depends(get_event_service_api)
 ):
-    """Get event impact assessments"""
+    logger.info(f"GET /events/impacts endpoint called by user: {current_user.get('username')}")
     try:
         return await event_service.get_event_impacts()
     except Exception as e:

@@ -16,7 +16,7 @@ const config = {
         container: { center: true, padding: "2rem", screens: { "2xl": "1400px" } },
         extend: {
             fontFamily: {
-                matrix: ['var(--font-matrix)', 'monospace'],
+                lcd: ['var(--font-lcd)', 'monospace'],
                 // sans: ['var(--font-sans)', /* ... */ ],
             },
             colors: {

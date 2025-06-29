@@ -16,70 +16,70 @@ export default function Nav() {
   // const pathname = usePathname(); // Uncomment if Nav uses pathname directly
 
   return (
-    <nav className="fixed top-0 left-0 w-full z-50 glossy-gradient p-4 rounded-lg border-b border-primary">
+    <nav className="fixed top-0 left-0 w-full z-50 matrix-card p-4 rounded-none"> 
       <div className="container mx-auto flex items-center justify-between flex-wrap">
-        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors tracking-normal">Route One</Link> {/* Added tracking-normal */}
+        <Link href="/" className="text-xl font-bold uppercase hover:text-primary transition-colors tracking-normal font-lcd matrix-glow">Route One</Link> {/* Added tracking-normal */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="text-foreground hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 focus:ring-offset-background rounded tracking-normal"> {/* Added tracking-normal */}
+            <button className="matrix-button font-lcd matrix-glow"> {/* Added tracking-normal */}
               Menu
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent align="end" className="matrix-card">
             {!user ? (
               <DropdownMenuItem asChild>
-                <Link href="/login" className="w-full tracking-normal">
+                <Link href="/login" className="w-full tracking-normal font-lcd matrix-glow">
                   Login
                 </Link>
               </DropdownMenuItem>
             ) : (
               <>
                 <DropdownMenuItem asChild>
-                  <Link href="/" className="w-full tracking-normal">
+                  <Link href="/" className="w-full tracking-normal font-lcd matrix-glow">
                     Home
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/dashboard" className="w-full tracking-normal">
+                  <Link href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow">
                     Dashboard
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/anomalies" className="w-full tracking-normal">
+                  <Link href="/anomalies" className="w-full tracking-normal font-lcd matrix-glow">
                     Anomalies
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/export" className="w-full tracking-normal">
+                  <Link href="/export" className="w-full tracking-normal font-lcd matrix-glow">
                     Export
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/grid" className="w-full tracking-normal">
+                  <Link href="/grid" className="w-full tracking-normal font-lcd matrix-glow">
                     Grid
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/logs" className="w-full tracking-normal">
+                  <Link href="/logs" className="w-full tracking-normal font-lcd matrix-glow">
                     Logs
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/nodes" className="w-full tracking-normal">
+                  <Link href="/nodes" className="w-full tracking-normal font-lcd matrix-glow">
                     Nodes
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/stream" className="w-full tracking-normal">
+                  <Link href="/stream" className="w-full tracking-normal font-lcd matrix-glow">
                     Stream
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/surveillance" className="w-full tracking-normal">
+                  <Link href="/surveillance" className="w-full tracking-normal font-lcd matrix-glow">
                     Surveillance
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={logout} className="w-full tracking-normal cursor-pointer text-red-600">
+                <DropdownMenuItem onClick={logout} className="w-full tracking-normal cursor-pointer text-red-600 font-lcd matrix-glow">
                   Logout
                 </DropdownMenuItem>
               </>

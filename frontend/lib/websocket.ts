@@ -3,13 +3,26 @@
 // Make the listener type generic
 type MessageListener<T> = (data: T) => void;
 
+// Define a generic structure for WebSocket messages
+interface WebSocketMessage<T = unknown> {
+  type: string;
+  data: T;
+}
+
 class WebSocketClient {
   private socket: WebSocket | null = null;
   private url: string;
   private pingInterval: number = 30000; // Interval in milliseconds (30 seconds)
   private pingTimer: NodeJS.Timeout | undefined;
-  // Use MessageListener<unknown> for the internal map
   private listeners: Map<string, Set<MessageListener<unknown>>> = new Map();
+
+  // Reconnection properties
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectDelay: number = 1000; // Initial delay in ms (1 second)
+  private maxReconnectDelay: number = 30000; // Max delay in ms (30 seconds)
+  private reconnecting: boolean = false;
+  private reconnectTimeout: NodeJS.Timeout | undefined;
 
   constructor(url: string) {
     this.url = url;
@@ -51,10 +64,12 @@ class WebSocketClient {
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        console.log('WebSocket already open.');
         resolve();
         return;
       }
       if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
+        console.log('WebSocket already connecting.');
         const checkOpen = () => {
           if (this.socket?.readyState === WebSocket.OPEN) {
             resolve();
@@ -68,11 +83,16 @@ class WebSocketClient {
         return;
       }
 
+      this.reconnecting = false; // Reset reconnection state on explicit connect call
+      this.reconnectAttempts = 0; // Reset attempts
+
       this.socket = new WebSocket(this.url);
 
-      // Line 87 (eslint no-unused-vars for 'event')
-      this.socket.onopen = () => { // Changed 'event' to '_event' as it's not used
+      this.socket.onopen = () => {
         console.log('WebSocket connected');
+        this.reconnectAttempts = 0; // Reset on successful connection
+        this.reconnecting = false;
+        clearTimeout(this.reconnectTimeout); // Clear any pending reconnects
         this.startPinging();
         resolve();
       };
@@ -80,26 +100,73 @@ class WebSocketClient {
       this.socket.onclose = (event: CloseEvent) => {
         console.log('WebSocket onclose event:', event);
         clearInterval(this.pingTimer);
-        if (event.wasClean) {
+        this.socket = null; // Clear the socket reference
+
+        if (!event.wasClean && !this.reconnecting) { // Attempt reconnect only if not clean close and not already reconnecting
+          console.warn('WebSocket closed unexpectedly. Attempting to reconnect...');
+          this.reconnect();
+        } else if (event.wasClean) {
           console.log(`WebSocket closed cleanly, code=${event.code}, reason=${event.reason}`);
-        } else {
-          console.error('WebSocket connection died:', event);
         }
-        this.socket = null;
       };
 
       this.socket.onerror = (event: Event) => {
         clearInterval(this.pingTimer);
         console.error('WebSocket error:', event);
         if (this.socket?.readyState !== WebSocket.OPEN) {
-             reject(event); // Reject only if the connection wasn't established
+          // If error occurs during connection attempt, reject the promise
+          if (!this.reconnecting) { // Only reject if not in a reconnect cycle
+            reject(new Error('WebSocket connection failed.'));
+          }
+        }
+        if (!this.reconnecting) { // Trigger reconnect on error if not already reconnecting
+          console.warn('WebSocket error. Attempting to reconnect...');
+          this.reconnect();
         }
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
-        this.handleIncomingMessage(event.data as string); // Assuming event.data is string
+        this.handleIncomingMessage(event.data as string);
       };
     });
+  }
+
+  private reconnect(): void {
+    if (this.reconnecting) {
+      console.log('Already reconnecting, skipping.');
+      return;
+    }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('Max reconnect attempts reached. Giving up.');
+      return;
+    }
+
+    this.reconnecting = true;
+    this.reconnectAttempts++;
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), this.maxReconnectDelay);
+    console.log(`Attempting to reconnect in ${delay / 1000} seconds (attempt ${this.reconnectAttempts})...`);
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.connect().then(() => {
+        console.log('Reconnection successful!');
+      }).catch(error => {
+        console.error('Reconnection failed:', error);
+        this.reconnecting = false; // Allow next attempt
+        this.reconnect(); // Try again
+      });
+    }, delay);
+  }
+
+  public disconnect(): void {
+    clearInterval(this.pingTimer);
+    clearTimeout(this.reconnectTimeout); // Stop any pending reconnects
+    this.reconnecting = false; // Ensure no further reconnects are triggered
+    if (this.socket) {
+      console.log('Disconnecting WebSocket cleanly.');
+      this.socket.close(1000, 'Client initiated disconnect'); // 1000 is normal closure
+    }
+    this.socket = null;
   }
 
   public disconnect(): void {
@@ -134,10 +201,9 @@ class WebSocketClient {
 
   private handleIncomingMessage(messageData: string): void {
     try {
-      const parsedData = JSON.parse(messageData);
-      if (typeof parsedData === 'object' && parsedData !== null && 'type' in parsedData) {
-        const messageType = parsedData.type as string;
-        const messagePayload: unknown = parsedData.data;
+      const parsedData: WebSocketMessage = JSON.parse(messageData);
+      if (typeof parsedData === 'object' && parsedData !== null && 'type' in parsedData && 'data' in parsedData) {
+        const { type: messageType, data: messagePayload } = parsedData;
 
         if (messageType === 'ping') {
           console.log('Received ping, sending pong');
@@ -155,7 +221,7 @@ class WebSocketClient {
           }
         }
       } else {
-        console.error('Received malformed message:', parsedData);
+        console.error('Received malformed message or missing type/data property:', parsedData);
       }
     } catch (error) {
       console.error('Error parsing incoming message or malformed JSON:', messageData, error);
