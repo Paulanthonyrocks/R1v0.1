@@ -66,6 +66,7 @@ class FeedManager:
         self._result_reader_task: Optional[asyncio.Task] = None
         self._connection_manager = None # Added type hint
         self._prediction_scheduler = None # New: Reference to PredictionScheduler
+        self._analytics_service = None # New: Reference to AnalyticsService
         self._is_processing_active: bool = False # New: Flag to control overall processing
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = 1.0 # Seconds
@@ -83,6 +84,11 @@ class FeedManager:
         """Inject the PredictionScheduler instance."""
         self._prediction_scheduler = scheduler
         self.logger.info("PredictionScheduler set in FeedManager.")
+
+    def set_analytics_service(self, service: "AnalyticsService"): # type: ignore [name-defined]
+        """Inject the AnalyticsService instance."""
+        self._analytics_service = service
+        self.logger.info("AnalyticsService set in FeedManager.")
 
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
@@ -144,7 +150,7 @@ class FeedManager:
                 # Add to registry with 'stopped' status initially
                 self.process_registry[feed_id] = {
                     'process': None, 'result_queue': None, 'stop_event': None,
-                    'reduce_fps_event': None, 'status': FeedOperationalStatusEnum.STOPPED, 'source': str(resolved_path),
+                    'reduce_fps_event': None, 'status': FeedOperationalStatusEnum.STOPPED, 'source': "/api/v1/sample-video/stream",
                     'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
                     'is_sample_feed': True, # Mark as sample feed                    'is_looped_feed': True,
                     'config_info': FeedConfigInfo(
@@ -214,6 +220,7 @@ class FeedManager:
                     status_data = FeedStatusData(
                         feed_id=feed_id,
                         config=config_info_entry,
+                        source=entry.get('source'),
                         status=op_status,
                         current_fps=entry['timer'].get_fps('loop_total')
                         if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
@@ -250,6 +257,7 @@ class FeedManager:
             return FeedStatusData(
                 feed_id=feed_id,
                 config=config_info_entry,
+                source=entry.get('source'),
                 status=op_status,
                 current_fps=entry['timer'].get_fps('loop_total') if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING else None,
                 status_message=None,
@@ -287,6 +295,7 @@ class FeedManager:
                     source_type="video_file" if Path(entry['source']).suffix else "unknown",
                     source_identifier=entry['source']
                 ),
+                source=entry['source'], # Add the source directly here
                 status=op_status,
                 current_fps=entry['timer'].get_fps('loop_total')
                 if entry.get('timer') and op_status == FeedOperationalStatusEnum.RUNNING
@@ -527,6 +536,8 @@ class FeedManager:
                                          entry['timer'] = FrameTimer()
                                     entry['timer'].update_from_dict(timings)
                                     entry['latest_metrics'] = metrics
+                                    if self._analytics_service: # Pass metrics to AnalyticsService
+                                        await self._analytics_service.process_feed_metrics(feed_id, metrics)
                                     if entry['status'] == 'starting':
                                         logger.info(f"Feed '{feed_id}' transitioned to 'running'.")
                                         entry['status'] = 'running'

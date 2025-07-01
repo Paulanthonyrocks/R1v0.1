@@ -29,6 +29,7 @@ class FeedConfigInfo(BaseModel):
 class FeedStatusData(BaseModel):
     feed_id: str = Field(..., example="feed_main_st_cam_1")
     config: FeedConfigInfo
+    source: Optional[str] = Field(None, description="The direct source URL/path of the feed, for frontend consumption.")
     status: FeedOperationalStatusEnum = Field(..., example=FeedOperationalStatusEnum.RUNNING)
     status_message: Optional[str] = Field(None, example="Processing normally at 25 FPS")
     start_time: Optional[datetime] = Field(None, description="Timestamp when the feed was last started (UTC)")
