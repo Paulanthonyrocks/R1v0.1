@@ -29,6 +29,7 @@ filterpy>=1.4.5
 tensorflow>=2.13.0  # Deep learning framework
 tensorflow-cpu>=2.13.0  # CPU-only version for systems without GPU
 scikit-learn>=1.0.0  # For StandardScaler and other ML utilities
+onnxruntime>=1.15.1 # For ONNX model inference
 
 # Pavement Analysis Dependencies
 opencv-python>=4.5.0

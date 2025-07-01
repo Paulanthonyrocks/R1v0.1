@@ -68,7 +68,9 @@ class AnalyticsService:
         self._db_manager = database_manager # Store DatabaseManager instance
 
         # Initialize ML components
-        self._traffic_predictor = TrafficPredictor(self.config)
+        predictor_config = self.config.get("traffic_predictor", {})
+        predictor_config["model_path"] = self.config.get("ml_model", {}).get("model_path") # Pass model path from main config
+        self._traffic_predictor = TrafficPredictor(predictor_config)
         self._data_cache = TrafficDataCache(
             max_history_hours=self.config.get("data_retention_hours", 24)
         )
@@ -930,8 +932,8 @@ class AnalyticsService:
             # or reject if strict matching is required. For now, proceed with target user_id.
 
         ws_message = WebSocketMessage(
-            event_type=WebSocketMessageTypeEnum.USER_SPECIFIC_ALERT, # Updated enum
-            payload=notification_model
+            type=WebSocketMessageTypeEnum.USER_SPECIFIC_ALERT, # Updated enum
+            data=notification_model
             # client_id is not set here, as send_personal_message_model targets a specific client_id
         )
 

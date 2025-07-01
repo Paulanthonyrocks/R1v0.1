@@ -109,8 +109,8 @@ async def delete_alert_endpoint(
     # Broadcast alert status update
     status_payload = AlertStatusUpdatePayload(alert_id=alert_id, status="dismissed")
     ws_message = WebSocketMessage(
-        event_type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE,
-        payload=status_payload
+        type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE,
+        data=status_payload
     )
     try:
         await conn_manager.broadcast_message_model(ws_message)
@@ -155,8 +155,8 @@ async def acknowledge_alert_endpoint(
     status_str = "acknowledged" if ack_request.acknowledged else "unacknowledged"
     status_payload = AlertStatusUpdatePayload(alert_id=alert_id, status=status_str)
     ws_message = WebSocketMessage(
-        event_type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE,
-        payload=status_payload
+        type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE,
+        data=status_payload
     )
     try:
         await conn_manager.broadcast_message_model(ws_message)

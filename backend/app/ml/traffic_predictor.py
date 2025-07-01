@@ -15,6 +15,12 @@ class TrafficPredictor:
         self.scaler = StandardScaler()
         self.sequence_length = 10  # Number of time steps to use for prediction
 
+        model_path = self.config.get("model_path")
+        if model_path:
+            self.load_model(model_path)
+        else:
+            logger.warning("No model_path provided in config for TrafficPredictor. Model will not be loaded.")
+
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""
         try:

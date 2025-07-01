@@ -99,8 +99,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     AUTH_FAILURE = "auth_failure"
 
 class WebSocketMessage(BaseModel):
-    event_type: WebSocketMessageTypeEnum = Field(..., description="The type of event this message represents")
-    payload: Union[
+    type: WebSocketMessageTypeEnum = Field(..., description="The type of event this message represents")
+    data: Union[
         RealtimeMetricsUpdate, 
         GlobalRealtimeMetrics,
         NewAlertNotification, 

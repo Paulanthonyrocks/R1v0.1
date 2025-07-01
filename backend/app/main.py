@@ -207,30 +207,21 @@ async def startup_event():
         raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
 
 
-    # Trigger the initial check for the sample feed.
-    try:
-        fm = get_feed_manager()
-        logger.info("Triggering initial sample feed check...")
-        await fm._check_and_manage_sample_feed()
-        logger.info("Initial sample feed check completed.")
-    except Exception as e:
-        logger.error(f"An error occurred during the initial sample feed check: {e}", exc_info=True)
-
-
-    # 5. Initialize Prediction Scheduler
+    # 5. Initialize Prediction Scheduler (but don't start it yet)
     try:
         analytics_service = get_analytics_service()
         if analytics_service:
             scheduler = PredictionScheduler(analytics_service)
-            await scheduler.start()
             app.state.prediction_scheduler = scheduler
-            logger.info("Prediction scheduler initialized and started")
+            # Inject the scheduler into the FeedManager
+            fm = get_feed_manager()
+            fm.set_prediction_scheduler(scheduler)
+            logger.info("Prediction scheduler initialized and injected into FeedManager.")
         else:
-            logger.warning("AnalyticsService not available, prediction scheduler not started.")
+            logger.warning("AnalyticsService not available, prediction scheduler not initialized.")
     except Exception as e:
         logger.error(f"Prediction scheduler initialization failed: {e}", exc_info=True)
-        # Decide if scheduler failure should halt startup
-        # raise RuntimeError(f"Prediction scheduler initialization failed: {e}") from e # Uncomment to halt
+        raise RuntimeError(f"Prediction scheduler initialization failed: {e}") from e
 
 
     logger.info("Application startup complete.")
@@ -239,14 +230,13 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
-    # Stop the prediction scheduler if it was initialized
-    if hasattr(app.state, 'prediction_scheduler') and app.state.prediction_scheduler:
-        await app.state.prediction_scheduler.stop()
-        logger.info("Prediction scheduler stopped.")
+    # The FeedManager's shutdown will handle stopping the prediction scheduler
+    # if it was started by FeedManager.start_processing()
+    fm = get_feed_manager()
+    await fm.shutdown() # Ensure FeedManager cleans up its processes and scheduler
 
-    # Shutdown services
-    await shutdown_services()
-    logger.info("Services shut down.")
+    # Shutdown services (this will now be handled by FeedManager.shutdown() for prediction_scheduler)
+    
 
     # Close database connection
     await close_database()
@@ -255,18 +245,7 @@ async def shutdown_event():
     logger.info("--- Backend shutdown complete ---")
 
 # Global scheduler instance
-prediction_scheduler: Optional[PredictionScheduler] = None
 
-async def start_prediction_scheduler():
-    """Start the prediction scheduler as a background task"""
-    global prediction_scheduler
-    analytics_service = get_analytics_service()
-    if analytics_service:
-        prediction_scheduler = PredictionScheduler(analytics_service)
-        asyncio.create_task(prediction_scheduler.run())
-        logger.info("Prediction scheduler started")
-    else:
-        logger.error("Could not start prediction scheduler: analytics service not initialized")
 
 # --- CORS Middleware ---
 origins = [
@@ -275,6 +254,16 @@ origins = [
 ]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(LoggingMiddleware)
+
+# --- Global State for API Connection Tracking ---
+# This will be initialized in startup_event
+app.state.realtime_connections_count = 0
+app.state.realtime_connections_lock = asyncio.Lock()
+
+# --- Global State for API Connection Tracking ---
+# This will be initialized in startup_event
+app.state.realtime_connections_count = 0
+app.state.realtime_connections_lock = asyncio.Lock()
 
 
 # --- Include API Routers ---
@@ -299,10 +288,14 @@ try:
     app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"])
     logger.info("API routers included successfully.")
     app.include_router(api.router, prefix="/api", tags=["API"])
+
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)
-    # Decide if startup should fail if routers can't be included
-    # raise RuntimeError(f"Router inclusion failed: {e}") from e
+
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def catch_all(request: Request, full_path: str):
+    logger.warning(f"Catch-all route hit for path: {full_path}. Method: {request.method}")
+    return JSONResponse(status_code=404, content={"detail": f"Endpoint not found: /{full_path}", "type": "NotFound"})
 
 
 # --- Define WebSocket Endpoint ---
@@ -365,7 +358,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         # Attempt to close the connection gracefully from server-side if an error occurs
         if active_connection and active_connection.websocket.client_state == WebSocketState.CONNECTED:
             error_payload = ErrorNotification(code="UNEXPECTED_SERVER_ERROR", message=str(e))
-            ws_msg = WebSocketMessage(event_type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, payload=error_payload)
+            ws_msg = WebSocketMessage(type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, data=error_payload)
             try:
                 await active_connection.send_json_model(ws_msg)
             except Exception as send_err:

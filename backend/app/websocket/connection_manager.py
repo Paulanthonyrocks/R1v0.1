@@ -256,7 +256,7 @@ class ActiveWebSocketConnection:
                         )
                     )
             else:
-                 await self.send_json_model(WebSocketMessage(event_type=WebSocketMessageTypeEnum.ERROR, payload=ErrorNotification(code="INVALID_REFRESH_REQUEST", message="Invalid or missing feed_id for refresh.")))
+                 await self.send_json_model(WebSocketMessage(type=WebSocketMessageTypeEnum.ERROR, data=ErrorNotification(code="INVALID_REFRESH_REQUEST", message="Invalid or missing feed_id for refresh.")))
 
         else:
             logger.warning(f"Unhandled message type from {self.client_id}: {message.event_type}")
@@ -284,8 +284,8 @@ class ConnectionManager:
                 feed_manager = get_feed_manager()
                 initial_statuses = await feed_manager.get_all_statuses()
                 message = WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
-                    payload={"feeds": [status.model_dump() for status in initial_statuses]}
+                    type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
+                    data={"feeds": [status.model_dump() for status in initial_statuses]}
                 )
                 await connection.send_json_model(message)
                 logger.info(f"Sent initial feed statuses to client {client_id}")

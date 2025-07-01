@@ -56,8 +56,8 @@ class TrafficSignalService:
 
         ws_payload = SignalStateUpdate(signal_data=signal_state)
         message = WebSocketMessage(
-            event_type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE,
-            payload=ws_payload
+            type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE,
+            data=ws_payload
         )
         topic = f"signal:{signal_id}"
         await self._connection_manager.broadcast_message_model(message, specific_topic=topic)

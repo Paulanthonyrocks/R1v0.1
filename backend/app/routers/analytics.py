@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from typing import List, Optional, Any, ClassVar
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -81,6 +81,8 @@ class AllNodesCongestionResponse(BaseModel):
     description="Returns the latest real-time analytics metrics for the dashboard, including congestion index, average speed, active incidents, and feed statuses."
 )
 async def get_realtime_analytics(
+    request: Request, # Inject the Request object
+    background_tasks: BackgroundTasks, # Inject BackgroundTasks
     current_user: dict = Depends(get_current_active_user),
     fm: FeedManager = Depends(get_feed_manager)
 ) -> APIResponse[GlobalRealtimeMetrics]:
@@ -89,6 +91,24 @@ async def get_realtime_analytics(
     Returns the latest global real-time analytics metrics for the dashboard.
     Requires authentication.
     """
+
+    async def _decrement_connections():
+        async with request.app.state.realtime_connections_lock:
+            request.app.state.realtime_connections_count -= 1
+            logger.info(f"Realtime connections: {request.app.state.realtime_connections_count}")
+            if request.app.state.realtime_connections_count == 0:
+                logger.info("Last realtime connection closed. Stopping processing.")
+                await fm.stop_processing()
+
+    background_tasks.add_task(_decrement_connections)
+
+    async with request.app.state.realtime_connections_lock:
+        request.app.state.realtime_connections_count += 1
+        logger.info(f"Realtime connections: {request.app.state.realtime_connections_count}")
+        if request.app.state.realtime_connections_count == 1:
+            logger.info("First realtime connection opened. Starting processing.")
+            await fm.start_processing()
+
     try:
         # Replicate the logic from FeedManager._broadcast_kpi_update, but return the metrics directly
         async with fm._lock:
@@ -103,12 +123,8 @@ async def get_realtime_analytics(
                 current_status_val = entry['status']
                 if isinstance(current_status_val, str):
                     try:
-                        current_status_enum = fm.config.get('FeedOperationalStatusEnum', None)
-                        if not current_status_enum:
-                            from app.models.feeds import FeedOperationalStatusEnum
-                            current_status_enum = FeedOperationalStatusEnum(current_status_val.lower())
-                        else:
-                            current_status_enum = current_status_enum(current_status_val.lower())
+                        from app.models.feeds import FeedOperationalStatusEnum # Import here to avoid circular dependency
+                        current_status_enum = FeedOperationalStatusEnum(current_status_val.lower())
                     except Exception:
                         current_status_enum = None
                 else:
@@ -177,6 +193,9 @@ async def get_all_nodes_congestion_data(
     try:
         logger.info(f"User {current_user.get('username')} requesting all nodes congestion data.")
         node_data_list = await analytics_service.get_all_location_congestion_data()
+        logger.debug(f"Retrieved node data list: {node_data_list}")
+        if not node_data_list:
+            logger.warning("Analytics service returned an empty list for node congestion data.")
 
         # node_data_list from AnalyticsService is List[Dict[str, Any]]
         # Pydantic will validate each item against NodeCongestionData

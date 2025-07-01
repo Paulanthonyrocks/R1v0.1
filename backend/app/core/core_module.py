@@ -103,27 +103,52 @@ class CoreModule:
         if not Path(self.model_path).exists():
             logger.error(f"Model file not found at {self.model_path}")
             raise FileNotFoundError(f"Model file not found at {self.model_path}")
-        try:
-            import torch
-            device = 'cpu'
-            if use_gpu:
-                if torch.cuda.is_available():
-                    device = 'cuda'
-                else:
-                    logger.warning("GPU acceleration requested but CUDA not available. Falling back to CPU.")
-            else:
-                 logger.info("GPU acceleration disabled in config. Using CPU.")
 
-            start_time = time.time()
-            self.model = YOLO(self.model_path)
-            self.model.to(device)
-            load_time = time.time() - start_time
-            logger.info(f"YOLO model loaded from {self.model_path} on '{device}' in {load_time:.3f}s")
+        is_onnx = self.model_path.endswith('.onnx')
+
+        try:
+            if is_onnx:
+                import onnxruntime as ort
+                logger.info(f"Attempting to load ONNX model from {self.model_path}")
+                providers = ['CPUExecutionProvider']
+                if use_gpu:
+                    # Check for CUDA availability for ONNX Runtime
+                    if 'CUDAExecutionProvider' in ort.get_available_providers():
+                        providers.insert(0, 'CUDAExecutionProvider')
+                    else:
+                        logger.warning("GPU acceleration requested but CUDAExecutionProvider not available for ONNX. Falling back to CPU.")
+                
+                start_time = time.time()
+                self.model = ort.InferenceSession(self.model_path, providers=providers)
+                load_time = time.time() - start_time
+                device = self.model.get_providers()[0] # Get the actual provider being used
+                logger.info(f"ONNX model loaded from {self.model_path} on '{device}' in {load_time:.3f}s")
+
+            else:
+                import torch
+                device = 'cpu'
+                if use_gpu:
+                    if torch.cuda.is_available():
+                        device = 'cuda'
+                    else:
+                        logger.warning("GPU acceleration requested but CUDA not available. Falling back to CPU.")
+                else:
+                    logger.info("GPU acceleration disabled in config. Using CPU.")
+
+                start_time = time.time()
+                self.model = YOLO(self.model_path)
+                self.model.to(device)
+                load_time = time.time() - start_time
+                logger.info(f"YOLO model loaded from {self.model_path} on '{device}' in {load_time:.3f}s")
+
         except ImportError as e:
-            logger.error(f"PyTorch/Ultralytics import error: {e}")
-            raise ImportError("PyTorch/Ultralytics is required.")
+            logger.error(f"Import error: {e}")
+            if is_onnx:
+                raise ImportError("ONNX Runtime is required for .onnx models.")
+            else:
+                raise ImportError("PyTorch/Ultralytics is required for .pt models.")
         except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}", exc_info=True)
+            logger.error(f"Failed to load model: {e}", exc_info=True)
             raise RuntimeError(f"Model loading failed: {e}")
 
     def detect_and_track(self, frame: np.ndarray, frame_index: int,
@@ -165,42 +190,89 @@ class CoreModule:
             crop_rect = roi_cfg.get('crop_rect', [0, 0, frame.shape[1], frame.shape[0]])
             
             if roi_enabled:
-                x1, y1, x2, y2 = crop_rect
-                processed_frame = frame[y1:y2, x1:x2]
+                x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
+                processed_frame = frame[y1_crop:y2_crop, x1_crop:x2_crop]
             else:
                 processed_frame = frame
             # ---------------------
 
-            results = self.model.predict(processed_frame, conf=confidence_threshold, imgsz=img_size, classes=self.vehicle_class_ids, max_det=self.max_active_tracks, verbose=False)
+            # --- Model-specific prediction ---
+            is_onnx = self.model_path.endswith('.onnx')
+            if is_onnx:
+                # Pre-process frame for ONNX model
+                input_img = cv2.resize(processed_frame, (img_size, img_size))
+                input_img = input_img.astype(np.float32) / 2.55
+                input_img = np.transpose(input_img, (2, 0, 1))
+                input_tensor = np.expand_dims(input_img, axis=0)
 
-            for r in results:
-                boxes = r.boxes
-                for box in boxes:
-                    if not all(hasattr(box, attr) for attr in ['conf', 'xyxy', 'cls']): continue
-                    conf = float(box.conf[0])
-                    cls = int(box.cls[0])
-                    if cls not in self.vehicle_class_ids: continue
+                # Run ONNX inference
+                input_name = self.model.get_inputs()[0].name
+                output_name = self.model.get_outputs()[0].name
+                outputs = self.model.run([output_name], {input_name: input_tensor})[0]
+                
+                # Post-process ONNX output
+                # This part needs to be adapted based on the exact output format of your ONNX model
+                # Assuming output is [1, 84, 8400] where 84 is (cx, cy, w, h, conf, cls...)
+                output = outputs[0].T # Transpose to (8400, 84)
+                scores = np.max(output[:, 4:], axis=1)
+                output = output[scores > confidence_threshold]
+                scores = scores[scores > confidence_threshold]
+                class_ids = np.argmax(output[:, 4:], axis=1)
+                boxes = output[:, :4]
 
-                    xyxy = box.xyxy[0].tolist()
-                    
-                    # --- Translate coordinates back if ROI is enabled ---
+                # Convert boxes from (cx, cy, w, h) to (x1, y1, x2, y2)
+                input_shape = np.array([img_size, img_size, img_size, img_size])
+                boxes = np.divide(boxes, input_shape, dtype=np.float32)
+                # Scale to original processed_frame size
+                scale_w = processed_frame.shape[1] / img_size
+                scale_h = processed_frame.shape[0] / img_size
+                boxes[:, 0] = (boxes[:, 0] - boxes[:, 2] / 2) * processed_frame.shape[1]
+                boxes[:, 1] = (boxes[:, 1] - boxes[:, 3] / 2) * processed_frame.shape[0]
+                boxes[:, 2] = boxes[:, 0] + boxes[:, 2] * processed_frame.shape[1]
+                boxes[:, 3] = boxes[:, 1] + boxes[:, 3] * processed_frame.shape[0]
+
+                for i in range(len(boxes)):
+                    if class_ids[i] not in self.vehicle_class_ids: continue
+                    x1, y1, x2, y2 = map(int, boxes[i])
+                    conf = float(scores[i])
+                    cls = int(class_ids[i])
+
                     if roi_enabled:
-                        x1_orig, y1_orig, x2_orig, y2_orig = map(int, xyxy)
-                        x1, y1 = x1_orig + crop_rect[0], y1_orig + crop_rect[1]
-                        x2, y2 = x2_orig + crop_rect[0], y2_orig + crop_rect[1]
-                    else:
-                        x1, y1, x2, y2 = map(int, xyxy)
-                    # --------------------------------------------------
+                        x1, y1 = x1 + x1_crop, y1 + y1_crop
+                        x2, y2 = x2 + x1_crop, y2 + y1_crop
 
                     center_x = (x1 + x2) / 2
                     center_y = (y1 + y2) / 2
-                    vehicle_bbox = [x1, y1, x2, y2]
-                    # Format: (center_x, center_y, conf, class_id, frame_idx, bbox)
-                    detections.append((center_x, center_y, conf, cls, frame_index, vehicle_bbox))
+                    detections.append((center_x, center_y, conf, cls, frame_index, [x1, y1, x2, y2]))
+
+            else: # Existing PyTorch logic
+                results = self.model.predict(processed_frame, conf=confidence_threshold, imgsz=img_size, classes=self.vehicle_class_ids, max_det=self.max_active_tracks, verbose=False)
+                for r in results:
+                    boxes = r.boxes
+                    for box in boxes:
+                        if not all(hasattr(box, attr) for attr in ['conf', 'xyxy', 'cls']): continue
+                        conf = float(box.conf[0])
+                        cls = int(box.cls[0])
+                        if cls not in self.vehicle_class_ids: continue
+
+                        xyxy = box.xyxy[0].tolist()
+                        
+                        if roi_enabled:
+                            x1_orig, y1_orig, x2_orig, y2_orig = map(int, xyxy)
+                            x1, y1 = x1_orig + x1_crop, y1_orig + y1_crop
+                            x2, y2 = x2_orig + x1_crop, y2_orig + y1_crop
+                        else:
+                            x1, y1, x2, y2 = map(int, xyxy)
+
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        vehicle_bbox = [x1, y1, x2, y2]
+                        detections.append((center_x, center_y, conf, cls, frame_index, vehicle_bbox))
+            
             return detections
 
         except Exception as e:
-            logger.error(f"Frame {frame_index}: Error during YOLO detection: {e}", exc_info=True)
+            logger.error(f"Frame {frame_index}: Error during vehicle detection: {e}", exc_info=True)
             return []
 
     def _update_tracks(self, frame: np.ndarray, detections: List[Tuple], proximity_threshold: int,
@@ -573,7 +645,7 @@ if __name__ == "__main__":
     # Basic config for testing
     test_config = {
         'vehicle_detection': {
-            'model_path': '../models/yolov8n.pt', # Adjust path as needed
+            'model_path': '../models/yolov8n.pt', # Using .pt model as requested
             'vehicle_class_ids': [2, 3, 5, 7],
             'confidence_threshold': 0.4, 'proximity_threshold': 60, 'track_timeout': 5,
             'max_active_tracks': 50, 'yolo_imgsz': 320, 'frame_resolution': [640, 480]
@@ -619,7 +691,7 @@ if __name__ == "__main__":
             if i==2: cv2.rectangle(dummy_frame, (110,110), (160,160), (0,255,0), -1) # Move it
             if i==3: cv2.rectangle(dummy_frame, (200,200), (250,250), (0,0,255), -1) # Add another
 
-            logger.info(f"\n--- Processing frame {frame_index} ---")
+            logger.info(f"--- Processing frame {frame_index} ---")
             tracked = core_module.detect_and_track(dummy_frame, frame_index)
             logger.info(f"Tracked vehicles: {len(tracked)}")
             for vid, data in tracked.items():
@@ -632,7 +704,7 @@ if __name__ == "__main__":
     except FileNotFoundError as fnf:
         logger.error(f"Test failed: Model file not found. {fnf}")
     except Exception as e:
-        logger.error(f"CoreModule test failed: {e}", exc_info=True)
+        logger.error(f"CoreModule test finished: {e}", exc_info=True)
 
     # Check if items were added to the dummy queue
     items_in_queue = 0

@@ -169,12 +169,7 @@ class WebSocketClient {
     this.socket = null;
   }
 
-  public disconnect(): void {
-    clearInterval(this.pingTimer);
-    if (this.socket) {
-      this.socket.close();
-    }
-  }
+  
 
   public sendMessage(type: string, data: unknown): void {
     const message = { type, data };

@@ -45,7 +45,7 @@ class FrameTimer:
 
 # --- FrameReader ---
 class FrameReader:
-    def __init__(self, source: Any, buffer_size: int = 5, target_fps: Optional[int] = 10):
+    def __init__(self, source: Any, buffer_size: int = 5, target_fps: Optional[int] = 2):
         self.source_name = str(source)
         self.target_fps = target_fps
         self.is_webcam = False
@@ -83,7 +83,7 @@ class FrameReader:
         elif self.target_fps and self.target_fps != self.source_fps:
             logger.warning(f"Target FPS {self.target_fps} differs from source FPS {self.source_fps}. Frame dropping/duplication may occur if not handled by reader logic.")
 
-        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=50) # Increased queue size
+        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=100) # Increased queue size
         self.stop_event = threading.Event()
         self._end_of_video_flag = False # Internal flag
         self.state_lock = threading.Lock() # For thread-safe access to _end_of_video_flag
@@ -124,7 +124,7 @@ class FrameReader:
                         logger.warning(f"FrameReader queue for '{self.source_name}' is full. Waiting for space...")
                         try:
                             # Wait with a timeout to avoid blocking indefinitely
-                            self.frame_queue.put((self.frame_index, frame.copy()), timeout=1.0)
+                            self.frame_queue.put((self.frame_index, frame.copy()), timeout=5.0)
                             self.frame_index += 1
                         except queue.Full:
                             logger.warning(f"FrameReader queue for '{self.source_name}' still full after waiting. Discarding frame {self.frame_index}.")

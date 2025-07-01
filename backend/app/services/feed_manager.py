@@ -65,6 +65,8 @@ class FeedManager:
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
         self._connection_manager = None # Added type hint
+        self._prediction_scheduler = None # New: Reference to PredictionScheduler
+        self._is_processing_active: bool = False # New: Flag to control overall processing
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = 1.0 # Seconds
         self._sample_feed_id: Optional[str] = None # Store the ID of the sample feed
@@ -76,6 +78,49 @@ class FeedManager:
         # Start the background task to read results
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self.logger.info("FeedManager initialized and result reader task started.")
+
+    def set_prediction_scheduler(self, scheduler: "PredictionScheduler"): # type: ignore [name-defined]
+        """Inject the PredictionScheduler instance."""
+        self._prediction_scheduler = scheduler
+        self.logger.info("PredictionScheduler set in FeedManager.")
+
+    async def start_processing(self):
+        """Starts the overall video processing and prediction scheduling."""
+        if self._is_processing_active:
+            self.logger.info("Processing is already active. Skipping start.")
+            return
+
+        self.logger.info("Starting overall video processing and prediction scheduling.")
+        self._is_processing_active = True
+
+        # Start the sample feed if no real feeds are active
+        await self._check_and_manage_sample_feed()
+
+        # Start the prediction scheduler
+        if self._prediction_scheduler:
+            await self._prediction_scheduler.start()
+            self.logger.info("Prediction scheduler started by FeedManager.")
+        else:
+            self.logger.warning("PredictionScheduler not set in FeedManager. Cannot start it.")
+
+    async def stop_processing(self):
+        """Stops the overall video processing and prediction scheduling."""
+        if not self._is_processing_active:
+            self.logger.info("Processing is already inactive. Skipping stop.")
+            return
+
+        self.logger.info("Stopping overall video processing and prediction scheduling.")
+        self._is_processing_active = False
+
+        # Stop the sample feed
+        await self._check_and_manage_sample_feed()
+
+        # Stop the prediction scheduler
+        if self._prediction_scheduler:
+            await self._prediction_scheduler.stop()
+            self.logger.info("Prediction scheduler stopped by FeedManager.")
+        else:
+            self.logger.warning("PredictionScheduler not set in FeedManager. Cannot stop it.")
 
     def initialize_shared_values(self):
         import multiprocessing
@@ -362,8 +407,8 @@ class FeedManager:
              )
         
         message = WebSocketMessage(
-            event_type=WebSocketMessageTypeEnum.GLOBAL_REALTIME_METRICS_UPDATE,
-            payload=metrics_payload
+            type=WebSocketMessageTypeEnum.GLOBAL_REALTIME_METRICS_UPDATE,
+            data=metrics_payload
         )
         await self._connection_manager.broadcast_message_model(message, specific_topic="kpis")
         logger.debug(f"Broadcasted KPI update: {metrics_payload.model_dump_json(indent=2)}")
@@ -440,15 +485,24 @@ class FeedManager:
                             # Check if process is alive without blocking
                             if not process.is_alive():
                                 exitcode = process.exitcode
-                                logger.warning(f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error.")
-                                if entry['status'] != 'error': # Avoid redundant updates/checks
-                                    entry['status'] = 'error'
-                                    entry['error_message'] = f"Process terminated unexpectedly (exitcode: {exitcode})."
-                                    entry['process'] = None # Clear process handle
-                                    feed_ids_to_update.add(feed_id)
-                                    kpi_update_needed = True
-                                    if not entry.get('is_sample_feed'):
-                                        sample_feed_check_needed = True # Real feed died, check sample
+                                if exitcode == 0:
+                                    logger.info(f"Process for feed '{feed_id}' exited cleanly (exitcode 0). Status set to STOPPED.")
+                                    if entry['status'] != FeedOperationalStatusEnum.STOPPED:
+                                        entry['status'] = FeedOperationalStatusEnum.STOPPED
+                                        entry['error_message'] = None # Clear any previous error
+                                        entry['process'] = None
+                                        feed_ids_to_update.add(feed_id)
+                                        kpi_update_needed = True
+                                else:
+                                    logger.warning(f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error.")
+                                    if entry['status'] != FeedOperationalStatusEnum.ERROR: # Avoid redundant updates/checks
+                                        entry['status'] = FeedOperationalStatusEnum.ERROR
+                                        entry['error_message'] = f"Process terminated unexpectedly (exitcode: {exitcode})."
+                                        entry['process'] = None # Clear process handle
+                                        feed_ids_to_update.add(feed_id)
+                                        kpi_update_needed = True
+                                        if not entry.get('is_sample_feed'):
+                                            sample_feed_check_needed = True # Real feed died, check sample
                             # Optional: Check via wait(0) if is_alive() is unreliable on some platforms
                             # elif entry['status'] == 'running' and process.wait(0) is not None:
                             #     logger.warning(f"Process for feed '{feed_id}' found dead (confirmed by wait(0)). Marking as error.")

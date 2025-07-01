@@ -208,8 +208,8 @@ class PredictionScheduler:
                 )
                 
                 message = WebSocketMessage(
-                    event_type=WebSocketMessageTypeEnum.PREDICTION_ALERT,
-                    payload=notification
+                    type=WebSocketMessageTypeEnum.PREDICTION_ALERT,
+                    data=notification
                 )
 
                 # Use analytics service's connection manager to broadcast

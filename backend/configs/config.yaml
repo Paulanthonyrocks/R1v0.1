@@ -2,7 +2,7 @@
 # Example Configuration for Route One Hub Backend
 
 # --- General Settings ---
-fps: 10 # Target processing FPS (workers might adjust dynamically)
+fps: 5 # Target processing FPS (workers might adjust dynamically)
 speed_limit: 60 # Speed limit in km/h for 'speeding' classification
 
 # --- Firebase Configuration ---
@@ -142,7 +142,7 @@ vehicle_detection:
   proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
   track_timeout: 10 # Seconds before a track is considered stale and removed
   max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 240 # Image size for YOLO model inference
+  yolo_imgsz: 256 # Image size for YOLO model inference
   skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
 
 # --- Kalman Filter Parameters ---

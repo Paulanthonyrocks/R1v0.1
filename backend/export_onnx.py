@@ -40,7 +40,7 @@ def main():
         quantize_dynamic(
             model_input=onnx_model_path,
             model_output=quantized_model_path,
-            weight_type=QuantType.QInt8,
+            weight_type=QuantType.QUInt8,
         )
         print(f"Successfully quantized model and saved to: {quantized_model_path}")
     except Exception as e:
