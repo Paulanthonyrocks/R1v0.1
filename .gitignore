@@ -26,4 +26,4 @@ __pycache__/
 *$py.class
 
 # Large data files (consider Git LFS if necessary)
-*.dat
+*.dat\"commit_message.txt\" 
