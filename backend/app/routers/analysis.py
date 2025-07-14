@@ -1,10 +1,12 @@
 # backend/app/models/analysis.py
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, ClassVar
 from datetime import datetime
 from pydantic import BaseModel, Field
 import logging
 
 from app.models.traffic import LocationModel
+from app.models.common import APIResponse
+from app.exceptions import OperationFailed
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ from app.models import traffic # Changed import style
 from app.models.signals import SignalState # If analysis needs signal state
 
 # Dependencies
-from app.dependencies import get_db, get_current_active_user, get_as # Added get_as
+from app.dependencies import get_db, get_current_active_user, get_as, get_analytics_service # Added get_as
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.services.analytics_service import AnalyticsService # For type hinting
 
@@ -153,6 +155,91 @@ async def get_location_predictions(
 
 
 
+# Pydantic Models for Node Congestion Data
+class NodeCongestionData(BaseModel):
+    id: str = Field(..., description="Unique identifier for the node (e.g., 'lat,lon' string or a specific ID).")
+    name: str = Field(..., description="Display name for the node.")
+    latitude: float = Field(..., description="Latitude of the node.")
+    longitude: float = Field(..., description="Longitude of the node.")
+    congestion_score: Optional[float] = Field(None, description="Calculated congestion score for the node (0-100).")
+    vehicle_count: Optional[int] = Field(None, description="Number of vehicles detected at the node.")
+    average_speed: Optional[float] = Field(None, description="Average speed of vehicles at the node (km/h).")
+    timestamp: datetime = Field(..., description="Timestamp of the latest data point for this node.")
+
+    class Config:
+        from_attributes = True  # Updated from orm_mode = True for Pydantic V2
+        json_schema_extra = {  # Updated from schema_extra for Pydantic V2
+            "example": {
+                "id": "34.0522,-118.2437",
+                "name": "Node at (34.0522, -118.2437)",
+                "latitude": 34.0522,
+                "longitude": -118.2437,
+                "congestion_score": 65.5,
+                "vehicle_count": 50,
+                "average_speed": 25.0,
+                "timestamp": "2023-10-27T10:30:00Z"
+            }
+        }
+
+class AllNodesCongestionResponse(BaseModel):
+    nodes: List[NodeCongestionData]
+    schema_extra: ClassVar[dict] = {
+        'example': {
+            'nodes': [
+                {
+                    'id': '34.0522,-118.2437',
+                    'name': 'Node at (34.0522, -118.2437)',
+                    'latitude': 34.0522,
+                    'longitude': -118.2437,
+                    'congestion_score': 65.5,
+                    'vehicle_count': 50,
+                    'average_speed': 25.0,
+                    'timestamp': '2023-10-27T10:30:00Z'
+                },
+                {
+                    'id': '40.7128,-74.0060',
+                    'name': 'Node at (40.7128, -74.0060)',
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'congestion_score': 30.2,
+                    'vehicle_count': 20,
+                    'average_speed': 45.0,
+                    'timestamp': '2023-10-27T10:35:00Z'
+                }
+            ]
+        }
+    }
+
+@router.get(
+    "/nodes/congestion",
+    response_model=APIResponse[AllNodesCongestionResponse], # Using the wrapper model
+    summary="Get Congestion Data for All Monitored Nodes",
+    description="Returns a list of all monitored locations/nodes with their latest congestion data, including vehicle count, average speed, and congestion score."
+)
+async def get_all_nodes_congestion_data(
+    current_user: dict = Depends(get_current_active_user), # Assuming authentication is needed
+    analytics_service: AnalyticsService = Depends(get_analytics_service) # Dependency injection
+) -> APIResponse[AllNodesCongestionResponse]:
+    logger.info(f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('username')}")
+    """
+    Retrieves the latest congestion data for all monitored nodes.
+    Each node's data includes its ID, name, coordinates, congestion score,
+    vehicle count, average speed, and the timestamp of the latest data.
+    Requires authentication.
+    """
+    try:
+        logger.info(f"User {current_user.get('username')} requesting all nodes congestion data.")
+        node_data_list = await analytics_service.get_all_location_congestion_data()
+        logger.debug(f"Retrieved node data list: {node_data_list}")
+        if not node_data_list:
+            logger.warning("Analytics service returned an empty list for node congestion data.")
+
+        # node_data_list from AnalyticsService is List[Dict[str, Any]]
+        # Pydantic will validate each item against NodeCongestionData
+        return APIResponse.success(data=AllNodesCongestionResponse(nodes=node_data_list), message="Successfully retrieved node congestion data.")
+    except Exception as e:
+        logger.error(f"Error retrieving all nodes congestion data: {e}", exc_info=True)
+        raise OperationFailed(detail="Failed to retrieve node congestion data.")
 # TODO:
 # - Consider if the old /trends that queries DB for List[TrendDataPoint] should be kept as a separate endpoint.
 # - The TrendDataPoint model was defined in analysis.py previously, needs to be added back or use AggregatedTrafficTrend.
