@@ -1,23 +1,19 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/main.py (Updated)
 
+import asyncio
 import logging
 import logging.config
 from pathlib import Path
-import time
-from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-import json
+from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials
-from pathlib import Path # Ensure Path is imported
 import uuid # For generating unique client IDs for WebSockets
-import asyncio
 
 # --- Import application modules ---
 # Routers
@@ -28,16 +24,14 @@ from app.routers import (
     alerts, 
     video, 
     incidents,
-    personalized_routes,
-    pavement
+    personalized_routes
 )
 from . import api
 # Initializers/Getters - Import config initializer now
-from .config import load_config, get_current_config, initialize_config  # Import config init/getter
-from .database import initialize_database, close_database, get_database_manager
-from .services import initialize_services, shutdown_services, get_connection_manager, get_analytics_service
+from .config import initialize_config  # Import config init/getter
+from .database import initialize_database, close_database
+from .services import initialize_services, get_connection_manager, get_analytics_service
 from app.utils.service_getters import get_feed_manager # Import get_feed_manager from the new utility file
-from .services.services import health_check as services_health_check # Import directly
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification # Added imports
 from app.tasks.prediction_scheduler import PredictionScheduler # Import the new scheduler
 # Logging will be reconfigured by initialize_config
@@ -274,13 +268,14 @@ try:
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
-    app.include_router(video.router, prefix="/api/v1", tags=["Video"])  # Add video router
+    app.include_router(video.router, prefix="/api/v1", tags=["Video"])
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
     app.include_router(
         personalized_routes.router, 
         prefix="/api/routes", 
         tags=["personalized-routing"]
     )
+    app.include_router(api.router, prefix="/api/v1", tags=["API"])
     # Register weather and events routers
     from app.routers import weather, events
     app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
@@ -376,10 +371,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         logger.info(f"WebSocket connection for client {client_id} is ending.")
         # manager.disconnect(client_id) # Called in exception blocks
 
-# --- Serve Sample Video Endpoint ---
-
-
-import asyncio
+# --- FastAPI App Instance ---
+app = FastAPI(
+    title="Route One Hub - Backend API",
+    version="1.0.0",
+    description="API for managing traffic analysis feeds, data, and real-time updates.",
+)
 
 if __name__ == "__main__":
     import uvicorn

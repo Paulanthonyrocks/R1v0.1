@@ -1,12 +1,10 @@
 from typing import List, Dict, Any
-from enum import Enum
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends, Query
 from datetime import datetime
 
 # Import models from the new location
-from app.models.feeds import FeedStatusData, FeedOperationalStatusEnum, FeedConfigInfo # Updated imports
-from app.models.traffic import TrafficData, LocationModel # Added LocationModel if needed directly by API, TrafficData moved here
+from app.models.feeds import FeedStatusData # Updated imports
+from app.models.traffic import TrafficData # Added LocationModel if needed directly by API, TrafficData moved here
 
 from app.dependencies import get_current_active_user, get_tss
 from app.services.traffic_signal_service import TrafficSignalService, TrafficSignalControlError
@@ -18,7 +16,7 @@ import asyncio
 from bson import ObjectId
 from fastapi import status
 
-from app.routers.analysis import router as analysis_router
+
 
 
 # StatusEnum is now FeedOperationalStatusEnum in app.models.feeds
@@ -147,15 +145,14 @@ async def get_signals(
     tss: TrafficSignalService = Depends(get_tss)
 ):
     """Endpoint to retrieve the list of traffic signals. Requires authentication."""
-    user_email = current_user.get("email")
-    # logger.info(f"Signal list retrieved by user: {user_email}")
+    
     try:
         signals = await tss.get_all_signals()
         return signals
     except TrafficSignalControlError as e:
         # logger.error(f"Error retrieving signals for user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    except Exception as e:
+    except Exception:
         # logger.error(f"Unexpected error retrieving signals for user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving signals.")
 
@@ -185,7 +182,7 @@ async def set_signal_phase(
     except TrafficSignalControlError as e:
         # logger.error(f"Control error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    except Exception as e:
+    except Exception:
         # logger.error(f"Unexpected error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred while setting signal phase for {signal_id}.")
 
