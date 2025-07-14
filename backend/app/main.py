@@ -24,7 +24,7 @@ import asyncio
 from app.routers import (
     feeds, 
     config as config_router, 
-    analytics, 
+    analysis,
     alerts, 
     video, 
     incidents,
@@ -272,7 +272,7 @@ app.state.realtime_connections_lock = asyncio.Lock()
 try:
     app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
-    app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytics"])
+    app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
