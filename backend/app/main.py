@@ -5,7 +5,7 @@ import logging
 import logging.config
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Query
 from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials
 import uuid # For generating unique client IDs for WebSockets
+from app.dependencies import verify_firebase_token # Import verify_firebase_token
 
 # --- Import application modules ---
 # Routers
@@ -305,7 +306,15 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
     await websocket.close(code=1000)
 
 @app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
+async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = Query(...)): # Added token query parameter
+    try:
+        # Verify the Firebase ID token
+        user_data = await verify_firebase_token(token)
+        logger.info(f"WebSocket connection attempt by authenticated user: {user_data.get('email')}")
+    except HTTPException as e:
+        logger.warning(f"WebSocket authentication failed for client {client_id}: {e.detail}")
+        await websocket.close(code=e.status_code, reason=e.detail)
+        return
     # Retrieve manager from app.state, which is set during startup
     manager = websocket.app.state.connection_manager 
     if manager is None:
