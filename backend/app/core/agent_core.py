@@ -442,7 +442,7 @@ class AgentCore:
             if not step_actions_all_successful:
                 current_step.status = PlanStepStatus.FAILED
                 self.logger.error(f"Plan Step '{current_step.step_id}' failed due to action failure.")
-                await self._handle_failed_plan()
+                await self._handle_failed_plan(action)
                 return
 
             # If step has no completion conditions, or all actions succeeded and no conditions, mark completed and try to advance.
@@ -1511,13 +1511,35 @@ class AgentCore:
         else:
             self.logger.info("No active goal to clear.")
 
-    async def _handle_failed_plan(self):
+    async def _handle_failed_plan(self, failed_action: Action):
         if self.active_goal:
-            self.logger.warning(f"Plan for goal '{self.active_goal.description}' failed. Attempting to replan.")
-            self._complete_active_plan("Replanning")
-            # The main decision cycle will trigger a new plan creation
+            self.logger.warning(f"Action {failed_action.action_type} for goal '{self.active_goal.description}' failed. Attempting to find an alternative.")
+            alternative_action = self._find_alternative_action(failed_action)
+            if alternative_action:
+                self.logger.info(f"Found alternative action: {alternative_action.action_type}")
+                # Replace the failed action with the alternative action in the plan
+                for step in self.active_plan:
+                    for i, action in enumerate(step.actions):
+                        if action == failed_action:
+                            step.actions[i] = alternative_action
+                            return
+            else:
+                self.logger.warning(f"No alternative action found for {failed_action.action_type}. Replanning.")
+                self._complete_active_plan("Replanning")
         else:
             self.logger.warning("A plan failed, but no active goal was found for replanning.")
+
+    def _find_alternative_action(self, failed_action: Action) -> Optional[Action]:
+        # This is a placeholder for the actual logic to find an alternative action.
+        # In a real implementation, this would involve a more complex search process.
+        if failed_action.action_type == ActionType.SET_SIGNAL_PHASE:
+            # If setting the signal phase failed, try setting a DMS message instead
+            return Action(
+                action_type=ActionType.SET_DMS_MESSAGE,
+                target_ids=["DMS001"],
+                parameters={"message": "Traffic signal failure. Expect delays."},
+            )
+        return None
 
     async def _monitor_plan_progress(self):
         if not self.active_plan or not self.active_goal:

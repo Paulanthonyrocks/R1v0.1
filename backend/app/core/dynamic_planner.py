@@ -19,12 +19,13 @@ class AgentPlanner:
         self.agent_core = agent_core
 
     def create_plan(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return self.forward_chaining_planner(goal, current_state)
+        return self.a_star_planner(goal, current_state)
 
-    def forward_chaining_planner(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def a_star_planner(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # This is a placeholder for the actual A* planning logic.
+        # In a real implementation, this would involve a more complex search process
+        # with a priority queue and a cost function.
         plan = []
-        # This is a placeholder for the actual forward-chaining logic.
-        # In a real implementation, this would involve a more complex search process.
         if "reduce congestion" in goal.description.lower():
             plan.extend(self._create_congestion_reduction_plan(goal, current_state))
         elif "clear incident" in goal.description.lower():

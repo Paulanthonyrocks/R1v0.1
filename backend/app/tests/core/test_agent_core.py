@@ -551,5 +551,22 @@ TestAgentCore.test_detour_service_integration = async_test(TestAgentCore.test_de
 
 TestAgentCore.test_emergency_service_integration = async_test(TestAgentCore.test_emergency_service_integration)
 
+    @patch('app.core.agent_core.logger')
+    async def test_a_star_planner_creates_plan_for_goal(self, mock_agent_logger):
+        goal = Goal(id="test_goal", description="Reduce congestion")
+        self.agent_core.set_goal(goal)
+
+        high_congestion_kpis = {"overall_congestion_level": "HIGH"}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+
+        await self.agent_core.run_decision_cycle()
+
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(len(self.agent_core.active_plan), 2)
+        self.assertEqual(self.agent_core.active_plan[0].description, "Extend green light on main street")
+        self.assertEqual(self.agent_core.active_plan[1].description, "Display congestion warning on DMS")
+
+TestAgentCore.test_a_star_planner_creates_plan_for_goal = async_test(TestAgentCore.test_a_star_planner_creates_plan_for_goal)
+
 if __name__ == '__main__':
     unittest.main()
