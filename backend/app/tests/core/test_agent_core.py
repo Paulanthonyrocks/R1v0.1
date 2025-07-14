@@ -453,5 +453,22 @@ def test_set_and_clear_goal(self):
 
 TestAgentCore.test_dynamic_planner_creates_plan_for_goal = async_test(TestAgentCore.test_dynamic_planner_creates_plan_for_goal)
 
+    @patch('app.core.agent_core.logger')
+    async def test_incident_clearance_plan(self, mock_agent_logger):
+        goal = Goal(id="test_goal", description="Clear incident")
+        self.agent_core.set_goal(goal)
+
+        incident_state = {"active_incidents_count": 1, "active_incidents": [{"id": "incident_1"}]}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = incident_state
+
+        await self.agent_core.run_decision_cycle()
+
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(len(self.agent_core.active_plan), 2)
+        self.assertEqual(self.agent_core.active_plan[0].description, "Dispatch emergency services")
+        self.assertEqual(self.agent_core.active_plan[1].description, "Set up a detour")
+
+TestAgentCore.test_incident_clearance_plan = async_test(TestAgentCore.test_incident_clearance_plan)
+
 if __name__ == '__main__':
     unittest.main()
