@@ -23,6 +23,7 @@ from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from app.core.dynamic_planner import AgentPlanner, Goal
+from app.core.actions import Action, ActionType
 
 
 logger = logging.getLogger(__name__)
@@ -332,11 +333,11 @@ class AgentCore:
         self.logger.info(f"Generated plan '{self.active_plan_id}' with {len(plan_steps)} steps for incident {incident_id}.")
         return plan_steps
 
-    async def _execute_plan_action(self, plan_action: PlanAction) -> bool:
-        """Executes a single PlanAction and returns True if successful, False otherwise."""
-        self.logger.info(f"Executing Plan Action: Type='{plan_action.action_type}', Targets='{plan_action.target_ids}', Params='{plan_action.parameters}'")
+    async def _execute_plan_action(self, plan_action: Action) -> bool:
+        """Executes a single Action and returns True if successful, False otherwise."""
+        self.logger.info(f"Executing Action: Type='{plan_action.action_type}', Targets='{plan_action.target_ids}', Params='{plan_action.parameters}'")
         try:
-            if plan_action.action_type == "SET_SIGNAL_PHASE":
+            if plan_action.action_type == ActionType.SET_SIGNAL_PHASE:
                 for target_id in plan_action.target_ids:
                     phase_val = plan_action.parameters.get("phase")
                     duration = plan_action.parameters.get("duration_seconds")
@@ -412,7 +413,8 @@ class AgentCore:
             if not current_step.actions: # If a step has no actions (e.g. a pure monitoring/wait step)
                  self.logger.info(f"Plan Step '{current_step.step_id}' has no actions to execute directly.")
             else:
-                for action in current_step.actions:
+                for action_data in current_step.actions:
+                    action = Action(**action_data)
                     success = await self._execute_plan_action(action)
                     if not success:
                         step_actions_all_successful = False

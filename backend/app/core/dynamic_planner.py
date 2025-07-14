@@ -19,7 +19,24 @@ class AgentPlanner:
         self.agent_core = agent_core
 
     def create_plan(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        # This is a placeholder for the actual planning logic.
-        # In a real implementation, this would use a planning algorithm
-        # to generate a sequence of actions to achieve the goal.
+        if "reduce congestion" in goal.description.lower():
+            return self._create_congestion_reduction_plan(goal, current_state)
+        return []
+
+    def _create_congestion_reduction_plan(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Simple rule: if congestion is high, extend green light on main street
+        if current_state.get("overall_congestion_level") == "HIGH":
+            return [
+                {
+                    "step_id": "step1",
+                    "description": "Extend green light on main street",
+                    "actions": [
+                        {
+                            "action_type": "SET_SIGNAL_PHASE",
+                            "target_ids": ["TS001"],
+                            "parameters": {"phase": "green", "duration_seconds": 120},
+                        }
+                    ],
+                }
+            ]
         return []

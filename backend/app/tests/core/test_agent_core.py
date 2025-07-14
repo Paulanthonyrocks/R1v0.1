@@ -430,5 +430,28 @@ async def test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns(s
 TestAgentCore.test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns = async_test(test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns)
 
 
+def test_set_and_clear_goal(self):
+    goal = Goal(id="test_goal", description="Reduce congestion")
+    self.agent_core.set_goal(goal)
+    self.assertEqual(self.agent_core.active_goal, goal)
+    self.agent_core.clear_goal()
+    self.assertIsNone(self.agent_core.active_goal)
+
+    @patch('app.core.agent_core.logger')
+    async def test_dynamic_planner_creates_plan_for_goal(self, mock_agent_logger):
+        goal = Goal(id="test_goal", description="Reduce congestion")
+        self.agent_core.set_goal(goal)
+
+        high_congestion_kpis = {"overall_congestion_level": "HIGH"}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+
+        await self.agent_core.run_decision_cycle()
+
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(len(self.agent_core.active_plan), 1)
+        self.assertEqual(self.agent_core.active_plan[0].description, "Extend green light on main street")
+
+TestAgentCore.test_dynamic_planner_creates_plan_for_goal = async_test(TestAgentCore.test_dynamic_planner_creates_plan_for_goal)
+
 if __name__ == '__main__':
     unittest.main()
