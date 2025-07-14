@@ -151,18 +151,7 @@ async def get_location_predictions(
             detail=f"Error generating predictions: {str(e)}"
         )
 
-@router.get(
-    "/nodes/congestion",
-    summary="Get Congestion Data for Nodes",
-    description="Retrieves real-time or near-real-time congestion data for traffic nodes.",
-    dependencies=[Depends(get_current_active_user)]
-)
-async def get_congestion_data(
-    analytics_svc: AnalyticsService = Depends(get_as)
-) -> List[Dict[str, Any]]:
-    logger.info("GET /nodes/congestion endpoint called.")
-    congestion_data = await analytics_svc.get_all_location_congestion_data()
-    return congestion_data
+
 
 # TODO:
 # - Consider if the old /trends that queries DB for List[TrendDataPoint] should be kept as a separate endpoint.

@@ -14,21 +14,26 @@ class VideoProcessor:
         self.cap = None
         self.frame_count = 0
         self.fps = 0
+        logger.info(f"VideoProcessor: Initializing for video path: {self.video_path}")
         self.initialize()
         
     def initialize(self):
         """Initialize the video capture"""
+        logger.info(f"VideoProcessor.initialize: Checking video file existence at {self.video_path}")
         if not self.video_path.exists():
+            logger.error(f"VideoProcessor.initialize: Video file not found at {self.video_path}")
             raise FileNotFoundError(f"Video file not found at {self.video_path}")
         
         self.cap = cv2.VideoCapture(str(self.video_path))
+        logger.info(f"VideoProcessor.initialize: Attempting to open video file: {self.video_path}")
         if not self.cap.isOpened():
+            logger.error(f"VideoProcessor.initialize: Failed to open video file: {self.video_path}. Check codecs or file integrity.")
             raise RuntimeError(f"Failed to open video file: {self.video_path}")
             
         self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-        logger.info(f"Initialized video processor for {self.video_path}")
-        logger.info(f"Frame count: {self.frame_count}, FPS: {self.fps}")
+        logger.info(f"VideoProcessor.initialize: Successfully initialized video processor for {self.video_path}")
+        logger.info(f"VideoProcessor.initialize: Frame count: {self.frame_count}, FPS: {self.fps}")
     
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """

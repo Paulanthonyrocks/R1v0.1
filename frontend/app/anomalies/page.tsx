@@ -293,17 +293,17 @@ const AnomaliesPage = () => {
         <div className="p-4">
         <AnomalyDetailModal anomaly={selectedAnomalyForModal} onClose={() => setSelectedAnomalyForModal(null)} />
 
-        <h1 className="text-2xl font-bold mb-4 uppercase text-matrix tracking-normal">Detected Anomalies</h1> {/* Added tracking-normal */}
+        <h1 className="text-2xl font-bold mb-4 uppercase text-lcd-text tracking-normal">Detected Anomalies</h1> {/* Added tracking-normal */}
 
         {/* Filters and Sorting UI */}
         <div className="mb-6 flex flex-wrap items-center gap-4">
           <div>
-            <label htmlFor="severity-filter" className="text-matrix-muted mr-2 tracking-normal">Severity:</label> {/* Added tracking-normal */}
+            <label htmlFor="severity-filter" className="text-lcd-text mr-2 tracking-normal">Severity:</label> {/* Added tracking-normal */}
             <select
               id="severity-filter"
               value={selectedSeverity}
               onChange={(e) => setSelectedSeverity(e.target.value as SeverityFilter)}
-              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-primary focus:border-primary" // Changed focus rings
+              className="bg-lcd-bg text-lcd-text p-2 rounded-md border border-lcd-text focus:ring-primary focus:border-primary"
             >
               <option value={ALL_SEVERITIES}>All</option>
               <option value="low">Low</option>
@@ -312,12 +312,12 @@ const AnomaliesPage = () => {
             </select>
           </div>
           <div>
-            <label htmlFor="sort-order" className="text-matrix-muted mr-2 tracking-normal">Sort by:</label> {/* Added tracking-normal */}
+            <label htmlFor="sort-order" className="text-lcd-text mr-2 tracking-normal">Sort by:</label> {/* Added tracking-normal */}
             <select
               id="sort-order"
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-              className="bg-matrix-panel text-matrix p-2 rounded-md border border-matrix-border focus:ring-primary focus:border-primary" // Changed focus rings
+              className="bg-lcd-bg text-lcd-text p-2 rounded-md border border-lcd-text focus:ring-primary focus:border-primary"
             >
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
@@ -370,7 +370,7 @@ const AnomaliesPage = () => {
                       <p className="text-sm tracking-normal"> {/* Added tracking-normal */}
                         <span className="font-semibold">Description:</span> {anomaly.description}
                       </p>
-                      <p className="mt-2 text-xs text-matrix-muted-text tracking-normal"> {/* Added tracking-normal */}
+                      <p className="mt-2 text-xs text-lcd-text tracking-normal"> {/* Added tracking-normal */}
                         <span className="font-semibold">Timestamp:</span> {new Date(anomaly.timestamp).toLocaleString()}
                       </p>
                       <div className="flex justify-end mt-2 space-x-2">
@@ -390,7 +390,7 @@ const AnomaliesPage = () => {
             </div>
           </>
         ) : (
-          <div className="text-center text-matrix-muted py-10 tracking-normal font-lcd"> {/* Added tracking-normal */}
+          <div className="text-center text-lcd-text py-10 tracking-normal font-lcd"> {/* Added tracking-normal */}
             {allAnomalies.length === 0 ? "No anomalies detected." : "No anomalies match the current filters."}
           </div>
         )}

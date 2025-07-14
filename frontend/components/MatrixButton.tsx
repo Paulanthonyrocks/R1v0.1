@@ -24,10 +24,9 @@ const MatrixButton: React.FC<MatrixButtonProps> = ({
   // Base styles inspired by original inline styles and typical button requirements
   // Also aligning with .matrix-button from globals.css where it makes sense (e.g., font, uppercase)
   const baseStyle = cn(
-    "font-matrix", // Original: fontFamily: 'var(--font-mono)' -> Tailwind equivalent is font-matrix if defined
+    "font-lcd", // Original: fontFamily: 'var(--font-mono)' -> Tailwind equivalent is font-matrix if defined
     "uppercase",
     "font-light", // Original: fontWeight: '300'
-    "rounded",    // Original: borderRadius: '4px' -> Tailwind 'rounded' is 0.25rem (4px)
     "border",
     "transition-colors duration-200", // Original: transition: 'background-color 0.2s, border-color 0.2s',
     "focus:outline-none",

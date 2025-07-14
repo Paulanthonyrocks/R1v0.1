@@ -215,7 +215,7 @@ const DashboardPage: React.FC = () => {
               <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
                 <SurveillanceFeed
                   feed={{
-                    id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/video/sample-video/stream', fps: 30
+                    id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/sample-video/stream', fps: 30
                   }}
                 />
               </div>

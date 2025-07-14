@@ -243,6 +243,38 @@ class AnalyticsService:
         topic = f"predictions:{abs(hash((location.latitude, location.longitude)))}"
         await self._connection_manager.broadcast_message_model(message, specific_topic=topic)
 
+    async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any]):
+        """
+        Processes real-time metrics from a feed and updates the internal data cache.
+        This method is called by the FeedManager.
+        """
+        logger.debug(f"Processing metrics for feed {feed_id}: {metrics}")
+        # Assuming metrics contain 'latitude', 'longitude', 'vehicle_count', 'average_speed', 'congestion_score'
+        # and 'timestamp' (or derived from current time if not present)
+        
+        latitude = metrics.get('latitude')
+        longitude = metrics.get('longitude')
+        timestamp = metrics.get('timestamp', datetime.now(timezone.utc))
+
+        if latitude is None or longitude is None:
+            logger.warning(f"Metrics for feed {feed_id} missing latitude or longitude. Cannot update cache.")
+            return
+
+        data_point = {
+            'vehicle_count': metrics.get('vehicle_count'),
+            'average_speed': metrics.get('average_speed'),
+            'congestion_score': metrics.get('congestion_score'),
+            'timestamp': timestamp
+        }
+        
+        self._data_cache.add_data_point(
+            latitude=latitude,
+            longitude=longitude,
+            timestamp=timestamp,
+            data=data_point
+        )
+        logger.debug(f"Data cache updated for {feed_id}.")
+
     async def get_all_location_congestion_data(self) -> List[Dict[str, Any]]:
         """
         Retrieves the latest congestion data summary for all tracked locations/nodes.

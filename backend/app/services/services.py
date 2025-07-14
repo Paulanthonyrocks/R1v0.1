@@ -73,11 +73,16 @@ async def initialize_services(config: Dict[str, Any], logger: logging.Logger): #
         connection_manager=connection_manager_instance
     )
     # Pass db_manager to AnalyticsService
-    _analytics_service_instance = AnalyticsService(
-        config=config.get("analytics_service", {}),
-        connection_manager=connection_manager_instance,
-        database_manager=db_manager # Add this line
-    )
+    try:
+        _analytics_service_instance = AnalyticsService(
+            config=config.get("analytics_service", {}),
+            connection_manager=connection_manager_instance,
+            database_manager=db_manager # Add this line
+        )
+        logger.info("AnalyticsService initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
+        _analytics_service_instance = None
     
     
     _route_optimization_service_instance = RouteOptimizationService(

@@ -74,37 +74,51 @@ const StreamPage: React.FC = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.OPERATOR}>
-      <div className="p-4 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative">
-        <h1 className="text-2xl font-bold col-span-full mb-4 text-primary tracking-normal">Real-Time Stream</h1> {/* Added text-primary tracking-normal */}
+      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
+        {/* Status Bar */}
+        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
+          <div className="flex items-center space-x-2">
+            <Signal size={20} />
+            <span className="font-lcd matrix-glow">STREAM</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Clock size={20} />
+            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <BatteryFull size={20} />
+          </div>
+        </header>
+        <div className="p-4 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative">
+          <h1 className="text-2xl font-bold col-span-full mb-4 text-lcd-text tracking-normal">Real-Time Stream</h1> {/* Added text-lcd-text tracking-normal */}
 
-        {/* Metric Cards */}
-        <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <MetricCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" />
-          <MetricCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" />
-          <MetricCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} />
-          <MetricCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running">
-            <div className="text-xs text-muted-foreground mt-1 tracking-normal"> {/* Changed color, added tracking */}
-              {metrics?.feed_statuses && (
-                <>
-                  <span className="mr-2">Stopped: <span>{metrics.feed_statuses.stopped}</span></span> {/* Removed specific color */}
-                  <span>Error: <span>{metrics.feed_statuses.error}</span></span> {/* Removed specific color */}
-                </>
-              )}
-            </div>
-          </MetricCard>
-        </div>
+          {/* Metric Cards */}
+          <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <MetricCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" />
+            <MetricCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" />
+            <MetricCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} />
+            <MetricCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running">
+              <div className="text-xs text-lcd-text mt-1 tracking-normal"> {/* Changed color, added tracking */}
+                {metrics?.feed_statuses && (
+                  <>
+                    <span className="mr-2">Stopped: <span>{metrics.feed_statuses.stopped}</span></span> {/* Removed specific color */}
+                    <span>Error: <span>{metrics.feed_statuses.error}</span></span> {/* Removed specific color */}
+                  </>
+                )}
+              </div>
+            </MetricCard>
+          </div>
 
-        {/* Chart */}
-        <div className="col-span-full">
-          <MatrixCard title="Trends" className="pixel-drop-shadow"> {/* Added pixel-drop-shadow */}
-            <Chart
-              chartType="LineChart"
-              width="100%"
-              height="400px"
-              data={chartData}
-              options={chartOptions}
-            />
-          </MatrixCard>
+          {/* Chart */}
+          <div className="col-span-full">
+            <MatrixCard title="Trends" className="pixel-drop-shadow"> {/* Added pixel-drop-shadow */}
+              <Chart
+                chartType="LineChart"
+                width="100%"
+                height="400px"
+                data={chartData}
+                options={chartOptions}
+              />
+            </MatrixCard>
+          </div>
         </div>
       </div>
     </AuthGuard>

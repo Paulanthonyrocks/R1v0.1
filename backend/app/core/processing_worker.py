@@ -54,8 +54,6 @@ except ImportError as e:
 
 
 # --- Process Video Function ---
-import logging.config # Added for dictConfig
-
 def process_video(
     video_path: str,
     frame_queue: "multiprocessing.Queue[Tuple[str, int, 'np.ndarray', Dict, Dict, Dict]]",
@@ -70,28 +68,34 @@ def process_video(
     reduce_frame_rate_event: Any,  # multiprocessing.Event
     global_fps: Any,  # multiprocessing.Value
     db_queue: Optional["multiprocessing.Queue[Dict]"] = None,
-    error_queue: Optional["multiprocessing.Queue[str]"] = None,
-    logging_config: Optional[Dict[str, Any]] = None # Added logging_config parameter
+    error_queue: Optional["multiprocessing.Queue[str]"] = None
 ) -> None:
     # Configure logging specific to this process
-    if logging_config:
-        try:
-            logging.config.dictConfig(logging_config)
-        except Exception as e:
-            # Fallback to basic logging if dictConfig fails
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            logger.error(f"Failed to configure logging in worker process: {e}", exc_info=True)
-
-    logger = logging.getLogger(f"app.core.processing_worker.Process-{feed_id}")
     log_level_str = config.get('logging', {}).get('level', 'INFO').upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
-    logger.setLevel(log_level)
-    logger.propagate = False # Prevent duplication if root logger also has handlers
+    # Get log path from config, fallback to local if not found
+    log_path_worker = config.get('logging', {}).get('log_path', './logs/worker.log')
+    Path(log_path_worker).parent.mkdir(parents=True, exist_ok=True)
 
-    # Ensure log directory exists if file handler is used
-    log_file_path = config.get('logging', {}).get('handlers', {}).get('workerFileHandler', {}).get('filename')
-    if log_file_path:
-        Path(log_file_path).parent.mkdir(parents=True, exist_ok=True)
+    # Set up specific logger for this process
+    logger = logging.getLogger(f"Process-{feed_id}")
+    logger.setLevel(log_level)
+    # Avoid adding handlers if they already exist (can happen in some envs)
+    if not logger.handlers:
+        formatter = logging.Formatter("%(asctime)s - %(process)d - %(levelname)s - %(message)s")
+        # Stream Handler (console)
+        sh = logging.StreamHandler()
+        sh.setFormatter(formatter)
+        logger.addHandler(sh)
+        # File Handler
+        try:
+            fh = logging.FileHandler(log_path_worker)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+        except Exception as log_e:
+            logger.error(f"Failed to create file handler for worker log {log_path_worker}: {log_e}")
+
+    logger.propagate = False # Prevent duplication if root logger also has handlers
 
     logger.info(f"Process {os.getpid()} started for {feed_id} ({video_path}) with log level {log_level_str}")
 
@@ -125,8 +129,7 @@ def process_video(
         # --- End Webcam Index Parsing ---
 
 
-        resolved_video_path = Path(source_location).resolve()
-        logger.info(f"Initializing FrameReader for {source_type}: {resolved_video_path}")
+        logger.info(f"Initializing FrameReader for {source_type}: {source_location}")
         # FrameReader.__init__ now raises RuntimeError if capture fails to open
         reader = FrameReader(source_location, buffer_size=config['video_input'].get('webcam_buffer_size', 1), target_fps=config.get('fps'))
         # Add a small delay for camera/reader thread to initialize
@@ -173,9 +176,8 @@ def process_video(
             result = reader.read()
             if result is None or not isinstance(result, tuple) or len(result) != 2:
                 logger.error(f"[{feed_id}] FrameReader.read() returned invalid result: {result}")
-                stop_event.set() # Signal stop before breaking
                 break  # Exit loop or handle as needed
-            current_frame_index, frame = result
+            frame, current_frame_index = result
             timer.log_time('read', time.time() - read_start_time)
 
             # Ensure current_frame_index is a scalar integer
@@ -187,7 +189,6 @@ def process_video(
             if frame is None:
                 if reader.end_of_video:
                     logger.info(f"[{feed_id}] End of video/stream detected by reader.")
-                    stop_event.set() # Signal stop before breaking
                     break # Exit loop gracefully
                 else:
                     # If no frame but not EOF, could be temporary reader issue or just empty queue
@@ -265,9 +266,11 @@ def process_video(
             combined_frame = visualize_data(
                 frame=processing_frame,
                 tracked_vehicles=tracked_vehicles_raw,
-                traffic_metrics=metrics,
+                density=density,
+                alerts_queue=alerts_queue,
                 visualization_options=vis_options,
                 config=config, # Pass config needed by visualize
+                debug_mode=(log_level <= logging.DEBUG), # Pass debug flag
                 feed_id=feed_id
             )
             timer.log_time('visualize', time.time() - vis_start_time)

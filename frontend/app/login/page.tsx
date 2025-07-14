@@ -58,58 +58,72 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen">
-      <div className="matrix-glow-card p-8 max-w-sm w-full"> {/* Using matrix-glow-card for styling */}
-        <h1 className="text-2xl font-bold mb-6 text-center uppercase text-primary tracking-normal">Login</h1> {/* Added tracking-normal */}
-        <form onSubmit={handleLogin}>
-          <div className="mb-4">
-            <label className="block text-sm font-semibold mb-2 text-primary tracking-normal" htmlFor="email"> {/* Added text-primary tracking-normal */}
-              Email
-            </label>
-            <input
-              type="email"
-              id="email"
-              className="matrix-input w-full tracking-normal placeholder:text-primary" // Added tracking-normal placeholder:text-primary
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="user@example.com" // Added placeholder example
-            />
-          </div>
-          <div className="mb-6">
-            <label className="block text-sm font-semibold mb-2 text-primary tracking-normal" htmlFor="password"> {/* Added text-primary tracking-normal */}
-              Password
-            </label>
-            <input
-              type="password"
-              id="password"
-              className="matrix-input w-full tracking-normal placeholder:text-primary" // Added tracking-normal placeholder:text-primary
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="••••••••" // Added placeholder example
-            />
-          </div>
-          {error && (
-            <p className="text-primary text-sm mb-4 tracking-normal flex items-center">
-              <AlertTriangle className="h-4 w-4 mr-2 flex-shrink-0" /> {/* Icon added, color inherited (text-primary) */}
-              {error}
-            </p>
-          )}
-          <MatrixButton
-            type="submit"
-            className="w-full tracking-normal" /* tracking-normal might be inherent from MatrixButton base styles but explicit here */
-            disabled={loading}
-          >
-            {loading ? 'Logging In...' : 'Login'}
-          </MatrixButton>
-        </form>
-        <p className="text-center text-sm mt-4 tracking-normal"> {/* Added tracking-normal */}
-          Don&apos;t have an account?{' '}
-          <a href="/signup" className="text-primary hover:underline tracking-normal font-lcd"> {/* Added tracking-normal */}
-            Sign up
-          </a>
-        </p>
+    <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
+      {/* Status Bar */}
+      <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
+        <div className="flex items-center space-x-2">
+          <Signal size={20} />
+          <span className="font-lcd matrix-glow">LOGIN</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <Clock size={20} />
+          <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          <BatteryFull size={20} />
+        </div>
+      </header>
+      <div className="flex items-center justify-center flex-1">
+        <div className="matrix-glow-card p-8 max-w-sm w-full"> {/* Using matrix-glow-card for styling */}
+          <h1 className="text-2xl font-bold mb-6 text-center uppercase text-lcd-text tracking-normal">Login</h1> {/* Added tracking-normal */}
+          <form onSubmit={handleLogin}>
+            <div className="mb-4">
+              <label className="block text-sm font-semibold mb-2 text-lcd-text tracking-normal" htmlFor="email"> {/* Added text-lcd-text tracking-normal */}
+                Email
+              </label>
+              <input
+                type="email"
+                id="email"
+                className="matrix-input w-full tracking-normal placeholder:text-lcd-text" // Added tracking-normal placeholder:text-lcd-text
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                placeholder="user@example.com" // Added placeholder example
+              />
+            </div>
+            <div className="mb-6">
+              <label className="block text-sm font-semibold mb-2 text-lcd-text tracking-normal" htmlFor="password"> {/* Added text-lcd-text tracking-normal */}
+                Password
+              </label>
+              <input
+                type="password"
+                id="password"
+                className="matrix-input w-full tracking-normal placeholder:text-lcd-text" // Added tracking-normal placeholder:text-lcd-text
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="••••••••" // Added placeholder example
+              />
+            </div>
+            {error && (
+              <p className="text-red-500 text-sm mb-4 tracking-normal flex items-center">
+                <AlertTriangle className="h-4 w-4 mr-2 flex-shrink-0" /> {/* Icon added, color changed to red-500 */}
+                {error}
+              </p>
+            )}
+            <MatrixButton
+              type="submit"
+              className="w-full tracking-normal" /* tracking-normal might be inherent from MatrixButton base styles but explicit here */
+              disabled={loading}
+            >
+              {loading ? 'Logging In...' : 'Login'}
+            </MatrixButton>
+          </form>
+          <p className="text-center text-sm mt-4 tracking-normal"> {/* Added tracking-normal */}
+            Don&apos;t have an account?{' '}
+            <a href="/signup" className="text-lcd-text hover:underline tracking-normal font-lcd"> {/* Added tracking-normal */}
+              Sign up
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   );

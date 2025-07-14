@@ -24,7 +24,7 @@ import asyncio
 from app.routers import (
     feeds, 
     config as config_router, 
-    analysis, 
+    analytics, 
     alerts, 
     video, 
     incidents,
@@ -216,6 +216,7 @@ async def startup_event():
             # Inject the scheduler into the FeedManager
             fm = get_feed_manager()
             fm.set_prediction_scheduler(scheduler)
+            fm.set_analytics_service(analytics_service) # Inject AnalyticsService into FeedManager
             logger.info("Prediction scheduler initialized and injected into FeedManager.")
         else:
             logger.warning("AnalyticsService not available, prediction scheduler not initialized.")
@@ -271,7 +272,7 @@ app.state.realtime_connections_lock = asyncio.Lock()
 try:
     app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
-    app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics"])
+    app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytics"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
@@ -287,8 +288,8 @@ try:
     from app.routers import route_history
     app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"])
     logger.info("API routers included successfully.")
-    app.include_router(api.router, prefix="/api", tags=["API"])
-
+    
+    logger.info("API routers included successfully.")
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)
 

@@ -26,16 +26,14 @@ export default function RootLayout({
         </head>
         <body
           className={cn(
-            "min-h-screen bg-background antialiased flex flex-col font-lcd text-foreground static-noise",
-            inter.variable, // Provide fallback sans font variable
+            "min-h-screen bg-lcd-bg text-lcd-text font-lcd flex flex-col",
+            inter.variable,
           )}
         >
           <ToastProvider>
-            {/* <Nav /> */}
             <main
               className={cn(
                 "flex-1 overflow-y-auto relative",
-                // pathname !== '/' && 'pt-16' // Apply top padding if not on the homepage (where Nav might be transparent or different)
               )}
             >{children}</main>
           </ToastProvider>

@@ -19,6 +19,7 @@ backend/data
 .idx
 .cursor
 .firebase
+GEMINI.md
 
 # Python cache files
 __pycache__/
