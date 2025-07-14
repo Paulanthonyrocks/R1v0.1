@@ -274,7 +274,7 @@ try:
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
     app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
-    app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])  # Add video router
+    app.include_router(video.router, prefix="/api/v1", tags=["Video"])  # Add video router
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
     app.include_router(
         personalized_routes.router, 
