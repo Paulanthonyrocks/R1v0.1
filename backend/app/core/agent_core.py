@@ -18,9 +18,11 @@ from app.services.traffic_signal_service import TrafficSignalService
 from app.services.dms_service import DmsService
 from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
-from app.models.dms import DmsState
+from app.models.dms import DmsState, DmsMessage
 from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage
 from unittest.mock import MagicMock, patch, AsyncMock
+
+from app.core.dynamic_planner import AgentPlanner, Goal
 
 
 logger = logging.getLogger(__name__)
@@ -235,6 +237,8 @@ class AgentCore:
         self.active_plan: Optional[List[PlanStep]] = None
         self.current_plan_step_index: int = -1 # -1 indicates no plan active or current step not set
         self.active_plan_id: Optional[str] = None # To identify the type of plan active
+        self.active_goal: Optional[Goal] = None
+        self.planner = AgentPlanner(self)
         self.logger.info("Advanced planning attributes initialized (active_plan: None).")
 
     def _get_hardcoded_hwy_closure_plan(self, incident_alert: Dict[str, Any]) -> List[PlanStep]:
@@ -921,6 +925,17 @@ class AgentCore:
 
         # Check for new plan triggers ONLY if no plan is currently active or being processed.
         # _complete_active_plan sets self.active_plan to None.
+        if not self.active_plan and self.active_goal:
+            self.logger.info(f"Active goal detected: {self.active_goal.description}. Creating a new plan.")
+            plan_steps_data = self.planner.create_plan(self.active_goal, system_kpis)
+            if plan_steps_data:
+                self.active_plan = [PlanStep(**step_data) for step_data in plan_steps_data]
+                self.active_plan_id = f"PLAN_FOR_GOAL_{self.active_goal.id}"
+                self.current_plan_step_index = 0
+                self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps for goal '{self.active_goal.description}'.")
+            else:
+                self.logger.warning(f"Planner failed to create a plan for goal: {self.active_goal.description}")
+
         if not self.active_plan:
             if self.active_plan_id is not None: # Indicates a plan just finished and was cleared by _complete_active_plan
                 self.logger.info(f"Complex plan formerly ID'd as '{self.active_plan_id}' was recently completed and cleared.")
@@ -1463,6 +1478,17 @@ class AgentCore:
         if self._memory_updated_this_cycle:
             self._save_effectiveness_memory()
         self.logger.info(f"--- AgentCore cycle completed for {sample_user_id} at {datetime.utcnow().isoformat()} ---")
+
+    def set_goal(self, goal: Goal):
+        self.active_goal = goal
+        self.logger.info(f"New goal set: {goal.description}")
+
+    def clear_goal(self):
+        if self.active_goal:
+            self.logger.info(f"Clearing goal: {self.active_goal.description}")
+            self.active_goal = None
+        else:
+            self.logger.info("No active goal to clear.")
 
     async def _formulate_dms_message(self, incident_type: str, incident_location: LocationModel, closure_direction_affected: Optional[str]) -> List[DmsMessage]:
         messages: List[DmsMessage] = []

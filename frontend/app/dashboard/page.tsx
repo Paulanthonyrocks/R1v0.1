@@ -10,6 +10,7 @@ import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
+import GoalSetter from '@/components/GoalSetter';
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
@@ -149,6 +150,9 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
 
+        <div className="mt-6">
+          <GoalSetter />
+        </div>
       </div>
     </AuthGuard>
   );

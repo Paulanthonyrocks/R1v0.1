@@ -27,7 +27,8 @@ from app.routers import (
     video, 
     incidents,
     personalized_routes,
-    pavement
+    pavement,
+    goals
 )
 from . import api
 # Initializers/Getters - Import config initializer now
@@ -237,6 +238,7 @@ try:
     app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
     from app.routers import route_history
     app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"])
+    app.include_router(goals.router, prefix="/api/v1", tags=["Goals"])
     logger.info("API routers included successfully.")
     app.include_router(api.router, prefix="/api", tags=["API"])
 except Exception as e:

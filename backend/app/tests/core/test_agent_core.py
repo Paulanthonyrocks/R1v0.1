@@ -413,7 +413,7 @@ async def test_run_decision_cycle_no_predictive_user_alert_low_likelihood(self, 
 
     self.mock_analytics_service.send_user_specific_alert.assert_not_awaited()
 
-TestAgentCore.test_run_decision_cycle_no_user_specific_alert_if_low_congestion = async_test(test_run_decision_cycle_no_user_specific_alert_if_low_congestion)
+TestAgentCore.test_run_decision_cycle_no_predictive_user_alert_low_likelihood = async_test(TestAgentCore.test_run_decision_cycle_no_predictive_user_alert_low_likelihood)
 
 @patch('app.core.agent_core.logger')
 async def test_run_decision_cycle_no_user_specific_alert_if_no_common_patterns(self, mock_agent_logger):
