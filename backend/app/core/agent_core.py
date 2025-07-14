@@ -16,6 +16,8 @@ from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.analytics_service import AnalyticsService
 from app.services.traffic_signal_service import TrafficSignalService
 from app.services.dms_service import DmsService
+from app.services.emergency_service import EmergencyService
+from app.services.detour_service import DetourService
 from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
 from app.models.dms import DmsState, DmsMessage
@@ -203,12 +205,16 @@ class AgentCore:
                  personalized_routing_service: PersonalizedRoutingService,
                  analytics_service: AnalyticsService,
                  traffic_signal_service: TrafficSignalService,
-                 dms_service: DmsService): # Add DmsService
+                 dms_service: DmsService,
+                 emergency_service: EmergencyService,
+                 detour_service: DetourService): # Add DmsService
         self.prediction_scheduler = prediction_scheduler
         self.personalized_routing_service = personalized_routing_service
         self.analytics_service = analytics_service
         self.traffic_signal_service = traffic_signal_service
-        self.dms_service = dms_service # Store DmsService
+        self.dms_service = dms_service
+        self.emergency_service = emergency_service
+        self.detour_service = detour_service
 
         self._recent_signal_actions: Dict[str, Dict[str, Any]] = {}
         self.green_wave_corridor_configs = GREEN_WAVE_CORRIDOR_CONFIGS
@@ -375,6 +381,18 @@ class AgentCore:
                     if response.status not in [SignalControlStatusEnum.ACCEPTED, SignalControlStatusEnum.SUCCESS]:
                         self.logger.error(f"Plan Action CLEAR_DMS_MESSAGE for {target_id} failed: {response.message}")
                         return False
+            elif plan_action.action_type == ActionType.DISPATCH_EMERGENCY_SERVICES:
+                for target_id in plan_action.target_ids:
+                    success = await self.emergency_service.dispatch(incident_id=target_id, details=plan_action.parameters)
+                    if not success:
+                        self.logger.error(f"Action DISPATCH_EMERGENCY_SERVICES for {target_id} failed.")
+                        return False
+            elif plan_action.action_type == ActionType.SET_DETOUR:
+                for target_id in plan_action.target_ids:
+                    success = await self.detour_service.set_detour(incident_id=target_id, details=plan_action.parameters)
+                    if not success:
+                        self.logger.error(f"Action SET_DETOUR for {target_id} failed.")
+                        return False
             else:
                 self.logger.warning(f"Plan Action: Unknown action_type '{plan_action.action_type}'")
                 return False
@@ -424,9 +442,8 @@ class AgentCore:
             if not step_actions_all_successful:
                 current_step.status = PlanStepStatus.FAILED
                 self.logger.error(f"Plan Step '{current_step.step_id}' failed due to action failure.")
-                # Optionally, could halt the entire plan here:
-                # self._complete_active_plan(final_status="FAILED_STEP")
-                # return
+                await self._handle_failed_plan()
+                return
 
             # If step has no completion conditions, or all actions succeeded and no conditions, mark completed and try to advance.
             if not current_step.completion_conditions:
@@ -1479,6 +1496,8 @@ class AgentCore:
 
         if self._memory_updated_this_cycle:
             self._save_effectiveness_memory()
+
+        await self._monitor_plan_progress()
         self.logger.info(f"--- AgentCore cycle completed for {sample_user_id} at {datetime.utcnow().isoformat()} ---")
 
     def set_goal(self, goal: Goal):
@@ -1491,6 +1510,34 @@ class AgentCore:
             self.active_goal = None
         else:
             self.logger.info("No active goal to clear.")
+
+    async def _handle_failed_plan(self):
+        if self.active_goal:
+            self.logger.warning(f"Plan for goal '{self.active_goal.description}' failed. Attempting to replan.")
+            self._complete_active_plan("Replanning")
+            # The main decision cycle will trigger a new plan creation
+        else:
+            self.logger.warning("A plan failed, but no active goal was found for replanning.")
+
+    async def _monitor_plan_progress(self):
+        if not self.active_plan or not self.active_goal:
+            return
+
+        if self.active_goal.status == GoalStatus.COMPLETED:
+            return
+
+        system_kpis = self.analytics_service.get_current_system_kpis_summary()
+        all_kpis_met = True
+        for kpi, target_value in self.active_goal.target_kpis.items():
+            if kpi not in system_kpis or system_kpis[kpi] != target_value:
+                all_kpis_met = False
+                break
+
+        if all_kpis_met:
+            self.active_goal.status = GoalStatus.COMPLETED
+            self.logger.info(f"Goal '{self.active_goal.description}' has been met.")
+            self.clear_goal()
+            self._complete_active_plan("Goal met")
 
     async def _formulate_dms_message(self, incident_type: str, incident_location: LocationModel, closure_direction_affected: Optional[str]) -> List[DmsMessage]:
         messages: List[DmsMessage] = []
