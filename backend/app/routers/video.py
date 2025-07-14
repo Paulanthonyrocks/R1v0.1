@@ -1,15 +1,10 @@
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pathlib import Path
 import logging
 from ..services.video_processor import VideoManager
 from app.dependencies import get_current_active_user
-import io
-from ..core.core_module import CoreModule
-from ..utils.visualization import visualize_data
-from ..utils.monitoring import TrafficMonitor
-import cv2
-import yaml
+import json
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
 
@@ -34,8 +29,20 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         async def generate_frames():
             for data in processor.get_frame_generator():
                 frame_bytes = data["frame"]
+                kpis_json = data["kpis"] # Assuming kpis is already a dictionary
+                
+                # Convert KPIs to JSON bytes
+                kpis_bytes = json.dumps(kpis_json).encode('utf-8')
+
+                # Yield image part
                 yield (
-                    b'--frame\r\n'                     b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+                )
+                # Yield metrics part
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: application/json\r\n\r\n' + kpis_bytes + b'\r\n'
                 )
         return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
     except ResourceNotFound:

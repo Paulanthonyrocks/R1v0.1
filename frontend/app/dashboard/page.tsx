@@ -83,7 +83,7 @@ const DashboardPage: React.FC = () => {
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
       try {
-        const res = await fetch('/api/v1/analytics/nodes/congestion');
+        const res = await fetch('/api/v1/analysis/nodes/congestion');
         if (!res.ok) throw new Error('Failed to fetch congestion data');
         const data = await res.json();
         if (Array.isArray(data.nodes) && data.nodes.length > 0) {

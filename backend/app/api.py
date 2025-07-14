@@ -18,7 +18,7 @@ import asyncio
 from bson import ObjectId
 from fastapi import status
 
-from app.routers.analytics import router as analytics_router
+from app.routers.analysis import router as analysis_router
 
 
 # StatusEnum is now FeedOperationalStatusEnum in app.models.feeds

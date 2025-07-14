@@ -377,13 +377,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         # manager.disconnect(client_id) # Called in exception blocks
 
 # --- Serve Sample Video Endpoint ---
-@app.get("/api/v1/sample-video")
-def get_sample_video():
-    """Serve the sample video file directly"""
-    video_path = Path(__file__).parent.parent.parent / "frontend" / "public" / "sample_traffic.mp4"
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Sample video file not found")
-    return FileResponse(str(video_path), media_type="video/mp4")
+
 
 import asyncio
 
