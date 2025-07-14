@@ -8,19 +8,19 @@ from uuid import UUID, uuid4
 import os
 import random
 
+import enum
 from pydantic import BaseModel, Field, validator
 
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.personalized_routing_service import PersonalizedRoutingService, CommonTravelPattern
 from app.services.analytics_service import AnalyticsService
 from app.services.traffic_signal_service import TrafficSignalService
-from app.services.dms_service import DmsService # Import DmsService
+from app.services.dms_service import DmsService
 from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
-from app.models.dms import DmsState, DmsMessage # Import DMS models for type hinting if needed by AgentCore later
+from app.models.dms import DmsState
 from app.models.websocket import UserSpecificConditionAlert, WebSocketMessage
-# For patching in main_example
-from unittest.mock import MagicMock, patch, AsyncMock # Added AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock
 
 
 logger = logging.getLogger(__name__)
@@ -39,16 +39,6 @@ class PlanStepStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
-
-class PlanStep(BaseModel):
-    step_id: str
-    description: Optional[str] = None
-    actions: List[PlanAction] = Field(default_factory=list)
-    status: PlanStepStatus = Field(default=PlanStepStatus.PENDING)
-    step_activation_time: Optional[datetime] = Field(None, description="Timestamp when this step's actions were last executed or when it became active waiting for conditions.")
-    completion_logic: str = Field(default="ANY_MET", description="Logic for multiple conditions: 'ANY_MET' or 'ALL_MET'.")
-    completion_conditions: List[StepCompletionCondition] = Field(default_factory=list, description="List of conditions that determine step completion.")
-    # Future: Add dependencies, trigger_conditions, completion_criteria
 
 class ConditionType(str, enum.Enum):
     KPI_THRESHOLD = "kpi_threshold"         # Step completes if a KPI meets a certain threshold
@@ -98,6 +88,16 @@ class StepCompletionCondition(BaseModel):
         if values.get('condition_type') == ConditionType.TIME_ELAPSED and v is None:
             raise ValueError("time_elapsed_seconds must be provided for TIME_ELAPSED condition type")
         return v
+
+class PlanStep(BaseModel):
+    step_id: str
+    description: Optional[str] = None
+    actions: List[PlanAction] = Field(default_factory=list)
+    status: PlanStepStatus = Field(default=PlanStepStatus.PENDING)
+    step_activation_time: Optional[datetime] = Field(None, description="Timestamp when this step's actions were last executed or when it became active waiting for conditions.")
+    completion_logic: str = Field(default="ANY_MET", description="Logic for multiple conditions: 'ANY_MET' or 'ALL_MET'.")
+    completion_conditions: List[StepCompletionCondition] = Field(default_factory=list, description="List of conditions that determine step completion.")
+    # Future: Add dependencies, trigger_conditions, completion_criteria
 
 # --- Accident Response Strategy Definitions ---
 STRATEGY_ACCIDENT_EXTEND_GREEN_LONG = "STRATEGY_ACCIDENT_EXTEND_GREEN_LONG"
@@ -209,8 +209,7 @@ class AgentCore:
 
         self._recent_signal_actions: Dict[str, Dict[str, Any]] = {}
         self.green_wave_corridor_configs = GREEN_WAVE_CORRIDOR_CONFIGS
-        # self.action_effectiveness_config = ACTION_KPI_CONFIG # This was incorrect, should be ACTION_EFFECTIVENESS_CONFIG
-        self.action_kpi_config = ACTION_KPI_CONFIG # Corrected variable name based on usage
+        self.action_kpi_config = ACTION_KPI_CONFIG
         self.action_effectiveness_config = ACTION_EFFECTIVENESS_CONFIG
 
 
@@ -712,8 +711,7 @@ class AgentCore:
 
     def _calculate_effectiveness_score(self, log_entry_data: Dict[str,Any]) -> Tuple[Optional[float],Optional[Dict[str,Any]]]:
         action_type = log_entry_data.get("action_type")
-        # config = self.action_effectiveness_config.get(action_type) # This was incorrect
-        config = ACTION_EFFECTIVENESS_CONFIG.get(action_type) # Corrected: Use the global config dict
+        config = self.action_effectiveness_config.get(action_type)
 
         if not config: return None, None
 
@@ -957,37 +955,6 @@ class AgentCore:
                         break
                     else:
                         self.logger.warning(f"Failed to load/generate highway closure plan for incident {incident_id_for_plan}.")
-
-        processed_pending_indices: List[int] = []
-                self.active_plan = None
-                self.active_plan_id = None
-                self.current_plan_step_index = -1
-
-            # Check for conditions that trigger a new complex plan
-            for alert_item_for_plan in active_alerts:
-                alert_type_for_plan = alert_item_for_plan.get("type", "UNKNOWN").upper() # Ensure uppercase for comparison
-                alert_severity_for_plan_str = alert_item_for_plan.get("severity", IncidentSeverityEnum.LOW.value).lower()
-                alert_details_for_plan = alert_item_for_plan.get("details", {})
-
-                is_critical_road_closure_all_lanes = (
-                    alert_type_for_plan == IncidentTypeEnum.ROAD_CLOSURE.value.upper() and # Compare with .value.upper()
-                    alert_severity_for_plan_str == IncidentSeverityEnum.CRITICAL.value and
-                    alert_details_for_plan.get("lanes_affected", "").upper() == "ALL"
-                )
-
-                if is_critical_road_closure_all_lanes:
-                    incident_id_for_plan = alert_item_for_plan.get('id', 'unknown_incident')
-                    self.logger.info(f"COMPLEX SCENARIO TRIGGERED: Critical all-lanes road closure (Alert ID: {incident_id_for_plan}). Activating predefined plan.")
-                    self.active_plan = self._get_hardcoded_hwy_closure_plan(alert_item_for_plan)
-                    if self.active_plan: # Ensure plan was loaded
-                        self.active_plan_id = f"HWY_CLOSURE_{incident_id_for_plan}"
-                        self.current_plan_step_index = 0
-                        self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps. Starting at step {self.current_plan_step_index}.")
-                        # Once a plan is activated for a major incident, we might break from checking other alerts for *new* plans.
-                        # The active plan will now be the focus.
-                        break
-                    else:
-                        self.logger.warning(f"Failed to load highway closure plan for incident {incident_id_for_plan}.")
 
         processed_pending_indices: List[int] = []
         for idx, item in enumerate(self.pending_kpi_collection):
@@ -1493,42 +1460,8 @@ class AgentCore:
                     })
                     self.logger.info(f"Scheduled KPI collection for {action_type_str} (ID: {action_id}) on {corridor_id_to_run}. Choice: {green_wave_selection_method}.")
 
-        if True:
-            selected_wave_to_run_example = {"id": "main_st_ns_wave", "config": GREEN_WAVE_CORRIDOR_CONFIGS["main_st_ns_wave"]}
-            if selected_wave_to_run_example:
-                cfg_run_example = selected_wave_to_run_example["config"]; cid_run_example = selected_wave_to_run_example["id"]
-                example_can_run = True
-                for sig_id_ex in cfg_run_example.get("signals_in_order",[]):
-                    if sig_id_ex in processed_signals_for_coordination: example_can_run = False; break
-                if example_can_run:
-                    self.logger.info(f"ILLUSTRATIVE_EXAMPLE: Attempting to run illustrative wave {cid_run_example}")
-                    action_type_str_example = "GREEN_WAVE_ACTIVATION"; current_action_target_ids_example = [cid_run_example]
-                    current_action_parameters_example = {"corridor_config": cfg_run_example, "corridor_id": cid_run_example, "selection_method": "ILLUSTRATIVE_HARDCODED"}
-                    fetched_pre_action_kpis_example = await self._fetch_pre_action_kpis(action_type_str_example, current_action_target_ids_example, current_action_parameters_example, system_kpis)
-                    action_kpi_cfg_example = self.action_kpi_config.get(action_type_str_example) # Corrected
-                    if action_kpi_cfg_example:
-                        action_id_example = uuid4(); action_ts_example = datetime.utcnow()
-                        base_pre_kpis_example = {"overall_congestion_at_decision": system_kpis.get("overall_congestion_level"),
-                                                 "corridor_id": cid_run_example,
-                                                 "expected_demand_level": system_kpis.get(cfg_run_example.get("demand_kpi_trigger"), "N/A"),
-                                                 "selection_method": "ILLUSTRATIVE_HARDCODED"
-                                                 }
-                        if fetched_pre_action_kpis_example: base_pre_kpis_example.update(fetched_pre_action_kpis_example)
-                        self.pending_kpi_collection.append({
-                            'action_id': action_id_example, 'action_type': action_type_str_example,
-                            'target_ids': [cid_run_example] + cfg_run_example["signals_in_order"],
-                            'action_timestamp': action_ts_example,
-                            'action_parameters': {"wave_green_time_seconds": cfg_run_example["wave_green_time_seconds"], "selection_method": "ILLUSTRATIVE_HARDCODED"},
-                            'pre_action_context_kpis': base_pre_kpis_example,
-                            'query_after_timestamp': action_ts_example + timedelta(seconds=action_kpi_cfg_example["delay_seconds"]),
-                            'metrics_to_collect': action_kpi_cfg_example["metrics"],
-                            'evaluation_window_minutes': action_kpi_cfg_example["eval_window_minutes"],
-                            'kpi_query_details': {'service_method_name': action_kpi_cfg_example["service_method"], 'method_specific_args': {'corridor_id': cid_run_example}}})
-                        self.logger.info(f"Scheduled KPI collection for Illustrative GW Example {action_id_example} on {cid_run_example} with pre_kpis: {base_pre_kpis_example}")
-                else:
-                    self.logger.info(f"ILLUSTRATIVE_EXAMPLE: Illustrative wave {cid_run_example} conflicts with already processed signals. Skipping.")
-
-        if self._memory_updated_this_cycle: self._save_effectiveness_memory()
+        if self._memory_updated_this_cycle:
+            self._save_effectiveness_memory()
         self.logger.info(f"--- AgentCore cycle completed for {sample_user_id} at {datetime.utcnow().isoformat()} ---")
 
     async def _formulate_dms_message(self, incident_type: str, incident_location: LocationModel, closure_direction_affected: Optional[str]) -> List[DmsMessage]:
@@ -1570,7 +1503,8 @@ class AgentCore:
         self.logger.debug(f"Formulated DMS messages for {incident_type} at {location_name}: {[(m.page_number, m.text) for m in messages]}")
         return messages
 
-    async def _handle_dms_for_incident(self, incident_alert: Dict[str, Any], all_dms_states: List[DmsState], system_kpis: Dict[str, Any]):
+    async def _handle_dms_for_incident(self, incident_alert: Dict[str, Any], system_kpis: Dict[str, Any]):
+        all_dms_states = await self.dms_service.get_all_dms_states()
         incident_type = incident_alert.get("type", "UNKNOWN_INCIDENT").upper()
         incident_location_data = incident_alert.get("location")
 
@@ -1584,32 +1518,24 @@ class AgentCore:
             self.logger.error(f"DMS Handling: Could not parse incident location for {incident_alert.get('id')}: {e}. Skipping DMS.")
             return
 
-        # Basic relevance check: For now, only ROAD_CLOSURE and high-severity ACCIDENT trigger DMS
-        alert_severity_str = incident_alert.get("severity", IncidentSeverityEnum.LOW.value if hasattr(IncidentSeverityEnum, "LOW") else "low") # Handle if enum not directly passed
-
-        # Convert severity string to enum member if possible for comparison
-        try:
-            alert_severity = IncidentSeverityEnum(alert_severity_str.lower())
-        except ValueError:
-            self.logger.warning(f"DMS Handling: Unknown severity '{alert_severity_str}' for incident {incident_alert.get('id')}. Defaulting to LOW.")
+        alert_severity_str = incident_alert.get("severity", "low")
+        if alert_severity_str.lower() == "critical":
+            alert_severity = IncidentSeverityEnum.CRITICAL
+        elif alert_severity_str.lower() == "high":
+            alert_severity = IncidentSeverityEnum.HIGH
+        elif alert_severity_str.lower() == "medium":
+            alert_severity = IncidentSeverityEnum.MEDIUM
+        else:
             alert_severity = IncidentSeverityEnum.LOW
-
 
         if not (incident_type == "ROAD_CLOSURE" or (incident_type == "ACCIDENT" and alert_severity in [IncidentSeverityEnum.HIGH, IncidentSeverityEnum.CRITICAL])):
             self.logger.debug(f"DMS Handling: Incident type {incident_type} with severity {alert_severity.value} not configured for DMS activation. Skipping.")
             return
 
         closure_direction_affected = incident_alert.get("details", {}).get("direction_affected")
-
-        # Simple DMS selection: find the closest ONLINE DMS within a certain radius (e.g., 2km)
-        # This is a placeholder for more sophisticated selection logic based on road network, DMS viewable direction etc.
         MAX_DMS_ACTIVATION_RADIUS_METERS = 2000
-        candidate_dms_units: List[DmsState] = []
-
-        # Placeholder for _find_dms_near_location - for now, iterate all and check distance manually
-        # In a real system, self.traffic_signal_service._haversine_distance or similar would be used.
-        # For now, a simplified check assuming a simple grid for mock locations.
         relevant_dms_found = False
+
         for dms_state in all_dms_states:
             if dms_state.operational_status == DmsStatusEnum.ONLINE and dms_state.location:
                 # Simplified distance check (Manhattan distance for example on a grid)

@@ -86,3 +86,34 @@ class PersonalizedRouteResponse(BaseModel):
     weather_impact: Optional[Dict[str, Any]]
     event_impacts: List[Dict[str, Any]]
     confidence_score: float
+
+class RouteRequest(BaseModel):
+    start_location: Dict[str, float]
+    end_location: Dict[str, float]
+    preference: Optional[RoutePreferenceType] = None
+
+class RouteResponse(BaseModel):
+    route: List[Dict[str, float]]
+    distance: float
+    duration: float
+
+class Maneuver(BaseModel):
+    instruction: str
+    location: List[float]
+    type: str
+
+class RouteHistoryModel(BaseModel):
+    user_id: str
+    route_id: str
+    start_time: datetime
+    end_time: datetime
+    start_location: Dict[str, float]
+    end_location: Dict[str, float]
+    distance: float
+    duration: float
+    preference: RoutePreferenceType
+
+class RouteDetails(BaseModel):
+    route: List[Dict[str, float]]
+    distance: float
+    duration: float

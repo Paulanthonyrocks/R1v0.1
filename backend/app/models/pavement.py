@@ -25,3 +25,11 @@ class PavementAnalysisResponse(BaseModel):
     pci_score: float
     image_url: Optional[str]
     report_url: Optional[str]
+
+class PavementAnalysis(BaseModel):
+    distresses: List[PavementDistress]
+    pci_score: float
+
+class PavementConditionIndex(BaseModel):
+    score: float
+    category: str

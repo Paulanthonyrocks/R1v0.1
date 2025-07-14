@@ -19,4 +19,20 @@ class Alert(BaseModel):
     acknowledged_by: Optional[str] = Field(None, example="user_admin_01", description="Identifier of the user/system that acknowledged the alert")
     acknowledged_at: Optional[datetime] = Field(None, description="Timestamp of when the alert was acknowledged (UTC)")
     source_component: Optional[str] = Field(None, example="anomaly_detection_service", description="The backend component that generated the alert")
-    tags: Optional[List[str]] = Field(None, example=["congestion", "high_priority"], description="Optional tags for categorizing or filtering alerts") 
+    tags: Optional[List[str]] = Field(None, example=["congestion", "high_priority"], description="Optional tags for categorizing or filtering alerts")
+
+class AlertCreate(BaseModel):
+    severity: AlertSeverityEnum
+    message: str
+    details: Optional[Dict[str, Any]] = None
+    feed_id: Optional[str] = None
+    source_component: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class AlertUpdate(BaseModel):
+    acknowledged: Optional[bool] = None
+    acknowledged_by: Optional[str] = None
+
+class AlertAcknowledgement(BaseModel):
+    acknowledged: bool
+    acknowledged_by: Optional[str] = None

@@ -51,3 +51,25 @@ class FeedCreateResponse(BaseModel):
     feed_id: str
     message: str
     initial_status: FeedOperationalStatusEnum
+
+class FeedSource(BaseModel):
+    id: str
+    name: str
+    source_type: str
+    source: str
+    custom_config: Optional[Dict[str, Any]] = None
+
+class FeedSourceCreate(BaseModel):
+    name: str
+    source_type: str
+    source: str
+    custom_config: Optional[Dict[str, Any]] = None
+
+class FeedSourceStatus(BaseModel):
+    feed_id: str
+    status: str
+    message: Optional[str] = None
+
+class FeedType(str, enum.Enum):
+    VIDEO = "video"
+    SENSOR = "sensor"
