@@ -707,5 +707,23 @@ TestAgentCore.test_plan_monitoring_and_completion = async_test(TestAgentCore.tes
 
 TestAgentCore.test_replanning_on_failed_plan = async_test(TestAgentCore.test_replanning_on_failed_plan)
 
+    @patch('app.core.agent_core.logger')
+    async def test_plan_execution_with_new_actions(self, mock_agent_logger):
+        goal = Goal(id="test_goal", description="Clear incident", objectives=[Objective(kpi="active_incidents_count", target_value=0)])
+        self.agent_core.set_goal(goal)
+
+        incident_state = {"active_incidents_count": 1, "active_incidents": [{"id": "incident_1"}]}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = incident_state
+
+        self.agent_core.emergency_service.dispatch = AsyncMock(return_value="dispatch_123")
+        self.agent_core.detour_service.set_detour = AsyncMock(return_value=True)
+
+        await self.agent_core.run_decision_cycle()
+
+        self.agent_core.emergency_service.dispatch.assert_awaited_once()
+        self.agent_core.detour_service.set_detour.assert_awaited_once()
+
+TestAgentCore.test_plan_execution_with_new_actions = async_test(TestAgentCore.test_plan_execution_with_new_actions)
+
 if __name__ == '__main__':
     unittest.main()

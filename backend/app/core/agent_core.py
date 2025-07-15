@@ -18,6 +18,8 @@ from app.services.traffic_signal_service import TrafficSignalService
 from app.services.dms_service import DmsService
 from app.services.emergency_service import EmergencyService
 from app.services.detour_service import DetourService
+from app.services.emergency_service import EmergencyService
+from app.services.detour_service import DetourService
 from app.models.traffic import LocationModel, IncidentSeverityEnum, IncidentTypeEnum
 from app.models.signals import SignalState, SignalPhaseEnum, SignalOperationalStatusEnum, SignalControlCommandResponse, SignalControlStatusEnum
 from app.models.dms import DmsState, DmsMessage
@@ -207,7 +209,7 @@ class AgentCore:
                  traffic_signal_service: TrafficSignalService,
                  dms_service: DmsService,
                  emergency_service: EmergencyService,
-                 detour_service: DetourService): # Add DmsService
+                 detour_service: DetourService):
         self.prediction_scheduler = prediction_scheduler
         self.personalized_routing_service = personalized_routing_service
         self.analytics_service = analytics_service
@@ -398,6 +400,12 @@ class AgentCore:
                     dispatch_id = await self.emergency_service.dispatch(incident_id=target_id, details=plan_action.parameters)
                     if not dispatch_id:
                         self.logger.error(f"Action DISPATCH_EMERGENCY_SERVICES for {target_id} failed.")
+                        return False
+            elif plan_action.action_type == ActionType.SET_DETOUR:
+                for target_id in plan_action.target_ids:
+                    success = await self.detour_service.set_detour(incident_id=target_id, details=plan_action.parameters)
+                    if not success:
+                        self.logger.error(f"Action SET_DETOUR for {target_id} failed.")
                         return False
             else:
                 self.logger.warning(f"Plan Action: Unknown action_type '{plan_action.action_type}'")

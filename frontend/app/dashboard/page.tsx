@@ -13,6 +13,7 @@ import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
 import GoalSetter from '@/components/GoalSetter';
 import PlanViewer from '@/components/PlanViewer';
 import PlanViewer from '@/components/PlanViewer';
+import PlanViewer from '@/components/PlanViewer';
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
