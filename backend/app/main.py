@@ -156,7 +156,7 @@ async def startup_event():
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
     if loaded_config is None:
         # The exception above should prevent reaching here if config init fails
- print("Failed to initialize logging.") # Also print if config is None after init call
+        print("Failed to initialize logging.") # Also print if config is None after init call
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
 
