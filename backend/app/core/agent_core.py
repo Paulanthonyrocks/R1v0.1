@@ -1519,19 +1519,9 @@ class AgentCore:
 
     async def _handle_failed_plan(self, failed_action: Action):
         if self.active_goal:
-            self.logger.warning(f"Action {failed_action.action_type} for goal '{self.active_goal.description}' failed. Attempting to find an alternative.")
-            alternative_action = self._find_alternative_action(failed_action)
-            if alternative_action:
-                self.logger.info(f"Found alternative action: {alternative_action.action_type}")
-                # Replace the failed action with the alternative action in the plan
-                for step in self.active_plan:
-                    for i, action in enumerate(step.actions):
-                        if action == failed_action:
-                            step.actions[i] = alternative_action
-                            return
-            else:
-                self.logger.warning(f"No alternative action found for {failed_action.action_type}. Replanning.")
-                self._complete_active_plan("Replanning")
+            self.logger.warning(f"Action {failed_action.action_type} for goal '{self.active_goal.description}' failed. Attempting to replan.")
+            self._complete_active_plan("Replanning")
+            # The main decision cycle will trigger a new plan creation
         else:
             self.logger.warning("A plan failed, but no active goal was found for replanning.")
 
@@ -1555,13 +1545,13 @@ class AgentCore:
             return
 
         system_kpis = self.analytics_service.get_current_system_kpis_summary()
-        all_kpis_met = True
-        for kpi, target_value in self.active_goal.target_kpis.items():
-            if kpi not in system_kpis or system_kpis[kpi] != target_value:
-                all_kpis_met = False
+        all_objectives_met = True
+        for objective in self.active_goal.objectives:
+            if objective.kpi not in system_kpis or system_kpis[objective.kpi] != objective.target_value:
+                all_objectives_met = False
                 break
 
-        if all_kpis_met:
+        if all_objectives_met:
             self.active_goal.status = GoalStatus.COMPLETED
             self.logger.info(f"Goal '{self.active_goal.description}' has been met.")
             self.clear_goal()
