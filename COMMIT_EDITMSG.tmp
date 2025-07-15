@@ -1,3 +1,0 @@
-Fix: Ensure FeedStatusData includes source URL for frontend consumption
-
-This commit addresses the 404 error encountered by the frontend when attempting to fetch video streams. The `FeedStatusData` model in the backend has been updated to include a direct `source` URL, and the `FeedManager` now populates this field when broadcasting feed status updates. This ensures the frontend's `useMultipartStream` hook receives a valid URL for video playback.
