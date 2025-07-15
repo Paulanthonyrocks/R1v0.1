@@ -393,6 +393,12 @@ class AgentCore:
                     if not success:
                         self.logger.error(f"Action SET_DETOUR for {target_id} failed.")
                         return False
+            elif plan_action.action_type == ActionType.DISPATCH_EMERGENCY_SERVICES:
+                for target_id in plan_action.target_ids:
+                    dispatch_id = await self.emergency_service.dispatch(incident_id=target_id, details=plan_action.parameters)
+                    if not dispatch_id:
+                        self.logger.error(f"Action DISPATCH_EMERGENCY_SERVICES for {target_id} failed.")
+                        return False
             else:
                 self.logger.warning(f"Plan Action: Unknown action_type '{plan_action.action_type}'")
                 return False
