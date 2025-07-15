@@ -205,6 +205,24 @@ logging:
       level: INFO
       propagate: False
 
+    # Logger for Firebase authentication events
+    'firebase_auth':
+      handlers: [consoleHandler, mainFileHandler]
+      level: DEBUG
+      propagate: False
+
+    # Logger for core agent module
+    'app.core.agent_core':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
+      propagate: False
+
+    # Logger for core module
+    'app.core.core_module':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
+      propagate: False
+
 # --- Database Configuration ---
 database:
   db_path: ./data/vehicle_data.db # Path to SQLite database file (ensure directory exists)
