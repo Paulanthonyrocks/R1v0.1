@@ -657,5 +657,55 @@ TestAgentCore.test_plan_monitoring_and_completion = async_test(TestAgentCore.tes
 
 TestAgentCore.test_replanning_on_failed_plan = async_test(TestAgentCore.test_replanning_on_failed_plan)
 
+    @patch('app.core.agent_core.logger')
+    async def test_plan_monitoring_and_completion(self, mock_agent_logger):
+        objectives = [Objective(kpi="overall_congestion_level", target_value="LOW")]
+        goal = Goal(id="test_goal", description="Reduce congestion", objectives=objectives)
+        self.agent_core.set_goal(goal)
+
+        # First cycle, congestion is HIGH, plan is created
+        high_congestion_kpis = {"overall_congestion_level": "HIGH"}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+        await self.agent_core.run_decision_cycle()
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(self.agent_core.active_goal.status, GoalStatus.PENDING)
+
+        # Second cycle, congestion is still HIGH, plan is still active
+        await self.agent_core.run_decision_cycle()
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(self.agent_core.active_goal.status, GoalStatus.PENDING)
+
+        # Third cycle, congestion is LOW, goal is met
+        low_congestion_kpis = {"overall_congestion_level": "LOW"}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = low_congestion_kpis
+        await self.agent_core.run_decision_cycle()
+        self.assertIsNone(self.agent_core.active_plan)
+        self.assertIsNone(self.agent_core.active_goal)
+
+TestAgentCore.test_plan_monitoring_and_completion = async_test(TestAgentCore.test_plan_monitoring_and_completion)
+
+    @patch('app.core.agent_core.logger')
+    async def test_replanning_on_failed_plan(self, mock_agent_logger):
+        goal = Goal(id="test_goal", description="Reduce congestion", objectives=[Objective(kpi="overall_congestion_level", target_value="LOW")])
+        self.agent_core.set_goal(goal)
+
+        # Mock a failing action
+        self.mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=MagicMock(status="FAILED"))
+
+        # First cycle, plan is created and fails
+        high_congestion_kpis = {"overall_congestion_level": "HIGH"}
+        self.mock_analytics_service.get_current_system_kpis_summary.return_value = high_congestion_kpis
+        await self.agent_core.run_decision_cycle()
+        self.assertIsNone(self.agent_core.active_plan) # Plan should be cleared
+        self.assertIsNotNone(self.agent_core.active_goal) # Goal should still be active
+
+        # Second cycle, replanning is triggered
+        self.mock_traffic_signal_service.set_signal_phase = AsyncMock(return_value=MagicMock(status="SUCCESS"))
+        await self.agent_core.run_decision_cycle()
+        self.assertIsNotNone(self.agent_core.active_plan)
+        self.assertEqual(len(self.agent_core.active_plan), 2)
+
+TestAgentCore.test_replanning_on_failed_plan = async_test(TestAgentCore.test_replanning_on_failed_plan)
+
 if __name__ == '__main__':
     unittest.main()

@@ -1521,7 +1521,15 @@ class AgentCore:
         if self.active_goal:
             self.logger.warning(f"Action {failed_action.action_type} for goal '{self.active_goal.description}' failed. Attempting to replan.")
             self._complete_active_plan("Replanning")
-            # The main decision cycle will trigger a new plan creation
+            system_kpis = self.analytics_service.get_current_system_kpis_summary()
+            plan_steps_data = self.planner.create_plan(self.active_goal, system_kpis)
+            if plan_steps_data:
+                self.active_plan = [PlanStep(**step_data) for step_data in plan_steps_data]
+                self.active_plan_id = f"PLAN_FOR_GOAL_{self.active_goal.id}"
+                self.current_plan_step_index = 0
+                self.logger.info(f"Activated plan '{self.active_plan_id}' with {len(self.active_plan)} steps for goal '{self.active_goal.description}'.")
+            else:
+                self.logger.warning(f"Planner failed to create a plan for goal: {self.active_goal.description}")
         else:
             self.logger.warning("A plan failed, but no active goal was found for replanning.")
 
@@ -1547,7 +1555,7 @@ class AgentCore:
         system_kpis = self.analytics_service.get_current_system_kpis_summary()
         all_objectives_met = True
         for objective in self.active_goal.objectives:
-            if objective.kpi not in system_kpis or system_kpis[objective.kpi] != objective.target_value:
+            if objective.kpi not in system_kpis or not self._is_objective_met(system_kpis[objective.kpi], objective.target_value):
                 all_objectives_met = False
                 break
 
@@ -1556,6 +1564,10 @@ class AgentCore:
             self.logger.info(f"Goal '{self.active_goal.description}' has been met.")
             self.clear_goal()
             self._complete_active_plan("Goal met")
+
+    def _is_objective_met(self, current_value: Any, target_value: Any) -> bool:
+        # This is a simple comparison, but it could be extended to handle more complex conditions.
+        return current_value == target_value
 
     async def _formulate_dms_message(self, incident_type: str, incident_location: LocationModel, closure_direction_affected: Optional[str]) -> List[DmsMessage]:
         messages: List[DmsMessage] = []
