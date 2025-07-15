@@ -310,6 +310,16 @@ try:
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)
 
+@app.get("/firebase-status")
+async def firebase_status():
+    """Checks if the Firebase Admin SDK is initialized."""
+    try:
+        firebase_admin.get_app() # This will raise an error if the default app is not initialized
+        return {"status": "Firebase Admin SDK initialized successfully"}
+    except ValueError:
+        return {"status": "Firebase Admin SDK not initialized"}
+    except Exception as e:
+        return {"status": f"Error checking Firebase status: {e}"}
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def catch_all(request: Request, full_path: str):
     logger.warning(f"Catch-all route hit for path: {full_path}. Method: {request.method}")
