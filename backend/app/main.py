@@ -144,16 +144,16 @@ async def forbidden_exception_handler(request: Request, exc: Forbidden):
 async def startup_event():
     logger.info("--- Starting Route One Backend ---")
     loaded_config = None
- print("Attempting to initialize logging...")
+    print("Attempting to initialize logging...")
 
     # 1. Initialize Configuration
     try:    
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
+        logger.info("Logging initialized successfully.") # Log successful initialization
     except Exception as e:
         logger.critical(f"CRITICAL FAILURE during config initialization: {e}", exc_info=True)
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
-
     if loaded_config is None:
         # The exception above should prevent reaching here if config init fails
  print("Failed to initialize logging.") # Also print if config is None after init call
