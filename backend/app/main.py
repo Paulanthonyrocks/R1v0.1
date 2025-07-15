@@ -144,10 +144,10 @@ async def forbidden_exception_handler(request: Request, exc: Forbidden):
 async def startup_event():
     logger.info("--- Starting Route One Backend ---")
     loaded_config = None
+ print("Attempting to initialize logging...")
 
     # 1. Initialize Configuration
- print("Attempting to initialize logging...")
-    try:
+    try:    
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
     except Exception as e:
@@ -155,7 +155,7 @@ async def startup_event():
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
 
     if loaded_config is None:
-        print("Loaded config is None. Critical error.")
+        # The exception above should prevent reaching here if config init fails
  print("Failed to initialize logging.") # Also print if config is None after init call
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
