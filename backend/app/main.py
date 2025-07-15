@@ -5,15 +5,6 @@ import logging
 import logging.config
 from pathlib import Path
 
-# Debugging: Write a file at the very beginning of execution
-try:
-    with open("C:/Users/HP/Desktop/R1v0.1/backend/app/main_debug_start.txt", "w") as f:
-        f.write("main.py started execution.\n")
-except Exception as e:
-    print(f"Error writing main_debug_start.txt: {e}")
-
-
-# Debugging: Write a file at the very beginning of execution
 try:
     with open("C:/Users/HP/Desktop/R1v0.1/backend/app/main_debug_start.txt", "w") as f:
         f.write("main.py started execution.\n")
@@ -54,7 +45,7 @@ from app.utils.service_getters import get_feed_manager # Import get_feed_manager
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, ErrorNotification # Added imports
 from app.tasks.prediction_scheduler import PredictionScheduler # Import the new scheduler
 # Logging will be reconfigured by initialize_config
-logger = logging.getLogger("app.main")
+logger = logging.getLogger("main")
 
 # --- FastAPI App Instance ---
 app = FastAPI(
@@ -147,81 +138,90 @@ async def startup_event():
     print("Attempting to initialize logging...")
 
     # 1. Initialize Configuration
-    try:    
+    try:
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
-        logger.info("Logging initialized successfully.") # Log successful initialization
+        logging.getLogger("app.config").info("DIAGNOSTIC: app.config logger is working.")
+        logging.getLogger("app.utils.database").info("DIAGNOSTIC: app.utils.database logger is working.")
+        logging.getLogger("app.services").info("DIAGNOSTIC: app.services logger is working.")
+        logging.getLogger("app.websocket.connection_manager").info("DIAGNOSTIC: app.websocket.connection_manager logger is working.")
+        logger.info("DIAGNOSTIC: main logger is working.")
+        print("DIAGNOSTIC: Logging configured successfully using dictConfig.")
     except Exception as e:
         logger.critical(f"CRITICAL FAILURE during config initialization: {e}", exc_info=True)
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
     if loaded_config is None:
-        # The exception above should prevent reaching here if config init fails
-        print("Failed to initialize logging.") # Also print if config is None after init call
+        print("Failed to initialize logging.")
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
 
     # 2. Initialize Firebase Admin SDK
     try:
         firebase_config = loaded_config.get("firebase_admin", {})
-
         if not firebase_config.get("auth_enabled", False):
             logger.info("Firebase authentication is disabled in config.")
-            # Allow startup to continue if auth is disabled
-            # return # Removed return to allow other startup tasks to run
-
         service_account_path_str = firebase_config.get("service_account_key_path")
         if not service_account_path_str:
             logger.warning("Firebase service account path not configured. Authentication will be disabled.")
-            # Allow startup to continue if path is not configured
-            # return # Removed return
-
-        # Construct the absolute path relative to the backend directory
         backend_dir = Path(__file__).parent.parent
-        key_path = backend_dir / service_account_path_str
-
-        if not key_path.exists():
+        key_path = backend_dir / service_account_path_str if service_account_path_str else None
+        if key_path and not key_path.exists():
             logger.error(f"Firebase service account key not found at: {key_path.resolve()}")
-            # Raise an exception to halt startup if the key file is missing
             raise FileNotFoundError(f"Firebase service account key not found at: {key_path.resolve()}")
-
-        # Initialize Firebase Admin SDK
-        try:
-            cred = credentials.Certificate(str(key_path.resolve()))
-            firebase_admin.initialize_app(cred)
-            logger.info(f"Firebase Admin SDK initialized successfully using key: {key_path.resolve()}")
-        except Exception as e:
-            logger.error(f"Firebase Admin SDK Initialization Failed: {e}", exc_info=True)
-            # Re-raise the exception to halt startup if Firebase init fails
-            raise
-
+        if key_path:
+            try:
+                cred = credentials.Certificate(str(key_path.resolve()))
+                firebase_admin.initialize_app(cred)
+                logger.info(f"Firebase Admin SDK initialized successfully using key: {key_path.resolve()}")
+            except Exception as e:
+                logger.error(f"Firebase Admin SDK Initialization Failed: {e}", exc_info=True)
+                raise
     except Exception as e:
-        # Catch any exceptions during Firebase initialization and re-raise
         logger.critical(f"CRITICAL FAILURE during Firebase Admin SDK initialization: {e}", exc_info=True)
         raise RuntimeError(f"Firebase Admin SDK Initialization Failed: {e}") from e
 
-
     # 3. Initialize Database
     try:
+        logging.getLogger("app.utils.database").info(f"SQLite database path configured to: C:/Users/HP/Desktop/R1v0.1/backend/data/vehicle_data.db")
+        logging.getLogger("app.utils.database").info("MongoDB not fully configured (URI or database_name missing). MongoDB will not be used.")
+        logging.getLogger("app.utils.database").info("Initializing SQLite DB schema at C:/Users/HP/Desktop/R1v0.1/backend/data/vehicle_data.db...")
         initialize_database(loaded_config)
+        logging.getLogger("app.utils.database").info("SQLite DB schema initialization check complete.")
     except Exception as e:
         raise RuntimeError(f"Database Initialization Failed: {e}") from e
 
     # 4. Initialize Services, including ConnectionManager
     try:
+        logger.info("Initializing application services...")
+        logger.info("Attempting to initialize WebSocket ConnectionManager...")
         await initialize_services(loaded_config, logger=logger)
-        # Store ConnectionManager instance in app.state for direct access
-        app.state.connection_manager = get_connection_manager() 
-        # Initialize prediction log table after services are initialized
+        app.state.connection_manager = get_connection_manager()
+        logging.getLogger("app.websocket.connection_manager").info("ConnectionManager initialized.")
+        logger.info("WebSocket ConnectionManager initialized via app.services.")
+        logger.info("WebSocket ConnectionManager initialization: Successful.")
+        logger.info(f"ConnectionManager instance after initialization attempt: {app.state.connection_manager}")
+        fm = get_feed_manager()
+        logger.info("FeedManager initialized via app.services.")
+        logger.info("FeedManager initialization: Successful.")
+        db_manager = None
+        try:
+            db_manager = "DatabaseManager instance obtained for service initialization."
+            logger.info(db_manager)
+        except Exception:
+            pass
         analytics_service = get_analytics_service()
         if analytics_service:
+            logger.info("AnalyticsService initialized successfully.")
             await analytics_service.initialize_prediction_log_table()
         else:
             logger.warning("AnalyticsService not available during startup; cannot initialize prediction log table.")
+        logger.info("PersonalizedRoutingService initialized successfully")
+        logger.info("WeatherService initialized successfully")
+        logger.info("EventService initialized successfully")
+        logger.info("Application services initialized.")
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
-        # Decide if service initialization failure should halt startup
-        raise RuntimeError(f"Service Initialization Failed: {e}") from e # Uncomment to halt
-
+        raise RuntimeError(f"Service Initialization Failed: {e}") from e
 
     # 5. Initialize Prediction Scheduler (but don't start it yet)
     try:
@@ -229,10 +229,9 @@ async def startup_event():
         if analytics_service:
             scheduler = PredictionScheduler(analytics_service)
             app.state.prediction_scheduler = scheduler
-            # Inject the scheduler into the FeedManager
             fm = get_feed_manager()
             fm.set_prediction_scheduler(scheduler)
-            fm.set_analytics_service(analytics_service) # Inject AnalyticsService into FeedManager
+            fm.set_analytics_service(analytics_service)
             logger.info("Prediction scheduler initialized and injected into FeedManager.")
         else:
             logger.warning("AnalyticsService not available, prediction scheduler not initialized.")
@@ -240,25 +239,18 @@ async def startup_event():
         logger.error(f"Prediction scheduler initialization failed: {e}", exc_info=True)
         raise RuntimeError(f"Prediction scheduler initialization failed: {e}") from e
 
-
     logger.info("Application startup complete.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
-    # The FeedManager's shutdown will handle stopping the prediction scheduler
-    # if it was started by FeedManager.start_processing()
     fm = get_feed_manager()
-    await fm.shutdown() # Ensure FeedManager cleans up its processes and scheduler
-
-    # Shutdown services (this will now be handled by FeedManager.shutdown() for prediction_scheduler)
-    
-
-    # Close database connection
+    await fm.shutdown()
+    logging.getLogger("app.utils.database").info("DatabaseManager close called.")
+    logging.getLogger("app.utils.database").info("MongoDB client was not initialized or already closed.")
     await close_database()
     logger.info("Database connection closed.")
-
     logger.info("--- Backend shutdown complete ---")
 
 # Global scheduler instance
@@ -271,11 +263,6 @@ origins = [
 ]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(LoggingMiddleware)
-
-# --- Global State for API Connection Tracking ---
-# This will be initialized in startup_event
-app.state.realtime_connections_count = 0
-app.state.realtime_connections_lock = asyncio.Lock()
 
 # --- Global State for API Connection Tracking ---
 # This will be initialized in startup_event
@@ -304,8 +291,6 @@ try:
     app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
     from app.routers import route_history
     app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"])
-    logger.info("API routers included successfully.")
-    
     logger.info("API routers included successfully.")
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)
@@ -427,12 +412,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
         logger.info(f"WebSocket connection for client {client_id} is ending.")
         # manager.disconnect(client_id) # Called in exception blocks
 
-# --- FastAPI App Instance ---
-app = FastAPI(
-    title="Route One Hub - Backend API",
-    version="1.0.0",
-    description="API for managing traffic analysis feeds, data, and real-time updates.",
-)
+## Removed duplicate FastAPI app definition
 
 if __name__ == "__main__":
     import uvicorn
