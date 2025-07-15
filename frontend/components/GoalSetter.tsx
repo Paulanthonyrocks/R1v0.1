@@ -118,36 +118,36 @@ const GoalSetter = () => {
                     />
                     <button
                         onClick={() => handleRemoveObjective(index)}
-                        className="bg-red-500 text-white p-2 rounded-md"
+                        className="bg-red-700 text-white p-2 rounded-md pixel-font"
                     >
-                        Remove
+                        X
                     </button>
                 </div>
             ))}
             <button
                 onClick={handleAddObjective}
-                className="bg-gray-500 text-white p-2 rounded-md mb-4"
+                className="bg-gray-700 text-white p-2 rounded-md mb-4 pixel-font"
             >
-                Add Objective
+                + Add Objective
             </button>
             <div className="flex items-center space-x-2">
                 <button
                     onClick={handleSetGoal}
                     disabled={isLoading}
-                    className="bg-blue-500 text-white p-2 rounded-md disabled:bg-gray-400"
+                    className="bg-green-700 text-white p-2 rounded-md disabled:bg-gray-400 pixel-font"
                 >
                     {isLoading ? 'Setting...' : 'Set Goal'}
                 </button>
                 <button
                     onClick={handleClearGoal}
                     disabled={isLoading}
-                    className="bg-red-500 text-white p-2 rounded-md disabled:bg-gray-400"
+                    className="bg-red-700 text-white p-2 rounded-md disabled:bg-gray-400 pixel-font"
                 >
                     {isLoading ? 'Clearing...' : 'Clear Goal'}
                 </button>
             </div>
-            {error && <p className="text-red-500 mt-2">{error}</p>}
-            {success && <p className="text-green-500 mt-2">{success}</p>}
+            {error && <p className="text-red-500 mt-2 pixel-font">{error}</p>}
+            {success && <p className="text-green-500 mt-2 pixel-font">{success}</p>}
         </div>
     );
 };
