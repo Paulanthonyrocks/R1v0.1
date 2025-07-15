@@ -12,6 +12,7 @@ interface WebSocketMessage<T = unknown> {
 class WebSocketClient {
   private socket: WebSocket | null = null;
   private url: string;
+  private token: string | null = null;
   private pingInterval: number = 30000; // Interval in milliseconds (30 seconds)
   private pingTimer: NodeJS.Timeout | undefined;
   private listeners: Map<string, Set<MessageListener<unknown>>> = new Map();
@@ -24,8 +25,9 @@ class WebSocketClient {
   private reconnecting: boolean = false;
   private reconnectTimeout: NodeJS.Timeout | undefined;
 
-  constructor(url: string) {
+  constructor(url: string, token: string | null = null) {
     this.url = url;
+    this.token = token;
   }
 
   // --- addEventListener ---
@@ -86,7 +88,8 @@ class WebSocketClient {
       this.reconnecting = false; // Reset reconnection state on explicit connect call
       this.reconnectAttempts = 0; // Reset attempts
 
-      this.socket = new WebSocket(this.url);
+      const url = this.token ? `${this.url}?token=${this.token}` : this.url;
+      this.socket = new WebSocket(url);
 
       this.socket.onopen = () => {
         console.log('WebSocket connected');
@@ -110,20 +113,7 @@ class WebSocketClient {
         }
       };
 
-      this.socket.onerror = (event: Event) => {
-        clearInterval(this.pingTimer);
-        console.error('WebSocket error:', event);
-        if (this.socket?.readyState !== WebSocket.OPEN) {
-          // If error occurs during connection attempt, reject the promise
-          if (!this.reconnecting) { // Only reject if not in a reconnect cycle
-            reject(new Error('WebSocket connection failed.'));
-          }
-        }
-        if (!this.reconnecting) { // Trigger reconnect on error if not already reconnecting
-          console.warn('WebSocket error. Attempting to reconnect...');
-          this.reconnect();
-        }
-      };
+      this.socket.onerror = (event: Event) => this.handleError(event);
 
       this.socket.onmessage = (event: MessageEvent) => {
         this.handleIncomingMessage(event.data as string);
@@ -236,6 +226,21 @@ class WebSocketClient {
     }, this.pingInterval);
   }
 
+  private handleError(event: Event, reject?: (reason?: any) => void): void {
+    clearInterval(this.pingTimer);
+    console.error('WebSocket error:', event);
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      // If error occurs during connection attempt, reject the promise
+      if (reject) {
+        reject(new Error('WebSocket connection failed.'));
+      }
+    }
+    if (!this.reconnecting) { // Trigger reconnect on error if not already reconnecting
+      console.warn('WebSocket error. Attempting to reconnect...');
+      this.reconnect();
+    }
+  }
+
 }
 
 const getOrCreateClientId = () => {
@@ -251,6 +256,6 @@ const getOrCreateClientId = () => {
 const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const clientId = getOrCreateClientId();
 const wsUrl = `${wsProtocol}//${process.env.NEXT_PUBLIC_API_URL}/ws/${clientId}`;
-const ws = new WebSocketClient(wsUrl);
 
-export { ws, WebSocketClient as default };
+// Export the class directly, not a singleton instance
+export { WebSocketClient };

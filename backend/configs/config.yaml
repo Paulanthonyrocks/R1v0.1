@@ -21,7 +21,7 @@ logging:
   handlers:
     consoleHandler:
       class: logging.StreamHandler
-      level: INFO
+      level: DEBUG
       formatter: standardFormatter
       stream: ext://sys.stdout
     mainFileHandler:
@@ -63,7 +63,7 @@ logging:
     # Root logger
     '':
       handlers: [consoleHandler, mainFileHandler]
-      level: INFO
+      level: DEBUG
       propagate: True
     # Specific logger for the main application
     'app.main':
@@ -90,10 +90,119 @@ logging:
       handlers: [consoleHandler, mlFileHandler]
       level: INFO
       propagate: False
+    # Logger for ML submodules
+    'app.ml.traffic_predictor':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.route_optimizer':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.preference_learner':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for ML pavement analysis submodules
+    'app.ml.pavement_analysis.utils.image_preprocessing':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.utils.camera_calibration':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.reporting.report_generator':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.analyze_pavement':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.detection_modules.ml_detector':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.analysis_modules.rutting_analysis':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.analysis_modules.pothole_measurement':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.analysis_modules.pci_calculator':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.pavement_analysis.analysis_modules.crack_measurement':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'app.ml.data_cache':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for service submodules
+    'app.services.feed_manager':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.analytics_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.weather_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.video_processor':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.traffic_signal_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.personalized_routing_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.route_optimization_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
+    'app.services.event_service':
+      handlers: [consoleHandler, servicesFileHandler]
+      level: INFO
+      propagate: False
     # Logger for WebSocket connection manager
     'app.websocket.connection_manager':
       handlers: [consoleHandler, mainFileHandler] # Using mainFileHandler for now, can create a separate one if needed
       level: DEBUG
+      propagate: False
+    # Logger for short names used in code
+    'main':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
+      propagate: False
+    'ml_detector':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    'analyze_pavement':
+      handlers: [consoleHandler, mlFileHandler]
+      level: INFO
+      propagate: False
+    # Logger for HTTP access logs
+    'uvicorn.access':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
+      propagate: False
+    'fastapi':
+      handlers: [consoleHandler, mainFileHandler]
+      level: INFO
       propagate: False
 
 # --- Database Configuration ---

@@ -5,7 +5,23 @@ import logging
 import logging.config
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Query
+# Debugging: Write a file at the very beginning of execution
+try:
+    with open("C:/Users/HP/Desktop/R1v0.1/backend/app/main_debug_start.txt", "w") as f:
+        f.write("main.py started execution.\n")
+except Exception as e:
+    print(f"Error writing main_debug_start.txt: {e}")
+
+
+# Debugging: Write a file at the very beginning of execution
+try:
+    with open("C:/Users/HP/Desktop/R1v0.1/backend/app/main_debug_start.txt", "w") as f:
+        f.write("main.py started execution.\n")
+except Exception as e:
+    print(f"Error writing main_debug_start.txt: {e}")
+
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
 from starlette.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +30,9 @@ from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials
 import uuid # For generating unique client IDs for WebSockets
-from app.dependencies import verify_firebase_token # Import verify_firebase_token
+from app.dependencies import verify_firebase_token, auth_scheme, get_token_from_query # Import verify_firebase_token and auth_scheme
+from fastapi import Query, Depends # Separate import for Query and Depends
+from fastapi.security import HTTPAuthorizationCredentials # Import HTTPAuthorizationCredentials
 
 # --- Import application modules ---
 # Routers
@@ -136,6 +154,7 @@ async def startup_event():
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
 
     if loaded_config is None:
+        print("Loaded config is None. Critical error.")
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
 
@@ -306,9 +325,15 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
     await websocket.close(code=1000)
 
 @app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = Query(...)): # Added token query parameter
+async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)):
+    """
+    Handles WebSocket connections.
+
+    Authentication is performed at connection time using a token from the query parameters.
+    """
     try:
-        # Verify the Firebase ID token
+        if not token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         user_data = await verify_firebase_token(token)
         logger.info(f"WebSocket connection attempt by authenticated user: {user_data.get('email')}")
     except HTTPException as e:
@@ -324,7 +349,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
 
     await websocket.accept()
     # The actual connection object (ActiveWebSocketConnection) is created inside manager.connect
-    await manager.connect(websocket, client_id)
+    await manager.connect(websocket, client_id, user_data)
     # At this point, manager.active_connections[client_id] should be the ActiveWebSocketConnection instance
     # However, direct access might not be needed here if all logic is in ActiveWebSocketConnection
     
@@ -391,4 +416,4 @@ if __name__ == "__main__":
     import uvicorn
     import multiprocessing
     multiprocessing.set_start_method("spawn", force=True)
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, log_level="debug")

@@ -35,6 +35,10 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0); // Track attempts
   const lastPingRef = useRef<number>(0);
+  // --- Auth context for token ---
+  // Import useUser from UserContext
+  // (If not already imported at top, add: import { useUser } from '@/lib/auth/UserContext';)
+  const { user } = typeof window !== 'undefined' ? require('@/lib/auth/UserContext').useUser() : { user: null };
 
   // Add WebSocketMessageTypeEnum if not already globally available or imported from a shared types location
   // For this example, assuming it might be defined or imported elsewhere, or we define it here.
@@ -75,13 +79,30 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       console.log('WebSocket connected successfully.');
       setIsConnected(true);
       setError(null); // Clear error on successful connection
       reconnectAttempts.current = 0; // Reset attempts on successful connection
       lastPingRef.current = Date.now();
-      
+      // --- Send authentication message with token ---
+      let token = null;
+      if (user && user.getIdToken) {
+        try {
+          token = await user.getIdToken();
+        } catch (e) {
+          console.error('Failed to get user token for WebSocket auth:', e);
+        }
+      }
+      if (token) {
+        ws.send(JSON.stringify({
+          event_type: 'authenticate',
+          payload: { token }
+        }));
+        console.log('Sent WebSocket authentication message.');
+      } else {
+        console.warn('No user token available for WebSocket authentication.');
+      }
       // Set ready state after a short delay
       readyTimeoutRef.current = setTimeout(() => {
           setIsReady(true);

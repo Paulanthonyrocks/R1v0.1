@@ -1,22 +1,26 @@
-import React, { createContext, useContext, useState, Dispatch, SetStateAction, useEffect } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
 import { UserRole } from '@/lib/auth/roles';
-import { User, onAuthStateChanged, getAuth, signOut } from 'firebase/auth';
+import { User, signOut, getAuth } from 'firebase/auth';
 import { app } from '@/lib/firebase';
+import useAuth from '../hook/useAuth'; // Import the useAuth hook
+import { WebSocketClient } from '../websocket';
 
 interface UserContextValue {
   userRole: UserRole;
-  setUserRole: Dispatch<SetStateAction<UserRole>>;
   user: User | null;
+  token: string | null;
   loading: boolean;
   logout: () => Promise<void>;
+  wsClient: WebSocketClient | null;
 }
 
 const UserContext = createContext<UserContextValue>({
   userRole: UserRole.VIEWER,
-  setUserRole: () => {},
   user: null,
+  token: null,
   loading: true,
   logout: async () => {},
+  wsClient: null,
 });
 
 export const useUser = () => {
@@ -30,37 +34,31 @@ interface UserProviderProps {
 const auth = getAuth(app);
 
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
-  const [userRole, setUserRole] = useState<UserRole>(UserRole.VIEWER);
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, token, wsClient, loading } = useAuth();
+  const [userRole, setUserRole] = React.useState<UserRole>(UserRole.VIEWER);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        try {
-          const idTokenResult = await currentUser.getIdTokenResult();
-          const role = idTokenResult.claims.role as UserRole | undefined;
-          if (role && Object.values(UserRole).includes(role)) {
-            setUserRole(role);
-          } else {
-            setUserRole(UserRole.VIEWER);
-          }
-        } catch {
+    if (user) {
+      user.getIdTokenResult().then(idTokenResult => {
+        const role = idTokenResult.claims.role as UserRole | undefined;
+        if (role && Object.values(UserRole).includes(role)) {
+          setUserRole(role);
+        } else {
           setUserRole(UserRole.VIEWER);
         }
-      } else {
-        setUserRole(UserRole.VIEWER);
-      }
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+      });
+    } else {
+      setUserRole(UserRole.VIEWER);
+    }
+  }, [user]);
 
   const logout = async () => {
     await signOut(auth);
   };
 
-  const value = { userRole, setUserRole, user, loading, logout };
-  return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
+  return (
+    <UserContext.Provider value={{ userRole, user, token, loading, logout, wsClient }}>
+      {children}
+    </UserContext.Provider>
+  );
 };

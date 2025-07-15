@@ -4,8 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2, RotateCw } from 'lucide-react';
 import { cn } from "@/lib/utils";
-import type { SurveillanceFeedProps, TrafficMetrics } from '@/lib/types';
+import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook'; // Assuming useRealtimeUpdates is still needed from this hook file
+import { useUser } from '@/lib/auth/UserContext';
 import useMultipartStream from '@/lib/useMultipartStream';
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
@@ -14,9 +15,10 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const component_node = `Source: ${source ?? 'N/A'}`; // Renamed to avoid conflict
 
     const { sendMessage, isConnected } = useRealtimeUpdates();
+    const { token } = useUser();
 
     const streamUrl = status === 'running' && source ? source : null;
-    const { image, metrics, error: streamError, isLoading: isStreamLoading } = useMultipartStream(streamUrl);
+    const { image, metrics, error: streamError, isLoading: isStreamLoading } = useMultipartStream(streamUrl, token);
 
     const [isToggling, setIsToggling] = useState<boolean>(false); // State for toggle button loading
 
@@ -63,6 +65,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
             <div className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden"> {/* Added overflow-hidden */}
                 {/* Display the video image or placeholder */}
                 {image ? ( 
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img src={image} alt={`${feedName} Feed`} className="w-full h-full object-cover image-rendering-pixelated filter-contrast-125" />
                 ) : (
                      <div className="absolute inset-0 flex items-center justify-center opacity-30">
@@ -106,8 +109,8 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                 {/* Metrics Overlay */}
                  {metrics && status === 'running' && !isToggling && !isStreamLoading && !streamError && (
                      <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow">
-                        <span>VEH: {metrics.total_vehicles ?? '--'}</span>
-                        <span>AVG SPEED: {metrics.average_speed_kmh ?? '--'} KM/H</span>
+                        <span>VEH: {typeof metrics.total_vehicles === 'number' ? metrics.total_vehicles : '--'}</span>
+                        <span>AVG SPEED: {typeof metrics.average_speed_kmh === 'number' ? metrics.average_speed_kmh : '--'} KM/H</span>
                      </div>
                  )}
                  {/* Refresh Button */}
@@ -115,8 +118,9 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                     <button
                         className="absolute bottom-1.5 left-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
                         onClick={(e) => { e.stopPropagation(); handleRefreshFeed(); }} // Stop click event from propagating to card toggle
+                        title="Refresh Feed"
                     >
-                        <RotateCw size={14} />
+                        <RotateCw className="h-4 w-4" />
                     </button>)}
             </div>
             <CardContent className="p-2 rounded-none">

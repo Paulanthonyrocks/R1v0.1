@@ -1,16 +1,20 @@
 // frontend/lib/useMultipartStream.ts
 import { useState, useEffect, useRef } from 'react';
 
+interface MetricsData {
+  [key: string]: unknown;
+}
+
 interface MultipartStreamData {
   image: string | null; // Data URL for the image
-  metrics: any | null; // Parsed JSON data
+  metrics: MetricsData | null; // Parsed JSON data
   error: string | null;
   isLoading: boolean;
 }
 
-const useMultipartStream = (url: string | null): MultipartStreamData => {
+const useMultipartStream = (url: string | null, token: string | null): MultipartStreamData => {
   const [imageData, setImageData] = useState<string | null>(null);
-  const [metricsData, setMetricsData] = useState<any | null>(null);
+  const [metricsData, setMetricsData] = useState<MetricsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -25,15 +29,26 @@ const useMultipartStream = (url: string | null): MultipartStreamData => {
       return;
     }
 
+    // Prepend API base URL if url is relative
+    let fetchUrl = url;
+    if (url.startsWith('/')) {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+      fetchUrl = apiBase.replace(/\/$/, '') + url;
+    }
+
     setIsLoading(true);
     setError(null);
-
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
 
     const readStream = async () => {
       try {
-        const response = await fetch(url, { signal });
+        const headers: HeadersInit = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch(fetchUrl, { headers, signal });
 
         if (!response.ok || !response.body) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -89,7 +104,7 @@ const useMultipartStream = (url: string | null): MultipartStreamData => {
 
               if (headersEnd > -1) {
                 const headers = partText.substring(0, headersEnd);
-                const body = part.slice(headersEnd + 4); // +4 for \r\n\r\n
+                // const body = part.slice(headersEnd + 4); // Removed unused variable
 
                 if (headers.includes('Content-Type: image/jpeg')) {
                    // Find the actual start of the image data (after headers and potential newline)
@@ -108,8 +123,8 @@ const useMultipartStream = (url: string | null): MultipartStreamData => {
 
                   try {
                       const jsonText = new TextDecoder().decode(metricsPart);
-                      setMetricsData(JSON.parse(jsonText));
-                  } catch (jsonError: any) {
+                      setMetricsData(JSON.parse(jsonText) as MetricsData);
+                  } catch (jsonError: unknown) {
                       console.error("Error parsing metrics JSON:", jsonError);
                       setMetricsData({ error: "Failed to parse metrics" });
                   }
@@ -137,12 +152,13 @@ const useMultipartStream = (url: string | null): MultipartStreamData => {
 
         setIsLoading(false);
 
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (signal.aborted) {
           console.log('Stream fetch aborted');
         } else {
+          const errorMsg = err instanceof Error ? err.message : String(err);
           console.error("Stream fetch error:", err);
-          setError(err.message || "Failed to fetch stream");
+          setError(errorMsg || "Failed to fetch stream");
           setIsLoading(false);
         }
       }
@@ -159,7 +175,7 @@ const useMultipartStream = (url: string | null): MultipartStreamData => {
        }
     };
 
-  }, [url]); // Re-run effect if URL changes
+  }, [url, token, imageData]); // Added imageData to dependency array
 
   return { image: imageData, metrics: metricsData, error, isLoading };
 };

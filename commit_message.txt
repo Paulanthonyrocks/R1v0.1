@@ -1,0 +1,5 @@
+Feat: Implement WebSocket authentication
+
+- Added token-based authentication to the WebSocket endpoint in `backend/app/main.py`.
+- The WebSocket now expects a `token` query parameter, which is verified using Firebase.
+- Connections are rejected with `401 Unauthorized` or `403 Forbidden` if the token is missing or invalid.

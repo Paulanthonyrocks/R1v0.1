@@ -273,8 +273,8 @@ class ConnectionManager:
         self.active_connections: Dict[str, ActiveWebSocketConnection] = {}
         logger.info("ConnectionManager initialized.")
 
-    async def connect(self, websocket: WebSocket, client_id: str):
-        connection = ActiveWebSocketConnection(websocket, client_id, self)
+    async def connect(self, websocket: WebSocket, client_id: str, user_info: Optional[Dict[str, Any]] = None):
+        connection = ActiveWebSocketConnection(websocket, client_id, self, user_info)
         try:
             self.active_connections[client_id] = connection
             logger.info(f"Client {client_id} connected. Total connections: {len(self.active_connections)}")

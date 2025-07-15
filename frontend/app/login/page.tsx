@@ -8,7 +8,7 @@ import { signInWithEmailAndPassword, } from 'firebase/auth';
 // FirebaseError should be imported from 'firebase/app' - Note: FirebaseError is typically imported from 'firebase/auth' or 'firebase/app'. Let's check the actual export location.
 import { FirebaseError } from 'firebase/app';
 import MatrixButton from '@/components/MatrixButton'; // Add this import
-import { AlertTriangle } from 'lucide-react'; // Import error icon
+import { AlertTriangle, Signal, Clock, BatteryFull } from 'lucide-react'; // Import error icon
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');

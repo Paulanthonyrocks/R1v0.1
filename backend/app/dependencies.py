@@ -1,7 +1,7 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
 
 from typing import Dict, Any, Optional
-from fastapi import HTTPException, Depends, status
+from fastapi import HTTPException, Depends, status, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import firebase_admin
 from firebase_admin import auth, credentials
@@ -96,33 +96,42 @@ def is_super_admin(user_data: dict) -> bool:
 
 async def verify_firebase_token(token: str) -> Dict[str, Any]:
     """Verify Firebase ID token and return decoded token data."""
+    import logging
+    logger = logging.getLogger("firebase_auth")
+    logger.info(f"Verifying Firebase token: {token[:40]}... (truncated)")
     if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
+        logger.error("Firebase authentication service not available.")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Firebase authentication service not available.",
         )
-    
     try:
-        return auth.verify_id_token(token, check_revoked=True)
+        decoded = auth.verify_id_token(token, check_revoked=True)
+        logger.info(f"Decoded token: {decoded}")
+        return decoded
     except auth.RevokedIdTokenError:
+        logger.error("Token has been revoked.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.UserDisabledError:
+        logger.error("User account is disabled.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.InvalidIdTokenError as e:
+        logger.error(f"Invalid ID token: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:
+        logger.error(f"Authentication error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Authentication error: {str(e)}",
@@ -191,3 +200,7 @@ async def get_connection_manager() -> ConnectionManager:
             detail="WebSocket connection manager not available."
         )
     return manager
+
+async def get_token_from_query(websocket: WebSocket) -> Optional[str]:
+    """Dependency to get the token from the query parameter for WebSocket authentication."""
+    return websocket.query_params.get("token")
