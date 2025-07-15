@@ -8,11 +8,16 @@ class GoalStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class Objective(BaseModel):
+    kpi: str
+    target_value: Any
+    weight: float = 1.0
+
 class Goal(BaseModel):
     id: str
     description: str
     status: GoalStatus = GoalStatus.PENDING
-    target_kpis: Dict[str, Any] = Field(default_factory=dict)
+    objectives: List[Objective] = Field(default_factory=list)
 
 class AgentPlanner:
     def __init__(self, agent_core):
@@ -24,12 +29,13 @@ class AgentPlanner:
     def a_star_planner(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         # This is a placeholder for the actual A* planning logic.
         # In a real implementation, this would involve a more complex search process
-        # with a priority queue and a cost function.
+        # with a priority queue and a cost function that considers the weighted objectives.
         plan = []
-        if "reduce congestion" in goal.description.lower():
-            plan.extend(self._create_congestion_reduction_plan(goal, current_state))
-        elif "clear incident" in goal.description.lower():
-            plan.extend(self._create_incident_clearance_plan(goal, current_state))
+        for objective in goal.objectives:
+            if "congestion" in objective.kpi:
+                plan.extend(self._create_congestion_reduction_plan(goal, current_state))
+            elif "incident" in objective.kpi:
+                plan.extend(self._create_incident_clearance_plan(goal, current_state))
         return plan
 
     def _create_congestion_reduction_plan(self, goal: Goal, current_state: Dict[str, Any]) -> List[Dict[str, Any]]:
