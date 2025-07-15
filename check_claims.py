@@ -31,6 +31,7 @@ user_uid = "lrv2tpm9ICWY139aSGjXbaPVijE2"
 
 try:
     user = auth.get_user(user_uid)
+    print(f"User Account Status: {'Disabled' if user.disabled else 'Enabled'}")
     print(f"\nSuccessfully fetched user: {user.uid}")
     print("Custom Claims:")
     if user.custom_claims:
