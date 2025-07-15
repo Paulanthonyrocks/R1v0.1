@@ -146,6 +146,7 @@ async def startup_event():
     loaded_config = None
 
     # 1. Initialize Configuration
+ print("Attempting to initialize logging...")
     try:
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
@@ -155,6 +156,7 @@ async def startup_event():
 
     if loaded_config is None:
         print("Loaded config is None. Critical error.")
+ print("Failed to initialize logging.") # Also print if config is None after init call
         logger.critical("Configuration was not loaded. Cannot initialize Firebase Admin SDK.")
         raise RuntimeError("Configuration loading failed, cannot proceed with startup.")
 
@@ -335,10 +337,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
         user_data = await verify_firebase_token(token)
+        # Add logging after token verification
+        logger.info(f"[WS {client_id}] Token verified. User data: {user_data}")
         logger.info(f"WebSocket connection attempt by authenticated user: {user_data.get('email')}")
     except HTTPException as e:
         logger.warning(f"WebSocket authentication failed for client {client_id}: {e.detail}")
         await websocket.close(code=e.status_code, reason=e.detail)
+        # Add logging before returning on auth failure
+        logger.info(f"[WS {client_id}] Authentication failed, closing connection.")
         return
     # Retrieve manager from app.state, which is set during startup
     manager = websocket.app.state.connection_manager 
@@ -348,7 +354,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
         return
 
     await websocket.accept()
+    # Add logging after accepting connection
+    logger.info(f"[WS {client_id}] WebSocket connection accepted.")
     # The actual connection object (ActiveWebSocketConnection) is created inside manager.connect
+    # Add logging before calling manager.connect
+    logger.info(f"[WS {client_id}] Calling manager.connect.")
     await manager.connect(websocket, client_id, user_data)
     # At this point, manager.active_connections[client_id] should be the ActiveWebSocketConnection instance
     # However, direct access might not be needed here if all logic is in ActiveWebSocketConnection
@@ -362,6 +372,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
             pass # Already trying to close
         return
 
+    # Add logging after successful connection establishment
+    logger.info(f"[WS {client_id}] manager.connect finished.")
     logger.info(f"Client {client_id} WebSocket connection established.")
 
     try:
