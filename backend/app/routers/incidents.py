@@ -48,7 +48,7 @@ async def get_incidents(
     current_user: dict = Depends(get_current_active_user),
     fm: FeedManager = Depends(get_feed_manager)
 ) -> List[dict]:
-    logger.info(f"GET /incidents endpoint called by user: {current_user.get('username')}")
+    logger.info(f"GET /incidents endpoint called by user: {current_user.get('email')}")
     """
     Get all active incidents from the feed manager. Falls back to mock data if no live incidents.
     Requires authentication.

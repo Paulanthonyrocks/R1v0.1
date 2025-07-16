@@ -24,7 +24,10 @@ class VideoProcessor:
             logger.error(f"VideoProcessor.initialize: Video file not found at {self.video_path}")
             raise FileNotFoundError(f"Video file not found at {self.video_path}")
         
-        self.cap = cv2.VideoCapture(str(self.video_path))
+        # Set OpenCV options for faster initialization
+        self.cap = cv2.VideoCapture(str(self.video_path), cv2.CAP_FFMPEG)  # Explicitly use FFMPEG backend
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Keep buffer small
+        
         logger.info(f"VideoProcessor.initialize: Attempting to open video file: {self.video_path}")
         if not self.cap.isOpened():
             logger.error(f"VideoProcessor.initialize: Failed to open video file: {self.video_path}. Check codecs or file integrity.")
@@ -32,6 +35,11 @@ class VideoProcessor:
             
         self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+        
+        # Optimize video reading
+        self.cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 0)  # Reset to beginning
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)  # Set desired FPS
+        
         logger.info(f"VideoProcessor.initialize: Successfully initialized video processor for {self.video_path}")
         logger.info(f"VideoProcessor.initialize: Frame count: {self.frame_count}, FPS: {self.fps}")
     
@@ -72,12 +80,18 @@ class VideoProcessor:
             self.initialize()
             
         try:
+            frame_count = 0
+            frame_skip = 2  # Process every nth frame to improve performance
             while True:
                 ret, frame = self.cap.read()
                 if not ret:
                     # If we reach the end, loop back to the beginning
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
+                
+                frame_count += 1
+                if frame_count % frame_skip != 0:
+                    continue  # Skip this frame
                     
                 # Process the frame and get KPIs
                 kpis = self.process_frame(frame)

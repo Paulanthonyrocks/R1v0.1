@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { auth } from '../firebase'; // Adjust this path to your Firebase auth instance
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { WebSocketClient } from '../websocket'; // Adjust this path to your WebSocketClient class
+import { WebSocketClient } from '../websocket/WebSocketClient';
 
 const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -24,13 +24,12 @@ const useAuth = () => {
         }
 
         // Initialize WebSocket client with token
-        const clientId = crypto.randomUUID();
         const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-        const wsUrl = `${wsBase.replace(/\/$/, '')}/ws/${clientId}`;
-        const client = new WebSocketClient(wsUrl, idToken);
+        const wsUrl = `${wsBase.replace(/\/$/, '')}/ws`;
+        const client = new WebSocketClient(wsUrl);
         wsClientRef.current = client;
         
-        client.connect().catch(err => console.error("WebSocket connection error:", err));
+        client.connect(idToken).catch(err => console.error("WebSocket connection error:", err));
 
       } else {
         setUser(null);

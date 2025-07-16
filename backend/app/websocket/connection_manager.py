@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import List, Dict, Any, Set, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -19,13 +20,18 @@ from app.utils.service_getters import get_feed_manager # Import the feed manager
 logger = logging.getLogger(__name__) # Initialize logger
 
 class ActiveWebSocketConnection:
-    def __init__(self, websocket: WebSocket, client_id: str, manager: 'ConnectionManager'):
+    def __init__(self, websocket: WebSocket, client_id: str, manager: 'ConnectionManager', user_info: Optional[Dict[str, Any]] = None):
         self.websocket = websocket
         self.client_id = client_id
         self.manager = manager
-        self.user_info: Optional[Dict[str, Any]] = None
+        self.user_info: Optional[Dict[str, Any]] = user_info
         self.subscriptions: Set[str] = set()
         self.auth_pending: bool = True
+        self.last_ping: float = time.time()
+        self.ping_timeout: float = 30.0  # 30 seconds timeout
+        self.token_refresh_time: Optional[float] = None
+        self.token: Optional[str] = None
+        self.token_expiry: Optional[float] = None  # Unix timestamp of token expiration
 
     
 
@@ -71,6 +77,21 @@ class ActiveWebSocketConnection:
                  data = json.loads(data_raw.decode('utf-8'))
             else: # Assuming it's already a dict (e.g. from websocket.receive_json())
                 data = data_raw
+            
+            # Special handling for ping messages
+            if data.get("event_type") == "ping":
+                await self.send_json_model(WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.PONG,
+                    data={"timestamp": datetime.utcnow().isoformat()}
+                ))
+                return
+            # --- Conversion logic for legacy client format ---
+            # If client sends {type, data}, convert to {event_type, payload}
+            if 'type' in data and 'data' in data:
+                data = {
+                    'event_type': data['type'],
+                    'payload': data['data']
+                }
         except json.JSONDecodeError:
             logger.error(f"Failed to decode JSON message from {self.client_id}: {data_raw}")
             await self.send_json_model(

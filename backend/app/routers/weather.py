@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
 from typing import Optional, Dict, Any
+import logging
 from app.services.weather_service import WeatherService
 from app.dependencies import get_weather_service_api, get_current_active_user
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.get(
     "/current",
@@ -17,7 +19,7 @@ async def get_current_weather(
     weather_service: WeatherService = Depends(get_weather_service_api),
     current_user: dict = Depends(get_current_active_user)
 ):
-    logger.info(f"GET /weather/current endpoint called by user: {current_user.get('username')} for lat: {lat}, lon: {lon}")
+    logger.info(f"GET /weather/current endpoint called by user: {current_user.get('email')} for lat: {lat}, lon: {lon}")
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)
     except Exception as e:

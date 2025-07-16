@@ -220,7 +220,7 @@ async def get_all_nodes_congestion_data(
     current_user: dict = Depends(get_current_active_user), # Assuming authentication is needed
     analytics_service: AnalyticsService = Depends(get_analytics_service) # Dependency injection
 ) -> APIResponse[AllNodesCongestionResponse]:
-    logger.info(f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('username')}")
+    logger.info(f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('email')}")
     """
     Retrieves the latest congestion data for all monitored nodes.
     Each node's data includes its ID, name, coordinates, congestion score,
@@ -228,7 +228,7 @@ async def get_all_nodes_congestion_data(
     Requires authentication.
     """
     try:
-        logger.info(f"User {current_user.get('username')} requesting all nodes congestion data.")
+        logger.info(f"User {current_user.get('email')} requesting all nodes congestion data.")
         node_data_list = await analytics_service.get_all_location_congestion_data()
         logger.debug(f"Retrieved node data list: {node_data_list}")
         if not node_data_list:

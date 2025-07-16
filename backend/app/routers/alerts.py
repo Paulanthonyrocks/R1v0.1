@@ -43,7 +43,7 @@ async def get_alerts(
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
     current_user: dict = Depends(get_current_active_user)
 ) -> AlertsResponse:
-    logger.info(f"GET /alerts endpoint called by user: {current_user.get('username')}")
+    logger.info(f"GET /alerts endpoint called by user: {current_user.get('email')}")
     """
     Endpoint to fetch alerts with filtering and pagination. Requires authentication.
     """
@@ -95,16 +95,16 @@ async def delete_alert_endpoint(
     current_user: dict = Depends(get_current_active_user), # Assuming admin/specific role check might be here or decorator
     conn_manager: ConnectionManager = Depends(get_connection_manager)
 ):
-    logger.info(f"User '{current_user.get('username')}' attempting to delete alert ID: {alert_id}")
+    logger.info(f"User '{current_user.get('email')}' attempting to delete alert ID: {alert_id}")
 
     # TODO: Add role-based access control if needed, e.g., only admins can delete.
 
     deleted = await db.delete_alert(alert_id)
     if not deleted:
-        logger.warning(f"Alert ID {alert_id} not found for deletion by user '{current_user.get('username')}'.")
+        logger.warning(f"Alert ID {alert_id} not found for deletion by user '{current_user.get('email')}'.")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Alert with ID {alert_id} not found.")
 
-    logger.info(f"Alert ID {alert_id} successfully deleted by user '{current_user.get('username')}'.")
+    logger.info(f"Alert ID {alert_id} successfully deleted by user '{current_user.get('email')}'.")
 
     # Broadcast alert status update
     status_payload = AlertStatusUpdatePayload(alert_id=alert_id, status="dismissed")
@@ -134,22 +134,22 @@ async def acknowledge_alert_endpoint(
     current_user: dict = Depends(get_current_active_user),
     conn_manager: ConnectionManager = Depends(get_connection_manager)
 ) -> AlertModel:
-    logger.info(f"User '{current_user.get('username')}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}")
+    logger.info(f"User '{current_user.get('email')}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}")
 
     # TODO: Add role-based access control if needed.
 
     success = await db.acknowledge_alert(alert_id=alert_id, acknowledge=ack_request.acknowledged)
     if not success:
-        logger.warning(f"Alert ID {alert_id} not found for acknowledge by user '{current_user.get('username')}'.")
+        logger.warning(f"Alert ID {alert_id} not found for acknowledge by user '{current_user.get('email')}'.")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Alert with ID {alert_id} not found.")
 
     updated_alert_data = await db.get_alert_by_id(alert_id)
     if not updated_alert_data:
         # This should ideally not happen if acknowledge_alert returned True
-        logger.error(f"Alert ID {alert_id} was acknowledged but could not be refetched by user '{current_user.get('username')}'.")
+        logger.error(f"Alert ID {alert_id} was acknowledged but could not be refetched by user '{current_user.get('email')}'.")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Alert with ID {alert_id} not found after update.")
 
-    logger.info(f"Alert ID {alert_id} acknowledgement status set to {ack_request.acknowledged} by user '{current_user.get('username')}'.")
+    logger.info(f"Alert ID {alert_id} acknowledgement status set to {ack_request.acknowledged} by user '{current_user.get('email')}'.")
 
     # Broadcast alert status update
     status_str = "acknowledged" if ack_request.acknowledged else "unacknowledged"

@@ -21,7 +21,7 @@ logging:
   handlers:
     consoleHandler:
       class: logging.StreamHandler
-      level: DEBUG
+      level: INFO
       formatter: standardFormatter
       stream: ext://sys.stdout
     mainFileHandler:
@@ -63,12 +63,12 @@ logging:
     # Root logger
     '':
       handlers: [consoleHandler, mainFileHandler]
-      level: DEBUG
+      level: INFO
       propagate: True
     # Specific logger for the main application
     'app.main':
       handlers: [consoleHandler, mainFileHandler]
-      level: DEBUG
+      level: INFO
       propagate: False # Prevent messages from being handled by root logger as well
     # Logger for processing workers (their loggers will be named 'Process-feed_id')
     'Process':
@@ -180,7 +180,7 @@ logging:
     # Logger for WebSocket connection manager
     'app.websocket.connection_manager':
       handlers: [consoleHandler, mainFileHandler] # Using mainFileHandler for now, can create a separate one if needed
-      level: DEBUG
+      level: INFO
       propagate: False
     # Logger for short names used in code
     'main':
@@ -208,7 +208,7 @@ logging:
     # Logger for Firebase authentication events
     'firebase_auth':
       handlers: [consoleHandler, mainFileHandler]
-      level: DEBUG
+      level: INFO
       propagate: False
 
     # Logger for core agent module
@@ -341,7 +341,7 @@ performance:
 vis_options_default:
   - Tracked Vehicles
   - Vehicle Data
-  - Lane Dividers
+  # - Lane Dividers
   # - Lane Density Overlay # Can be performance intensive
   # - Grid Overlay
 

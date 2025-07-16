@@ -34,7 +34,8 @@ from app.routers import (
     alerts, 
     video, 
     incidents,
-    personalized_routes
+    personalized_routes,
+    token
 )
 from . import api
 # Initializers/Getters - Import config initializer now
@@ -141,12 +142,7 @@ async def startup_event():
     try:
         config_file_path_obj = Path(__file__).parent.parent / "configs" / "config.yaml"
         loaded_config = initialize_config(str(config_file_path_obj.resolve()))
-        logging.getLogger("app.config").info("DIAGNOSTIC: app.config logger is working.")
-        logging.getLogger("app.utils.database").info("DIAGNOSTIC: app.utils.database logger is working.")
-        logging.getLogger("app.services").info("DIAGNOSTIC: app.services logger is working.")
-        logging.getLogger("app.websocket.connection_manager").info("DIAGNOSTIC: app.websocket.connection_manager logger is working.")
-        logger.info("DIAGNOSTIC: main logger is working.")
-        print("DIAGNOSTIC: Logging configured successfully using dictConfig.")
+        # ...existing code...
     except Exception as e:
         logger.critical(f"CRITICAL FAILURE during config initialization: {e}", exc_info=True)
         raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
@@ -375,9 +371,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
         while True:
             # The websocket.receive_text() or receive_json() call will raise WebSocketDisconnect
             # if the client disconnects.
-            logger.debug(f"Client {client_id}: Before receive_text. WebSocket state: {websocket.client_state}")
             data_raw = await websocket.receive_text() # Or receive_json() if clients always send JSON
-            logger.debug(f"Client {client_id}: Received data. WebSocket state: {websocket.client_state}")
             # active_connection should be self.active_connections.get(client_id) from manager
             # which is now passed to handle_incoming_message.
             # No, handle_incoming_message is a method of ActiveWebSocketConnection itself.
