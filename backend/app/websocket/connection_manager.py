@@ -78,20 +78,22 @@ class ActiveWebSocketConnection:
             else: # Assuming it's already a dict (e.g. from websocket.receive_json())
                 data = data_raw
             
-            # Special handling for ping messages
-            if data.get("event_type") == "ping":
+            # Handle the message in the format the client sends
+            if data.get("type") == "ping":
                 await self.send_json_model(WebSocketMessage(
                     type=WebSocketMessageTypeEnum.PONG,
                     data={"timestamp": datetime.utcnow().isoformat()}
                 ))
                 return
-            # --- Conversion logic for legacy client format ---
-            # If client sends {type, data}, convert to {event_type, payload}
-            if 'type' in data and 'data' in data:
-                data = {
-                    'event_type': data['type'],
-                    'payload': data['data']
-                }
+
+            # All messages from the client should be in the format {type, data}
+            if not ('type' in data and 'data' in data):
+                logger.warning(f"Invalid message format from client {self.client_id}: {data}")
+                await self.send_json_model(WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                    data={"error_code": "INVALID_FORMAT", "message": "Invalid message format. Expected {type, data}."}
+                ))
+                return
         except json.JSONDecodeError:
             logger.error(f"Failed to decode JSON message from {self.client_id}: {data_raw}")
             await self.send_json_model(

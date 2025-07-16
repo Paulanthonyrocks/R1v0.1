@@ -1,10 +1,9 @@
 // frontend/app/dashboard/page.tsx
 "use client";
 
-// frontend/app/dashboard/page.tsx
-"use client";
-
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { APIResponse, AllNodesCongestionResponse } from '@/lib/types/api';
 import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
 import { Signal, BatteryFull } from 'lucide-react'; // Import Signal and BatteryFull icons
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
@@ -83,12 +82,13 @@ const DashboardPage: React.FC = () => {
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
       try {
-        const res = await fetch('/api/v1/analysis/nodes/congestion');
-        if (!res.ok) throw new Error('Failed to fetch congestion data');
-        const data = await res.json();
-        if (Array.isArray(data.nodes) && data.nodes.length > 0) {
+        const res = await fetch('/api/v1/analytics/nodes/congestion');
+        if (!res.ok) throw new Error(`Failed to fetch congestion data: ${res.status}`);
+        const response = await res.json() as APIResponse<AllNodesCongestionResponse>;
+        if (response.status === 'success' && response.data.nodes.length > 0) {
+          const { nodes } = response.data;
           // Congestion Index
-          const scores = data.nodes
+          const scores = nodes
             .map((n: BackendCongestionNodeData) => typeof n.congestion_score === 'number' ? n.congestion_score : null)
             .filter((v: number | null) => v !== null);
           if (scores.length > 0) {
@@ -98,7 +98,7 @@ const DashboardPage: React.FC = () => {
             setCongestionIndex(null);
           }
           // Average Speed
-          const speeds = data.nodes
+          const speeds = nodes
             .map((n: BackendCongestionNodeData) => typeof n.average_speed === 'number' ? n.average_speed : null)
             .filter((v: number | null) => v !== null);
           if (speeds.length > 0) {
@@ -108,7 +108,7 @@ const DashboardPage: React.FC = () => {
             setAverageSpeed(null);
           }
           // Total Flow (sum of vehicle_count)
-          const vehicleCounts = data.nodes
+          const vehicleCounts = nodes
             .map((n: BackendCongestionNodeData) => typeof n.vehicle_count === 'number' ? n.vehicle_count : null)
             .filter((v: number | null) => v !== null);
           if (vehicleCounts.length > 0) {
@@ -151,13 +151,13 @@ const DashboardPage: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="matrix-card">
               <DropdownMenuItem asChild>
-                <a href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</a>
+                <Link href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <a href="/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</a>
+                <Link href="/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <a href="/history" className="w-full tracking-normal font-lcd matrix-glow">ROUTE HISTORY</a>
+                <Link href="/history" className="w-full tracking-normal font-lcd matrix-glow">ROUTE HISTORY</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <a href="/impacts" className="w-full tracking-normal font-lcd matrix-glow">WEATHER & EVENTS</a>
@@ -211,7 +211,7 @@ const DashboardPage: React.FC = () => {
           {/* Sample Video Feed */}
           <div className="mb-4 matrix-card p-4">
             <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">SAMPLE VIDEO FEED</h2>
-            <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card" style={{whiteSpace: 'nowrap'}}>
+            <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card whitespace-nowrap">
               <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
                 <SurveillanceFeed
                   feed={{

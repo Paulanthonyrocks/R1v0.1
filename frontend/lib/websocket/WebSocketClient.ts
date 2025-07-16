@@ -14,23 +14,82 @@ const getOrCreateClientId = () => {
 // Make the listener type generic
 type MessageListener<T> = (data: T) => void;
 
+// Type definitions for specific message payloads
+// Define possible metric value types
+export type MetricValue = string | number | boolean | null;
+
+export interface RealtimeMetricsUpdate {
+    feed_id: string;
+    timestamp: string;
+    metrics: Record<string, MetricValue>;
+}
+
+export interface GlobalRealtimeMetrics {
+    timestamp: string;
+    metrics_source?: string;
+    congestion_index?: number;
+    average_speed_kmh?: number;
+    active_incidents_count?: number;
+    total_flow?: number;
+    feed_statuses?: Record<string, number>;
+    custom_metrics?: Record<string, MetricValue>;
+}
+
+export interface GeneralNotification {
+    message_type: string;
+    title?: string;
+    message: string;
+    severity: 'info' | 'warning' | 'error';
+    suggested_actions?: string[];
+    timestamp: string;
+}
+
+export interface ErrorNotification {
+    error_code?: string;
+    message: string;
+    details?: string;
+    timestamp: string;
+}
+
+// Enum for valid message types expected by the server
+export enum WebSocketMessageType {
+    METRICS_UPDATE = 'metrics_update',
+    GLOBAL_REALTIME_METRICS_UPDATE = 'global_realtime_metrics_update',
+    NEW_ALERT = 'new_alert',
+    SIGNAL_UPDATE = 'signal_update',
+    FEED_STATUS_UPDATE = 'feed_status_update',
+    GENERAL_NOTIFICATION = 'general_notification',
+    ERROR_NOTIFICATION = 'error_notification',
+    PREDICTION_ALERT = 'prediction_alert',
+    ALERT_STATUS_UPDATE = 'alert_status_update',
+    NODE_CONGESTION_UPDATE = 'node_congestion_update',
+    USER_SPECIFIC_ALERT = 'user_specific_alert',
+    PONG = 'pong',
+    AUTH_SUCCESS = 'auth_success',
+    AUTH_FAILURE = 'auth_failure',
+    // Special type for internal ping messages that will be translated to pong responses
+    INTERNAL_PING = '__internal_ping'
+}
+
 export interface WebSocketMessage<T = unknown> {
-    type: string;
-    payload?: T;
+    type: WebSocketMessageType;
+    data: T;
+    client_id?: string;
+    correlation_id?: string;
     timestamp?: number;
 }
 
 export interface IWebSocketClient {
     connect(token: string): Promise<void>;
     disconnect(): void;
-    send(data: WebSocketMessage<unknown>): void;
-    subscribe<T>(messageType: string, listener: MessageListener<T>): void;
-    unsubscribe<T>(messageType: string, listener: MessageListener<T>): void;
+    send<T>(data: WebSocketMessage<T>): void;
+    subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
+    unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
     reconnectWithNewToken(token: string): Promise<void>;
 }
 
 export class WebSocketClient implements IWebSocketClient {
-    private listeners: Map<string, Set<MessageListener<unknown>>> = new Map();
+    private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown>>> = new Map();
     private ws: WebSocket | null = null;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 5;
@@ -41,6 +100,7 @@ export class WebSocketClient implements IWebSocketClient {
     private isConnecting = false;
     private pingInterval: NodeJS.Timeout | null = null;
     private lastPongTime: number = Date.now();
+    private errorListeners: Set<(type: string, message: string) => void> = new Set();
 
     constructor(baseUrl: string) {
         this.url = baseUrl;
@@ -97,25 +157,49 @@ export class WebSocketClient implements IWebSocketClient {
                 }
             };
 
-            this.ws.onclose = async () => {
+            this.ws.onclose = async (event: CloseEvent) => {
                 this.isConnecting = false;
                 this.stopPingInterval();
+                
+                const closeReason = event.reason || 'Connection closed';
+                const wasClean = event.wasClean;
                 
                 if (this.reconnectAttempts < this.maxReconnectAttempts) {
                     this.reconnectAttempts++;
                     this.reconnectDelay *= 2; // Exponential backoff
+                    const delay = this.reconnectDelay;
+                    
+                    if (!wasClean) {
+                        this.notifyError('connection_closed', 
+                            `Connection closed unexpectedly (${closeReason}). Attempting to reconnect in ${delay/1000} seconds...`);
+                    }
+                    
                     setTimeout(async () => {
                         const currentToken = this.tokenManager.getCurrentToken();
                         if (currentToken) {
                             await this.connect(currentToken);
+                        } else {
+                            this.notifyError('auth_error', 'Unable to reconnect: No valid authentication token available');
                         }
-                    }, this.reconnectDelay);
+                    }, delay);
+                } else {
+                    this.notifyError('max_reconnect_attempts', 
+                        `Maximum reconnection attempts (${this.maxReconnectAttempts}) reached. Please refresh the page.`);
                 }
             };
 
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+            this.ws.onerror = (error: Event) => {
+                const wsError = error as ErrorEvent;
+                console.error('WebSocket error:', {
+                    message: wsError.message || 'Unknown error',
+                    type: wsError.type,
+                    error: wsError.error,
+                    url: this.ws?.url
+                });
                 this.isConnecting = false;
+                
+                // Emit error notification to listeners
+                this.notifyError('connection_error', wsError.message || 'Failed to connect to server');
             };
 
             this.ws.onmessage = this.handleMessage.bind(this);
@@ -129,13 +213,15 @@ export class WebSocketClient implements IWebSocketClient {
     private startPingInterval(): void {
         this.stopPingInterval();
         this.pingInterval = setInterval(() => {
+            const now = Date.now();
             this.send({
-                type: 'ping',
-                payload: { timestamp: Date.now() }
+                type: WebSocketMessageType.INTERNAL_PING,
+                data: null,
+                timestamp: now
             });
             
             // Check if we haven't received a pong in too long
-            if (Date.now() - this.lastPongTime > 30000) { // 30 seconds
+            if (now - this.lastPongTime > 30000) { // 30 seconds
                 this.handleConnectionTimeout();
             }
         }, 15000); // Send ping every 15 seconds
@@ -157,52 +243,75 @@ export class WebSocketClient implements IWebSocketClient {
 
     private handleMessage(event: MessageEvent): void {
         try {
-            const message = JSON.parse(event.data);
+            const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
             
             // Handle pong messages
-            if (message.type === 'pong') {
+            if (message.type === WebSocketMessageType.PONG) {
                 this.lastPongTime = Date.now();
                 return;
             }
 
+            // Validate message structure
+            if (!Object.values(WebSocketMessageType).includes(message.type)) {
+                console.error('Invalid message type received:', message.type);
+                return;
+            }
+
             // Handle message with registered listeners
-            if (typeof message === 'object' && message !== null && 'type' in message) {
-                const { type, payload } = message;
-                if (this.listeners.has(type)) {
-                    this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
-                        try {
-                            listener(payload);
-                        } catch (error) {
-                            console.error(`Error in listener for message type ${type}:`, error);
-                        }
-                    });
-                }
+            const type = message.type as WebSocketMessageType;
+            if (this.listeners.has(type)) {
+                this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
+                    try {
+                        listener(message.data);
+                    } catch (error) {
+                        console.error(`Error in listener for message type ${type}:`, error);
+                    }
+                });
             }
         } catch (error) {
             console.error('Error handling WebSocket message:', error);
         }
     }
 
-    public subscribe<T>(messageType: string, listener: MessageListener<T>): void {
+    public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
         if (!this.listeners.has(messageType)) {
             this.listeners.set(messageType, new Set());
         }
         this.listeners.get(messageType)?.add(listener as MessageListener<unknown>);
     }
 
-    public unsubscribe<T>(messageType: string, listener: MessageListener<T>): void {
+    public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
         this.listeners.get(messageType)?.delete(listener as MessageListener<unknown>);
         if (this.listeners.get(messageType)?.size === 0) {
             this.listeners.delete(messageType);
         }
     }
 
-    public send(data: WebSocketMessage): void {
+    public send(message: WebSocketMessage): void {
+        // Transform internal ping to proper pong for the server
+        if (message.type === WebSocketMessageType.INTERNAL_PING) {
+            const pongMessage: WebSocketMessage = {
+                type: WebSocketMessageType.PONG,
+                data: null,
+                timestamp: message.timestamp ?? Date.now()
+            };
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify(pongMessage));
+            }
+            return;
+        }
+
+        // Ensure message has a timestamp
+        const messageToSend: WebSocketMessage = {
+            ...message,
+            timestamp: message.timestamp ?? Date.now()
+        };
+
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(data));
+            this.ws.send(JSON.stringify(messageToSend));
         } else {
             // Queue message if not connected
-            this.messageQueue.push(data);
+            this.messageQueue.push(messageToSend);
         }
     }
 
@@ -212,5 +321,30 @@ export class WebSocketClient implements IWebSocketClient {
             this.ws.close();
             this.ws = null;
         }
+    }
+
+    public onError(listener: (type: string, message: string) => void): () => void {
+        this.errorListeners.add(listener);
+        return () => this.errorListeners.delete(listener);
+    }
+
+    private notifyError(type: string, message: string): void {
+        this.errorListeners.forEach(listener => {
+            try {
+                listener(type, message);
+            } catch (error) {
+                console.error('Error in error listener:', error);
+            }
+        });
+
+        // Also emit as an error notification message
+        this.send({
+            type: WebSocketMessageType.ERROR_NOTIFICATION,
+            data: {
+                error_code: type,
+                message: message,
+                timestamp: new Date().toISOString()
+            } as ErrorNotification
+        });
     }
 }

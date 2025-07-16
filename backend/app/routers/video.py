@@ -15,33 +15,10 @@ logger = logging.getLogger(__name__)
 
 @router.get("/sample-video/stream")
 async def stream_video(
-    current_user: dict = Depends(get_current_active_user),
-    token: str = Depends(lambda x: x.headers.get("Authorization", "").replace("Bearer ", ""))
+    current_user: dict = Depends(get_current_active_user)
 ):
-    # Security: Ensure user is validated with retry
-    retry_count = 0
-    max_retries = 2
+    """Stream sample traffic video with real-time processing"""
     
-    while retry_count < max_retries:
-        if current_user and current_user.get("email"):
-            break
-        retry_count += 1
-        if retry_count < max_retries:
-            # Small delay to allow token refresh
-            await asyncio.sleep(0.5)
-            try:
-                current_user = await verify_firebase_token(token)
-            except Exception as e:
-                logger.warning(f"Token validation retry {retry_count} failed: {e}")
-                continue
-    
-    if not current_user or not current_user.get("email"):
-        logger.warning("Unauthorized access attempt to /sample-video/stream")
-        raise OperationFailed(detail="Unauthorized")
-    
-    # Store the token for periodic validation
-    current_user["token"] = token
-
     logger.info(f"GET /video/sample-video/stream endpoint called by user: {current_user.get('email')}")
     VIDEO_PATH = os.getenv("SAMPLE_VIDEO_PATH", str(Path(__file__).parent.parent.parent.parent / "frontend" / "public" / "sample_traffic.mp4"))
     video_path = Path(VIDEO_PATH)
@@ -66,19 +43,8 @@ async def stream_video(
 
         async def generate_frames():
             frame_count = 0
-            auth_check_interval = 30  # Check auth token every 30 frames
             try:
                 for data in processor.get_frame_generator():
-                    # Periodically verify token is still valid
-                    frame_count += 1
-                    if frame_count % auth_check_interval == 0:
-                        try:
-                            # Re-verify the token
-                            await verify_firebase_token(current_user.get("token"))
-                        except Exception as auth_error:
-                            logger.error(f"Token validation failed during streaming: {auth_error}")
-                            return
-                    
                     frame_bytes = data["frame"]
                     # Yield only image frames for performance and compatibility
                     yield (

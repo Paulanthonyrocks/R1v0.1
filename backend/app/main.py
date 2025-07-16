@@ -271,7 +271,7 @@ app.state.realtime_connections_lock = asyncio.Lock()
 try:
     app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
     app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
-    app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+    app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics"])
     app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(video.router, prefix="/api/v1", tags=["Video"])
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
@@ -347,8 +347,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = 
     await websocket.accept()
     # Add logging after accepting connection
     logger.info(f"[WS {client_id}] WebSocket connection accepted.")
-    # The actual connection object (ActiveWebSocketConnection) is created inside manager.connect
-    # Add logging before calling manager.connect
+    # Accept the WebSocket connection first
+    await websocket.accept()
+    logger.info(f"[WS {client_id}] WebSocket connection accepted.")
+    
+    # Create the ActiveWebSocketConnection instance
     logger.info(f"[WS {client_id}] Calling manager.connect.")
     await manager.connect(websocket, client_id, user_data)
     # At this point, manager.active_connections[client_id] should be the ActiveWebSocketConnection instance
