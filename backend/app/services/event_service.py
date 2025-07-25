@@ -1,5 +1,4 @@
 import aiohttp
-import requests
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import logging

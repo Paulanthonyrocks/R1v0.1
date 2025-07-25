@@ -1,5 +1,6 @@
 "use client";
 
+import Link from 'next/link';
 import React, { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import AuthGuard from "@/components/auth/AuthGuard";
@@ -39,26 +40,7 @@ const LiveMapPage: React.FC = () => {
                 <span className="font-lcd matrix-glow">LIVE MAP</span>
               </div>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="matrix-card">
-              <DropdownMenuItem asChild>
-                <a href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow">DASHBOARD</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/anomalies" className="w-full tracking-normal font-lcd matrix-glow">ANOMALIES</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/logs" className="w-full tracking-normal font-lcd matrix-glow">SYSTEM LOGS</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/analytics" className="w-full tracking-normal font-lcd matrix-glow">ANALYTICS</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</a>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+            
           </DropdownMenu>
           <div className="flex items-center space-x-2">
             <Clock size={20} />

@@ -125,6 +125,10 @@ export class WebSocketClient implements IWebSocketClient {
             this.ws.close();
         }
 
+        // Update the URL with the new token
+        const clientId = getOrCreateClientId();
+        this.url = `${this.url.split('?')[0].split('/').slice(0, -1).join('/')}/${clientId}?token=${token}`;
+
         // Reset reconnection parameters
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;

@@ -2,9 +2,8 @@ import logging
 from pathlib import Path
 import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import cv2
-import numpy as np
 import matplotlib.pyplot as plt
 from enum import Enum
 
@@ -78,8 +77,10 @@ def generate_analysis_report(
             d_type = distress.get("type", DistressType.UNKNOWN_DISTRESS.value) 
             if not isinstance(d_type, str):
                  # Fallback if d_type is not a string (e.g. if DistressType enum itself was passed)
-                 try: d_type = d_type.value
-                 except: d_type = str(d_type)
+                 try:
+                     d_type = d_type.value
+                 except Exception:
+                     d_type = str(d_type)
 
             current_count = report_data["summary"]["distress_types_count"].get(d_type, 0)
             report_data["summary"]["distress_types_count"][d_type] = current_count + 1
@@ -101,7 +102,8 @@ def generate_analysis_report(
                 for distress in distresses:
                     bbox = distress.get('location')
                     d_type_str = distress.get("type", DistressType.UNKNOWN_DISTRESS.value)
-                    if not isinstance(d_type_str, str): d_type_str = d_type_str.value # ensure string key
+                    if not isinstance(d_type_str, str):
+                        d_type_str = d_type_str.value # ensure string key
 
                     color = DISTRESS_COLORS.get(d_type_str, DISTRESS_COLORS[DistressType.UNKNOWN_DISTRESS.value])
                     
@@ -115,10 +117,14 @@ def generate_analysis_report(
                         
                         # Add key measurements from the 'measurements' dict
                         measurements = distress.get('measurements', {})
-                        if 'width_mm' in measurements: label_parts.append(f"W:{measurements['width_mm']:.1f}mm")
-                        if 'length_mm' in measurements: label_parts.append(f"L:{measurements['length_mm']:.1f}mm")
-                        if 'estimated_diameter_mm' in measurements: label_parts.append(f"D:{measurements['estimated_diameter_mm']:.1f}mm")
-                        if 'area_sq_m' in measurements and 'crack' not in d_type_str: label_parts.append(f"A:{measurements['area_sq_m']:.2f}m2")
+                        if 'width_mm' in measurements:
+                            label_parts.append(f"W:{measurements['width_mm']:.1f}mm")
+                        if 'length_mm' in measurements:
+                            label_parts.append(f"L:{measurements['length_mm']:.1f}mm")
+                        if 'estimated_diameter_mm' in measurements:
+                            label_parts.append(f"D:{measurements['estimated_diameter_mm']:.1f}mm")
+                        if 'area_sq_m' in measurements and 'crack' not in d_type_str:
+                            label_parts.append(f"A:{measurements['area_sq_m']:.2f}m2")
 
                         label = " ".join(label_parts)
                         (label_width, label_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)

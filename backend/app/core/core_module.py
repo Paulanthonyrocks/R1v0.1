@@ -48,6 +48,7 @@ class CoreModule:
         self.max_active_tracks = vehicle_detection_cfg.get('max_active_tracks', 50)
         self.yolo_imgsz = vehicle_detection_cfg.get('yolo_imgsz', 640)
         frame_w, frame_h = vehicle_detection_cfg.get('frame_resolution',[640,480])
+        self.vehicle_type_map = {int(k): v for k, v in vehicle_detection_cfg.get('vehicle_type_map', {}).items()}
 
         self.num_lanes = lane_detection_cfg.get('num_lanes', 6)
         self.lane_width_pixels = lane_detection_cfg.get('lane_width', frame_w / (self.num_lanes + 1) if self.num_lanes > 0 else frame_w / 4)
@@ -62,20 +63,22 @@ class CoreModule:
         perspective_matrix = None
         if matrix_path_str:
             matrix_path = Path(matrix_path_str)
-            # Resolve relative path based on app.py's parent if not absolute
             if not matrix_path.is_absolute():
-                 # Assume core_module is in the same dir or subdir relative to app.py structure
-                 # This might need adjustment based on exact project layout
-                 # If utils.py is guaranteed to be co-located with app.py:
-                 # app_dir = Path(__file__).parent.parent.resolve() # Go up one level if core_module is in a subdir
                  app_dir = Path(__file__).parent.parent.parent.parent.resolve() # Go up to project root
                  matrix_path = app_dir / matrix_path
             if matrix_path.exists():
                 try:
                     perspective_matrix = np.load(matrix_path)
                     logger.info(f"Loaded perspective matrix from: {matrix_path}")
-                except Exception as e: logger.error(f"Failed to load perspective matrix from {matrix_path}: {e}")
-            else: logger.warning(f"Perspective matrix path specified but not found: {matrix_path}")
+                except Exception as e:
+                    logger.error(f"Failed to load perspective matrix from {matrix_path}: {e}")
+                    perspective_matrix = None # Ensure it's None on failure
+            else:
+                logger.warning(f"Perspective matrix path specified but not found: {matrix_path}")
+                perspective_matrix = None # Ensure it's None if not found
+        else:
+            perspective_matrix = None
+            logger.info("No perspective matrix path specified.")
 
         # Initialize LPP
         if LicensePlatePreprocessor:
@@ -105,9 +108,10 @@ class CoreModule:
             raise FileNotFoundError(f"Model file not found at {self.model_path}")
 
         is_onnx = self.model_path.endswith('.onnx')
+        is_quantized_onnx = self.model_path.endswith('_quant.onnx')
 
         try:
-            if is_onnx:
+            if is_onnx or is_quantized_onnx:
                 import onnxruntime as ort
                 logger.info(f"Attempting to load ONNX model from {self.model_path}")
                 providers = ['CPUExecutionProvider']
@@ -115,6 +119,7 @@ class CoreModule:
                     # Check for CUDA availability for ONNX Runtime
                     if 'CUDAExecutionProvider' in ort.get_available_providers():
                         providers.insert(0, 'CUDAExecutionProvider')
+                        logger.info("CUDAExecutionProvider available for ONNX Runtime.")
                     else:
                         logger.warning("GPU acceleration requested but CUDAExecutionProvider not available for ONNX. Falling back to CPU.")
                 
@@ -155,8 +160,10 @@ class CoreModule:
                          confidence_threshold: Optional[float] = None,
                          proximity_threshold: Optional[int] = None,
                          track_timeout: Optional[int] = None) -> Dict[str, Dict]:
-        if frame is None or frame.size == 0: return {}
-        if self.model is None: return {}
+        if frame is None or frame.size == 0:
+            return {}
+        if self.model is None:
+            return {}
         logger.debug("detect_and_track executed")
 
         # Use parameters passed during the call, falling back to instance defaults
@@ -182,22 +189,25 @@ class CoreModule:
         detections = []
         try:
             img_size = self.yolo_imgsz
-            if not isinstance(img_size, int) or img_size <= 0: img_size = 640
+            if not isinstance(img_size, int) or img_size <= 0:
+                img_size = 640
 
             # --- ROI Processing ---
             roi_cfg = self.config.get('roi_processing', {})
             roi_enabled = roi_cfg.get('enabled', False)
             crop_rect = roi_cfg.get('crop_rect', [0, 0, frame.shape[1], frame.shape[0]])
             
+            preprocess_start_time = time.time()
             if roi_enabled:
                 x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
                 processed_frame = frame[y1_crop:y2_crop, x1_crop:x2_crop]
             else:
                 processed_frame = frame
-            # ---------------------
+            logger.debug(f"Frame {frame_index}: Preprocessing took {(time.time() - preprocess_start_time)*1000:.2f}ms")
 
             # --- Model-specific prediction ---
-            is_onnx = self.model_path.endswith('.onnx')
+            inference_start_time = time.time()
+            is_onnx = self.model_path.endswith('.onnx') or self.model_path.endswith('_quant.onnx')
             if is_onnx:
                 # Pre-process frame for ONNX model
                 input_img = cv2.resize(processed_frame, (img_size, img_size))
@@ -209,7 +219,9 @@ class CoreModule:
                 input_name = self.model.get_inputs()[0].name
                 output_name = self.model.get_outputs()[0].name
                 outputs = self.model.run([output_name], {input_name: input_tensor})[0]
+                logger.debug(f"Frame {frame_index}: ONNX Inference took {(time.time() - inference_start_time)*1000:.2f}ms")
                 
+                postprocess_start_time = time.time()
                 # Post-process ONNX output
                 # This part needs to be adapted based on the exact output format of your ONNX model
                 # Assuming output is [1, 84, 8400] where 84 is (cx, cy, w, h, conf, cls...)
@@ -231,43 +243,91 @@ class CoreModule:
                 boxes[:, 2] = boxes[:, 0] + boxes[:, 2] * processed_frame.shape[1]
                 boxes[:, 3] = boxes[:, 1] + boxes[:, 3] * processed_frame.shape[0]
 
+                # Filter by class_ids
+                valid_indices = np.isin(class_ids, self.vehicle_class_ids)
+                boxes = boxes[valid_indices]
+                scores = scores[valid_indices]
+                class_ids = class_ids[valid_indices]
+
+                # Convert boxes from (cx, cy, w, h) to (x1, y1, x2, y2)
+                # This part is already vectorized, ensure it's correct
+                x1 = (boxes[:, 0] - boxes[:, 2] / 2)
+                y1 = (boxes[:, 1] - boxes[:, 3] / 2)
+                x2 = (boxes[:, 0] + boxes[:, 2] / 2)
+                y2 = (boxes[:, 1] + boxes[:, 3] / 2)
+
+                # Scale to original processed_frame size
+                scale_w = processed_frame.shape[1] / img_size
+                scale_h = processed_frame.shape[0] / img_size
+                x1 *= scale_w
+                y1 *= scale_h
+                x2 *= scale_w
+                y2 *= scale_h
+
+                # Apply ROI offset if enabled
+                if roi_enabled:
+                    x1 += x1_crop
+                    y1 += y1_crop
+                    x2 += x1_crop
+                    y2 += y1_crop
+
+                # Calculate center_x, center_y
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
+
+                # Combine into detections list
                 for i in range(len(boxes)):
-                    if class_ids[i] not in self.vehicle_class_ids: continue
-                    x1, y1, x2, y2 = map(int, boxes[i])
-                    conf = float(scores[i])
-                    cls = int(class_ids[i])
-
-                    if roi_enabled:
-                        x1, y1 = x1 + x1_crop, y1 + y1_crop
-                        x2, y2 = x2 + x1_crop, y2 + y1_crop
-
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
-                    detections.append((center_x, center_y, conf, cls, frame_index, [x1, y1, x2, y2]))
+                    detections.append((
+                        float(center_x[i]), float(center_y[i]),
+                        float(scores[i]), int(class_ids[i]),
+                        frame_index,
+                        [int(x1[i]), int(y1[i]), int(x2[i]), int(y2[i])]
+                    ))
+                logger.debug(f"Frame {frame_index}: ONNX Postprocessing took {(time.time() - postprocess_start_time)*1000:.2f}ms")
 
             else: # Existing PyTorch logic
                 results = self.model.predict(processed_frame, conf=confidence_threshold, imgsz=img_size, classes=self.vehicle_class_ids, max_det=self.max_active_tracks, verbose=False)
+                logger.debug(f"Frame {frame_index}: PyTorch Inference took {(time.time() - inference_start_time)*1000:.2f}ms")
+                postprocess_start_time = time.time()
                 for r in results:
-                    boxes = r.boxes
-                    for box in boxes:
-                        if not all(hasattr(box, attr) for attr in ['conf', 'xyxy', 'cls']): continue
-                        conf = float(box.conf[0])
-                        cls = int(box.cls[0])
-                        if cls not in self.vehicle_class_ids: continue
+                    if r.boxes.xyxy.size == 0: # Check if there are any detections
+                        continue
 
-                        xyxy = box.xyxy[0].tolist()
-                        
-                        if roi_enabled:
-                            x1_orig, y1_orig, x2_orig, y2_orig = map(int, xyxy)
-                            x1, y1 = x1_orig + x1_crop, y1_orig + y1_crop
-                            x2, y2 = x2_orig + x1_crop, y2_orig + y1_crop
-                        else:
-                            x1, y1, x2, y2 = map(int, xyxy)
+                    # Extract data as numpy arrays
+                    xyxy = r.boxes.xyxy.cpu().numpy()
+                    confs = r.boxes.conf.cpu().numpy()
+                    clss = r.boxes.cls.cpu().numpy()
 
-                        center_x = (x1 + x2) / 2
-                        center_y = (y1 + y2) / 2
-                        vehicle_bbox = [x1, y1, x2, y2]
-                        detections.append((center_x, center_y, conf, cls, frame_index, vehicle_bbox))
+                    # Filter by confidence threshold and vehicle class IDs
+                    valid_indices = (confs > confidence_threshold) & (np.isin(clss, self.vehicle_class_ids))
+                    
+                    if not np.any(valid_indices): # Check if any valid detections remain
+                        continue
+
+                    filtered_xyxy = xyxy[valid_indices]
+                    filtered_confs = confs[valid_indices]
+                    filtered_clss = clss[valid_indices]
+
+                    # Apply ROI offset if enabled (vectorized)
+                    if roi_enabled:
+                        filtered_xyxy[:, 0] += x1_crop
+                        filtered_xyxy[:, 1] += y1_crop
+                        filtered_xyxy[:, 2] += x1_crop
+                        filtered_xyxy[:, 3] += y1_crop
+
+                    # Calculate center_x, center_y (vectorized)
+                    center_x = (filtered_xyxy[:, 0] + filtered_xyxy[:, 2]) / 2
+                    center_y = (filtered_xyxy[:, 1] + filtered_xyxy[:, 3]) / 2
+
+                    # Append to detections list
+                    for i in range(len(filtered_xyxy)):
+                        detections.append((
+                            float(center_x[i]), float(center_y[i]),
+                            float(filtered_confs[i]), int(filtered_clss[i]),
+                            frame_index,
+                            [int(filtered_xyxy[i, 0]), int(filtered_xyxy[i, 1]), int(filtered_xyxy[i, 2]), int(filtered_xyxy[i, 3])]
+                        ))
+                logger.debug(f"Frame {frame_index}: PyTorch Postprocessing took {(time.time() - postprocess_start_time)*1000:.2f}ms")
             
             return detections
 
@@ -280,7 +340,8 @@ class CoreModule:
         current_tracks_in_frame = {}
         if not detections:
             for track in self.vehicle_data.values():
-                 if track.get('kalman_filter'): track['kalman_filter'].predict()
+                 if track.get('kalman_filter'):
+                     track['kalman_filter'].predict()
             return current_tracks_in_frame
 
         detection_centers = np.array([d[:2] for d in detections])
@@ -312,7 +373,8 @@ class CoreModule:
                 distances, indices = kdtree.query(predicted_positions, k=1)
 
                 for i, vehicle_id in enumerate(track_ids_to_match):
-                    if np.isnan(distances[i]): continue
+                    if np.isnan(distances[i]):
+                        continue
                     best_match_idx = indices[i]
                     distance = distances[i]
 
@@ -324,14 +386,18 @@ class CoreModule:
                         current_tracks_in_frame[vehicle_id] = track
                         matched_detection_indices.add(best_match_idx)
 
-            except ValueError as ve: logger.error(f"KDTree query error: {ve}")
-            except Exception as tree_err: logger.error(f"Error during KDTree matching: {tree_err}", exc_info=True)
+            except ValueError as ve:
+                logger.error(f"KDTree query error: {ve}")
+            except Exception as tree_err:
+                logger.error(f"Error during KDTree matching: {tree_err}", exc_info=True)
 
         unmatched_detections_indices = set(detection_indices) - matched_detection_indices
         for idx in unmatched_detections_indices:
-            if len(self.vehicle_data) >= self.max_active_tracks: break
+            if len(self.vehicle_data) >= self.max_active_tracks:
+                break
             new_vehicle_id = self._initialize_new_track(detections[idx], current_time, frame_index)
-            if new_vehicle_id: current_tracks_in_frame[new_vehicle_id] = self.vehicle_data[new_vehicle_id]
+            if new_vehicle_id:
+                current_tracks_in_frame[new_vehicle_id] = self.vehicle_data[new_vehicle_id]
 
         return current_tracks_in_frame
 
@@ -339,7 +405,8 @@ class CoreModule:
     def _initialize_new_track(self, detection: Tuple, current_time: float, frame_index: int) -> Optional[str]:
         try:
             center_x, center_y, conf, class_id, _, vehicle_bbox = detection
-            if (vehicle_bbox[2]-vehicle_bbox[0]) * (vehicle_bbox[3]-vehicle_bbox[1]) < 1000: return None
+            if (vehicle_bbox[2]-vehicle_bbox[0]) * (vehicle_bbox[3]-vehicle_bbox[1]) < 1000:
+                return None
 
             # Generate globally unique vehicle ID using feed_id prefix
             vehicle_id = f"{self.feed_id}-{CoreModule.vehicle_id_counter}"
@@ -374,11 +441,13 @@ class CoreModule:
 
             kf = track.get('kalman_filter')
             if kf:
-                try: kf.update(np.array([center_x, center_y], dtype=np.float32))
+                try:
+                    kf.update(np.array([center_x, center_y], dtype=np.float32))
                 except Exception as kf_err:
                     logger.warning(f"Kalman update failed for {track['vehicle_id']}: {kf_err}")
                     track['kalman_filter'] = self._initialize_kalman_filter(center_x, center_y)
-            else: track['kalman_filter'] = self._initialize_kalman_filter(center_x, center_y)
+            else:
+                track['kalman_filter'] = self._initialize_kalman_filter(center_x, center_y)
 
             # Estimate Speed (using Kalman velocity)
             track['speed'] = self._estimate_speed_kalman(track, current_time, prev_time) # Pass prev_time
@@ -386,7 +455,7 @@ class CoreModule:
 
             new_lane = self._estimate_lane(track['bbox'])
             last_recorded_lane = track['lane_history'][-1][1] if track['lane_history'] else -1
-            center_lane_new = (new_lane - 0.5) * self.lane_width_pixels
+            # center_lane_new = (new_lane - 0.5) * self.lane_width_pixels
             center_lane_old = (last_recorded_lane - 0.5) * self.lane_width_pixels if last_recorded_lane != -1 else center_x
             if last_recorded_lane != -1 and new_lane != -1 and new_lane != last_recorded_lane and abs(center_x - center_lane_old) > self.lane_change_buffer:
                 logger.info(f"Vehicle {track['vehicle_id']} lane change {last_recorded_lane} -> {new_lane}")
@@ -475,7 +544,8 @@ class CoreModule:
 
     def _estimate_speed_kalman(self, track: Dict, current_time: float, prev_time: float) -> float:
         kf = track.get('kalman_filter')
-        if not kf: return 0.0
+        if not kf:
+            return 0.0
         try:
             vx, vy = kf.x[2], kf.x[3] # Velocity in pixels/dt (where dt was used in F matrix)
             # Use the actual time difference between updates for scaling
@@ -495,7 +565,8 @@ class CoreModule:
             return 0.0
 
     def _ocr_license_plate(self, frame: np.ndarray, bbox: List[int]) -> str:
-        if not self.preprocessor: return "Unknown (NoPrep)"
+        if not self.preprocessor:
+            return "Unknown (NoPrep)"
         try:
             x1, y1, x2, y2 = map(int, bbox)
             h, w = frame.shape[:2]
@@ -515,9 +586,11 @@ class CoreModule:
             roi_x_end = min(w, int(x2 - roi_w * right_margin_factor))
             # -------------------------------
 
-            if roi_x_start >= roi_x_end or roi_y_start >= roi_y_end: return "Unknown (BadROI)"
+            if roi_x_start >= roi_x_end or roi_y_start >= roi_y_end:
+                return "Unknown (BadROI)"
             roi = frame[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
-            if (roi.shape[0] * roi.shape[1]) < self.preprocessor.min_roi_size: return "Unknown (SmallROI)"
+            if (roi.shape[0] * roi.shape[1]) < self.preprocessor.min_roi_size:
+                return "Unknown (SmallROI)"
             return self.preprocessor.preprocess_and_ocr(roi)
         except Exception as e:
             logger.error(f"OCR processing failed: {e}", exc_info=True)
@@ -551,16 +624,19 @@ class CoreModule:
             raise
 
     def _estimate_lane(self, bbox: List[int]) -> int:
-        if not bbox or len(bbox) != 4: return -1
+        if not bbox or len(bbox) != 4:
+            return -1
         x_center = (bbox[0] + bbox[2]) / 2
-        if self.lane_width_pixels <= 0: return -1
+        if self.lane_width_pixels <= 0:
+            return -1
         # Correct calculation: lane based on which width segment the center falls into
         lane = int(x_center // self.lane_width_pixels) + 1
         return max(1, min(lane, self.num_lanes)) # Clamp
 
     def _remove_stale_tracks(self, current_time: float, track_timeout: int) -> None:
         stale_ids = [vid for vid, track in self.vehicle_data.items() if current_time - track['last_seen'] > track_timeout]
-        for vid in stale_ids: del self.vehicle_data[vid]
+        for vid in stale_ids:
+            del self.vehicle_data[vid]
 
         if len(self.vehicle_data) > self.max_active_tracks:
              sorted_tracks = sorted(self.vehicle_data.items(), key=lambda item: item[1]['last_seen'])
@@ -579,11 +655,13 @@ class CoreModule:
             # logger.debug("DB queue not configured or provided. Skipping data save.") # Optional: Log only once or less frequently
             return
         # ----------------------------------------
-        if not current_tracks: return
+        if not current_tracks:
+            return
 
         vehicle_data_list = []
         for track_id, track in current_tracks.items():
-            if not track: continue # Skip if track is None somehow
+            if not track:
+                continue # Skip if track is None somehow
             try:
                 vehicle_data = {
                     'vehicle_id': track_id, # Already includes feed_id prefix
@@ -608,7 +686,8 @@ class CoreModule:
                  logger.error(f"Error preparing data for DB for {track_id}: {e}", exc_info=True)
 
 
-        if not vehicle_data_list: return
+        if not vehicle_data_list:
+            return
 
         try:
             for vehicle_data in vehicle_data_list:
@@ -620,24 +699,38 @@ class CoreModule:
             logger.error(f"Failed to put vehicle data onto db_queue: {e}", exc_info=True)
 
     def _get_vehicle_type(self, class_id: int) -> str:
-        type_map = {2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
-        return type_map.get(class_id, 'unknown')
+        return self.vehicle_type_map.get(class_id, 'unknown')
 
     def cleanup(self):
         logger.info(f"CoreModule cleanup initiated for {self.feed_id}. Active tracks: {len(self.vehicle_data)}")
         self.vehicle_data.clear()
         # Model cleanup (if possible)
-        if hasattr(self.model, 'session') and self.model.session: del self.model.session
-        if hasattr(self.model, 'predictor') and self.model.predictor: del self.model.predictor
+        if self.model_path.endswith('.onnx') and hasattr(self.model, 'release'):
+            # ONNX Runtime sessions might have a release method or can be explicitly closed
+            # Depending on ORT version, direct deletion might be enough, but explicit is better.
+            try:
+                self.model.release() # Some ORT versions might have this
+                logger.info(f"ONNX session for {self.feed_id} released.")
+            except AttributeError:
+                logger.debug(f"ONNX session for {self.feed_id} does not have a .release() method.")
+            except Exception as e:
+                logger.warning(f"Error releasing ONNX session for {self.feed_id}: {e}")
+        elif hasattr(self.model, 'predictor') and self.model.predictor:
+            del self.model.predictor
         del self.model
-        if self.preprocessor and hasattr(self.preprocessor, 'gemini_model'): del self.preprocessor.gemini_model
+        if self.preprocessor and hasattr(self.preprocessor, 'gemini_model'):
+            del self.preprocessor.gemini_model
 
-        import gc; gc.collect()
+        import gc
+        gc.collect()
         try:
             import torch
-            if torch.cuda.is_available(): torch.cuda.empty_cache()
-        except ImportError: pass
-        except Exception as e: logger.warning(f"Error during CUDA cache clear on cleanup: {e}")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"Error during CUDA cache clear on cleanup: {e}")
         logger.info(f"CoreModule cleanup finished for {self.feed_id}.")
 
 # --- Example standalone usage ---
@@ -687,9 +780,12 @@ if __name__ == "__main__":
         for i in range(5):
             frame_index = i * 5 # Simulate skipping frames
             # Simulate some movement or change detections if needed
-            if i==1: cv2.rectangle(dummy_frame, (100,100), (150,150), (0,255,0), -1) # Add a "vehicle"
-            if i==2: cv2.rectangle(dummy_frame, (110,110), (160,160), (0,255,0), -1) # Move it
-            if i==3: cv2.rectangle(dummy_frame, (200,200), (250,250), (0,0,255), -1) # Add another
+            if i==1:
+                cv2.rectangle(dummy_frame, (100,100), (150,150), (0,255,0), -1) # Add a "vehicle"
+            if i==2:
+                cv2.rectangle(dummy_frame, (110,110), (160,160), (0,255,0), -1) # Move it
+            if i==3:
+                cv2.rectangle(dummy_frame, (200,200), (250,250), (0,0,255), -1) # Add another
 
             logger.info(f"--- Processing frame {frame_index} ---")
             tracked = core_module.detect_and_track(dummy_frame, frame_index)

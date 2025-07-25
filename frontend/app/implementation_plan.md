@@ -1,6 +1,6 @@
-# Implementation Plan: Pavement Analysis Frontend (Next.js)
+# Frontend Implementation Plan: Pavement Analysis Module
 
-This document outlines the implementation plan for the frontend of the Pavement Analysis system, integrating with the Python backend via API endpoints.
+This document outlines the implementation plan for the frontend of the Pavement Analysis system, which is a module within the larger Traffic Management Hub. It details the integration with the Python backend via API endpoints and the specific components and functionalities required for this module.
 
 ## Authentication Note (IMPORTANT)
 

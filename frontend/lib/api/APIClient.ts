@@ -1,4 +1,5 @@
 import { TokenManager } from '../auth/TokenManager';
+import * as auth from 'firebase/auth';
 
 export interface APIOptions {
     baseURL: string;
@@ -13,6 +14,7 @@ export interface APIError extends Error {
 
 export class APIClient {
     private static instance: APIClient;
+    private static _options: APIOptions; // Store initial options
     private baseURL: string;
     private timeout: number;
     private headers: Record<string, string>;
@@ -33,6 +35,14 @@ export class APIClient {
     static getInstance(options: APIOptions): APIClient {
         if (!APIClient.instance) {
             APIClient.instance = new APIClient(options);
+            APIClient._options = options; // Store the options used for the first instance
+        } else {
+            // If an instance already exists, ensure the options are the same
+            if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
+                console.warn("APIClient.getInstance called with different options than initial instantiation. Ignoring new options.");
+                // Optionally, you could throw an error here if strict singleton behavior is desired:
+                // throw new Error("APIClient already instantiated with different options.");
+            }
         }
         return APIClient.instance;
     }
@@ -64,19 +74,20 @@ export class APIClient {
         }
     }
 
-    private async handleResponse<T>(response: Response): Promise<T> {
+    private async handleResponse<T>(response: Response, originalRequestOptions: RequestInit): Promise<T> {
         if (!response.ok) {
             if (response.status === 401) {
                 // Token might be expired, try to refresh with firebase user
-                const auth = await import('firebase/auth');
+                // auth is already imported at the top of the file
                 const user = auth.getAuth().currentUser;
                 if (user) {
                     const newToken = await this.tokenManager.refreshToken(user);
                     if (newToken) {
                         // Retry the request with new token
+                        const newHeaders = { ...originalRequestOptions.headers, 'Authorization': `Bearer ${newToken}` };
                         return this.request<T>(response.url, {
-                            method: response.type as string,
-                            body: response.body
+                            ...originalRequestOptions,
+                            headers: newHeaders,
                         });
                     }
                 }
@@ -114,7 +125,7 @@ export class APIClient {
 
         try {
             const response = await this.fetchWithTimeout(url, fetchOptions);
-            return this.handleResponse<T>(response);
+            return this.handleResponse<T>(response, fetchOptions);
         } catch (error: unknown) {
             if (error instanceof Error && error.name === 'AbortError') {
                 throw new Error('Request timeout');

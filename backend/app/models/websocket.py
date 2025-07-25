@@ -6,7 +6,7 @@ import enum
 from app.models.alerts import Alert
 from app.models.signals import SignalState
 from app.models.feeds import FeedStatusData # For feed status updates
-from app.models.traffic import LocationModel # Added for UserSpecificNotification
+
 
 # --- Specific Payload Models ---
 class RealtimeMetricsUpdate(BaseModel):
@@ -86,6 +86,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     GLOBAL_REALTIME_METRICS_UPDATE = "global_realtime_metrics_update"
     NEW_ALERT = "new_alert"
     SIGNAL_UPDATE = "signal_update"
+    FEED_METRICS = "FEED_METRICS" # Added for feed-specific metrics
     FEED_STATUS_UPDATE = "feed_status_update"
     GENERAL_NOTIFICATION = "general_notification"
     ERROR_NOTIFICATION = "error_notification"
@@ -93,6 +94,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     ALERT_STATUS_UPDATE = "alert_status_update" # For acknowledged, dismissed alerts
     NODE_CONGESTION_UPDATE = "node_congestion_update" # For broadcasting node congestion data
     USER_SPECIFIC_ALERT = "user_specific_alert" # Renamed from USER_SPECIFIC_NOTIFICATION
+    INITIAL_FEED_STATUSES = "initial_feed_statuses" # New type for initial feed status dump
     # Add other specific event types as needed
     PONG = "pong" # For keep-alive
     AUTH_SUCCESS = "auth_success"

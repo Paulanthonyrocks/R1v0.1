@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
@@ -7,7 +7,6 @@ from app.main import app # Assuming main app instance is here
 from app.dependencies import get_db, get_current_active_user, get_connection_manager
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
-from app.models.alerts import Alert as AlertModel # For response model validation
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, AlertStatusUpdatePayload
 
 # --- Mock Dependencies ---
@@ -50,10 +49,10 @@ class TestAlertsRouter(unittest.TestCase):
         args, _ = mock_connection_manager.broadcast_message_model.call_args
         sent_message: WebSocketMessage = args[0]
 
-        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE)
-        self.assertIsInstance(sent_message.payload, AlertStatusUpdatePayload)
-        self.assertEqual(sent_message.payload.alert_id, alert_id_to_delete)
-        self.assertEqual(sent_message.payload.status, "dismissed")
+        self.assertEqual(sent_message.type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE)
+        self.assertIsInstance(sent_message.data, AlertStatusUpdatePayload)
+        self.assertEqual(sent_message.data.alert_id, alert_id_to_delete)
+        self.assertEqual(sent_message.data.status, "dismissed")
 
     def test_delete_alert_not_found(self):
         alert_id_to_delete = 999
@@ -93,8 +92,8 @@ class TestAlertsRouter(unittest.TestCase):
         args, _ = mock_connection_manager.broadcast_message_model.call_args
         sent_message: WebSocketMessage = args[0]
 
-        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE)
-        self.assertIsInstance(sent_message.payload, AlertStatusUpdatePayload)
+        self.assertEqual(sent_message.type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE)
+        self.assertIsInstance(sent_message.data, AlertStatusUpdatePayload)
         self.assertEqual(sent_message.payload.alert_id, alert_id_to_ack)
         self.assertEqual(sent_message.payload.status, "acknowledged")
 
@@ -106,7 +105,7 @@ class TestAlertsRouter(unittest.TestCase):
         updated_alert_data_from_db = {
             "id": alert_id_to_unack, "timestamp": datetime.now(timezone.utc).timestamp(),
             "severity": "CRITICAL", "feed_id": "feed456",
-            "message": "Test alert unacknowledged", "details": "{}", "acknowledged": False
+            "message": "Test alert unacknowledged", "details": {}, "acknowledged": False
         }
         mock_db_manager.get_alert_by_id = AsyncMock(return_value=updated_alert_data_from_db)
 
@@ -121,7 +120,7 @@ class TestAlertsRouter(unittest.TestCase):
         mock_connection_manager.broadcast_message_model.assert_awaited_once()
         args, _ = mock_connection_manager.broadcast_message_model.call_args
         sent_message: WebSocketMessage = args[0]
-        self.assertEqual(sent_message.payload.status, "unacknowledged")
+        self.assertEqual(sent_message.data.status, "unacknowledged")
 
 
     def test_acknowledge_alert_not_found(self):

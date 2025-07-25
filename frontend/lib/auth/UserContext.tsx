@@ -59,6 +59,12 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
           }
         }
       });
+
+      if (user && wsClient) {
+        user.getIdToken().then(token => {
+          wsClient.connect(token).catch(err => console.error("WebSocket connection error:", err));
+        });
+      }
     } else {
       setUserRole(UserRole.VIEWER);
     }

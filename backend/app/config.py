@@ -49,6 +49,58 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             logger.warning("Falling back to basic logging configuration.")
         # --- End Logging Reconfiguration ---
 
+        # Resolve relative paths to absolute paths
+        project_root = Path(__file__).parent.parent.parent # Assumes config.py is in backend/app/
+        
+        # Resolve sample_video path
+        sample_video_path_relative = _config_instance.get('video_input', {}).get('sample_video')
+        if sample_video_path_relative:
+            # Get the directory of the config.yaml file
+            config_file_dir = Path(config_path).parent
+            
+            # Resolve the path relative to the config.yaml's directory
+            resolved_sample_video_path = (config_file_dir / sample_video_path_relative).resolve()
+            
+            _config_instance['video_input']['sample_video'] = str(resolved_sample_video_path)
+            logger.info(f"Resolved sample_video path to: {_config_instance['video_input']['sample_video']}")
+
+        # Resolve model_path for vehicle_detection
+        model_path_relative = _config_instance.get('vehicle_detection', {}).get('model_path')
+        if model_path_relative:
+            model_path_absolute = (project_root / model_path_relative).resolve()
+            _config_instance['vehicle_detection']['model_path'] = str(model_path_absolute)
+            logger.info(f"Resolved vehicle_detection model_path to: {_config_instance['vehicle_detection']['model_path']}")
+
+        # Resolve matrix_path for perspective_calibration
+        matrix_path_relative = _config_instance.get('perspective_calibration', {}).get('matrix_path')
+        if matrix_path_relative:
+            matrix_path_absolute = (project_root / matrix_path_relative).resolve()
+            _config_instance['perspective_calibration']['matrix_path'] = str(matrix_path_absolute)
+            logger.info(f"Resolved perspective_calibration matrix_path to: {_config_instance['perspective_calibration']['matrix_path']}")
+
+        # Resolve db_path for database
+        db_path_relative = _config_instance.get('database', {}).get('db_path')
+        if db_path_relative:
+            db_path_absolute = (project_root / db_path_relative).resolve()
+            _config_instance['database']['db_path'] = str(db_path_absolute)
+            logger.info(f"Resolved database db_path to: {_config_instance['database']['db_path']}")
+
+        # --- Reconfigure Logging Here (Centralized) ---
+        # It's good practice to configure logging as soon as config is loaded
+        print("Attempting to configure logging with dictConfig...")
+        try:
+            logging.config.dictConfig(_config_instance['logging'])
+            print("Logging configured successfully using dictConfig.")
+            logger.info("Logging configured successfully using dictConfig.")
+        except Exception as e:
+            print(f"Failed to configure logging with dictConfig: {e}")
+            logger.error(f"Failed to configure logging with dictConfig: {e}", exc_info=True)
+            # Fallback to basic config if dictConfig fails
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            print("Falling back to basic logging configuration.")
+            logger.warning("Falling back to basic logging configuration.")
+        # --- End Logging Reconfiguration ---
+
         return _config_instance
     except ConfigError as e:
         logger.critical(f"CRITICAL CONFIGURATION ERROR during initialization: {e}", exc_info=True)

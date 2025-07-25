@@ -1,6 +1,6 @@
 # models.py
-from pydantic import BaseModel, validator, Field
-from typing import Dict, Union, List
+from pydantic import BaseModel, Field
+from typing import Dict, Union
 from datetime import datetime
 
 from app.models.traffic import LocationModel

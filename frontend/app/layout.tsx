@@ -17,7 +17,7 @@ const inter = Inter({
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const pathname = usePathname();
+  
   return (
     <html lang="en" suppressHydrationWarning>
       <UserProvider>

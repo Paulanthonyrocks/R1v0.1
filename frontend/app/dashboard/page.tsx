@@ -15,15 +15,17 @@ import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed
-import { WS_URL } from '@/lib/hook';
+
+import useAuth from '@/lib/hook/useAuth';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
+  const { token } = useAuth();
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
-  const { /* kpis, */ alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
+  const { /* kpis, */ alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(token);
   // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   // State for REST API congestion index
@@ -79,10 +81,20 @@ const DashboardPage: React.FC = () => {
   }
 
   useEffect(() => {
+    // Only fetch if token is available
+    if (!token) {
+      console.log("DashboardPage: Token not available, skipping KPI fetch.");
+      return;
+    }
+
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
       try {
-        const res = await fetch('/api/v1/analytics/nodes/congestion');
+        const res = await fetch('/api/v1/analytics/nodes/congestion', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
         if (!res.ok) throw new Error(`Failed to fetch congestion data: ${res.status}`);
         const response = await res.json() as APIResponse<AllNodesCongestionResponse>;
         if (response.status === 'success' && response.data.nodes.length > 0) {
@@ -125,17 +137,19 @@ const DashboardPage: React.FC = () => {
           setTotalFlow(null);
           setActiveIncidents(null);
         }
-      } catch {
+      } catch (error) {
+        console.error("Error fetching KPIs from API:", error);
         setCongestionIndex(null);
         setAverageSpeed(null);
         setTotalFlow(null);
         setActiveIncidents(null);
       }
     };
+
     fetchKpisFromApi();
     const interval = setInterval(fetchKpisFromApi, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [token]); // Add token to dependency array
 
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}>

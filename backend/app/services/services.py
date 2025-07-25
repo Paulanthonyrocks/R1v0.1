@@ -1,27 +1,30 @@
 # app/services.py
 import logging
-from app.services.feed_manager import FeedManager as FMClass
 from app.websocket.connection_manager import ConnectionManager
+from app.services.feed_manager import FeedManager as FMClass
+
+from typing import Optional, Dict, Any
+from datetime import datetime
+
 from app.services.traffic_signal_service import TrafficSignalService
-from app.services.analytics_service import AnalyticsService
 from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
-from typing import Optional, Dict, Any
-from datetime import datetime
+from app.database import get_database_manager
+from app.services.analytics_service import AnalyticsService
 
-connection_manager_instance: Optional[ConnectionManager] = None
+logger = logging.getLogger(__name__)
+
+feed_manager_instance: Optional[FMClass] = None # Keep FeedManager instance global if needed outside initialize_services
+
+connection_manager_instance = None
 _traffic_signal_service_instance: Optional[TrafficSignalService] = None
 _analytics_service_instance: Optional[AnalyticsService] = None
 _route_optimization_service_instance: Optional[RouteOptimizationService] = None
 _personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
 _weather_service_instance: Optional[WeatherService] = None
 _event_service_instance: Optional[EventService] = None
-
-from app.database import get_database_manager
-from app.utils.service_getters import get_feed_manager # Import the moved getter
-feed_manager_instance: Optional[FMClass] = None # Keep FeedManager instance global if needed outside initialize_services
 
 
 async def initialize_services(config: Dict[str, Any], logger: logging.Logger): # Accept logger as argument
@@ -33,7 +36,8 @@ async def initialize_services(config: Dict[str, Any], logger: logging.Logger): #
     if connection_manager_instance is None:
          logger.info("Attempting to initialize WebSocket ConnectionManager...")
          try:
-              connection_manager_instance = ConnectionManager()
+              from app.websocket.connection_manager import ConnectionManager
+              connection_manager_instance = ConnectionManager(feed_manager=feed_manager_instance)
               logger.info("WebSocket ConnectionManager initialized via app.services.")
          except Exception as e:
                logger.error(f"Failed to initialize ConnectionManager in app.services: {e}")
@@ -74,25 +78,32 @@ async def initialize_services(config: Dict[str, Any], logger: logging.Logger): #
     )
     # Pass db_manager to AnalyticsService
     try:
+        from app.services.analytics_service import AnalyticsService
         _analytics_service_instance = AnalyticsService(
             config=config.get("analytics_service", {}),
             connection_manager=connection_manager_instance,
             database_manager=db_manager # Add this line
         )
-        logger.info("AnalyticsService initialized successfully.")
+        logger.info("AnalyticsService initialized successfully in services.py.")
+        print(f"services.py: _analytics_service_instance created: {_analytics_service_instance}")
     except Exception as e:
         logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
         _analytics_service_instance = None
+        raise # Re-raise the exception to propagate the error
     
     
-    _route_optimization_service_instance = RouteOptimizationService(
-        traffic_predictor=_analytics_service_instance._traffic_predictor,
-        data_cache=_analytics_service_instance._data_cache
-    )
+    if _analytics_service_instance:
+        _route_optimization_service_instance = RouteOptimizationService(
+            traffic_predictor=_analytics_service_instance._traffic_predictor,
+            data_cache=_analytics_service_instance._data_cache
+        )
+        logger.info("RouteOptimizationService initialized successfully.")
+    else:
+        logger.warning("AnalyticsService not initialized, skipping RouteOptimizationService initialization.")
     # Initialize personalized routing service
     try:
         _personalized_routing_service_instance = PersonalizedRoutingService(
-            db_url=config.get("database", {}).get("url", "sqlite:///data/vehicle_data.db"),
+            database_manager=db_manager,
             traffic_predictor=_analytics_service_instance._traffic_predictor if _analytics_service_instance else None,
             data_cache=_analytics_service_instance._data_cache if _analytics_service_instance else None
         )
@@ -125,22 +136,28 @@ async def initialize_services(config: Dict[str, Any], logger: logging.Logger): #
 
     logger.info("Application services initialized.")
 
-def get_connection_manager() -> ConnectionManager:
+def get_connection_manager() -> 'ConnectionManager':
      if connection_manager_instance is None:
           raise RuntimeError("WebSocket ConnectionManager not initialized.")
      return connection_manager_instance
 
+def get_feed_manager() -> FMClass:
+    if feed_manager_instance is None:
+        logger.error("FeedManager accessed before initialization!")
+        raise RuntimeError("FeedManager not initialized.")
+    return feed_manager_instance
+
+
+
 def get_traffic_signal_service() -> TrafficSignalService:
     if _traffic_signal_service_instance is None:
         # This path should ideally not be taken if initialize_services is called at startup.
-        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("TrafficSignalService accessed before initialization!")
         raise RuntimeError("TrafficSignalService not initialized.")
     return _traffic_signal_service_instance
 
 def get_analytics_service() -> AnalyticsService: # New getter
     if _analytics_service_instance is None:
-        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("AnalyticsService accessed before initialization!")
         raise RuntimeError("AnalyticsService not initialized.")
     return _analytics_service_instance
@@ -148,7 +165,6 @@ def get_analytics_service() -> AnalyticsService: # New getter
 def get_route_optimization_service() -> RouteOptimizationService:
     """Get the route optimization service instance"""
     if _route_optimization_service_instance is None:
-        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("RouteOptimizationService accessed before initialization!")
         raise RuntimeError("RouteOptimizationService not initialized.")
     return _route_optimization_service_instance
@@ -161,7 +177,6 @@ def get_personalized_routing_service() -> Optional[PersonalizedRoutingService]:
 def get_weather_service() -> WeatherService:
     """Get the weather service instance"""
     if _weather_service_instance is None:
-        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("WeatherService accessed before initialization!")
         raise RuntimeError("WeatherService not initialized")
     return _weather_service_instance
@@ -169,13 +184,11 @@ def get_weather_service() -> WeatherService:
 def get_event_service() -> EventService:
     """Get the event service instance"""
     if _event_service_instance is None:
-        logger = logging.getLogger("app.services") # Ensure logger is defined here too
         logger.error("EventService accessed before initialization!")
         raise RuntimeError("EventService not initialized")
     return _event_service_instance
 
 async def shutdown_services(): # Make async for feed manager shutdown
-    logger = logging.getLogger("app.services") # Ensure logger is defined here too
     global feed_manager_instance, connection_manager_instance, _traffic_signal_service_instance, _analytics_service_instance, _route_optimization_service_instance
     logger.info("Shutting down application services...")
     if connection_manager_instance:
@@ -214,7 +227,7 @@ async def shutdown_services(): # Make async for feed manager shutdown
 
 async def health_check() -> Dict[str, Any]:
     """Performs a health check on critical services."""
-    logger = logging.getLogger("app.services") # Ensure logger is defined here too
+    # logger = logging.getLogger("app.services") # Ensure logger is defined here too
     # Basic health check, can be expanded
     # For FeedManager, you might check if the result reader task is alive
     # For Database, you might do a simple query

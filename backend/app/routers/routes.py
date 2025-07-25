@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from fastapi import APIRouter, Depends, Body, Query, HTTPException, status
 from typing import Optional, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
+import logging
 
 from app.models.traffic import LocationModel
 from app.dependencies import get_route_optimization_service, get_current_active_user
 from app.services.route_optimization_service import RouteOptimizationService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class RouteOptimizationRequest(BaseModel):
     start_location: LocationModel
@@ -42,10 +44,7 @@ async def optimize_route(
             preferences=request.preferences
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Route optimization failed: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Route optimization failed: {str(e)}")
 
 @router.get(
     "/supported-areas",
@@ -112,7 +111,4 @@ async def get_route_analytics(
             }
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch route analytics: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch route analytics: {str(e)}")

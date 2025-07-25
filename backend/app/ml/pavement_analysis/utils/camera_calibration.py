@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import logging
-from pathlib import Path
 from typing import Tuple, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -99,8 +98,8 @@ def get_pixel_to_mm_ratio(
             focal_length_x = calibration_params['camera_matrix'][0,0]  # fx
             focal_length_y = calibration_params['camera_matrix'][1,1]  # fy
             # This is a very simplified model, assumes camera pointing straight down
-            ratio_x = distance_to_surface / focal_length_x # mm/pixel if focal_length is in pixels and distance in mm
-            ratio_y = distance_to_surface / focal_length_y # This needs careful unit checking.
+            # ratio_x = distance_to_surface / focal_length_x # mm/pixel if focal_length is in pixels and distance in mm
+            # ratio_y = distance_to_surface / focal_length_y # This needs careful unit checking.
                                                        # Assuming sensor_element_size / focal_length = pixel_size_in_world_units / distance_to_object
                                                        # So pixel_to_mm = (sensor_element_size_mm * distance_to_object_mm) / focal_length_pixels
                                                        # Let's stick to simpler default for now if this path is taken.

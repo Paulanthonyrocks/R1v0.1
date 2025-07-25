@@ -1,11 +1,9 @@
-import numpy as np
-from typing import Dict, Any, Tuple
-
-# It's good practice to have logging available in all modules
 import logging
-logger = logging.getLogger(__name__)
-
 import psutil # Needed for check_system_resources
+from typing import Dict, Any, Tuple
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:
     """Checks current CPU and Virtual Memory usage percentage."""
@@ -101,13 +99,30 @@ class TrafficMonitor:
         # Identify lanes with high density
         high_density_lanes = [lane for lane, count in self.lane_counts.items() if count > self.density_threshold]
 
+        # Calculate a simple congestion score (0-100)
+        # Lower speed and higher vehicle count contribute to higher congestion
+        congestion_score = 0.0
+        if total_vehicles > 0:
+            # Inverse of speed (normalized by speed limit)
+            speed_factor = 1 - (avg_speed_kmh / self.speed_limit_kmh) if self.speed_limit_kmh > 0 else 0
+            speed_factor = max(0, min(1, speed_factor)) # Clamp between 0 and 1
+
+            # Vehicle density factor (normalized by a reasonable max density, e.g., 100 vehicles in view)
+            density_factor = total_vehicles / 100.0 # Assuming 100 is a high density for a single view
+            density_factor = max(0, min(1, density_factor)) # Clamp between 0 and 1
+
+            # Combine factors, e.g., 70% from speed, 30% from density
+            congestion_score = (speed_factor * 0.7 + density_factor * 0.3) * 100
+            congestion_score = round(congestion_score, 1)
+
         return {
-            'total_vehicles': total_vehicles,
+            'vehicle_count': total_vehicles, # Renamed from total_vehicles
             'stopped_vehicles': stopped_count,
             'speeding_vehicles': speeding_count,
-            'average_speed_kmh': round(avg_speed_kmh, 1),
+            'average_speed': round(avg_speed_kmh, 1), # Renamed from average_speed_kmh
             'congestion_level_percent': round(congestion_lvl_percent, 1),
             'is_congested': is_congested,
+            'congestion_score': congestion_score, # Added congestion_score
             'vehicles_per_lane': self.lane_counts.copy(), # Return a copy
             'high_density_lanes': high_density_lanes,
             'vehicle_type_counts': vehicle_type_counts

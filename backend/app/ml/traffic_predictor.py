@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -184,9 +184,12 @@ class TrafficPredictor:
         final_likelihood = min(0.95, base_likelihood)
         
         factors = []
-        if 7 <= current_hour <= 9 or 16 <= current_hour <= 18: factors.append("peak_hour")
-        if avg_speed < 20: factors.append("slow_traffic")
-        if vehicle_count > 50: factors.append("high_density")
+        if 7 <= current_hour <= 9 or 16 <= current_hour <= 18:
+            factors.append("peak_hour")
+        if avg_speed < 20:
+            factors.append("slow_traffic")
+        if vehicle_count > 50:
+            factors.append("high_density")
 
         return {
             "location": {'latitude': input_features['latitude'].iloc[0], 'longitude': input_features['longitude'].iloc[0]},

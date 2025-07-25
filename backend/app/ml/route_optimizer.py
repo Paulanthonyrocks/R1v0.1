@@ -1,9 +1,10 @@
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import numpy as np
 from dataclasses import dataclass
 import networkx as nx
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ class OptimizedRoute:
     congestion_probability: float
     recommendations: List[str]
 
-import pandas as pd
 
 class DataCache:
     def get_statistics(self, latitude, longitude, hours):

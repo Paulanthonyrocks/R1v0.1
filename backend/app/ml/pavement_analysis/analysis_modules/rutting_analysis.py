@@ -1,7 +1,6 @@
-import cv2
 import numpy as np
 import logging
-from typing import Dict, List, Tuple, Optional, Any # Added Any
+from typing import Dict, List, Optional # Added Any
 
 # Adjusted import path for backend structure
 from ..utils.camera_calibration import get_pixel_to_mm_ratio

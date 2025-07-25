@@ -1,8 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from fastapi import HTTPException, status
-from unittest.mock import MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import MagicMock
 
 from app.main import app  # FastAPI app instance
 from app.services.personalized_routing_service import PersonalizedRoutingService

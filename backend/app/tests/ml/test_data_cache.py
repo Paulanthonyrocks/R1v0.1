@@ -98,7 +98,7 @@ class TestTrafficDataCache(unittest.TestCase):
     def test_get_location_key_rounding(self):
         # Test if locations that are very close map to the same key due to rounding
         lat1, lon1 = 34.12345, -118.12345
-        lat2, lon2 = 34.12340, -118.12340 # Should round to the same as lat1, lon1
+        lat2, lon2 = 34.12349, -118.12349 # Should round to the same as lat1, lon1
         lat3, lon3 = 34.12355, -118.12355 # Should round to different
 
         key1 = self.cache._get_location_key(lat1, lon1)

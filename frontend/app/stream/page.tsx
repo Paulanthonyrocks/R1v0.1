@@ -7,20 +7,9 @@ import MatrixCard from '../../components/MatrixCard';
 import MatrixButton from '../../components/MatrixButton';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
+import useAuth from '@/lib/hook/useAuth'; // Import useAuth
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
 
-// Updated MetricCard for 1-bit theme
-const MetricCard = ({ title, value, unit, children }: { title: string, value: React.ReactNode, unit?: string, children?: React.ReactNode }) => (
-  <div className="bg-card p-4 rounded border border-primary pixel-drop-shadow text-center flex flex-col items-center justify-center min-w-[140px]"> {/* Added border and shadow */}
-    <div className="text-xs text-muted-foreground uppercase mb-1 tracking-normal">{title}</div> {/* Changed color, added tracking */}
-    <div className="text-2xl font-bold mb-1 text-primary tracking-normal"> {/* Ensured black text, added tracking */}
-      {value}
-      {unit && <span className="text-base font-normal ml-1 tracking-normal">{unit}</span>} {/* Added tracking */}
-    </div>
-    {children}
-  </div>
-);
 
 const MAX_HISTORY = 20;
 

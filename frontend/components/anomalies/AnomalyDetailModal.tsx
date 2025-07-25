@@ -19,16 +19,14 @@ interface AnomalyDetailModalProps {
 }
 
 const AnomalyDetailModal: React.FC<AnomalyDetailModalProps> = ({ anomaly, onClose }) => {
-  if (!anomaly) return null;
-
-  const modalTitleId = `anomaly-modal-title-${anomaly.id}`;
+  const modalTitleId = anomaly ? `anomaly-modal-title-${anomaly.id}` : '';
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (anomaly) {
       previousFocusRef.current = document.activeElement as HTMLElement;
-      modalRef.current?.focus(); // Focus the modal container
+      modalRef.current?.focus();
 
       const handleKeyDown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
@@ -42,12 +40,12 @@ const AnomalyDetailModal: React.FC<AnomalyDetailModalProps> = ({ anomaly, onClos
             const firstElement = focusableElements[0] as HTMLElement;
             const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
 
-            if (event.shiftKey) { // Shift + Tab
+            if (event.shiftKey) {
               if (document.activeElement === firstElement) {
                 lastElement.focus();
                 event.preventDefault();
               }
-            } else { // Tab
+            } else {
               if (document.activeElement === lastElement) {
                 firstElement.focus();
                 event.preventDefault();
@@ -60,10 +58,13 @@ const AnomalyDetailModal: React.FC<AnomalyDetailModalProps> = ({ anomaly, onClos
       document.addEventListener('keydown', handleKeyDown);
       return () => {
         document.removeEventListener('keydown', handleKeyDown);
-        previousFocusRef.current?.focus(); // Restore focus on close
+        previousFocusRef.current?.focus();
       };
     }
   }, [anomaly, onClose]);
+
+  if (!anomaly) return null;
+
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">

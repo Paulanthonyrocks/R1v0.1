@@ -3,7 +3,7 @@ import numpy as np
 import logging
 import io
 import time
-from typing import Dict, Optional, Any # Ensure Any is imported if used, though not directly in LPP
+from typing import Dict, Optional # Ensure Any is imported if used, though not directly in LPP
 from PIL import Image
 import pytesseract
 import google.generativeai as genai

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List, Dict, Any
 import logging
 from app.services.event_service import EventService
@@ -21,10 +21,7 @@ async def get_current_events(
     try:
         return await event_service.get_events()
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch current events: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch current events: {str(e)}")
 
 @router.get(
     "/impacts",
@@ -40,7 +37,4 @@ async def get_event_impacts(
     try:
         return await event_service.get_event_impacts()
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch event impacts: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch event impacts: {str(e)}")

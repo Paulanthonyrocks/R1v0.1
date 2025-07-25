@@ -1,11 +1,11 @@
 # backend/app/routers/alerts.py
 
 from fastapi import APIRouter, Query, HTTPException, status, Depends
-from typing import List, Optional, Union
-from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from typing import List, Optional
+from pydantic import BaseModel
 
-from app.dependencies import get_current_active_user, get_db, get_connection_manager # Added get_connection_manager
+from app.dependencies import get_current_active_user, get_db, get_current_admin
+from app.services.services import get_connection_manager # Added get_connection_manager
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
 from app.websocket.connection_manager import ConnectionManager # Added ConnectionManager
@@ -41,9 +41,8 @@ async def get_alerts(
     search: Optional[str] = Query(None, description="Search term within alert messages (case-insensitive)"),
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
-    current_user: dict = Depends(get_current_active_user)
 ) -> AlertsResponse:
-    logger.info(f"GET /alerts endpoint called by user: {current_user.get('email')}")
+    logger.info("GET /alerts endpoint called")
     """
     Endpoint to fetch alerts with filtering and pagination. Requires authentication.
     """
@@ -60,21 +59,7 @@ async def get_alerts(
 
     try:
         alerts_data_from_db = await db.get_alerts_filtered(filters=filters, limit=limit, offset=offset)
-        # Assuming count_alerts_filtered exists or will be added to DatabaseManager if total_count is crucial here.
-        # For now, focusing on getting the alerts. A full count might be intensive.
-        # total_count = await db.count_alerts_filtered(filters=filters)
-        # Simplified total_count for now, or it needs to be implemented in DBManager
-        total_count = len(alerts_data_from_db) # This is only count for current page if not all fetched.
-                                               # For a proper total_count, db.count_alerts_filtered is needed.
-                                               # Assuming it exists for the sake of this example.
-        
-        # Placeholder for actual count method:
-        try:
-            actual_total_count = await db.count_alerts_filtered(filters=filters)
-        except AttributeError: # If count_alerts_filtered doesn't exist
-            logger.warning("DatabaseManager.count_alerts_filtered method not found. Total count might be inaccurate.")
-            actual_total_count = len(alerts_data_from_db) # Fallback
-
+        actual_total_count = await db.count_alerts_filtered(filters=filters)
         alert_items = [AlertModel(**alert_data) for alert_data in alerts_data_from_db]
 
         return AlertsResponse(alerts=alert_items, total_count=actual_total_count, page=page, limit=limit)
@@ -92,7 +77,7 @@ async def get_alerts(
 async def delete_alert_endpoint(
     alert_id: int,
     db: DatabaseManager = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user), # Assuming admin/specific role check might be here or decorator
+    current_user: dict = Depends(get_current_admin), # Only admins can delete alerts
     conn_manager: ConnectionManager = Depends(get_connection_manager)
 ):
     logger.info(f"User '{current_user.get('email')}' attempting to delete alert ID: {alert_id}")
@@ -131,7 +116,7 @@ async def acknowledge_alert_endpoint(
     alert_id: int,
     ack_request: AcknowledgeRequest,
     db: DatabaseManager = Depends(get_db),
-    current_user: dict = Depends(get_current_active_user),
+    current_user: dict = Depends(get_current_admin), # Only admins can acknowledge/unacknowledge alerts
     conn_manager: ConnectionManager = Depends(get_connection_manager)
 ) -> AlertModel:
     logger.info(f"User '{current_user.get('email')}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}")

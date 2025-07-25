@@ -1,14 +1,20 @@
 # backend/app/models/analysis.py
-from typing import Optional, List, Dict, Any, ClassVar
-from datetime import datetime
+from typing import List, Dict, Any, Optional, ClassVar
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 import logging
 
-from app.models.traffic import LocationModel
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
+
+from app.models import traffic
 from app.models.common import APIResponse
 from app.exceptions import OperationFailed
+from app.dependencies import get_current_active_user, get_as, get_analytics_service
+from app.services.analytics_service import AnalyticsService
 
 logger = logging.getLogger(__name__)
+
+router = APIRouter()
 
 class TrendDataPoint(BaseModel):
     timestamp: datetime
@@ -19,36 +25,19 @@ class TrendDataPoint(BaseModel):
     high_density_lanes: Optional[int] = None
 
 class LocationPredictionRequest(BaseModel):
-    location: LocationModel
+    location: traffic.LocationModel
     prediction_time: Optional[datetime] = None
     prediction_window_hours: Optional[int] = Field(default=24, ge=1, le=168)
     include_historical_context: Optional[bool] = Field(default=True)
     
 class PredictionResponse(BaseModel):
-    location: LocationModel
+    location: traffic.LocationModel
     prediction_time: datetime
     incident_likelihood: float = Field(..., ge=0, le=1)
     confidence_score: float = Field(..., ge=0, le=1)
     contributing_factors: List[str]
     recommendations: List[str]
     historical_context: Optional[Dict[str, Any]]
-
-# backend/app/routers/analysis.py
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-
-# Models
-from app.models import traffic # Changed import style
-from app.models.signals import SignalState # If analysis needs signal state
-
-# Dependencies
-from app.dependencies import get_db, get_current_active_user, get_as, get_analytics_service # Added get_as
-from app.utils import DatabaseManager  # Use re-exported DatabaseManager
-from app.services.analytics_service import AnalyticsService # For type hinting
-
-router = APIRouter()
 
 class TrendQuery(BaseModel):
     start_time: datetime
@@ -164,7 +153,7 @@ class NodeCongestionData(BaseModel):
     congestion_score: Optional[float] = Field(None, description="Calculated congestion score for the node (0-100).")
     vehicle_count: Optional[int] = Field(None, description="Number of vehicles detected at the node.")
     average_speed: Optional[float] = Field(None, description="Average speed of vehicles at the node (km/h).")
-    timestamp: datetime = Field(..., description="Timestamp of the latest data point for this node.")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp of the latest data point for this node.")
 
     class Config:
         from_attributes = True  # Updated from orm_mode = True for Pydantic V2
@@ -218,7 +207,7 @@ class AllNodesCongestionResponse(BaseModel):
 )
 async def get_all_nodes_congestion_data(
     current_user: dict = Depends(get_current_active_user), # Assuming authentication is needed
-    analytics_service: AnalyticsService = Depends(get_analytics_service) # Dependency injection
+    analytics_service: 'AnalyticsService' = Depends(get_analytics_service) # Dependency injection
 ) -> APIResponse[AllNodesCongestionResponse]:
     logger.info(f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('email')}")
     """

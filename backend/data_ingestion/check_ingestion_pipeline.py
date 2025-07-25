@@ -1,11 +1,10 @@
 import os
-import sys
 import time
 import json
 import subprocess
 from datetime import datetime, timedelta
-from kafka import KafkaProducer, KafkaConsumer, TopicPartition
-from kafka.errors import KafkaError, NoBrokersAvailable
+from kafka import KafkaProducer, KafkaConsumer
+from kafka.errors import NoBrokersAvailable
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 

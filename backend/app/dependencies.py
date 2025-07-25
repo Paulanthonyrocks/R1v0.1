@@ -1,30 +1,28 @@
 # /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
 
+from __future__ import annotations
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, Depends, status, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import firebase_admin
-from firebase_admin import auth, credentials
-
 from .database import get_database_manager
+from .utils.auth_utils import verify_firebase_token
 from .services.services import (
     get_feed_manager, 
     get_traffic_signal_service, 
     get_analytics_service,
-    get_personalized_routing_service,
     get_route_optimization_service,
     get_weather_service,
     get_event_service,
-    get_connection_manager
+    get_personalized_routing_service
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService
-from .services.analytics_service import AnalyticsService
 from .services.route_optimization_service import RouteOptimizationService
-from .services.personalized_routing_service import PersonalizedRoutingService
 from .services.weather_service import WeatherService
 from .services.event_service import EventService
-from app.websocket.connection_manager import ConnectionManager # Import for type hint
+from .services.analytics_service import AnalyticsService
+from .services.personalized_routing_service import PersonalizedRoutingService
+
 
 async def get_db():
     """Dependency to get the database manager instance."""
@@ -52,17 +50,11 @@ async def get_as() -> AnalyticsService:
     analytics_svc = get_analytics_service()
     return analytics_svc
 
+
 async def get_ros() -> RouteOptimizationService:
     """Dependency to get the RouteOptimizationService instance."""
     route_service = get_route_optimization_service()
     return route_service
-
-async def get_personalized_routing_service() -> PersonalizedRoutingService:
-    """Dependency to get the PersonalizedRoutingService instance."""
-    routing_service = get_personalized_routing_service()
-    if routing_service is None:
-        raise RuntimeError("PersonalizedRoutingService not initialized")
-    return routing_service
 
 async def get_weather_service_api() -> WeatherService:
     """Dependency to get the WeatherService instance."""
@@ -77,6 +69,13 @@ async def get_event_service_api() -> EventService:
     if event_service is None:
         raise RuntimeError("EventService not initialized")
     return event_service
+
+async def get_prs() -> PersonalizedRoutingService:
+    """Dependency to get the PersonalizedRoutingService instance."""
+    prs = get_personalized_routing_service()
+    if prs is None:
+        raise RuntimeError("PersonalizedRoutingService not initialized")
+    return prs
 
 # Initialize the authentication scheme
 auth_scheme = HTTPBearer(auto_error=False)
@@ -93,49 +92,6 @@ def is_admin(user_data: dict) -> bool:
 def is_super_admin(user_data: dict) -> bool:
     """Check if the user has super admin role."""
     return user_data.get("role") == SUPER_ADMIN_ROLE
-
-async def verify_firebase_token(token: str) -> Dict[str, Any]:
-    """Verify Firebase ID token and return decoded token data."""
-    import logging
-    logger = logging.getLogger("firebase_auth")
-    logger.info(f"Verifying Firebase token: {token[:40]}... (truncated)")
-    if not firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
-        logger.error("Firebase authentication service not available.")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Firebase authentication service not available.",
-        )
-    try:
-        decoded = auth.verify_id_token(token, check_revoked=True)
-        logger.info(f"Decoded token: {decoded}")
-        return decoded
-    except auth.RevokedIdTokenError:
-        logger.error("Token has been revoked.")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has been revoked.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except auth.UserDisabledError:
-        logger.error("User account is disabled.")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is disabled.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except auth.InvalidIdTokenError as e:
-        logger.error(f"Invalid ID token: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Authentication error: {str(e)}",
-        )
 
 async def get_current_user(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Dict[str, Any]:
     """Get the current authenticated user's data."""
@@ -188,19 +144,11 @@ async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCred
     except HTTPException:
         return None
 
-async def get_connection_manager() -> ConnectionManager:
-    """Dependency to get the WebSocket ConnectionManager instance."""
-    # Get the singleton ConnectionManager instance from services
-    manager = get_connection_manager()
-    if manager is None:
-        # This case should ideally not happen if ConnectionManager is a critical service
-        # and initialized properly in main.py or via services.py
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="WebSocket connection manager not available."
-        )
-    return manager
+
 
 async def get_token_from_query(websocket: WebSocket) -> Optional[str]:
     """Dependency to get the token from the query parameter for WebSocket authentication."""
-    return websocket.query_params.get("token")
+    token = websocket.query_params.get("token")
+    if token and token.startswith("?token="):
+        token = token.split("?token=", 1)[1]
+    return token

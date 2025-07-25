@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-import torch
 from ultralytics import YOLO
 import numpy as np
 from typing import List, Dict, Any

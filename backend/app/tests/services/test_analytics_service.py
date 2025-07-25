@@ -1,11 +1,16 @@
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 import asyncio
 from datetime import datetime, timezone, timedelta
 import numpy as np # For np.mean in tests
 import json
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+import uuid # For generating unique IDs
+from sqlalchemy.orm import sessionmaker as sqlalchemy_sessionmaker # Alias to avoid conflict
+from app.services.analytics_service import PredictionLogBase, PredictionLogModel
+from app.models.websocket import UserSpecificConditionAlert # Updated for testing send_user_specific_alert
+from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum # For test_correlate...
 
 from app.services.analytics_service import AnalyticsService
 from app.ml.data_cache import TrafficDataCache
@@ -143,7 +148,7 @@ class TestAnalyticsService(unittest.TestCase):
         self.assertEqual(kpis['active_monitored_locations'], 3)
         self.assertEqual(kpis['total_vehicle_flow_estimate'], 220) # 50 + 100 + 70
         self.assertAlmostEqual(kpis['average_speed_kmh'], round(np.mean([60,20,40]),1) ) # (60+20+40)/3 = 40
-        avg_congestion = np.mean([20,80,50]) # (20+80+50)/3 = 50
+        
         self.assertEqual(kpis['overall_congestion_level'], "MEDIUM") # 50 is MEDIUM
         self.analytics_service._data_cache.get_all_location_summaries.assert_called_once()
 
@@ -200,12 +205,12 @@ class TestAnalyticsService(unittest.TestCase):
         args, kwargs = self.mock_connection_manager.broadcast_message_model.call_args
 
         sent_message: WebSocketMessage = args[0]
-        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.GENERAL_NOTIFICATION)
-        self.assertIsInstance(sent_message.payload, GeneralNotification)
-        self.assertEqual(sent_message.payload.message_type, "operational_alert_by_agent")
-        self.assertEqual(sent_message.payload.title, title)
-        self.assertEqual(sent_message.payload.message, message_text)
-        self.assertEqual(sent_message.payload.severity, severity)
+        self.assertEqual(sent_message.type, WebSocketMessageTypeEnum.GENERAL_NOTIFICATION)
+        self.assertIsInstance(sent_message.data, GeneralNotification)
+        self.assertEqual(sent_message.data.message_type, "traffic_analysis")
+        self.assertEqual(sent_message.data.title, title)
+        self.assertEqual(sent_message.data.message, message_text)
+        self.assertEqual(sent_message.data.severity, severity)
 
         self.assertEqual(kwargs.get('specific_topic'), "operational_alerts")
 
@@ -227,12 +232,12 @@ class TestAnalyticsService(unittest.TestCase):
         # Check the call arguments for broadcast_message_model
         args, kwargs = self.mock_connection_manager.broadcast_message_model.call_args
         sent_message: WebSocketMessage = args[0]
-        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE)
-        self.assertIsInstance(sent_message.payload, NodeCongestionUpdatePayload)
-        self.assertEqual(len(sent_message.payload.nodes), 1)
+        self.assertEqual(sent_message.type, WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE)
+        self.assertIsInstance(sent_message.data, NodeCongestionUpdatePayload)
+        self.assertEqual(len(sent_message.data.nodes), 1)
         # Pydantic would have converted dict to NodeCongestionUpdateData instance if models are compatible
         # Here we check if the data passed to NodeCongestionUpdatePayload matches our mock
-        self.assertEqual(sent_message.payload.nodes[0]['id'], mock_node_data_list[0]['id'])
+        self.assertEqual(sent_message.data.nodes[0].id, mock_node_data_list[0]['id'])
         self.assertEqual(kwargs.get('specific_topic'), "node_congestion")
 
     async def test_broadcast_node_congestion_updates_no_data(self):
@@ -262,8 +267,8 @@ class TestAnalyticsService(unittest.TestCase):
         # Verify one of the calls (e.g., the first one)
         args, kwargs = self.mock_connection_manager.broadcast_message_model.call_args_list[0]
         sent_message: WebSocketMessage = args[0]
-        self.assertEqual(sent_message.event_type, WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE)
-        self.assertEqual(sent_message.payload.nodes[0]['id'], 'node1')
+        self.assertEqual(sent_message.type, WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE)
+        self.assertEqual(sent_message.data.nodes[0]['id'], 'node1')
 
         await self.analytics_service.stop_background_tasks()
         self.assertIsNone(self.analytics_service._node_congestion_task)
@@ -296,18 +301,8 @@ if __name__ == '__main__':
 
 
 # --- New Test Class for DB-dependent tests for AnalyticsService ---
-import uuid # For generating unique IDs
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker as sqlalchemy_sessionmaker # Alias to avoid conflict
-from contextlib import asynccontextmanager # For async session context manager mock
-
-# Import Base and models needed for table creation and direct querying in tests
-from app.services.analytics_service import PredictionLogBase, PredictionLogModel
-from app.models.websocket import UserSpecificConditionAlert # Updated for testing send_user_specific_alert
-from app.models.traffic import LocationModel, IncidentReport, IncidentTypeEnum, IncidentSeverityEnum # For test_correlate...
-from app.services.analytics_service import AnalyticsService # Re-import for clarity, though already available
-
 # Helper data for tests
+
 USER_ID_ANALYTICS_TEST_1 = "analytics_user_1"
 PREDICTION_ID_ANALYTICS_TEST_1 = str(uuid.uuid4())
 
@@ -330,41 +325,34 @@ class MockActiveWebSocketConnection:
 class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.engine = create_engine("sqlite:///:memory:")
-        PredictionLogBase.metadata.create_all(self.engine)
+        from sqlalchemy.ext.asyncio import create_async_engine
+        self.async_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with self.async_engine.begin() as conn:
+            await conn.run_sync(PredictionLogBase.metadata.create_all)
 
-        self.TestSessionLocal = sqlalchemy_sessionmaker(autocommit=False, autoflush=False, bind=self.engine, class_=AsyncMock) # Use AsyncMock for session for now
+        self.TestSessionLocal = sqlalchemy_sessionmaker(autocommit=False, autoflush=False, bind=self.async_engine, class_=Session)
 
         # Mock DatabaseManager more carefully for async session usage
         self.mock_db_manager_for_new_tests = MagicMock(spec=DatabaseManager)
-        self.mock_db_manager_for_new_tests.engine = self.engine # Allow table creation check
+        self.mock_db_manager_for_new_tests.engine = self.async_engine # Allow table creation check
 
-        @asynccontextmanager
-        async def get_mock_session():
-            # Create a real session for test DB operations but from an async-compatible maker
-            real_session_maker = sqlalchemy_sessionmaker(autocommit=False, autoflush=False, bind=self.engine, class_=Session) # Use standard Session for actual ops
-            db = real_session_maker()
-            try:
-                yield db
-                await db.commit() # This commit might be an issue if tests expect to control it.
-                                 # Tests should ideally manage their own commits or use a transactional approach.
-                                 # For simplicity, let's assume test methods will manage their data carefully.
-                                 # Or, remove this commit and let tests handle it.
-                                 # Let's remove it: tests will commit via service or helper.
-            except Exception:
-                await db.rollback() # If service method fails, it should rollback.
-                raise
-            finally:
-                await db.close() # Close after use.
+        class AsyncContextManagerMock:
+            def __init__(self, session_mock):
+                self.session_mock = session_mock
 
-        # Re-patching get_session to use a real session for the test DB
-        # This is tricky with AsyncMock. Let's use a MagicMock for get_session for now
-        # and have test methods create their own sessions if direct DB access is needed for setup/assert.
-        # The service itself will use this mock.
+            async def __aenter__(self):
+                return self.session_mock
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                if exc_type:
+                    self.session_mock.rollback()
+                else:
+                    self.session_mock.commit()
+                self.session_mock.close()
 
         # For the service calls, we want it to use a session that can be awaited.
         # The actual DB operations in helpers will use a direct session.
-        # self.mock_db_manager_for_new_tests.get_session = MagicMock(return_value=get_mock_session()) # Replaced by AsyncContextManagerSession below
+        self.mock_db_manager_for_new_tests.get_session = MagicMock(return_value=AsyncContextManagerMock(AsyncMock(spec=Session)))
         self.mock_db_manager_for_new_tests.get_incidents_in_vicinity_timeframe = AsyncMock(return_value=[]) # Default to no incidents
 
 
@@ -377,34 +365,12 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
             connection_manager=self.mock_connection_manager_for_new_tests,
             database_manager=self.mock_db_manager_for_new_tests
         )
-        # Override the service's _db_manager.get_session to use our mock that provides a real session
-        # This is essential for service methods to interact with the test DB.
-        # The mock setup for get_session needs to be an async context manager.
-
-        # Re-think: The service uses "async with self._db_manager.get_session() as session:"
-        # So, self._db_manager.get_session needs to BE an async context manager.
-
-        class AsyncContextManagerSession:
-            def __init__(self, engine_):
-                self.engine_ = engine_
-                self.real_session_maker_ = sqlalchemy_sessionmaker(autocommit=False, autoflush=False, bind=self.engine_, class_=Session)
-            async def __aenter__(self):
-                self.db_ = self.real_session_maker_()
-                return self.db_
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                if exc_type: # If an exception occurred
-                    await self.db_.rollback() # Use await if Session is async, else db.rollback()
-                else:
-                    await self.db_.commit() # Use await if Session is async, else db.commit()
-                await self.db_.close() # Use await if Session is async, else db.close()
-
-        self.mock_db_manager_for_new_tests.get_session = lambda: AsyncContextManagerSession(self.engine)
 
 
     async def asyncTearDown(self):
-        async with self.engine.connect() as conn:
+        async with self.async_engine.begin() as conn:
              await conn.run_sync(PredictionLogBase.metadata.drop_all)
-        await self.engine.dispose()
+        await self.async_engine.dispose()
 
     async def _add_prediction_log(self, session: Session, **kwargs) -> PredictionLogModel:
         entry_data = {
@@ -429,7 +395,7 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
     # 1. Test PredictionLogModel CRUD (simplified to create/query for now)
     async def test_prediction_log_model_crud(self):
         async with self.mock_db_manager_for_new_tests.get_session() as session:
-            created_entry = await self._add_prediction_log(session, id=PREDICTION_ID_ANALYTICS_TEST_1, outcome_verified=True, actual_outcome_type="test_event")
+            await self._add_prediction_log(session, id=PREDICTION_ID_ANALYTICS_TEST_1, outcome_verified=True, actual_outcome_type="test_event")
             retrieved_entry = await session.get(PredictionLogModel, PREDICTION_ID_ANALYTICS_TEST_1)
             self.assertIsNotNone(retrieved_entry)
             self.assertEqual(retrieved_entry.id, PREDICTION_ID_ANALYTICS_TEST_1)
@@ -620,11 +586,11 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
         _, first_call_args, _ = self.mock_connection_manager_for_new_tests.send_personal_message_model.mock_calls[0]
         sent_ws_message: WebSocketMessage = first_call_args[1]
-        self.assertEqual(sent_ws_message.event_type, WebSocketMessageTypeEnum.USER_SPECIFIC_ALERT) # Updated enum
-        self.assertIsInstance(sent_ws_message.payload, UserSpecificConditionAlert) # Check instance type
-        self.assertEqual(sent_ws_message.payload.alert_type, "test_user_alert")
-        self.assertEqual(sent_ws_message.payload.severity, "warning")
-        self.assertEqual(sent_ws_message.payload.route_context, {"destination_name": "Downtown"})
+        self.assertEqual(sent_ws_message.type, WebSocketMessageTypeEnum.USER_SPECIFIC_ALERT) # Updated enum
+        self.assertIsInstance(sent_ws_message.data, UserSpecificConditionAlert) # Check instance type
+        self.assertEqual(sent_ws_message.data.alert_type, "test_user_alert")
+        self.assertEqual(sent_ws_message.data.severity, "warning")
+        self.assertEqual(sent_ws_message.data.route_context, {"destination_name": "Downtown"})
 
     async def test_send_user_specific_alert_no_active_connections(self): # Renamed test method
         user_to_notify = "user_with_no_connections"

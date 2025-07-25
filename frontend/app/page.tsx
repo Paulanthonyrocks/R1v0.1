@@ -38,7 +38,7 @@ const NokiaHomeScreen = () => {
 
   useEffect(() => {
     const handleFirstInteraction = () => {
-      setUserInteracted(true);
+      
       // const bootJingle = new Audio('/audio/boot-jingle.mp3');
       // bootJingle.play();
       window.removeEventListener('click', handleFirstInteraction);

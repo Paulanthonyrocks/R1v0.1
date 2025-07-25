@@ -1,142 +1,162 @@
+import logging
+import asyncio
 import cv2
 import numpy as np
-from pathlib import Path
-import logging
-from typing import Dict, Any, Generator, Optional
+import os
 import time
+from typing import Dict, Generator, Optional
 from datetime import datetime
+
+from app.services.video_ws_manager import video_ws_manager
+from app.services.feed_manager import FeedManager
+from app.database import get_database_manager
+from app.models.processed_video import ProcessedVideo
 
 logger = logging.getLogger(__name__)
 
 class VideoProcessor:
-    def __init__(self, video_path: str):
-        self.video_path = Path(video_path)
-        self.cap = None
-        self.frame_count = 0
-        self.fps = 0
-        logger.info(f"VideoProcessor: Initializing for video path: {self.video_path}")
-        self.initialize()
-        
-    def initialize(self):
-        """Initialize the video capture"""
-        logger.info(f"VideoProcessor.initialize: Checking video file existence at {self.video_path}")
-        if not self.video_path.exists():
-            logger.error(f"VideoProcessor.initialize: Video file not found at {self.video_path}")
-            raise FileNotFoundError(f"Video file not found at {self.video_path}")
-        
-        # Set OpenCV options for faster initialization
-        self.cap = cv2.VideoCapture(str(self.video_path), cv2.CAP_FFMPEG)  # Explicitly use FFMPEG backend
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Keep buffer small
-        
-        logger.info(f"VideoProcessor.initialize: Attempting to open video file: {self.video_path}")
-        if not self.cap.isOpened():
-            logger.error(f"VideoProcessor.initialize: Failed to open video file: {self.video_path}. Check codecs or file integrity.")
-            raise RuntimeError(f"Failed to open video file: {self.video_path}")
-            
-        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-        
-        # Optimize video reading
-        self.cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 0)  # Reset to beginning
-        self.cap.set(cv2.CAP_PROP_FPS, self.fps)  # Set desired FPS
-        
-        logger.info(f"VideoProcessor.initialize: Successfully initialized video processor for {self.video_path}")
-        logger.info(f"VideoProcessor.initialize: Frame count: {self.frame_count}, FPS: {self.fps}")
-    
-    def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
+    def __init__(self, stream_id: str, feed_manager: FeedManager):
+        self.stream_id = stream_id
+        self.feed_manager = feed_manager
+        self._is_recording: bool = False
+        self._video_writer: Optional[cv2.VideoWriter] = None
+        self._output_path: Optional[str] = None
+        self._recording_start_time: Optional[float] = None
+        self._frame_rate: float = 10.0  # Default frame rate for output video
+        self._frame_size: tuple = (1280, 720)  # Default frame size (width, height)
+        logger.info(f"VideoProcessor: Initializing for stream_id: {self.stream_id}")
+
+    async def start_recording(self, output_filename: str, frame_rate: float, frame_size: tuple):
+        if self._is_recording:
+            logger.warning(f"Recording already in progress for stream {self.stream_id}")
+            return False
+
+        self._output_path = os.path.join("backend", "data", "processed_videos", output_filename)
+        os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
+
+        self._frame_rate = frame_rate
+        self._frame_size = frame_size
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4 files
+        self._video_writer = cv2.VideoWriter(self._output_path, fourcc, self._frame_rate, self._frame_size)
+
+        if not self._video_writer.isOpened():
+            logger.error(f"Could not open video writer for {self._output_path}")
+            self._video_writer = None
+            return False
+
+        self._is_recording = True
+        self._recording_start_time = time.time()
+        logger.info(f"Started recording processed video for stream {self.stream_id} to {self._output_path}")
+        return True
+
+    async def stop_recording(self):
+        if not self._is_recording:
+            logger.warning(f"No recording in progress for stream {self.stream_id}")
+            return False
+
+        if self._video_writer:
+            self._video_writer.release()
+            self._video_writer = None
+            logger.info(f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}")
+
+            # Save metadata to database
+            if self._output_path and self._recording_start_time:
+                db_manager = get_database_manager()
+                processed_video_entry = ProcessedVideo(
+                    stream_id=self.stream_id,
+                    file_path=self._output_path,
+                    start_time=datetime.fromtimestamp(self._recording_start_time),
+                    end_time=datetime.now(),
+                    duration=datetime.now().timestamp() - self._recording_start_time
+                )
+                await db_manager.save_processed_video_metadata(processed_video_entry)
+                logger.info(f"Saved processed video metadata for {self.stream_id}")
+
+        self._is_recording = False
+        self._output_path = None
+        self._recording_start_time = None
+        return True
+
+    async def get_frame_generator(self) -> Generator[bytes, None, None]:
         """
-        Process a single frame and extract KPIs
-        Returns a dictionary of KPIs
+        Generator that yields raw frames and broadcasts KPIs over WebSocket.
+        If recording is active, it also processes frames with overlays and saves them.
         """
-        # Convert frame to grayscale for processing
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Apply background subtraction or other motion detection
-        # This is a simple example - you might want to use more sophisticated methods
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blur, 60, 255, cv2.THRESH_BINARY)
-        
-        # Find contours to detect vehicles
-        contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Count vehicles (basic implementation - can be improved)
-        vehicle_count = len([c for c in contours if cv2.contourArea(c) > 500])
-        
-        # Calculate average motion (basic implementation)
-        motion_level = np.mean(thresh) / 255.0
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "vehicle_count": vehicle_count,
-            "motion_level": float(motion_level),
-            "frame_number": self.frame_count
-        }
-    
-    def get_frame_generator(self) -> Generator[Dict[str, Any], None, None]:
-        """
-        Generator that yields processed frames and their KPIs
-        """
-        if not self.cap or not self.cap.isOpened():
-            self.initialize()
-            
         try:
-            frame_count = 0
-            frame_skip = 2  # Process every nth frame to improve performance
             while True:
-                ret, frame = self.cap.read()
-                if not ret:
-                    # If we reach the end, loop back to the beginning
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
+                feed_entry = await self.feed_manager.get_feed_entry(self.stream_id)
+                if feed_entry and feed_entry.get('latest_frame_bytes') and feed_entry.get('latest_metrics'):
+                    raw_frame_bytes = feed_entry['latest_frame_bytes']
+                    kpis = feed_entry['latest_metrics']
+
+                    # Broadcast KPIs over WebSocket (for frontend display)
+                    await video_ws_manager.broadcast_kpis(self.stream_id, kpis)
+
+                    if self._is_recording and self._video_writer:
+                        # Decode raw frame bytes to numpy array for OpenCV processing
+                        np_arr = np.frombuffer(raw_frame_bytes, np.uint8)
+                        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                        if frame is not None:
+                            # Resize frame to match writer's expected size if necessary
+                            if frame.shape[1] != self._frame_size[0] or frame.shape[0] != self._frame_size[1]:
+                                frame = cv2.resize(frame, self._frame_size)
+
+                            # Draw overlays (example: bounding boxes, vehicle IDs, speed)
+                            # This part needs actual implementation based on KPI structure
+                            # For now, a placeholder:
+                            if 'detections' in kpis:
+                                for det in kpis['detections']:
+                                    bbox = det['bbox'] # Assuming [x1, y1, x2, y2]
+                                    label = det.get('label', 'Object')
+                                    confidence = det.get('confidence', 0.0)
+                                    speed = det.get('speed', None)
+
+                                    x1, y1, x2, y2 = map(int, bbox)
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    text = f"{label}: {confidence:.2f}"
+                                    if speed is not None: 
+                                        text += f" Speed: {speed:.1f}km/h"
+                                    cv2.putText(frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                            # Write processed frame to video file
+                            self._video_writer.write(frame)
+                        else:
+                            logger.warning(f"Failed to decode raw frame for stream {self.stream_id} for recording.")
+
+                    yield raw_frame_bytes  # Yield raw frame bytes for frontend
+                else:
+                    logger.debug(f"No new frame or metrics available for stream_id: {self.stream_id}. Waiting...")
                 
-                frame_count += 1
-                if frame_count % frame_skip != 0:
-                    continue  # Skip this frame
-                    
-                # Process the frame and get KPIs
-                kpis = self.process_frame(frame)
-                
-                # Encode frame to JPEG for streaming
-                _, buffer = cv2.imencode('.jpg', frame)
-                frame_bytes = buffer.tobytes()
-                
-                yield {
-                    "frame": frame_bytes,
-                    "kpis": kpis
-                }
-                
-                # Control frame rate
-                time.sleep(1/self.fps)
-                
+                await asyncio.sleep(0.01) 
+
         except Exception as e:
-            logger.error(f"Error processing video frame: {e}")
+            logger.error(f"Error in video frame generator for stream_id {self.stream_id}: {e}", exc_info=True)
             raise
-            
-    def __del__(self):
-        """Cleanup resources"""
-        if self.cap:
-            self.cap.release()
 
 class VideoManager:
     _instance = None
-    
+
     def __init__(self):
         self.video_processors: Dict[str, VideoProcessor] = {}
-        
+
     @classmethod
     def get_instance(cls) -> 'VideoManager':
         if cls._instance is None:
             cls._instance = VideoManager()
         return cls._instance
-        
-    def get_processor(self, video_path: str) -> VideoProcessor:
-        """Get or create a video processor for the given path"""
-        if video_path not in self.video_processors:
-            self.video_processors[video_path] = VideoProcessor(video_path)
-        return self.video_processors[video_path]
-        
-    def cleanup(self):
-        """Cleanup all video processors"""
+
+    def get_processor(self, stream_id: str, feed_manager: FeedManager) -> VideoProcessor:
+        """Get or create a video processor for the given stream_id."""
+        if stream_id not in self.video_processors:
+            self.video_processors[stream_id] = VideoProcessor(stream_id, feed_manager)
+        return self.video_processors[stream_id]
+
+    async def cleanup(self):
+        """Cleanup all video processors and stop any active recordings."""
         for processor in self.video_processors.values():
-            del processor
-        self.video_processors.clear() 
+            if processor._is_recording:
+                await processor.stop_recording()
+        self.video_processors.clear()
+ 

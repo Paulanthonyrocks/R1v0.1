@@ -1,52 +1,16 @@
-# backend/app/models/feeds.py
 from typing import Optional, List
-from datetime import datetime
-from pydantic import BaseModel, Field
-
-class FeedStatus(BaseModel):
-    id: str
-    source: str
-    status: str = Field(..., examples=["stopped", "running", "starting", "error"])
-    fps: Optional[float] = None
-    error_message: Optional[str] = None
-
-class FeedDetails(FeedStatus):
-    name: Optional[str] = None
-    last_update: Optional[datetime] = None
-    last_capture: Optional[datetime] = None
-    error_message: Optional[str] = None
-
-class FeedCreateRequest(BaseModel):
-    source: str = Field(..., examples=["/path/to/video.mp4", "webcam:0"])
-    name_hint: Optional[str] = None
-
-class FeedCreateResponse(BaseModel):
-    id: str
-    status: str = "starting"
-    message: str
-    initial_status: Optional[str] = None
-
-class StandardResponse(BaseModel):
-    success: bool = True
-    message: str
-
-# backend/app/routers/feeds.py
-from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.responses import JSONResponse
-
-# Import Dependencies
-from app.dependencies import get_feed_manager, get_current_active_user, get_current_active_user_optional, get_current_admin
-# Import Services
-from app.services.feed_manager import FeedManager, FeedNotFoundError, FeedOperationError, ResourceLimitError
-from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Unauthorized, Forbidden
-from app.models.common import APIResponse
 import logging
 
-# Configure logging (optional, can be configured globally in main.py)
-# logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
+from app.dependencies import get_feed_manager, get_current_active_user, get_current_active_user_optional, get_current_admin
+from app.services.feed_manager import FeedManager, FeedNotFoundError, FeedOperationError, ResourceLimitError
+from app.exceptions import ResourceNotFound, OperationFailed, BadRequest, Forbidden
+from app.models.common import APIResponse
+from app.models.feeds import FeedStatus, FeedCreateRequest, FeedCreateResponse, StandardResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,14 +20,14 @@ router = APIRouter()
     summary="Get Status of All Feeds",
     description="Retrieves the current status, source, FPS, and potential errors for all known feeds.",
 )
-async def get_feeds_status(
+async def get_all_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
     current_user: Optional[dict] = Depends(get_current_active_user_optional)
 ) -> APIResponse[List[FeedStatus]]:
     """
     Endpoint to get the status of all registered feeds.
     """
-    logger.info(f'Received request for get_feeds_status')
+    logger.info('Received request for get_all_feeds_status')
     if current_user:
         logger.info(f"User {current_user.get('uid', 'unknown_user_uid')} requested status of all feeds.")
     else:
@@ -74,6 +38,30 @@ async def get_feeds_status(
     except Exception as e:
         logger.error(f"Failed to retrieve feed statuses: {e}", exc_info=True)
         raise OperationFailed(detail="Failed to retrieve feed statuses.")
+
+@router.get(
+    "/sample-feed-data",
+    response_model=APIResponse[dict],
+    summary="Get Latest Metrics for Sample Feed",
+    description="Returns the latest metrics for the sample video feed.",
+)
+async def get_sample_feed_data(
+    fm: FeedManager = Depends(get_feed_manager),
+    current_user: Optional[dict] = Depends(get_current_active_user_optional)
+) -> APIResponse[dict]:
+    logger.info(f"GET /feeds/sample-feed-data endpoint called by user: {current_user.get('email') if current_user else 'anonymous'}")
+    if not fm._sample_feed_id or not fm.process_registry.get(fm._sample_feed_id):
+        raise ResourceNotFound(detail="Sample feed not found.")
+    
+    sample_feed_entry = fm.process_registry[fm._sample_feed_id]
+
+    if sample_feed_entry["status"] != "running":
+        raise BadRequest(detail="Sample feed is not running.")
+
+    metrics = sample_feed_entry["latest_metrics"]
+    if not metrics:
+        return APIResponse.success(data={}, message="No metrics available yet for sample feed.")
+    return APIResponse.success(data=metrics, message="Successfully retrieved sample feed metrics.")
 
 @router.post(
     "/",
@@ -93,17 +81,18 @@ async def add_and_start_feed(
     """
     logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to add feed: {request.source}")
     try:
-        feed_id = await fm.add_feed(feed_config=request.model_dump())
-        if not feed_id:
-            raise OperationFailed(detail="Failed to add feed: No feed ID returned.")
-        
-        start_success = await fm.start_feed(feed_id)
-        current_status = await fm.get_feed_status(feed_id)
+        result = await fm.add_and_start_feed(
+            source=request.source,
+            latitude=request.latitude,
+            longitude=request.longitude,
+            name_hint=request.name,
+            is_looped=True, # Assuming new feeds are looped by default, adjust if needed
+        )
         
         response_data = FeedCreateResponse(
-            id=feed_id, 
-            message=f"Feed '{request.name_hint or request.source}' added. Start attempt: {'successful' if start_success else 'failed'}.",
-            initial_status=current_status.status if current_status else "error"
+            feed_id=result["feed_id"],
+            message=f"Feed '{request.name or request.source}' added. Status: {result["status"]}.",
+            initial_status=result["status"]
         )
         return APIResponse.success(data=response_data, message="Feed added and start initiated.")
     except ResourceLimitError as e:

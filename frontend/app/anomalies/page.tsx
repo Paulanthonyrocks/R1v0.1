@@ -2,6 +2,7 @@
 "use client";
 // /home/user/R1v0.1/frontend/app/anomalies/page.tsx
 "use client";
+import Link from 'next/link';
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react'; // Added useCallback
 import 'leaflet/dist/leaflet.css';
 import MatrixCard from "@/components/MatrixCard";
@@ -263,26 +264,7 @@ const AnomaliesPage = () => {
                 <span className="font-lcd matrix-glow">ANOMALIES</span>
               </div>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="matrix-card">
-              <DropdownMenuItem asChild>
-                <a href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow">DASHBOARD</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/map" className="w-full tracking-normal font-lcd matrix-glow">LIVE MAP</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/logs" className="w-full tracking-normal font-lcd matrix-glow">SYSTEM LOGS</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/analytics" className="w-full tracking-normal font-lcd matrix-glow">ANALYTICS</a>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <a href="/dashboard/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</a>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+            
           </DropdownMenu>
           <div className="flex items-center space-x-2">
             <Clock size={20} />
@@ -353,7 +335,7 @@ const AnomaliesPage = () => {
                   }}
                   role="button"
                   tabIndex={0}
-                  aria-label={`View details for ${anomaly.type}: ${anomaly.description.substring(0, 50)}${anomaly.description.length > 50 ? '...' : ''}`}
+                  aria-label={`View details for ${anomaly.type}: ${anomaly.description.substring(0, 50)}${anomaly.description.length > 50 ? '...' : ''}`
                 >
                   <MatrixCard
                     title={anomaly.type}

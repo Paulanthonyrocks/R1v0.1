@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from collections import defaultdict
 
@@ -28,10 +28,12 @@ class TrafficDataCache:
             'timestamp': timestamp,
             **data
         }
+        logger.debug(f"Adding data point for {location_key}: {data_point}")
         self.location_data[location_key].append(data_point)
         
         # Clean old data
         self._clean_old_data(location_key)
+        logger.debug(f"Data point added and cleaned for {location_key}. Current points: {len(self.location_data[location_key])}")
         
     def _clean_old_data(self, location_key: str):
         """Remove data points older than max_history_hours"""
@@ -107,11 +109,13 @@ class TrafficDataCache:
         Retrieves the latest data summary for all tracked locations.
         A "summary" here means the most recent data point's key metrics.
         """
+        logger.debug("Retrieving all location summaries.")
         summaries = []
-        now = datetime.now() # For context if needed, though not directly used in "latest" logic below
+        # now = datetime.now() # For context if needed, though not directly used in "latest" logic below
 
         for location_key, data_points in self.location_data.items():
             if not data_points:
+                logger.debug(f"No data points for location_key: {location_key}. Skipping.")
                 continue
 
             # Assume the last data point is the most recent one
@@ -140,5 +144,5 @@ class TrafficDataCache:
                 **latest_point # Include all other fields from the latest data point
             }
             summaries.append(summary)
-
+        logger.debug(f"Returning {len(summaries)} location summaries.")
         return summaries

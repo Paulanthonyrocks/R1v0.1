@@ -7,7 +7,7 @@ initialized at application startup. It uses lazy imports to avoid circular
 dependency issues.
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 import logging
 
 # Use TYPE_CHECKING to avoid runtime circular imports

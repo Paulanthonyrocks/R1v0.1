@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Signal, Clock, BatteryFull } from 'lucide-react';
+import useAuth from '@/lib/hook/useAuth'; // Import useAuth
 
 interface Signal {
   id: string;
@@ -9,12 +10,21 @@ const TrafficSignalControl = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<string | null>(null);
   const [phase, setPhase] = useState('');
+  const { token } = useAuth(); // Get the token from useAuth
 
   useEffect(() => {
     // Fetch the list of traffic signals
     const fetchSignals = async () => {
+      if (!token) {
+        console.log("TrafficSignalControl: Token not available, skipping fetchSignals.");
+        return;
+      }
       try {
-        const response = await fetch('/api/v1/signals');
+        const response = await fetch('/api/v1/signals', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
         const data = await response.json();
         setSignals(data);
       } catch (error) {
@@ -23,15 +33,18 @@ const TrafficSignalControl = () => {
     };
 
     fetchSignals();
-  }, []);
+  }, [token]); // Add token to dependency array
 
   const updateSignalPhase = async () => {
-    if (!selectedSignal || !phase) return;
+    if (!selectedSignal || !phase || !token) return;
 
     try {
       const response = await fetch(`/api/v1/signals/${selectedSignal}/set_phase`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({ phase }),
       });
 

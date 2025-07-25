@@ -1,20 +1,14 @@
 // frontend/lib/useMultipartStream.ts
 import { useState, useEffect, useRef } from 'react';
 
-interface MetricsData {
-  [key: string]: unknown;
-}
-
 interface MultipartStreamData {
   image: string | null; // Data URL for the image
-  metrics: MetricsData | null; // Parsed JSON data
   error: string | null;
   isLoading: boolean;
 }
 
 const useMultipartStream = (url: string | null, token: string | null): MultipartStreamData => {
   const [imageData, setImageData] = useState<string | null>(null);
-  const [metricsData, setMetricsData] = useState<MetricsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -23,7 +17,6 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
   useEffect(() => {
     if (!url) {
       setImageData(null);
-      setMetricsData(null);
       setError(null);
       setIsLoading(false);
       return;
@@ -33,7 +26,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
     let fetchUrl = url;
     if (url.startsWith('/')) {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
-      fetchUrl = apiBase.replace(/\/$/, '') + url;
+      fetchUrl = apiBase.replace(/.+$/, '') + url;
     }
 
     setIsLoading(true);
@@ -64,12 +57,10 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
           throw new Error('Could not find boundary in Content-Type header');
         }
         const boundary = '--' + boundaryMatch[1];
-        const boundaryBytes = new TextEncoder().encode(`\r\n${boundary}`);
+        const boundaryBytes = new new TextEncoder().encode(`\r\n${boundary}`);
         const chunkReader = response.body.getReader();
 
         let buffer = new Uint8Array();
-        let imagePart: Uint8Array | null = null;
-        let metricsPart: Uint8Array | null = null;
 
         while (true) {
           const { done, value } = await chunkReader.read();
@@ -104,39 +95,19 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
               if (headersEnd > -1) {
                 const headers = partText.substring(0, headersEnd);
-                // const body = part.slice(headersEnd + 4); // Removed unused variable
 
                 if (headers.includes('Content-Type: image/jpeg')) {
                    // Find the actual start of the image data (after headers and potential newline)
                     const imageStart = partText.substring(0, headersEnd).length + 4;
-                    imagePart = part.slice(imageStart);
-                } else if (headers.includes('Content-Type: application/json')) {
-                    const jsonStart = partText.substring(0, headersEnd).length + 4;
-                    metricsPart = part.slice(jsonStart);
+                    const imagePart = part.slice(imageStart);
+                    const imageUrl = URL.createObjectURL(new Blob([imagePart], { type: 'image/jpeg' }));
+                    setImageData(imageUrl);
+
+                    // Clean up old blob URL to prevent memory leaks
+                    if (imageData && typeof imageData === 'string' && imageData.startsWith('blob:')) {
+                        URL.revokeObjectURL(imageData);
+                    }
                 }
-              }
-
-              // If we have both parts, process and update state
-              if (imagePart && metricsPart) {
-                  const imageUrl = URL.createObjectURL(new Blob([imagePart], { type: 'image/jpeg' }));
-                  setImageData(imageUrl);
-
-                  try {
-                      const jsonText = new TextDecoder().decode(metricsPart);
-                      setMetricsData(JSON.parse(jsonText) as MetricsData);
-                  } catch (jsonError: unknown) {
-                      console.error("Error parsing metrics JSON:", jsonError);
-                      setMetricsData({ error: "Failed to parse metrics" });
-                  }
-
-                  // Clean up old blob URL to prevent memory leaks
-                   if (imageData && typeof imageData === 'string' && imageData.startsWith('blob:')) {
-                      URL.revokeObjectURL(imageData);
-                   }
-
-                  // Reset for the next frame + metrics pair
-                  imagePart = null;
-                  metricsPart = null;
               }
 
               // Check for the next boundary in the remaining buffer
@@ -177,7 +148,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
   }, [url, token, imageData]); // Added imageData to dependency array
 
-  return { image: imageData, metrics: metricsData, error, isLoading };
+  return { image: imageData, error, isLoading };
 };
 
 // Helper function to find byte sequence

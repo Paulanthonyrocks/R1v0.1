@@ -24,8 +24,10 @@ class FrameTimer:
 
     def log_time(self, stage: str, duration: float):
         with self._lock:
-            if stage in self.timings: self.timings[stage].append(duration)
-            else: logger.warning(f"FrameTimer: Unknown stage '{stage}'")
+            if stage in self.timings:
+                self.timings[stage].append(duration)
+            else:
+                logger.warning(f"FrameTimer: Unknown stage '{stage}'")
 
     def get_avg(self, stage: str) -> float:
         with self._lock:
@@ -45,51 +47,48 @@ class FrameTimer:
 
 # --- FrameReader ---
 class FrameReader:
-    def __init__(self, source: Any, buffer_size: int = 5, target_fps: Optional[int] = 2):
+    def __init__(self, source, buffer_size: int = 1, target_fps: Optional[int] = None, max_queue_size: int = 100):
         self.source_name = str(source)
+        self.cap = None
+        self.buffer_size = buffer_size
         self.target_fps = target_fps
-        self.is_webcam = False
-        capture_source: Any = source # Explicitly type hint
-
-        try:
-            capture_source = int(source) # Try converting source to int (for webcam index)
-            self.is_webcam = True
-        except ValueError:
-            # If not an int, check if it's "webcam" string or a file/URL path
-            if str(source).lower() == "webcam":
-                 capture_source = 0 # Default webcam index
-                 self.is_webcam = True
-            elif "://" not in str(source) and not Path(source).exists(): # Check if it's not a URL and path doesn't exist
-                 raise FileNotFoundError(f"Video file not found: {source}")
-            # If it's a URL or an existing file path, capture_source remains as is
-
-        self.cap = cv2.VideoCapture(capture_source)
-        if not self.cap.isOpened():
-            logger.error(f"FrameReader: Failed to open video source: {capture_source} (from original source: {self.source_name})")
-            raise RuntimeError(f"Cannot open video source: {capture_source}")
-        logger.info(f"FrameReader: Successfully opened video source: {capture_source} (from original source: {self.source_name})")
-
-        self.source_fps: float = self.cap.get(cv2.CAP_PROP_FPS)
-        self.source_width: int = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.source_height: int = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        logger.info(f"Source properties: {self.source_width}x{self.source_height} @ {self.source_fps:.2f} FPS")
-
-        if self.is_webcam:
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
-            logger.info(f"Webcam buffer size set to: {buffer_size}")
-            if self.target_fps: # If a target FPS is set for the webcam
-                self.cap.set(cv2.CAP_PROP_FPS, float(self.target_fps)) # Ensure it's float for OpenCV
-                logger.info(f"Attempting to set webcam FPS to: {self.target_fps}")
-        elif self.target_fps and self.target_fps != self.source_fps:
-            logger.warning(f"Target FPS {self.target_fps} differs from source FPS {self.source_fps}. Frame dropping/duplication may occur if not handled by reader logic.")
-
-        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=100) # Increased queue size
+        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(maxsize=max_queue_size)
+        self.state_lock = threading.Lock() # Lock for accessing shared state
+        self._end_of_video_flag = False # Internal state, controlled by property
+        self.thread = None
         self.stop_event = threading.Event()
-        self._end_of_video_flag = False # Internal flag
-        self.state_lock = threading.Lock() # For thread-safe access to _end_of_video_flag
-        self.thread = threading.Thread(target=self._update_loop, daemon=True, name=f"FrameReader-{self.source_name}")
-        self.frame_index: int = 0 # To track frame numbers
-        self.thread.start()
+        self.frame_index = -1 # Current frame index being processed by the reader thread
+        self.last_read_time = time.time()
+        self.read_interval = 0 # Calculated based on target_fps
+
+        if self.target_fps:
+            self.read_interval = 1.0 / self.target_fps
+
+        self._initialize_capture(source)
+
+        if self.cap and self.cap.isOpened():
+            self.thread = threading.Thread(target=self._update_loop, daemon=True, name=f"FrameReader-{self.source_name}")
+            self.thread.start()
+        else:
+            logger.error(f"FrameReader: Failed to open video source: {source} (from original source: {self.source_name})")
+            raise RuntimeError(f"FrameReader: Failed to open video source: {source}")
+
+    def _initialize_capture(self, source):
+        """Initializes the OpenCV video capture object."""
+        if isinstance(source, (int, str)):
+            self.cap = cv2.VideoCapture(source)
+        else:
+            raise ValueError(f"Unsupported source type for FrameReader: {type(source)}")
+
+        if not self.cap.isOpened():
+            logger.error(f"FrameReader: Failed to open video source: {source} (from original source: {self.source_name})")
+            raise RuntimeError(f"FrameReader: Failed to open video source: {source}")
+        logger.info(f"FrameReader: Successfully opened video source: {source} (from original source: {self.source_name})")
+
+    @property
+    def isOpened(self) -> bool:
+        """Returns True if the video capture is opened, False otherwise."""
+        return self.cap.isOpened()
 
     @property
     def end_of_video(self) -> bool:
@@ -124,7 +123,7 @@ class FrameReader:
                         logger.warning(f"FrameReader queue for '{self.source_name}' is full. Waiting for space...")
                         try:
                             # Wait with a timeout to avoid blocking indefinitely
-                            self.frame_queue.put((self.frame_index, frame.copy()), timeout=5.0)
+                            self.frame_queue.put((self.frame_index, frame.copy()), timeout=0.1)
                             self.frame_index += 1
                         except queue.Full:
                             logger.warning(f"FrameReader queue for '{self.source_name}' still full after waiting. Discarding frame {self.frame_index}.")
@@ -156,8 +155,10 @@ class FrameReader:
 
         # Clear the queue
         while not self.frame_queue.empty():
-             try: self.frame_queue.get_nowait()
-             except queue.Empty: break
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                break
 
 
     def read(self) -> Optional[Tuple[int, np.ndarray]]:

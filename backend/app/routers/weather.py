@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Query, HTTPException, Depends
-from typing import Optional, Dict, Any
+from fastapi import APIRouter, Query, Depends
+from typing import Dict, Any
 import logging
 from app.services.weather_service import WeatherService
 from app.dependencies import get_weather_service_api, get_current_active_user
+from app.exceptions import OperationFailed
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -23,10 +24,7 @@ async def get_current_weather(
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching current weather: {str(e)}"
-        )
+        raise OperationFailed(detail=f"Error fetching current weather: {str(e)}")
 
 @router.get(
     "/impact",
@@ -44,7 +42,4 @@ async def get_weather_impact(
     try:
         return await weather_service.get_weather_impact(lat=lat, lon=lon)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching weather impact assessment: {str(e)}"
-        )
+        raise OperationFailed(detail=f"Error fetching weather impact assessment: {str(e)}")

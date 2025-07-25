@@ -1,4 +1,4 @@
-import asyncio
+
 import logging
 from typing import Optional, Dict, Any, List # Added List
 import json # For pretty printing dicts in logs
@@ -40,11 +40,16 @@ class AgentCore:
 
         target_hour = -1
         time_group = pattern.time_of_day_group.lower()
-        if "morning" in time_group: target_hour = 8 # Example: 8 AM
-        elif "midday" in time_group: target_hour = 12 # Example: 12 PM
-        elif "afternoon" in time_group: target_hour = 15 # Example: 3 PM
-        elif "evening" in time_group: target_hour = 17 # Example: 5 PM
-        elif "night" in time_group: target_hour = 21 # Example: 9 PM
+        if "morning" in time_group:
+            target_hour = 8 # Example: 8 AM
+        elif "midday" in time_group:
+            target_hour = 12 # Example: 12 PM
+        elif "afternoon" in time_group:
+            target_hour = 15 # Example: 3 PM
+        elif "evening" in time_group:
+            target_hour = 17 # Example: 5 PM
+        elif "night" in time_group:
+            target_hour = 21 # Example: 9 PM
         else:
             self.logger.warning(f"Unknown time_of_day_group '{pattern.time_of_day_group}' for pattern {pattern.pattern_id}. Cannot determine target hour.")
             return None
@@ -94,8 +99,8 @@ class AgentCore:
         ]
 
         # Example condition: only set priorities if system is highly congested or many critical alerts
-        current_congestion = system_kpis.get("overall_congestion_level", "UNKNOWN")
-        critical_alerts_count = alert_summary.get("critical_unack_alert_count", 0)
+        # current_congestion = system_kpis.get("overall_congestion_level", "UNKNOWN")
+        # critical_alerts_count = alert_summary.get("critical_unack_alert_count", 0)
 
         # For demonstration, let's always set some priority locations, or base it on a simple condition
         # if current_congestion == "HIGH" or critical_alerts_count > 0:
@@ -137,7 +142,6 @@ class AgentCore:
         self.logger.info(system_status_summary_log)
 
         # Threshold checking logic for operational alerts
-        CONGESTION_THRESHOLD_FOR_ALERT = "HIGH"
         CRITICAL_ALERT_COUNT_THRESHOLD_FOR_HIGH_CONGESTION = 0 # Alert if HIGH congestion AND >0 critical
         CRITICAL_ALERT_COUNT_THRESHOLD_STANDALONE = 2 # Alert if >2 critical alerts, regardless of congestion
 
@@ -339,7 +343,7 @@ async def main_example():
     # Real setup would involve proper instantiation of services with dependencies.
 
     # Mocking dependencies for PredictionScheduler and PersonalizedRoutingService
-    class MockAnalyticsServiceForScheduler: # Renamed to avoid conflict if AgentCore's AnalyticsService is also mocked
+    class MockAnalyticsService: # Renamed to avoid conflict if AgentCore's AnalyticsService is also mocked
         def __init__(self):
             self._connection_manager = None # Simplified
         async def predict_incident_likelihood(self, location, prediction_time):
@@ -364,12 +368,6 @@ async def main_example():
         analytics_service=analytics_service_mock,
         prediction_interval_minutes=15
     )
-    # This is the AnalyticsService mock for PredictionScheduler, not for AgentCore directly in this example
-    analytics_service_for_scheduler_mock = MockAnalyticsServiceForScheduler()
-    prediction_scheduler_instance = PredictionScheduler(
-        analytics_service=analytics_service_for_scheduler_mock,
-        prediction_interval_minutes=15
-    )
 
 
     personalized_routing_service_instance = PersonalizedRoutingService(
@@ -381,7 +379,7 @@ async def main_example():
     # Mock for AnalyticsService instance to be passed to AgentCore
     # This is separate from the one used by PredictionScheduler if they have different mocking needs.
     # For this example, MockAnalyticsServiceForScheduler can serve both if its interface matches.
-    actual_analytics_service_mock_for_agentcore = MockAnalyticsServiceForScheduler()
+    actual_analytics_service_mock_for_agentcore = MockAnalyticsService()
 
     # Initialize AgentCore
     agent_core = AgentCore(

@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List, Dict, Any
-import os
 from pathlib import Path
 import logging
+import re
 
 from app.dependencies import get_current_active_user
 from app.config import get_current_config
@@ -22,6 +22,13 @@ async def get_system_logs(
     Retrieves system logs from a specified log file.
     Requires authentication.
     """
+    # Define an allow-list of log files that can be accessed via the API
+    # This should ideally be configurable, but for now, it's hardcoded for security.
+    ALLOWED_LOG_FILES = ["backend_main.log", "uvicorn_access.log", "uvicorn_error.log", "app.log"]
+
+    if log_file_name not in ALLOWED_LOG_FILES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid log file name or not allowed.")
+
     config = get_current_config()
     log_config = config.get("logging", {})
     

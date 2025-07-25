@@ -1,17 +1,34 @@
 # backend/app/services/feed_manager.py
 
+from __future__ import annotations
 import asyncio
 import logging
 import time
 import numpy as np
 import psutil
 import re
-from multiprocessing import Process, Queue as MPQueue, Event, Lock, Value, set_start_method, get_start_method
-import psutil # Added for process management
-from typing import Dict, Any, Optional, List, Tuple, Type
-
-# Create type alias for Event to use in type hints
+from multiprocessing import Process, Queue as MPQueue, Event, set_start_method, get_start_method
+from typing import Dict, Any, Optional, List, Tuple
 from enum import Enum
+from pathlib import Path
+import queue # For queue.Empty exception
+from datetime import datetime, timezone # For alert timestamps
+
+# Import custom exceptions
+from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
+
+# Import Pydantic models
+from app.models.feeds import FeedStatusData, FeedConfigInfo, FeedOperationalStatusEnum # Updated import for FeedStatusData
+from app.models.alerts import Alert, AlertSeverityEnum # Updated import for Alert
+from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, FeedStatusUpdate, NewAlertNotification, GlobalRealtimeMetrics # New imports
+
+# Import core worker and utilities (adjust path as needed)
+from app.core.processing_worker import process_video
+from app.utils.monitoring import check_system_resources
+from app.utils.video import FrameTimer # FrameTimer moved to video.py
+from app.websocket.connection_manager import ConnectionManager
+from app.services.analytics_service import AnalyticsService
+from app.tasks.prediction_scheduler import PredictionScheduler
 
 class FeedStatus(Enum):
     """Enum to represent the possible states of a feed."""
@@ -20,25 +37,6 @@ class FeedStatus(Enum):
     STOPPED = 'stopped'
     STARTING = 'starting'
     ERROR = 'error'
-
-
-from pathlib import Path
-import queue # For queue.Empty exception
-import json # For potentially logging complex objects
-from datetime import datetime # For alert timestamps
-
-# Import custom exceptions
-from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
-
-# Import Pydantic models
-from app.models.feeds import FeedStatusData, FeedConfigInfo, FeedOperationalStatusEnum # Updated import for FeedStatusData
-from app.models.alerts import Alert, AlertSeverityEnum # Updated import for Alert
-from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, FeedStatusUpdate, NewAlertNotification, GeneralNotification, GlobalRealtimeMetrics # New imports
-
-# Import core worker and utilities (adjust path as needed)
-from app.core.processing_worker import process_video
-from app.utils.monitoring import check_system_resources
-from app.utils.video import FrameTimer # FrameTimer moved to video.py
 
 logger = logging.getLogger("app.services.feed_manager")
 
@@ -69,8 +67,9 @@ class FeedManager:
         self._analytics_service = None # New: Reference to AnalyticsService
         self._is_processing_active: bool = False # New: Flag to control overall processing
         self._last_kpi_broadcast_time = 0.0
-        self._kpi_broadcast_interval = 1.0 # Seconds
+        self._kpi_broadcast_interval = self.config.get('kpi_broadcast_interval', 1.0) # Seconds, configurable
         self._sample_feed_id: Optional[str] = None # Store the ID of the sample feed
+        self._feed_running_events: Dict[str, asyncio.Event] = {} # New: Events to signal when a feed is running
         self.logger = logger # Assign the module-level logger to the instance
 
         # Load available feeds from config if needed (or assume they are added dynamically)
@@ -85,7 +84,7 @@ class FeedManager:
         self._prediction_scheduler = scheduler
         self.logger.info("PredictionScheduler set in FeedManager.")
 
-    def set_analytics_service(self, service: "AnalyticsService"): # type: ignore [name-defined]
+    def set_analytics_service(self, service: AnalyticsService): # type: ignore [name-defined]
         """Inject the AnalyticsService instance."""
         self._analytics_service = service
         self.logger.info("AnalyticsService set in FeedManager.")
@@ -145,18 +144,21 @@ class FeedManager:
         sample_path_str = self.config.get('video_input',{}).get('sample_video')
         if sample_path_str:
             resolved_path = Path(sample_path_str) # Assuming load_config resolved it
+            logger.info(f"Resolved sample video path: {resolved_path}")
             if resolved_path.exists():
                 feed_id = self._generate_feed_id(str(resolved_path), "Sample Video")
                 # Add to registry with 'stopped' status initially
                 self.process_registry[feed_id] = {
                     'process': None, 'result_queue': None, 'stop_event': None,
-                    'reduce_fps_event': None, 'status': FeedOperationalStatusEnum.STOPPED, 'source': "/api/v1/sample-video/stream",
+                    'reduce_fps_event': None, 'status': FeedOperationalStatusEnum.STOPPED, 'source': str(resolved_path),
                     'start_time': None, 'error_message': None, 'latest_metrics': None, 'timer': None,
                     'is_sample_feed': True, # Mark as sample feed                    'is_looped_feed': True,
                     'config_info': FeedConfigInfo(
                         name="Sample Video", 
                         source_type="video_file", 
-                        source_identifier=str(resolved_path)
+                        source_identifier=str(resolved_path),
+                        latitude=34.0522,
+                        longitude=-118.2437
                     )
                 }
                 self._sample_feed_id = feed_id # Store the sample feed ID
@@ -168,11 +170,11 @@ class FeedManager:
         """Generates a unique Feed ID."""
         # Simple generation logic, enhance as needed
         if name_hint:
-            base_name = re.sub(r'[^\w\-]+', '_', name_hint)
+            base_name = re.sub(r'[^\w\-.]+', '_', name_hint)
         elif source.startswith("webcam:"):
             base_name = f"Webcam_{source.split(':')[1]}"
         else:
-            base_name = re.sub(r'[^\w\-]+', '_', Path(source).stem)
+            base_name = re.sub(r'[^\w\-.]+', '_', Path(source).stem)
 
         feed_id = f"Feed_{self._feed_id_counter}_{base_name}"
         while feed_id in self.process_registry:
@@ -194,7 +196,12 @@ class FeedManager:
     async def _broadcast(self, message_type: str, data: Dict):
         """Helper to broadcast safely."""
         if self._connection_manager:
-            await self._connection_manager.broadcast({"type": message_type, "data": data})
+            # Assuming data is already a dictionary that can be directly used as payload
+            # or wrapped into a WebSocketMessage model if needed.
+            # For now, let's assume it's a simple dict for broadcast_message_model.
+            # If the frontend expects a specific WebSocketMessage structure, this needs adjustment.
+            message = WebSocketMessage(type=WebSocketMessageTypeEnum(message_type.upper()), data=data)
+            await self._connection_manager.broadcast_message_model(message)
         else:
             logger.debug(f"Broadcast skipped (No WS Manager): Type={message_type}")
 
@@ -269,6 +276,11 @@ class FeedManager:
                 latest_metrics=entry.get('latest_metrics')
             )
 
+    async def get_feed_entry(self, feed_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves the raw registry entry for a specific feed by feed_id."""
+        async with self._lock:
+            return self.process_registry.get(feed_id)
+
     async def _broadcast_feed_update(self, feed_id: str):
         """Sends feed status update via WebSocket manager."""
         try:
@@ -306,8 +318,8 @@ class FeedManager:
 
             ws_payload = FeedStatusUpdate(feed_status_data=feed_status_data)
             message = WebSocketMessage(
-                event_type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
-                payload=ws_payload
+                type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
+                data=ws_payload
             )
             
             # Broadcast to a specific topic for this feed
@@ -323,7 +335,7 @@ class FeedManager:
     async def _broadcast_alert(self, feed_id: Optional[str], severity: AlertSeverityEnum, message_text: str, details: Optional[Dict[str, Any]] = None):
         """Sends a new alert via WebSocket manager."""
         if not self._connection_manager:
-            logger.debug(f"Skipping alert broadcast: ConnectionManager not available.")
+            logger.debug("Skipping alert broadcast: ConnectionManager not available.")
             return
 
         alert_model = Alert(
@@ -336,8 +348,8 @@ class FeedManager:
         
         ws_payload = NewAlertNotification(alert_data=alert_model)
         message = WebSocketMessage(
-            event_type=WebSocketMessageTypeEnum.NEW_ALERT_NOTIFICATION,
-            payload=ws_payload
+            type=WebSocketMessageTypeEnum.NEW_ALERT_NOTIFICATION,
+            data=ws_payload
         )
 
         # Broadcast to a general alerts topic, and potentially a feed-specific alert topic
@@ -427,7 +439,7 @@ class FeedManager:
         try:
             await self.start_feed(feed_id)
             logger.info(f"Started feed via WS request: {feed_id}")
-        except FeedNotFoundError as e:
+        except FeedNotFoundError:
             logger.error(f"Feed not found: {feed_id}")
         except FeedOperationError as e:
             logger.error(f"Could not start feed {feed_id}: {e}")
@@ -441,13 +453,11 @@ class FeedManager:
         """Refreshes a feed by stopping and then attempting to start it."""
         logger.info(f"Refresh requested for feed: '{feed_id}'")
         original_source = None
-        is_sample = False
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
                 raise FeedNotFoundError(feed_id)
             original_source = entry['source'] # Store source before stopping
-            is_sample = entry.get('is_sample_feed', False)
 
         if not original_source: # Should not happen if entry exists
             raise FeedOperationError(f"Cannot refresh {feed_id}, source not found.")
@@ -469,126 +479,168 @@ class FeedManager:
         """Background task to read from worker result queues."""
         logger.info("Result queue reader task started.")
         while not self._stop_reader_flag:
-            active_queues: List[Tuple[str, MPQueue]] = []
-            feed_ids_to_update = set() # Track feeds needing a status broadcast
+            feed_ids_to_update = set()
             kpi_update_needed = False
-            sample_feed_check_needed = False # Flag to check sample feed status later
+            sample_feed_check_needed = False
+            processed_any_item_in_cycle = False
 
-            async with self._lock: # Lock briefly to get active queues
-                for feed_id, entry in self.process_registry.items():
-                    if entry['status'] in ['running', 'starting'] and entry.get('result_queue'):
-                        active_queues.append((feed_id, entry['result_queue']))
+            active_queues_info = await self._get_active_queues_info()
 
-            for feed_id, q in active_queues:
-                try:
-                    last_item = None
-                    while True: # Drain
-                         item = q.get_nowait()
-                         last_item = item
-                except queue.Empty:
-                    # Check if process died while queue empty
-                    async with self._lock:
-                        entry = self.process_registry.get(feed_id)
-                        if entry and entry.get('process'):
-                            process = entry['process']
-                            # Check if process is alive without blocking
-                            if not process.is_alive():
-                                exitcode = process.exitcode
-                                if exitcode == 0:
-                                    logger.info(f"Process for feed '{feed_id}' exited cleanly (exitcode 0). Status set to STOPPED.")
-                                    if entry['status'] != FeedOperationalStatusEnum.STOPPED:
-                                        entry['status'] = FeedOperationalStatusEnum.STOPPED
-                                        entry['error_message'] = None # Clear any previous error
-                                        entry['process'] = None
-                                        feed_ids_to_update.add(feed_id)
-                                        kpi_update_needed = True
-                                else:
-                                    logger.warning(f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error.")
-                                    if entry['status'] != FeedOperationalStatusEnum.ERROR: # Avoid redundant updates/checks
-                                        entry['status'] = FeedOperationalStatusEnum.ERROR
-                                        entry['error_message'] = f"Process terminated unexpectedly (exitcode: {exitcode})."
-                                        entry['process'] = None # Clear process handle
-                                        feed_ids_to_update.add(feed_id)
-                                        kpi_update_needed = True
-                                        if not entry.get('is_sample_feed'):
-                                            sample_feed_check_needed = True # Real feed died, check sample
-                            # Optional: Check via wait(0) if is_alive() is unreliable on some platforms
-                            # elif entry['status'] == 'running' and process.wait(0) is not None:
-                            #     logger.warning(f"Process for feed '{feed_id}' found dead (confirmed by wait(0)). Marking as error.")
-                            #     entry['status'] = 'error'
-                            #     entry['error_message'] = "Process terminated unexpectedly."
-                            #     entry['process'] = None
-                            #     feed_ids_to_update.add(feed_id)
-                            #     kpi_update_needed = True # Feed status count changed
-                    continue # Go to next queue if this one is empty
-                except Exception as e:
-                    logger.error(f"Error reading queue for feed '{feed_id}': {e}")
-                    continue
+            # Process Result Queues
+            for feed_id, result_q in active_queues_info['result_queues']:
+                processed_result_queue, kpi_update_needed_local, sample_feed_check_needed_local = await self._process_result_queue(
+                    feed_id, result_q, feed_ids_to_update
+                )
+                processed_any_item_in_cycle |= processed_result_queue
+                kpi_update_needed |= kpi_update_needed_local
+                sample_feed_check_needed |= sample_feed_check_needed_local
 
-                if last_item:
-                    try:
-                        _feed_id, frame_idx, _frame, metrics, _raw_vehicles, timings = last_item
-                        if _feed_id == feed_id:
-                            async with self._lock:
-                                entry = self.process_registry.get(feed_id)
-                                if entry:
-                                    if 'timer' not in entry or not entry['timer']:
-                                         entry['timer'] = FrameTimer()
-                                    entry['timer'].update_from_dict(timings)
-                                    entry['latest_metrics'] = metrics
-                                    if self._analytics_service: # Pass metrics to AnalyticsService
-                                        await self._analytics_service.process_feed_metrics(feed_id, metrics)
-                                    if entry['status'] == 'starting':
-                                        logger.info(f"Feed '{feed_id}' transitioned to 'running'.")
-                                        entry['status'] = 'running'
-                                        feed_ids_to_update.add(feed_id)
-                                        kpi_update_needed = True # Feed status count changed
-                                        # If a real feed just started, check sample feed status
-                                        if not entry.get('is_sample_feed'):
-                                            sample_feed_check_needed = True
+            # Process DB Queues
+            for feed_id, db_q in active_queues_info['db_queues']:
+                processed_any_item_in_cycle |= await self._process_db_queue(feed_id, db_q)
 
-                            await self._broadcast("feed_metrics", {"feed_id": feed_id, "metrics": metrics})
+            # Broadcast Updates
+            await self._perform_broadcasts(feed_ids_to_update, kpi_update_needed, sample_feed_check_needed)
 
-                        else:
-                            logger.warning(f"Queue item feed_id mismatch for {feed_id}")
-                    except Exception as e:
-                        logger.error(f"Error processing item from queue for feed '{feed_id}': {e}")
-
-            # --- Broadcast Updates (outside the queue read loop) ---
-            # Broadcast individual feed updates if status changed
-            for feed_id_to_update in feed_ids_to_update:
-                await self._broadcast_feed_update(feed_id_to_update)
-
-            # Broadcast global KPIs periodically or if status changed
-            current_time = time.time()
-            if kpi_update_needed or (current_time - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval):
-                 await self._broadcast_kpi_update()
-                 self._last_kpi_broadcast_time = current_time
-
-            # Check if sample feed needs starting/stopping
-            if sample_feed_check_needed:
-                await self._check_and_manage_sample_feed()
-
-            try:
-                # Attempt to get a result from any queue
-                # Using a small timeout to not block indefinitely if queues are empty
-                # This also allows checking self._running more frequently.
-                result = await asyncio.wait_for(queue_get_task(), timeout=0.1) 
-                # ... existing code ...
-            except asyncio.TimeoutError:
-                pass  # No result in timeout, continue loop
-            except asyncio.CancelledError:
-                self.logger.info("Result reader task was cancelled.")
-                break # Exit loop gracefully on cancellation
-            except Exception as e:
-                self.logger.error(f"Error processing result queue: {e}", exc_info=True)
-                await asyncio.sleep(1) # Short sleep on error to prevent busy-looping
-
-            await asyncio.sleep(0.01) # Prevent busy-waiting, but allow high throughput
+            if not processed_any_item_in_cycle:
+                await asyncio.sleep(0.1)
 
         logger.info("Result queue reader task stopped.")
 
-    async def add_and_start_feed(self, source: str, name_hint: Optional[str] = None, is_looped: bool = True) -> Dict[str, Any]:
+    async def _get_active_queues_info(self) -> Dict[str, List[Tuple[str, MPQueue]]]:
+        """Helper to gather active result and DB queues."""
+        active_result_queues: List[Tuple[str, MPQueue]] = []
+        active_db_queues: List[Tuple[str, MPQueue]] = []
+        async with self._lock:
+            for feed_id, entry in self.process_registry.items():
+                if entry['status'] in ['running', 'starting']:
+                    if entry.get('result_queue'):
+                        active_result_queues.append((feed_id, entry['result_queue']))
+                    if entry.get('db_queue'):
+                        active_db_queues.append((feed_id, entry['db_queue']))
+        return {"result_queues": active_result_queues, "db_queues": active_db_queues}
+
+    async def _process_result_queue(self, feed_id: str, q: MPQueue, feed_ids_to_update: set) -> Tuple[bool, bool, bool]:
+        """Helper to process items from a single result queue."""
+        processed_items = False
+        kpi_update_needed_local = False
+        sample_feed_check_needed_local = False
+        while True:
+            try:
+                item = q.get_nowait()
+                processed_items = True
+
+                _feed_id, frame_idx, frame_bytes, metrics, _raw_vehicles, timings = item
+                if _feed_id == feed_id:
+                    async with self._lock:
+                        entry = self.process_registry.get(feed_id)
+                        if entry:
+                            if 'timer' not in entry or not entry['timer']:
+                                 entry['timer'] = FrameTimer()
+                            entry['timer'].update_from_dict(timings)
+                            # Ensure timestamp in metrics is timezone-aware (UTC)
+                            if 'timestamp' in metrics and isinstance(metrics['timestamp'], (int, float)):
+                                metrics['timestamp'] = datetime.fromtimestamp(metrics['timestamp'], tz=datetime.timezone.utc)
+                            elif 'timestamp' not in metrics:
+                                metrics['timestamp'] = datetime.now(datetime.timezone.utc)
+                            entry['latest_metrics'] = metrics
+                            entry['latest_frame_bytes'] = frame_bytes # Store the frame bytes
+                            if entry['status'] == 'starting':
+                                logger.info(f"Feed '{feed_id}' transitioned to 'running'.")
+                                entry['status'] = 'running'
+                                feed_ids_to_update.add(feed_id)
+                                kpi_update_needed_local = True
+                                if not entry.get('is_sample_feed'):
+                                    sample_feed_check_needed_local = True
+                                    kpi_update_needed_local = True
+                                if not entry.get('is_sample_feed'):
+                                    sample_feed_check_needed_local = True
+                                # Signal the feed running event
+                                if feed_id in self._feed_running_events:
+                                    self._feed_running_events[feed_id].set()
+
+                    await self._broadcast(WebSocketMessageTypeEnum.FEED_METRICS, {"feed_id": feed_id, "metrics": metrics})
+
+                    if self._analytics_service:
+                        try:
+                            # Get location info from feed's config_info
+                            config_info = entry.get('config_info')
+                            if config_info and config_info.latitude is not None and config_info.longitude is not None:
+                                metrics['latitude'] = config_info.latitude
+                                metrics['longitude'] = config_info.longitude
+                            else:
+                                logger.warning(f"Feed {feed_id} missing latitude/longitude in config_info. Cannot update cache with location.")
+
+                            await self._analytics_service.process_feed_metrics(feed_id, metrics)
+                        except Exception as e:
+                            logger.error(f"Error passing latest_metrics to AnalyticsService for feed '{feed_id}': {e}")
+                else:
+                    logger.warning(f"Result queue item feed_id mismatch for {feed_id}")
+
+                await asyncio.sleep(0.0001)
+            except queue.Empty:
+                break
+            except Exception as e:
+                logger.error(f"Error processing item from result queue for feed '{feed_id}': {e}", exc_info=True)
+                break
+
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if entry and entry.get('process'):
+                process = entry['process']
+                if not process.is_alive():
+                    exitcode = process.exitcode
+                    if exitcode == 0:
+                        logger.info(f"Process for feed '{feed_id}' exited cleanly (exitcode 0). Status set to STOPPED.")
+                        if entry['status'] != FeedOperationalStatusEnum.STOPPED:
+                            entry['status'] = FeedOperationalStatusEnum.STOPPED
+                            entry['error_message'] = None
+                            entry['process'] = None
+                            feed_ids_to_update.add(feed_id)
+                            kpi_update_needed_local = True
+                    else:
+                        logger.warning(f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error.")
+                        if entry['status'] != FeedOperationalStatusEnum.ERROR:
+                            entry['status'] = FeedOperationalStatusEnum.ERROR
+                            entry['error_message'] = f"Process terminated unexpectedly (exitcode: {exitcode})."
+                            entry['process'] = None
+                            feed_ids_to_update.add(feed_id)
+                            kpi_update_needed_local = True
+                            if not entry.get('is_sample_feed'):
+                                sample_feed_check_needed_local = True
+        return processed_items, kpi_update_needed_local, sample_feed_check_needed_local
+
+    async def _process_db_queue(self, feed_id: str, q: MPQueue) -> bool:
+        """Helper to process items from a single DB queue."""
+        processed_items = False
+        while True:
+            try:
+                vehicle_data = q.get_nowait()
+                processed_items = True
+                if self._analytics_service:
+                    await self._analytics_service.save_vehicle_data(vehicle_data)
+                await asyncio.sleep(0.0001)
+            except queue.Empty:
+                break
+            except Exception as e:
+                logger.error(f"Error processing item from db_queue for feed '{feed_id}': {e}", exc_info=True)
+                break
+        return processed_items
+
+    async def _perform_broadcasts(self, feed_ids_to_update: set, kpi_update_needed: bool, sample_feed_check_needed: bool):
+        """Helper to perform all necessary broadcasts and sample feed checks."""
+        for feed_id_to_update in feed_ids_to_update:
+            await self._broadcast_feed_update(feed_id_to_update)
+
+        current_time = time.time()
+        if kpi_update_needed or (current_time - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval):
+             await self._broadcast_kpi_update()
+             self._last_kpi_broadcast_time = current_time
+
+        if sample_feed_check_needed:
+            await self._check_and_manage_sample_feed()
+
+    async def add_and_start_feed(self, source: str, latitude: float, longitude: float, name_hint: Optional[str] = None, is_looped: bool = True) -> Dict[str, Any]:
         """Adds a new feed and attempts to start it. Returns feed_id and initial status."""
         async with self._lock:
             self._check_resources() # Raises ResourceLimitError if limits exceeded
@@ -602,6 +654,8 @@ class FeedManager:
                 name_hint=name_hint,
                 is_sample=False, # Manually added feeds are not sample feeds by default
                 is_looped=is_looped,
+                latitude=latitude if latitude is not None else 0.0, # Default to 0.0 if not provided
+                longitude=longitude if longitude is not None else 0.0, # Default to 0.0 if not provided
                 # other config params like resolution_preference, inference_mode can be added here
             )
 
@@ -677,7 +731,8 @@ class FeedManager:
                 logger.error(f"Failed to launch worker for restarting '{feed_id}': {e}", exc_info=True)
                 entry['status'] = 'error'
                 entry['error_message'] = f"Failed to launch process on restart: {e}"
-                if entry['result_queue']: entry['result_queue'].close()
+                if entry['result_queue']:
+                    entry['result_queue'].close()
                 entry['result_queue'] = None
                 entry['stop_event'] = None
                 # Don't remove from registry
@@ -726,13 +781,12 @@ class FeedManager:
         """Restarts a feed by stopping and then starting it."""
         logger.info(f"Restart requested for feed: '{feed_id}'")
         original_source = None
-        is_sample = False
         async with self._lock:
              entry = self.process_registry.get(feed_id)
              if not entry:
                  raise FeedNotFoundError(feed_id)
              original_source = entry['source'] # Store source before stopping
-             is_sample = entry.get('is_sample_feed', False)
+
 
         if not original_source: # Should not happen if entry exists
              raise FeedOperationError(f"Cannot restart {feed_id}, source not found.")
@@ -830,7 +884,7 @@ class FeedManager:
             reduce_event, self._global_fps,
             None, # Pass None for db_queue, DB handled centrally if needed or via results
             error_queue,
-            self.config.get('logging') # Pass the logging configuration
+            entry.get('config_info') # Pass the feed's specific config_info
         )
 
         process = Process(
@@ -863,7 +917,7 @@ class FeedManager:
             try:
                 # Run the blocking join in a thread pool executor
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, process.join, 1.5)  # Timeout 1.5s
+                await loop.run_in_executor(None, process.join, 5.0)  # Timeout 5.0s
 
                 if process.is_alive():
                     self.logger.warning(
@@ -886,11 +940,15 @@ class FeedManager:
                         self.logger.info(f"Process {pid} terminated.")
                 else:
                     logger.info(f"Process {pid} for '{feed_id}' joined successfully.")
+                if process:
+                    process.close()
             except Exception as e:
                 logger.error(f"Error joining/terminating process {pid} for '{feed_id}': {e}", exc_info=True)
                 # Try terminate again if join failed?
-                if process.is_alive():
-                    process.terminate()
+                if process:
+                    if process.is_alive():
+                        process.terminate()
+                    process.close()
 
     def _close_queue(self, feed_id: str, result_queue: Optional[MPQueue]):
         """Drains and closes a queue."""
@@ -898,7 +956,7 @@ class FeedManager:
             drained_count = 0
             while True:
                 try:
-                    result_queue.get_nowait();
+                    result_queue.get_nowait()
                     drained_count += 1
                 except queue.Empty:
                     break
@@ -908,7 +966,7 @@ class FeedManager:
                 logger.debug(
                     f"Drained {drained_count} items from result queue for {feed_id} during cleanup.")
             try:
-                result_queue.close();
+                result_queue.close()
                 result_queue.join_thread()
             except Exception as e:
                 logger.error(f"Error closing result queue for {feed_id}: {e}", exc_info=True)
@@ -975,16 +1033,7 @@ class FeedManager:
             await self._join_process(feed_id, process)
 
             # Close Process Handle (if supported and process exists)
-            if process:
-                try:
-                    # Check if the process is still alive before attempting to close its handle
-                    # This prevents ValueError: process object is closed
-                    if not process.is_alive() and process.exitcode is not None:
-                        process.close()
-                    else:
-                        self.logger.warning(f"Process {feed_id} (PID: {process.pid}) is still alive or its exitcode is None. Not closing handle yet.")
-                except Exception as e:
-                    self.logger.error(f"Error closing process handle for {feed_id}: {e}", exc_info=True)
+            
 
             self._close_queue(feed_id, result_queue)
 
@@ -992,12 +1041,16 @@ class FeedManager:
             if entry['status'] != 'stopped':
                 await self._update_registry_status(entry, feed_id)
 
+            # Clear the running event for this feed
+            if feed_id in self._feed_running_events:
+                self._feed_running_events[feed_id].clear()
+
             # Check if a real feed was cleaned up (even from error state)
             # Need to trigger sample feed check if the last real feed is now stopped
             if status in ['running', 'starting', 'error'] and not is_sample:
                  needs_sample_check = True # Set flag to check after lock release
 
-        except Exception as e:    
+        except Exception as e:
             logger.error(f"Unexpected error during cleanup for feed {feed_id}: {e}", exc_info=True)
             # Ensure status is error if cleanup fails badly
             entry = self.process_registry.get(feed_id)
@@ -1047,6 +1100,7 @@ class FeedManager:
 
     async def _check_and_manage_sample_feed(self):
         """Starts or stops the sample feed based on the status of real feeds."""
+        self.logger.debug(f"_check_and_manage_sample_feed called. Sample feed ID: {self._sample_feed_id}")
         if not self._sample_feed_id:
             logger.debug("Sample feed management check: No sample feed configured.")
             return
@@ -1085,3 +1139,67 @@ class FeedManager:
                 await self.start_feed(feed_id_to_start)
             except Exception as e:
                 logger.error(f"Error starting sample feed: {e}", exc_info=True)
+
+    async def get_feed_running_event(self, feed_id: str) -> asyncio.Event:
+        """Returns the asyncio.Event for a given feed_id, creating it if it doesn't exist."""
+        async with self._lock:
+            if feed_id not in self._feed_running_events:
+                self._feed_running_events[feed_id] = asyncio.Event()
+            return self._feed_running_events[feed_id]
+
+    async def remove_feed(self, feed_id: str):
+        """Removes a feed from the registry, stopping it first if running."""
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                raise FeedNotFoundError(feed_id)
+
+            # Stop the feed if it's running or starting
+            if entry['status'] in ['running', 'starting', 'error']:
+                logger.info(f"Stopping feed {feed_id} before removal.")
+                await self.stop_feed(feed_id) # This will handle cleanup and broadcast
+
+            del self.process_registry[feed_id]
+            logger.info(f"Feed {feed_id} removed from registry.")
+            # No need to broadcast status update for a removed feed, as stop_feed already broadcasted "stopped"
+            # If a "removed" status is needed on the frontend, a new WebSocketMessageTypeEnum would be required.
+
+    async def get_active_incidents(self) -> List[Alert]:
+        """Retrieves active incidents from the AnalyticsService."""
+        if self._analytics_service:
+            return await self._analytics_service.get_active_alerts() # Assuming AnalyticsService has this method
+        else:
+            logger.warning("AnalyticsService not set. Cannot retrieve active incidents.")
+            return []
+
+feed_manager_instance: Optional[FeedManager] = None
+
+async def initialize_feed_manager(config: dict):
+    global feed_manager_instance
+    if feed_manager_instance is None:
+        try:
+            feed_manager_instance = FeedManager(config)
+            logger.info("FeedManager initialized successfully.")
+        except Exception as e:
+            logger.critical(f"Failed to initialize FeedManager: {e}", exc_info=True)
+            feed_manager_instance = None
+            raise RuntimeError(f"FeedManager Initialization Failed: {e}") from e
+    return feed_manager_instance
+
+def get_feed_manager() -> FeedManager:
+    if feed_manager_instance is None:
+        logger.error("FeedManager accessed before initialization!")
+        raise RuntimeError("FeedManager not initialized.")
+    return feed_manager_instance
+
+async def close_feed_manager():
+    global feed_manager_instance
+    if feed_manager_instance:
+        try:
+            logger.info("Closing FeedManager...")
+            await feed_manager_instance.shutdown()
+            feed_manager_instance = None
+        except Exception as e:
+            logger.error(f"Error closing FeedManager: {e}")
+    else:
+        logger.info("FeedManager already closed or not initialized.")

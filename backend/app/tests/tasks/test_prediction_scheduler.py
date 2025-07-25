@@ -2,13 +2,13 @@ import asyncio
 import unittest
 from unittest.mock import patch, MagicMock, call, AsyncMock # Added AsyncMock
 import random
-from datetime import datetime, timedelta # Added datetime, timedelta
+from datetime import timedelta # Added datetime, timedelta
 
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.models.traffic import LocationModel
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, GeneralNotification
 
-class TestPredictionScheduler(unittest.TestCase):
+class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.mock_analytics_service = MagicMock()
@@ -108,7 +108,7 @@ class TestPredictionScheduler(unittest.TestCase):
         self.assertIn(str(sample_location.longitude), action)
         self.assertIn("Placeholder action:", action)
 
-        mock_logger.info.assert_called_once_with(f"Determined autonomous action: {action}")
+        mock_module_logger.info.assert_called_once_with(f"Determined autonomous action: {action}")
 
     @patch.object(PredictionScheduler, 'determine_autonomous_actions')
     @patch('app.tasks.prediction_scheduler.logger') # logger used in _predict_and_notify
@@ -202,16 +202,9 @@ class TestPredictionScheduler(unittest.TestCase):
 # For simplicity, I'm using await directly in test methods, assuming an async-compatible test runner
 # or that these will be adapted. If using `python -m unittest`, async test methods need `asyncio.run`.
 
-def async_test(f):
-    def wrapper(*args, **kwargs):
-        return asyncio.run(f(*args, **kwargs))
-    return wrapper
 
-TestPredictionScheduler.test_set_priority_locations = async_test(TestPredictionScheduler.test_set_priority_locations)
-TestPredictionScheduler.test_load_monitored_locations_uses_priority_when_set = async_test(TestPredictionScheduler.test_load_monitored_locations_uses_priority_when_set)
-TestPredictionScheduler.test_load_monitored_locations_uses_default_when_no_priority = async_test(TestPredictionScheduler.test_load_monitored_locations_uses_default_when_no_priority)
-TestPredictionScheduler.test_predict_and_notify_high_likelihood = async_test(TestPredictionScheduler.test_predict_and_notify_high_likelihood)
-TestPredictionScheduler.test_predict_and_notify_low_likelihood = async_test(TestPredictionScheduler.test_predict_and_notify_low_likelihood)
+
+
 
 
 # --- Tests for accuracy-based location selection ---
@@ -227,7 +220,7 @@ async def test_load_monitored_locations_adapts_to_accuracy(self, mock_random_cho
 
     # Mock the return value of _load_monitored_locations's internal `all_locations` list
     # to ensure we are testing against a known set.
-    with patch.object(self.scheduler, '_load_monitored_locations') as mock_load_method_internal_logic:
+    with patch.object(self.scheduler, '_load_monitored_locations') as _:
         # This is tricky. Instead of patching the whole method, we rely on the hardcoded list
         # in the actual _load_monitored_locations matching our self.original_hardcoded_locations_with_names.
         # For this test, we'll assume `all_locations` inside the method is `self.original_hardcoded_locations_with_names`.
@@ -390,7 +383,7 @@ async def test_run_loop_uses_priority_then_default(self):
     self.assertTrue(self.scheduler.logger.info.call_args_list[-2][0][0].startswith("No priority locations set")) # -2 because last is dynamic selected
     self.assertTrue(self.scheduler.logger.info.call_args_list[-1][0][0].startswith("Dynamically selected 1 default locations"))
 
-TestPredictionScheduler.test_run_loop_uses_priority_then_default = async_test(test_run_loop_uses_priority_then_default)
+
 
 
 if __name__ == '__main__':

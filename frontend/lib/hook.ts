@@ -7,7 +7,11 @@ import {
 
 // Generate a unique client_id for this session
 const CLIENT_ID = typeof window !== 'undefined' ? (window.localStorage.getItem('client_id') || (() => { const id = uuidv4(); window.localStorage.setItem('client_id', id); return id; })()) : 'default-client';
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ? `${process.env.NEXT_PUBLIC_WS_URL}/${CLIENT_ID}` : `ws://localhost:8000/ws/${CLIENT_ID}`;
+const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+const WS_URL = (token: string | null) => {
+  const baseUrl = `${WS_BASE_URL.replace(/\/$/, '')}/ws/${CLIENT_ID}`;
+  return token ? `${baseUrl}?token=${token}` : baseUrl;
+};
 
 const INITIAL_RECONNECT_DELAY_MS = 2000; // Start delay at 2s
 const MAX_RECONNECT_DELAY_MS = 30000; // Max delay 30s
@@ -30,15 +34,12 @@ type RealtimeData = {
 
 type MessageSender = (type: string, data?: unknown) => void;
 
-export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSender } {
+export function useRealtimeUpdates(token: string | null): RealtimeData & { sendMessage: MessageSender } {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0); // Track attempts
   const lastPingRef = useRef<number>(0);
-  // --- Auth context for token ---
-  // Import useUser from UserContext
-  // (If not already imported at top, add: import { useUser } from '@/lib/auth/UserContext';)
-  const { user } = typeof window !== 'undefined' ? require('@/lib/auth/UserContext').useUser() : { user: null };
+  
 
   // Add WebSocketMessageTypeEnum if not already globally available or imported from a shared types location
   // For this example, assuming it might be defined or imported elsewhere, or we define it here.
@@ -75,8 +76,8 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
         return; // Stop trying
     }
 
-    console.log(`Attempting WebSocket connection to ${WS_URL} (Attempt ${reconnectAttempts.current + 1})...`);
-    const ws = new WebSocket(WS_URL);
+    console.log(`Attempting WebSocket connection to ${WS_URL(token)} (Attempt ${reconnectAttempts.current + 1})...`);
+    const ws = new WebSocket(WS_URL(token));
     wsRef.current = ws;
 
     ws.onopen = async () => {
@@ -86,14 +87,6 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
       reconnectAttempts.current = 0; // Reset attempts on successful connection
       lastPingRef.current = Date.now();
       // --- Send authentication message with token ---
-      let token = null;
-      if (user && user.getIdToken) {
-        try {
-          token = await user.getIdToken();
-        } catch (e) {
-          console.error('Failed to get user token for WebSocket auth:', e);
-        }
-      }
       if (token) {
         ws.send(JSON.stringify({
           event_type: 'authenticate',
@@ -339,4 +332,3 @@ export function useRealtimeUpdates(): RealtimeData & { sendMessage: MessageSende
   };
 };
 
-export { WS_URL };

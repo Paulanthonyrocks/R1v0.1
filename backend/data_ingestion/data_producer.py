@@ -1,7 +1,6 @@
 import time
 import json
-import os # Added os for environment variables
-from kafka import KafkaProducer, KafkaAdminClient
+from kafka import KafkaProducer
 from kafka.errors import KafkaTimeoutError, KafkaError, NoBrokersAvailable
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type # Added tenacity
 import random
@@ -57,7 +56,7 @@ if __name__ == "__main__":
             retries=3, # Producer-level retries for some errors
             acks='all' # Ensure messages are acknowledged by all in-sync replicas
         )
-        print(f"Kafka producer initialized.")
+        print("Kafka producer initialized.")
 
         # Optional: Check topic existence or create it (requires admin privileges)
         # try:

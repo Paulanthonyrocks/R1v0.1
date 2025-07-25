@@ -8,22 +8,12 @@ interface TrafficSignalIconProps {
 const VALID_STATUSES = ['red', 'yellow', 'green'];
 
 const TrafficSignalIcon: React.FC<TrafficSignalIconProps> = ({ status, size = 12 }) => {
-  // Fallback handling for invalid status
+  const uniqueIdSuffix = useId();
+
   if (!VALID_STATUSES.includes(status)) {
     console.warn(`TrafficSignalIcon: Invalid status "${status}" provided. Expected one of ${VALID_STATUSES.join(', ')}. Rendering null.`);
     return null;
   }
-
-  const iconStyle: React.CSSProperties = {
-    width: size,
-    height: size,
-    display: 'inline-block',
-    verticalAlign: 'middle',
-    imageRendering: 'pixelated', // Ensure crisp rendering if scaled
-  };
-
-  // Deterministic (but unique per instance) ID for the pattern
-  const uniqueIdSuffix = useId();
   const ditherPatternId = `dither-pattern-yellow-signal-${uniqueIdSuffix}`;
 
   switch (status) {

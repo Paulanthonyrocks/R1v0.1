@@ -1,5 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from typing import List, Optional
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 import logging
 from ..ml.pavement_analysis.analyze_pavement import analyze_pavement_image
 from ..models.pavement import PavementAnalysisResponse
@@ -23,4 +22,4 @@ async def analyze_pavement(
         results = await analyze_pavement_image(contents)
         return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

@@ -2,12 +2,9 @@
 
 # Imports needed for check_system_resources or the __main__ block
 import logging
-import psutil # For check_system_resources
-from typing import Tuple # For check_system_resources type hint
 
 # Imports strictly for the __main__ example block (if not already covered)
 import sys
-import time # Used in __main__ for alert item formatting (if that part is kept/re-added)
 from pathlib import Path # Used in __main__ for config path
 
 # Third-party imports potentially used in __main__ (if not already covered)
@@ -102,6 +99,11 @@ if __name__ == "__main__":
         ocr_text_tesseract = lp_preprocessor_tess.preprocess_and_ocr(dummy_roi_tess)
         print(f"Tesseract Dummy OCR Result: '{ocr_text_tesseract}' (Requires Tesseract installed & configured)")
 
-    except ConfigError as ce: print(f"\n--- CONFIGURATION ERROR ---\n{ce}"); sys.exit(1)
-    except Exception as exc: print(f"\n--- UNEXPECTED ERROR IN MAIN TEST BLOCK ---\n{exc}"); logger.error("Main test block error", exc_info=True); sys.exit(1)
+    except ConfigError as ce:
+        print(f"\n--- CONFIGURATION ERROR ---\n{ce}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"\n--- UNEXPECTED ERROR IN MAIN TEST BLOCK ---\n{exc}")
+        logger.error("Main test block error", exc_info=True)
+        sys.exit(1)
     print("\n--- Utils.py Tests Finished ---")

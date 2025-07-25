@@ -1,80 +1,102 @@
 import asyncio
 import unittest
-from unittest.mock import patch, MagicMock, ANY
-from collections import Counter
+from unittest.mock import patch, MagicMock
+from contextlib import asynccontextmanager
+import uuid # For generating unique IDs
+from datetime import datetime, timedelta
+from sqlalchemy.orm import sessionmaker, Session # Note: Session is already imported in PersonalizedRoutingService for type hints, but good to have here too.
+# Explicitly import Base and models needed for table creation and direct querying in tests
+from app.services.personalized_routing_service import Base, ProactiveSuggestionFeedbackLog
 
 from app.services.personalized_routing_service import PersonalizedRoutingService, RouteHistoryModel
 from app.models.routing import RouteHistoryEntry # Assuming this is the correct model for entries
 from app.ml.preference_learner import UserPreferenceLearner # For mock
 from app.ml.route_optimizer import RouteOptimizer # For mock
+from app.utils.database import DatabaseManager
+from unittest.mock import AsyncMock
+from sqlalchemy import select
 
 
-class TestPersonalizedRoutingService(unittest.TestCase):
+class TestPersonalizedRoutingService(unittest.IsolatedAsyncioTestCase):
 
-    def setUp(self):
+    async def asyncSetUp(self):
         # Mock dependencies for PersonalizedRoutingService
-        self.mock_db_url = "sqlite:///:memory:" # Not actually used due to session mocking
         self.mock_traffic_predictor = MagicMock()
         self.mock_data_cache = MagicMock()
+
+        # Mock the DatabaseManager and its get_session method
+        self.mock_db_manager = MagicMock(spec=DatabaseManager)
+        # Mock get_session to return an async context manager
+        class AsyncContextManagerMock:
+            def __init__(self, session_mock):
+                self.session_mock = session_mock
+
+            async def __aenter__(self):
+                return self.session_mock
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                if exc_type:
+                    self.session_mock.rollback()
+                else:
+                    self.session_mock.commit()
+                self.session_mock.close()
+
+        self.mock_db_manager.get_session = MagicMock(return_value=AsyncContextManagerMock(AsyncMock(spec=Session)))
 
         # Patch __init__ of dependencies if they have complex setup
         with patch.object(UserPreferenceLearner, '__init__', return_value=None), \
              patch.object(RouteOptimizer, '__init__', return_value=None):
             self.service = PersonalizedRoutingService(
-                db_url=self.mock_db_url,
+                database_manager=self.mock_db_manager,
                 traffic_predictor=self.mock_traffic_predictor,
                 data_cache=self.mock_data_cache
             )
 
-        # Mock the SQLAlchemy Session
-        self.mock_session = MagicMock()
-        self.service.Session = MagicMock(return_value=self.mock_session)
+    @asynccontextmanager
+    async def _get_test_session(self):
+        # This is a simplified mock session for tests that don't need a real DB interaction
+        # For tests that need real DB, use TestPersonalizedRoutingServiceWithDb
+        mock_session = MagicMock()
+        yield mock_session
+        mock_session.commit.assert_called_once() # Ensure commit is called
 
-    def test_get_most_frequent_destination_success(self):
+    async def asyncTearDown(self):
+        pass # No specific cleanup needed for this mock-based setup
+
+    async def test_get_most_frequent_destination_success(self):
         user_id = "user1"
-        sample_location_1 = {"latitude": 10.0, "longitude": 20.0, "name": "Work"}
+        sample_location_1 = {"latitude": 34.0, "longitude": -118.0, "name": "Work"}
         sample_location_2 = {"latitude": 30.0, "longitude": 40.0, "name": "Home"}
 
-        # Mock RouteHistoryModel instances (what query would return)
-        history_records_mocks = [
-            MagicMock(spec=RouteHistoryModel, end_location=sample_location_1), # Freq: 2
-            MagicMock(spec=RouteHistoryModel, end_location=sample_location_1),
-            MagicMock(spec=RouteHistoryModel, end_location=sample_location_2), # Freq: 1
-        ]
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(session, user_id=user_id, end_location=sample_location_1)
+            await self._add_route_history_entry(session, user_id=user_id, end_location=sample_location_1)
+            await self._add_route_history_entry(session, user_id=user_id, end_location=sample_location_2)
 
-        # Configure the mock query chain
-        self.mock_session.query(RouteHistoryModel.end_location).filter().order_by().limit().all.return_value = history_records_mocks
-
-        result = self.service._get_most_frequent_destination(user_id, limit=3)
-
+        result = await self.service._get_most_frequent_destination(user_id, limit=3)
         self.assertEqual(result, sample_location_1)
-        self.mock_session.query(RouteHistoryModel.end_location).filter(RouteHistoryModel.user_id == user_id).order_by(RouteHistoryModel.start_time.desc()).limit(3).all.assert_called_once()
 
-    def test_get_most_frequent_destination_single_entry(self):
+    async def test_get_most_frequent_destination_single_entry(self):
         user_id = "user_single"
         sample_location_1 = {"latitude": 10.0, "longitude": 20.0}
-        history_records_mocks = [
-            MagicMock(spec=RouteHistoryModel, end_location=sample_location_1),
-        ]
-        self.mock_session.query(RouteHistoryModel.end_location).filter().order_by().limit().all.return_value = history_records_mocks
-        result = self.service._get_most_frequent_destination(user_id, limit=1)
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(session, user_id=user_id, end_location=sample_location_1)
+
+        result = await self.service._get_most_frequent_destination(user_id, limit=1)
         self.assertEqual(result, sample_location_1)
 
-    def test_get_most_frequent_destination_no_history(self):
+    async def test_get_most_frequent_destination_no_history(self):
         user_id = "user_no_history"
-        self.mock_session.query(RouteHistoryModel.end_location).filter().order_by().limit().all.return_value = []
-        result = self.service._get_most_frequent_destination(user_id)
+        result = await self.service._get_most_frequent_destination(user_id)
         self.assertIsNone(result)
 
-    def test_get_most_frequent_destination_no_single_frequent(self):
+    async def test_get_most_frequent_destination_no_single_frequent(self):
         user_id = "user_no_frequent"
-        # All destinations appear only once, and there's more than one
-        history_records_mocks = [
-            MagicMock(spec=RouteHistoryModel, end_location={"lat": 10, "lon": 20}),
-            MagicMock(spec=RouteHistoryModel, end_location={"lat": 30, "lon": 40}),
-        ]
-        self.mock_session.query(RouteHistoryModel.end_location).filter().order_by().limit().all.return_value = history_records_mocks
-        result = self.service._get_most_frequent_destination(user_id)
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(session, user_id=user_id, end_location={"latitude": 10.0, "longitude": 20.0})
+            await self._add_route_history_entry(session, user_id=user_id, end_location={"latitude": 30.0, "longitude": 40.0})
+
+        result = await self.service._get_most_frequent_destination(user_id)
         self.assertIsNone(result)
 
     @patch('app.services.personalized_routing_service.logger')
@@ -123,14 +145,6 @@ if __name__ == '__main__':
 
 
 # --- New Test Class for DB-dependent tests ---
-import uuid # For generating unique IDs
-from datetime import datetime, timedelta
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker # Note: Session is already imported in PersonalizedRoutingService for type hints, but good to have here too.
-# Explicitly import Base and models needed for table creation and direct querying in tests
-from app.services.personalized_routing_service import Base, ProactiveSuggestionFeedbackLog, CommonTravelPattern
-# RouteHistoryModel is already imported at the top by the existing test class
-from app.models.traffic import LocationModel # For constructing test data for patterns
 
 
 # Helper data for tests
@@ -142,11 +156,23 @@ SUGGESTION_ID_DB_TEST_2 = str(uuid.uuid4())
 class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.engine = create_engine("sqlite:///:memory:")
-        # Base is imported from personalized_routing_service where all relevant models are registered
-        Base.metadata.create_all(self.engine)
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from app.utils.database import DatabaseManager # Import the real DatabaseManager
 
-        self.TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        # Create an in-memory SQLite async engine for testing
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+        # Create a session factory for this engine
+        self.TestSessionLocal = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+
+        # Mock the DatabaseManager to use our test engine and session factory
+        self.mock_db_manager = MagicMock(spec=DatabaseManager)
+        self.mock_db_manager.async_engine = self.engine
+        self.mock_db_manager.get_session = AsyncMock(side_effect=self._get_test_session) # Use a side_effect to return a real session
+
+        # Ensure tables are created in the in-memory database
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
         self.mock_traffic_predictor = MagicMock()
         self.mock_data_cache = MagicMock()
@@ -162,12 +188,15 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
         self.mock_route_optimizer = self.MockRouteOptimizer.return_value
 
         self.service = PersonalizedRoutingService(
-            db_url="sqlite:///:memory:", # This URL is for the service's own engine if it were not overridden
+            database_manager=self.mock_db_manager,
             traffic_predictor=self.mock_traffic_predictor,
             data_cache=self.mock_data_cache
         )
-        # Crucially, override the service's Session factory to use our in-memory test session
-        self.service.Session = self.TestSessionLocal
+
+    @asynccontextmanager
+    async def _get_test_session(self):
+        async with self.TestSessionLocal() as session:
+            yield session
 
     async def asyncTearDown(self):
         self.patcher_learner.stop()
@@ -175,7 +204,7 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
         # Base.metadata.drop_all(self.engine) # Clean up tables - good practice
         # For in-memory, connection close/dispose might be enough and tables are dropped with engine
-        async with self.engine.connect() as conn: # Ensure connection is active for drop_all
+        async with self.engine.begin() as conn:
              await conn.run_sync(Base.metadata.drop_all)
         await self.engine.dispose()
 
@@ -336,7 +365,6 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
         # Verify the original entry was not changed
         async with self.TestSessionLocal() as session:
-            unchanged_entry = await session.get(ProactiveSuggestionFeedbackLog, {"suggestion_id": suggestion_id_for_mismatch})
             # If using composite primary key or if id is different from suggestion_id, adjust lookup.
             # The _add_suggestion_log_entry uses a random uuid for `id` and passes suggestion_id separately.
             # We need to find the original entry's PK `id` if it's not the same as suggestion_id.

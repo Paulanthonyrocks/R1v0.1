@@ -3,14 +3,13 @@
 import logging
 
 # Import the functions/classes you want to expose directly from the package level
-from .services import ( # Assuming your file is named services.py
+from .services import (
     initialize_services,
     shutdown_services,
     get_feed_manager,
     get_connection_manager,
     get_route_optimization_service,
     get_traffic_signal_service,
-    get_analytics_service,
     get_personalized_routing_service,
     get_weather_service,
     get_event_service,
@@ -32,10 +31,11 @@ __all__ = [
     "get_connection_manager",
     "get_route_optimization_service",
     "get_traffic_signal_service",
-    "get_analytics_service",
     "get_personalized_routing_service",
     "get_weather_service",
     "get_event_service",
+    "feed_manager_instance",
+    "connection_manager_instance",
     # Add class names here if you want them included in '*' import
     # "FeedManager",
 ]

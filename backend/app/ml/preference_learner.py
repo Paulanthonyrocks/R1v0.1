@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN

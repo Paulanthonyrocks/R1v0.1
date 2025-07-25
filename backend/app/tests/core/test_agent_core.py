@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import MagicMock, patch, call, ANY # Added ANY
+from unittest.mock import MagicMock, patch, ANY, AsyncMock # Added ANY, AsyncMock
 import json # For checking log messages with JSON
 
 from app.core.agent_core import AgentCore
@@ -343,7 +343,7 @@ def async_test(f):
 
     @async_test
     @patch('app.core.agent_core.logger')
-    
+    async def test_run_decision_cycle_predictive_user_alert_high_likelihood(self, mock_agent_logger):
         sample_user_id = "user_predictive_alert"
         mock_loc_summary_start = {"latitude": 34.0, "longitude": -118.0, "name": "Home"}
         mock_loc_summary_end = {"latitude": 34.1, "longitude": -118.1, "name": "Work"}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict
 from app.dependencies import get_current_active_user
 from app.models.common import APIResponse
@@ -15,7 +15,7 @@ async def check_token_status(current_user: dict = Depends(get_current_active_use
     """
     try:
         if not current_user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
         # Extract relevant token information
         token_info = {
@@ -34,4 +34,4 @@ async def check_token_status(current_user: dict = Depends(get_current_active_use
 
     except Exception as e:
         logger.error(f"Error checking token status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

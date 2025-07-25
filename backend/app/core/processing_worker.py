@@ -5,8 +5,9 @@ import time
 import numpy as np
 import queue
 from typing import Dict, Optional, Set, Tuple, Union, TYPE_CHECKING, Any
+from multiprocessing import Queue as MPQueue
 import multiprocessing
-from multiprocessing import Queue as MPQueue, Event as MPEvent, Value
+from datetime import datetime, timezone
 
 if TYPE_CHECKING:
     import numpy as np
@@ -17,8 +18,8 @@ try:
     from ..utils.video import FrameTimer, FrameReader
     from ..utils.monitoring import TrafficMonitor
     from ..utils.visualization import visualize_data
-    from ..utils.config import ConfigError, load_config
-    from ..utils import DEFAULT_CONFIG
+    from ..utils.config import ConfigError
+    # from ..utils import DEFAULT_CONFIG # Not directly used here, but might be in other parts of the worker
     # LOG_PATH is defined in app.py, get it via config if needed or handle logging differently
     # For simplicity, we might re-fetch the path from config inside the function if needed
 except ImportError as e:
@@ -37,11 +38,14 @@ except ImportError as e:
          def get_metrics(self, *args, **kwargs): return {}
     def visualize_data(*args, **kwargs): return args[0] # Return original frame
     class FrameReader:
-        def __init__(self, *args, **kwargs): self.cap = None; self.end_of_video=True
+        def __init__(self, *args, **kwargs):
+            self.cap = None
+            self.end_of_video=True
         def read(self): return None, None
         def stop(self): pass
         def isOpened(self): return False # Simulate failure if import failed
-    class ConfigError(Exception): pass
+    class ConfigError(Exception):
+        pass
     # Fallback log path if config doesn't provide one
     LOG_PATH = './logs/worker.log'
 
@@ -56,9 +60,9 @@ except ImportError as e:
 # --- Process Video Function ---
 def process_video(
     video_path: str,
-    frame_queue: "multiprocessing.Queue[Tuple[str, int, 'np.ndarray', Dict, Dict, Dict]]",
-    stop_event: Any,  # multiprocessing.Event
-    alerts_queue: "multiprocessing.Queue[Dict]",
+    frame_queue: "MPQueue[Tuple[str, int, 'np.ndarray', Dict, Dict, Dict]]",
+    stop_event: Any,  # Event
+    alerts_queue: "MPQueue[Dict]",
     config: Dict,
     feed_id: str,
     confidence_threshold: float,
@@ -68,7 +72,8 @@ def process_video(
     reduce_frame_rate_event: Any,  # multiprocessing.Event
     global_fps: Any,  # multiprocessing.Value
     db_queue: Optional["multiprocessing.Queue[Dict]"] = None,
-    error_queue: Optional["multiprocessing.Queue[str]"] = None
+    error_queue: Optional["multiprocessing.Queue[str]"] = None,
+    feed_config_info: Optional[Dict] = None # New argument for feed-specific config
 ) -> None:
     # Configure logging specific to this process
     log_level_str = config.get('logging', {}).get('level', 'INFO').upper()
@@ -98,6 +103,7 @@ def process_video(
     logger.propagate = False # Prevent duplication if root logger also has handlers
 
     logger.info(f"Process {os.getpid()} started for {feed_id} ({video_path}) with log level {log_level_str}")
+    logger.info(f"Worker received config: {config}")
 
 
     reader = None
@@ -131,26 +137,26 @@ def process_video(
 
         logger.info(f"Initializing FrameReader for {source_type}: {source_location}")
         # FrameReader.__init__ now raises RuntimeError if capture fails to open
-        reader = FrameReader(source_location, buffer_size=config['video_input'].get('webcam_buffer_size', 1), target_fps=config.get('fps'))
+        reader = FrameReader(
+            source_location,
+            buffer_size=config['video_input'].get('webcam_buffer_size', 1),
+            target_fps=config.get('fps'),
+            max_queue_size=config['video_input'].get('max_queue_size', 1000) # Pass max_queue_size from config
+        )
         # Add a small delay for camera/reader thread to initialize
         time.sleep(config['interface'].get('camera_warmup_time', 0.5))
 
-        # --- FrameReader Initialization Check (Redundant if FrameReader raises, but safe) ---
-        # FrameReader's __init__ should raise RuntimeError if self.cap.isOpened() is false
-        # The check below adds an extra layer but might hide the original error from FrameReader
-        # If FrameReader guarantees raising the error, this check can be removed.
-        # Keeping it for now as an explicit safeguard in the worker.
-        if not reader or not reader.cap or not reader.cap.isOpened():
-             # If FrameReader didn't raise, construct an error message here
-             error_msg = f"[{feed_id}] FrameReader failed to initialize or open source: {source_location} (checked after init). Worker stopping."
-             logger.error(error_msg)
-             if error_queue: error_queue.put(error_msg) # Report back
-             raise RuntimeError(error_msg) # Stop the process execution
-        # ----------------------------------------------------------
+        if not reader.isOpened:
+            error_msg = f"[{feed_id}] FrameReader failed to open source: {source_location}. Worker stopping."
+            logger.error(error_msg)
+            if error_queue:
+                error_queue.put(error_msg)
+            raise RuntimeError(error_msg)
 
-        logger.info(f"FrameReader initialized for {feed_id}")
+        logger.info(f"FrameReader successfully opened source for {feed_id}")
 
-        if CoreModule is None: raise ImportError("CoreModule could not be imported.")
+        if CoreModule is None:
+            raise ImportError("CoreModule could not be imported.")
         logger.info(f"Initializing CoreModule for {feed_id}")
         # Pass db_queue to CoreModule for data saving
         core_module = CoreModule(
@@ -164,7 +170,8 @@ def process_video(
         # TrafficMonitor is now also imported from utils
         traffic_monitor = TrafficMonitor(config)
 
-        frame_count_processed = 0; last_log_time = time.time()
+        frame_count_processed = 0
+        last_log_time = time.time()
         base_frame_skip_interval = max(1, config['vehicle_detection'].get('skip_frames', 1))
         dynamic_skip_interval = base_frame_skip_interval
 
@@ -175,9 +182,17 @@ def process_video(
             read_start_time = time.time()
             result = reader.read()
             if result is None or not isinstance(result, tuple) or len(result) != 2:
-                logger.error(f"[{feed_id}] FrameReader.read() returned invalid result: {result}")
-                break  # Exit loop or handle as needed
-            frame, current_frame_index = result
+                if reader.end_of_video:
+                    logger.info(f"[{feed_id}] End of video/stream detected by reader, or reader stopped. Exiting worker loop.")
+                    break # Exit loop gracefully if end of video
+                else:
+                    logger.debug(f"[{feed_id}] FrameReader.read() returned no frame (queue empty). Retrying...")
+                    if stop_event.is_set(): # Check stop event immediately if no frame
+                        logger.info(f"[{feed_id}] Stop event set while waiting for frame. Exiting worker loop.")
+                        break
+                    time.sleep(0.01) # Small sleep to prevent busy-waiting
+                    continue # Continue to next iteration to try reading again
+            current_frame_index, frame = result
             timer.log_time('read', time.time() - read_start_time)
 
             # Ensure current_frame_index is a scalar integer
@@ -216,7 +231,8 @@ def process_video(
             try:
                 if frame.shape[1] != target_resolution[0] or frame.shape[0] != target_resolution[1]:
                     processing_frame = cv2.resize(frame, target_resolution, interpolation=cv2.INTER_LINEAR)
-                else: processing_frame = frame
+                else:
+                    processing_frame = frame
             except Exception as e:
                 logger.error(f"[{feed_id}] Error preparing/resizing frame {current_frame_index}: {e}. Shape: {frame.shape}. Skip.")
                 continue # Skip this frame
@@ -236,18 +252,21 @@ def process_video(
                     # This case should ideally not be reached if initialization is checked
                     logger.error(f"[{feed_id}] CoreModule not initialized, cannot process frame {current_frame_index}.")
                     # Optionally report error and break, or just skip
-                    if error_queue: error_queue.put(f"[{feed_id}] CoreModule not initialized.")
+                    if error_queue:
+                        error_queue.put(f"[{feed_id}] CoreModule not initialized.")
                     time.sleep(1) # Avoid busy-looping if core module is broken
                     continue # Skip frame processing
 
             except Exception as core_err:
                  logger.error(f"[{feed_id}] Core Error frame {current_frame_index}: {core_err}", exc_info=(log_level <= logging.DEBUG)) # Log traceback only in debug
-                 if error_queue: error_queue.put(f"[{feed_id}] Core Error: {core_err}")
+                 if error_queue:
+                     error_queue.put(f"[{feed_id}] Core Error: {core_err}")
                  consecutive_core_errors += 1
                  if consecutive_core_errors >= MAX_CONSECUTIVE_CORE_ERRORS:
                       critical_error_msg = f"[{feed_id}] Exceeded max consecutive core errors ({MAX_CONSECUTIVE_CORE_ERRORS}). Stopping worker."
                       logger.critical(critical_error_msg)
-                      if error_queue: error_queue.put(critical_error_msg)
+                      if error_queue:
+                          error_queue.put(critical_error_msg)
                       stop_event.set() # Signal stop
                       break # Exit loop
                  continue # Skip rest of loop for this frame on core error
@@ -259,18 +278,22 @@ def process_video(
 
             metrics = traffic_monitor.get_metrics()
             metrics['frame_index'] = current_frame_index # Add index for reference
-            density = metrics.get('vehicles_per_lane', {})
+            metrics['timestamp'] = datetime.now(timezone.utc) # Add timezone-aware timestamp
 
+            # Add latitude and longitude to metrics if available in feed_config_info
+            if feed_config_info:
+                if 'latitude' in feed_config_info and feed_config_info['latitude'] is not None:
+                    metrics['latitude'] = feed_config_info['latitude']
+                if 'longitude' in feed_config_info and feed_config_info['longitude'] is not None:
+                    metrics['longitude'] = feed_config_info['longitude']
             vis_start_time = time.time()
             # Call visualize_data (now imported from utils)
             combined_frame = visualize_data(
                 frame=processing_frame,
                 tracked_vehicles=tracked_vehicles_raw,
-                density=density,
-                alerts_queue=alerts_queue,
+                traffic_metrics=metrics,
                 visualization_options=vis_options,
                 config=config, # Pass config needed by visualize
-                debug_mode=(log_level <= logging.DEBUG), # Pass debug flag
                 feed_id=feed_id
             )
             timer.log_time('visualize', time.time() - vis_start_time)
@@ -286,8 +309,10 @@ def process_video(
             try:
                 logger.debug(f"[{feed_id}] Attempting to put frame {current_frame_index} onto queue.")
                 if frame_queue.full():
-                    try: frame_queue.get_nowait() # Drop oldest
-                    except queue.Empty: pass
+                    try:
+                        frame_queue.get_nowait() # Drop oldest
+                    except queue.Empty:
+                        pass
                 frame_queue.put_nowait(output_data)
                 logger.debug(f"[{feed_id}] Successfully put frame {current_frame_index} onto queue.")
             except queue.Full:
@@ -303,8 +328,10 @@ def process_video(
             current_time = time.time()
             if current_time - last_log_time > 10.0:
                  qsize_approx = -1
-                 try: qsize_approx = frame_queue.qsize() # Approx size
-                 except NotImplementedError: pass
+                 try:
+                     qsize_approx = frame_queue.qsize() # Approx size
+                 except NotImplementedError:
+                     pass
 
                  logger.info(
                      f"[{feed_id}] Frame ~{current_frame_index}. "
@@ -318,29 +345,34 @@ def process_video(
     except KeyboardInterrupt:
         logger.warning(f"[{feed_id}] KeyboardInterrupt received. Stopping worker.")
         stop_event.set()
-    except RuntimeError as e:
+    except RuntimeError:
          # Catch runtime errors (like FrameReader init failure)
          # Error message is already logged where the exception is raised
-         if not stop_event.is_set(): stop_event.set() # Ensure stop is signaled
+         if not stop_event.is_set():
+             stop_event.set() # Ensure stop is signaled
     except ImportError as e:
          # Catch import errors during setup (CoreModule)
          error_msg = f"[{feed_id}] FATAL Import Error: {e}. Worker cannot run."
          logger.critical(error_msg, exc_info=True)
-         if error_queue: error_queue.put(error_msg)
-         if not stop_event.is_set(): stop_event.set()
+         if error_queue:
+             error_queue.put(error_msg)
+         if not stop_event.is_set():
+             stop_event.set()
     except Exception as e:
         # Catch any other unexpected exception during setup or the main loop
         error_msg = f"[{feed_id}] FATAL Unhandled Error in process loop: {e}"
         logger.critical(error_msg, exc_info=True) # Log as critical
-        if error_queue: error_queue.put(error_msg)
-        if not stop_event.is_set(): stop_event.set() # Ensure stop is signaled
+        if error_queue:
+            error_queue.put(error_msg)
+        if not stop_event.is_set():
+            stop_event.set() # Ensure stop is signaled
     finally:
         # --- Enhanced Cleanup ---
         pid = os.getpid()
         logger.info(f"[{feed_id}] Cleaning up process {pid}...")
         if not stop_event.is_set():
-            logger.warning(f"[{feed_id}] Stop event not set during cleanup initiation, setting now.")
-            stop_event.set()
+             logger.warning(f"[{feed_id}] Stop event not set during cleanup initiation, setting now.")
+             stop_event.set()
 
         # Stop FrameReader safely
         if reader:
@@ -350,7 +382,8 @@ def process_video(
                 logger.info(f"[{feed_id}] FrameReader stopped.")
             except Exception as read_stop_err:
                  logger.error(f"[{feed_id}] Error stopping FrameReader: {read_stop_err}", exc_info=True)
-        else: logger.info(f"[{feed_id}] FrameReader was not initialized, skipping stop.")
+        else:
+            logger.info(f"[{feed_id}] FrameReader was not initialized, skipping stop.")
 
         # Cleanup CoreModule safely
         if core_module:
@@ -360,7 +393,8 @@ def process_video(
                 logger.info(f"[{feed_id}] CoreModule cleaned up.")
             except Exception as core_clean_err:
                  logger.error(f"[{feed_id}] Error cleaning up CoreModule: {core_clean_err}", exc_info=True)
-        else: logger.info(f"[{feed_id}] CoreModule was not initialized, skipping cleanup.")
+        else:
+            logger.info(f"[{feed_id}] CoreModule was not initialized, skipping cleanup.")
 
         # Drain output queue (optional, helps release memory faster)
         drained_count = 0
@@ -368,9 +402,12 @@ def process_video(
              while not frame_queue.empty():
                  frame_queue.get_nowait()
                  drained_count += 1
-        except queue.Empty: pass
-        except Exception as q_drain_err: logger.warning(f"[{feed_id}] Error draining output queue during cleanup: {q_drain_err}")
-        if drained_count > 0: logger.debug(f"[{feed_id}] Drained {drained_count} items from output queue during cleanup.")
+        except queue.Empty:
+            pass
+        except Exception as q_drain_err:
+            logger.warning(f"[{feed_id}] Error draining output queue during cleanup: {q_drain_err}")
+        if drained_count > 0:
+            logger.debug(f"[{feed_id}] Drained {drained_count} items from output queue during cleanup.")
 
         # Close queue from worker side (optional, main process usually manages queue lifetime)
         # try: frame_queue.close()
@@ -379,4 +416,4 @@ def process_video(
         frame_count_processed = frame_count_processed if 'frame_count_processed' in locals() else 0
         logger.info(f"[{feed_id}] Process {pid} terminated. Processed ~{frame_count_processed} frames.")
         # Ensure all handlers are flushed and closed (helps with file logging)
-        logging.shutdown()
+        

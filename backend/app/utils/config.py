@@ -17,6 +17,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "logging": {
         "level": "INFO",
         "file": "app.log",
+        "log_path": "./logs/backend_main.log", # Default log path for main application
     },
     "github": {
         "token": None,  # Replace with your GitHub token

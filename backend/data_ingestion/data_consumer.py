@@ -4,7 +4,7 @@ import logging
 import signal
 import time
 from datetime import datetime, timezone
-from kafka import KafkaConsumer, TopicPartition
+from kafka import KafkaConsumer
 from kafka.errors import KafkaError, NoBrokersAvailable
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure
@@ -36,11 +36,6 @@ def send_to_dlq(message_value: dict, error_details: str, kafka_producer=None, dl
     In a real system, this would involve publishing to a different Kafka topic,
     storing in a database, or writing to a file.
     """
-    dlq_message = {
-        "original_message": message_value,
-        "error": error_details,
-        "timestamp": time.time()
-    }
     logger.error(f"DLQ: Sending message to DLQ. Error: {error_details}. Message: {message_value}")
     # if kafka_producer and dlq_topic:
     # try:
@@ -343,7 +338,8 @@ def main():
 
 
             if not message_pack:
-                if shutdown_flag: break
+                if shutdown_flag:
+                    break
                 current_time = time.time()
                 if current_time - last_window_check_time >= config.FORCE_WINDOW_CHECK_INTERVAL_SECONDS:
                     logger.debug("No messages, checking for completed windows.")
@@ -405,7 +401,8 @@ def main():
                         max_offsets_in_batch[tp] = msg.offset + 1 # Skip bad message
                         batch_had_errors = True
                 
-                if shutdown_flag: break
+                if shutdown_flag:
+                    break
 
             # After processing all messages in message_pack or if shutdown
             if max_offsets_in_batch:

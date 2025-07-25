@@ -7,6 +7,7 @@ class AlertSeverityEnum(str, enum.Enum):
     INFO = "INFO"
     WARNING = "WARNING"
     CRITICAL = "CRITICAL"
+    ERROR = "ERROR"
 
 class Alert(BaseModel):
     id: int = Field(..., example=101, description="Unique identifier for the alert")

@@ -3,11 +3,9 @@ import numpy as np
 import logging
 import time # Used in visualize_data for banner timestamp
 from typing import Dict, Any, Optional, Set, Tuple
+from .monitoring import TrafficMonitor
 
 logger = logging.getLogger(__name__)
-
-# Attempt to import TrafficMonitor from where it's planned to be
-from .monitoring import TrafficMonitor
 # No longer need the placeholder class TrafficMonitor here
 
 # Global variables for caching visualization overlays

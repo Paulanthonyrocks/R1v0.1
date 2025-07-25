@@ -1,5 +1,5 @@
 import aiohttp
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timedelta
 import logging
 from fastapi import HTTPException
@@ -27,7 +27,7 @@ class WeatherService:
             try:
                 # Fetch new data
                 async with aiohttp.ClientSession() as session:
-                    url = f"https://api.openweathermap.org/data/2.5/weather"
+                    url = "https://api.openweathermap.org/data/2.5/weather"
                     params = {
                         'lat': lat,
                         'lon': lon,

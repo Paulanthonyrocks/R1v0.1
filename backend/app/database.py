@@ -1,18 +1,19 @@
 # app/database.py (Example)
 import logging
-from app.utils import DatabaseManager as DBManagerClass, load_config, ConfigError  # Assuming class is in utils
-from pathlib import Path
+from app.utils import DatabaseManager as DBManagerClass
+
 from typing import Optional
 
 logger = logging.getLogger("app.database")
 
 db_manager_instance: Optional[DBManagerClass] = None
 
-def initialize_database(config: dict):
+async def initialize_database(config: dict):
     global db_manager_instance
     if db_manager_instance is None:
         try:
             db_manager_instance = DBManagerClass(config)
+            
             logger.info("DatabaseManager initialized successfully via app.database.")
         except Exception as e:
             logger.critical(f"Failed to initialize DatabaseManager in app.database: {e}", exc_info=True)
@@ -32,7 +33,7 @@ async def close_database():
     if db_manager_instance:
         try:
             logger.info("Closing database connections from app.database...")
-            db_manager_instance.close()  # Close all connections
+            await db_manager_instance.close()  # Close all connections
             db_manager_instance = None
         except Exception as e:
             logger.error(f"Error closing database from app.database: {e}")

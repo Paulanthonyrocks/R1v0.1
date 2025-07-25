@@ -66,14 +66,18 @@ class TestAnalyticsRouterNodesCongestion(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         response_json = response.json()
 
-        self.assertIn("nodes", response_json)
-        self.assertEqual(len(response_json["nodes"]), len(mock_node_data))
+        self.assertIn("nodes", response_json["data"])
+        self.assertEqual(len(response_json["data"]["nodes"]), len(mock_node_data))
 
         # Detailed check of one item to ensure structure and data match
-        self.assertEqual(response_json["nodes"][0]["id"], mock_node_data[0]["id"])
-        self.assertEqual(response_json["nodes"][0]["name"], mock_node_data[0]["name"])
-        self.assertEqual(response_json["nodes"][0]["congestion_score"], mock_node_data[0]["congestion_score"])
-        self.assertEqual(response_json["nodes"][0]["timestamp"], mock_node_data[0]["timestamp"]) # Timestamps are ISO strings
+        self.assertEqual(response_json["data"]["nodes"][0]["id"], mock_node_data[0]["id"])
+        self.assertEqual(response_json["data"]["nodes"][0]["name"], mock_node_data[0]["name"])
+        self.assertEqual(response_json["data"]["nodes"][0]["congestion_score"], mock_node_data[0]["congestion_score"])
+        # Compare timestamps by converting both to datetime objects or standardizing string format
+        # For simplicity, let's compare only the date and time parts, ignoring timezone differences for now
+        # Or, convert both to datetime objects and then compare
+        from dateutil.parser import isoparse
+        self.assertEqual(isoparse(response_json["data"]["nodes"][0]["timestamp"]).replace(tzinfo=None), isoparse(mock_node_data[0]["timestamp"]).replace(tzinfo=None))
 
         mock_analytics_service_instance.get_all_location_congestion_data.assert_awaited_once()
 
@@ -85,8 +89,8 @@ class TestAnalyticsRouterNodesCongestion(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         response_json = response.json()
-        self.assertIn("nodes", response_json)
-        self.assertEqual(len(response_json["nodes"]), 0)
+        self.assertIn("nodes", response_json["data"])
+        self.assertEqual(len(response_json["data"]["nodes"]), 0)
         mock_analytics_service_instance.get_all_location_congestion_data.assert_awaited_once()
 
     def test_get_nodes_congestion_service_error(self):

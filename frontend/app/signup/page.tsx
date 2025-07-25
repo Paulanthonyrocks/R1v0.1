@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { FirebaseError } from 'firebase/app';
-import { AlertTriangle } from 'lucide-react'; // Import error icon
+import { AlertTriangle, Signal, Clock, BatteryFull } from 'lucide-react'; // Import error icon
 
 const SignupPage: React.FC = () => {
   // Note: MatrixButton component import was missing in the provided file, assuming it should be used like login page.
