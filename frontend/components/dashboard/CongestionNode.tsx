@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { CongestionNodeProps } from '@/lib/types';
 import { CheckCircle2, AlertTriangle, XOctagon } from 'lucide-react'; // Import status icons
 
-const CongestionNode = React.memo(({ id, name, value }: CongestionNodeProps) => {
+const CongestionNode = React.memo(({ name, value }: CongestionNodeProps) => {
   const indicatorColorClass = "[&>div]:bg-primary"; // Always black indicator
   const textColorClass = 'text-primary'; // Always black
 

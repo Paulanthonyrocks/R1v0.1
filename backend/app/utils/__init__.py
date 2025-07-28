@@ -8,7 +8,7 @@ making them available directly under the `app.utils` namespace. This provides a
 stable API even after internal refactoring of the utility modules.
 """
 
-import logging # Keep logging if the __init__ itself logs.
+import logging  # Keep logging if the __init__ itself logs.
 
 # Import from .config module
 from .config import ConfigError, load_config, DEFAULT_CONFIG, merge_dicts
@@ -23,7 +23,12 @@ from .image_processing import LicensePlatePreprocessor
 from .video import FrameReader, FrameTimer
 
 # Import from .visualization module
-from .visualization import visualize_data, create_lane_overlay, create_grid_overlay, alpha_blend
+from .visualization import (
+    visualize_data,
+    create_lane_overlay,
+    create_grid_overlay,
+    alpha_blend,
+)
 
 # Import from .monitoring module
 from .monitoring import TrafficMonitor, check_system_resources
@@ -39,31 +44,25 @@ logger = logging.getLogger(__name__)
 # the public interface of the package.
 __all__ = [
     # From config.py
-    'ConfigError',
-    'load_config',
-    'DEFAULT_CONFIG',
-    'merge_dicts',
-
+    "ConfigError",
+    "load_config",
+    "DEFAULT_CONFIG",
+    "merge_dicts",
     # From database.py
-    'DatabaseError',
-    'DatabaseManager',
-
+    "DatabaseError",
+    "DatabaseManager",
     # From image_processing.py
-    'LicensePlatePreprocessor',
-
+    "LicensePlatePreprocessor",
     # From video.py
-    'FrameReader',
-    'FrameTimer',
-
+    "FrameReader",
+    "FrameTimer",
     # From visualization.py
-    'visualize_data',
-    'create_lane_overlay',
-    'create_grid_overlay',
-    'alpha_blend',
-
+    "visualize_data",
+    "create_lane_overlay",
+    "create_grid_overlay",
+    "alpha_blend",
     # From monitoring.py
-    'TrafficMonitor',
-
+    "TrafficMonitor",
     # From utils.py (the remaining part of the original utils)
-    'check_system_resources'
+    "check_system_resources",
 ]

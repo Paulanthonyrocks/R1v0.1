@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 PredictionLogBase = declarative_base()
 
+
 class PredictionLogModel(PredictionLogBase):
     __tablename__ = "prediction_logs"
 
@@ -16,16 +17,21 @@ class PredictionLogModel(PredictionLogBase):
     location_longitude = Column(Float)
     predicted_event_start_time = Column(DateTime)
     predicted_event_end_time = Column(DateTime)
-    prediction_type = Column(String) # e.g., "incident_likelihood", "congestion_level"
-    predicted_value = Column(JSON) # Store the full prediction dictionary
-    source_of_prediction = Column(String) # e.g., "PredictionScheduler", "Manual"
+    prediction_type = Column(String)  # e.g., "incident_likelihood", "congestion_level"
+    predicted_value = Column(JSON)  # Store the full prediction dictionary
+    source_of_prediction = Column(String)  # e.g., "PredictionScheduler", "Manual"
     outcome_verified = Column(Boolean, default=False)
-    actual_outcome_type = Column(String, nullable=True) # e.g., "incident_occurred", "no_event_detected"
-    actual_outcome_details = Column(JSON, nullable=True) # Details about the actual outcome
+    actual_outcome_type = Column(
+        String, nullable=True
+    )  # e.g., "incident_occurred", "no_event_detected"
+    actual_outcome_details = Column(
+        JSON, nullable=True
+    )  # Details about the actual outcome
     verified_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return f"<PredictionLog(id='{self.id}', type='{self.prediction_type}', location='{self.location_name}')>"
+
 
 # Pydantic model for data transfer (optional, but good practice)
 class PredictionLogCreate(BaseModel):
@@ -37,6 +43,7 @@ class PredictionLogCreate(BaseModel):
     prediction_type: str
     predicted_value: Dict[str, Any]
     source_of_prediction: str
+
 
 class PredictionLogResponse(PredictionLogCreate):
     id: str

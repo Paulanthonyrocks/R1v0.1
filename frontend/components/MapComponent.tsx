@@ -4,12 +4,6 @@ import React, { useEffect, useRef, useId } from 'react'; // Removed useState
 import L from 'leaflet';
 import type { Anomaly } from '@/app/anomalies/page'; // Assuming Anomaly type is exported from page.tsx
 
-
-// Import or define custom icon images
-import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
-import iconDefaultUrl from 'leaflet/dist/images/marker-icon.png';
-import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
-
 // --- Custom Icons based on Severity ---
 // The '_severity' parameter is kept for future extension where different icon images might be used.
 // Prefixing with an underscore signals to the linter that it's intentionally not used in the current function body.

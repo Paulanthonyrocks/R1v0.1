@@ -8,8 +8,8 @@ import {
 // Generate a unique client_id for this session
 const CLIENT_ID = typeof window !== 'undefined' ? (window.localStorage.getItem('client_id') || (() => { const id = uuidv4(); window.localStorage.setItem('client_id', id); return id; })()) : 'default-client';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-const WS_URL = (token: string | null) => {
-  const baseUrl = `${WS_BASE_URL.replace(/\/$/, '')}/ws/${CLIENT_ID}`;
+export const WS_URL = (token: string | null) => {
+  const baseUrl = `${WS_BASE_URL.replace(/\/$/, '')}/api/v1/ws/${CLIENT_ID}`;
   return token ? `${baseUrl}?token=${token}` : baseUrl;
 };
 
@@ -242,7 +242,7 @@ export function useRealtimeUpdates(token: string | null): RealtimeData & { sendM
          console.log("WebSocket closed cleanly.");
       }
     };
-  }, []); // Remove error dependency
+  }, [token]); // Add token to dependency array
   
   // Heartbeat monitoring effect
   useEffect(() => {

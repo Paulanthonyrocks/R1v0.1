@@ -5,17 +5,17 @@ from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+
 def preprocess_image(
-    image: np.ndarray,
-    target_size: Optional[Tuple[int, int]] = None
+    image: np.ndarray, target_size: Optional[Tuple[int, int]] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Preprocesses the input image for pavement analysis
-    
+
     Args:
         image: Input image as numpy array
         target_size: Optional tuple of (width, height) for resizing
-        
+
     Returns:
         Tuple of (preprocessed grayscale image, color image for visualization)
     """
@@ -41,22 +41,22 @@ def preprocess_image(
     denoised = cv2.fastNlMeansDenoising(gray)
 
     # Enhance contrast
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(denoised)
 
     return enhanced, image_for_dl_and_vis
 
+
 def apply_roi(
-    image: np.ndarray,
-    roi_points: Optional[np.ndarray] = None
+    image: np.ndarray, roi_points: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Apply region of interest mask to the image
-    
+
     Args:
         image: Input image
         roi_points: Optional numpy array of ROI polygon points
-        
+
     Returns:
         Tuple of (masked image, mask)
     """
@@ -65,12 +65,15 @@ def apply_roi(
         height, width = image.shape[:2]
         margin_x = int(width * 0.2)
         margin_y = int(height * 0.2)
-        roi_points = np.array([
-            [margin_x, margin_y],
-            [width - margin_x, margin_y],
-            [width - margin_x, height - margin_y],
-            [margin_x, height - margin_y]
-        ], dtype=np.int32)
+        roi_points = np.array(
+            [
+                [margin_x, margin_y],
+                [width - margin_x, margin_y],
+                [width - margin_x, height - margin_y],
+                [margin_x, height - margin_y],
+            ],
+            dtype=np.int32,
+        )
 
     # Create mask
     mask = np.zeros(image.shape[:2], dtype=np.uint8)

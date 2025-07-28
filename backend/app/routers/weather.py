@@ -8,38 +8,44 @@ from app.exceptions import OperationFailed
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 @router.get(
     "/current",
     response_model=Dict[str, Any],
     summary="Get current weather for a location",
-    description="Get current weather conditions including temperature, wind speed, and precipitation"
+    description="Get current weather conditions including temperature, wind speed, and precipitation",
 )
 async def get_current_weather(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
     weather_service: WeatherService = Depends(get_weather_service_api),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
 ):
-    logger.info(f"GET /weather/current endpoint called by user: {current_user.get('email')} for lat: {lat}, lon: {lon}")
+    logger.info(
+        f"GET /weather/current endpoint called by user: {current_user.get('email')} for lat: {lat}, lon: {lon}"
+    )
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)
     except Exception as e:
         raise OperationFailed(detail=f"Error fetching current weather: {str(e)}")
 
+
 @router.get(
     "/impact",
     response_model=Dict[str, Any],
     summary="Get weather impact assessment",
-    description="Get weather impact assessment for route planning"
+    description="Get weather impact assessment for route planning",
 )
 async def get_weather_impact(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
     weather_service: WeatherService = Depends(get_weather_service_api),
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
 ):
     """Get weather impact assessment"""
     try:
         return await weather_service.get_weather_impact(lat=lat, lon=lon)
     except Exception as e:
-        raise OperationFailed(detail=f"Error fetching weather impact assessment: {str(e)}")
+        raise OperationFailed(
+            detail=f"Error fetching weather impact assessment: {str(e)}"
+        )

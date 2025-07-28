@@ -1,7 +1,8 @@
 from typing import TypeVar, Generic, Optional
 from pydantic import BaseModel
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 class APIResponse(BaseModel, Generic[T]):
     status: str
@@ -12,9 +13,13 @@ class APIResponse(BaseModel, Generic[T]):
         from_attributes = True
 
     @classmethod
-    def success(cls, data: Optional[T] = None, message: str = "Operation successful.") -> 'APIResponse[T]':
+    def success(
+        cls, data: Optional[T] = None, message: str = "Operation successful."
+    ) -> "APIResponse[T]":
         return cls(status="success", message=message, data=data)
 
     @classmethod
-    def error(cls, message: str = "Operation failed.", data: Optional[T] = None) -> 'APIResponse[T]':
+    def error(
+        cls, message: str = "Operation failed.", data: Optional[T] = None
+    ) -> "APIResponse[T]":
         return cls(status="error", message=message, data=data)

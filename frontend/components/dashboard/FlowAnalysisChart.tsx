@@ -41,13 +41,20 @@ const formatXAxis = (tickItem: string, timeRange: 'day' | 'week' | 'month') => {
   }
 };
 
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; color: string; dataKey: string }>;
+  label?: string;
+  timeRange: 'day' | 'week' | 'month';
+}
+
 // Custom Tooltip Component
-const CustomTooltipComponent = ({ active, payload, label, timeRange }: any) => {
+const CustomTooltipComponent = ({ active, payload, label, timeRange }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
       return (
         <div className="bg-background/90 border border-border p-2 rounded-md shadow-lg text-xs backdrop-blur-sm">
           <p className="label text-muted-foreground">{`Time: ${formatXAxis(label, timeRange)}`}</p>
-          {payload.map((entry: any, index: number) => (
+          {payload.map((entry: { name: string; value: number; color: string; dataKey: string }, index: number) => (
              <p key={`item-${index}`} style={{ color: entry.color }} className="font-medium">
                 {/* Adjust formatting and units as needed */}
                 {`${entry.name}: ${entry.value?.toFixed(1)} ${entry.dataKey === 'avg_speed' ? 'mph' : ''}`}
@@ -66,7 +73,7 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
     const aggregateData = (data: TrendDataPoint[], timeRange: 'day' | 'week' | 'month') => {
       if (timeRange === 'day') return data; // No aggregation for daily data
 
-      let interval: 'hour' | 'day' = timeRange === 'week' ? 'hour' : 'day';
+      const interval: 'hour' | 'day' = timeRange === 'week' ? 'hour' : 'day';
       const aggregatedData: TrendDataPoint[] = [];
       const groups: { [key: string]: TrendDataPoint[] } = {};
 
@@ -129,13 +136,7 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
         );
     }
 
-    // Pre-format timestamps
-    const formattedData = aggregatedData.map(item => ({
-      ...item,
-      formattedTimestamp: formatXAxis(item.timestamp, timeRange),
-    }));
-
-  return (
+    return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart
         data={aggregatedData}
@@ -230,7 +231,5 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
     </ResponsiveContainer>
   );
 };
-
-const CustomTooltip = React.memo(CustomTooltipComponent);
 
 export default React.memo(FlowAnalysisChart); // Memoize the component

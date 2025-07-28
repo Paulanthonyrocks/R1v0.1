@@ -4,12 +4,14 @@ import React, { useState, useEffect } from 'react';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import useAuth from '@/lib/hook/useAuth'; // Import useAuth
 import NodeCard from '@/components/nodes/NodeCard';
 import { AlertTriangle, Signal, Clock, BatteryFull } from 'lucide-react';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const NodesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
+  const { token } = useAuth();
 
   const {
     nodeCongestionData,
@@ -17,7 +19,7 @@ const NodesPage: React.FC = () => {
     isReady,
     error: wsError,
     startWebSocket
-  } = useRealtimeUpdates();
+  } = useRealtimeUpdates(token);
 
   useEffect(() => {
     if (!isConnected) {
@@ -51,7 +53,7 @@ const NodesPage: React.FC = () => {
               <AlertTriangle className="h-6 w-6 text-red-500 mr-2 flex-shrink-0" />
               <p className="text-xl font-semibold tracking-normal">Error Connecting to Node Stream</p>
             </div>
-            <p className="text-sm tracking-normal ml-8">{String(displayError.message || displayError)}</p>
+            <p className="text-sm tracking-normal ml-8">{displayError || 'Unknown error'}</p>
           </div>
         </div>
       );

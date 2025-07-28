@@ -76,6 +76,7 @@ export interface MatrixCardProps {
 export interface StatCardProps  {
   title: string;
   value: string;
+  unit?: string; // Added unit property
   icon: React.ElementType;
   statusIcon?: React.ElementType;
   change: string;
@@ -153,7 +154,7 @@ export type LocationTuple = [number, number];
 export interface Anomaly {
   id: number; // Can be string if WebSocket provides string IDs that can't be parsed to number
   type: string;
-  severity: "low" | "medium" | "high"; // Consider if this needs to be broader based on AlertData.severity
+  severity: SeverityLevel; // Changed to SeverityLevel
   description: string;
   timestamp: string; // ISO string format recommended
   location: LocationTuple;

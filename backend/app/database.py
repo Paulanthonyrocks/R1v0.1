@@ -8,18 +8,23 @@ logger = logging.getLogger("app.database")
 
 db_manager_instance: Optional[DBManagerClass] = None
 
+
 async def initialize_database(config: dict):
     global db_manager_instance
     if db_manager_instance is None:
         try:
             db_manager_instance = DBManagerClass(config)
-            
+
             logger.info("DatabaseManager initialized successfully via app.database.")
         except Exception as e:
-            logger.critical(f"Failed to initialize DatabaseManager in app.database: {e}", exc_info=True)
+            logger.critical(
+                f"Failed to initialize DatabaseManager in app.database: {e}",
+                exc_info=True,
+            )
             db_manager_instance = None
             raise RuntimeError(f"Database Initialization Failed: {e}") from e
     return db_manager_instance
+
 
 def get_database_manager() -> DBManagerClass:
     if db_manager_instance is None:
@@ -27,6 +32,7 @@ def get_database_manager() -> DBManagerClass:
         logger.error("Database accessed before initialization!")
         raise RuntimeError("Database not initialized.")
     return db_manager_instance
+
 
 async def close_database():
     global db_manager_instance

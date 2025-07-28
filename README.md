@@ -13,15 +13,6 @@ The primary users of the Traffic Management Hub are traffic management professio
 *   **System Administrators:** Individuals who configure and maintain the traffic management system.
 *   **City Planners:** Professionals who analyze traffic patterns to improve urban planning.
 
-## Key Technologies
-
-The project leverages a modern technology stack to provide a scalable, reliable, and user-friendly application. Key technologies include:
-
-*   **Frontend:** Next.js, React, TypeScript, Tailwind CSS, CesiumJS
-*   **Backend:** Node.js, Firebase Cloud Functions
-*   **Database and Services:** Firebase (Firestore, Authentication)
-The Traffic Management Hub is a web application designed to provide a comprehensive view and control system for traffic management. It allows operators to monitor real-time traffic conditions, manage traffic signals, respond to incidents, and configure the system. The application aims to improve traffic flow, reduce congestion, and enhance road safety.
-
 ## Project Goals
 
 *   Provide real-time traffic data visualization.
@@ -29,8 +20,8 @@ The Traffic Management Hub is a web application designed to provide a comprehens
 *   Facilitate quick responses to traffic incidents.
 *   Offer system configuration capabilities.
 *   Improve overall traffic efficiency and safety.
-* Provide a system that is built to scale.
-* Ensure security and reliability.
+*   Provide a system that is built to scale.
+*   Ensure security and reliability.
 
 ## Core Features
 
@@ -43,29 +34,8 @@ The Traffic Management Hub offers a range of features to address the needs of tr
 *   **System Configuration:** Provides system administrators with the ability to configure various settings, including traffic signal parameters, incident response protocols, and user access.
 *   **Dashboard:** Presents an overview of system health, key metrics, and real-time alerts.
 *   **User Management:** Enables system administrators to manage user accounts, access levels, and roles.
-* **Role-Based Access Control:** Provides control over the information that different user types can view and change.
+*   **Role-Based Access Control:** Provides control over the information that different user types can view and change.
 *   **Alerts and Notifications:** Delivers real-time alerts and notifications to operators regarding critical incidents and system events.
-
-
-
-
-## Features
-
-### Current
-
-*   **3D Globe Visualization:** The application uses a 3D globe to display map data.
-
-### Planned
-
-*   **Real-time Traffic Data:** Display traffic flow, speed, and volume on the map.
-*   **Signal Management:** Control and monitor the status of traffic signals.
-*   **Incident Management:** Report, track, and respond to traffic incidents.
-*   **System Configuration:** Configure system parameters and settings.
-*   **Dashboard:** Provide an overview of system status and key metrics.
-*   **User Management:** Manage user accounts and roles (admin, operator, viewer).
-*   **Alerts and Notifications:** Notify operators about critical events.
-* **Role-Based Access Control:** Control what specific users can access and modify.
-
 
 ## Technologies Used
 
@@ -74,89 +44,89 @@ The Traffic Management Hub offers a range of features to address the needs of tr
     *   **React:** JavaScript library for building user interfaces.
     *   **TypeScript:** Typed superset of JavaScript for improved code quality.
     *   **Tailwind CSS:** Utility-first CSS framework for styling.
+    *   **CesiumJS:** 3D mapping library for globe visualization.
 *   **Backend:**
-    *   **Node.js:** JavaScript runtime environment.
+    *   **FastAPI:** High-performance Python web framework for building APIs.
+    *   **Python:** Primary language for backend logic, data processing, and machine learning.
+    *   **PyTorch, Ultralytics, OpenCV, ONNX Runtime:** For machine learning and computer vision tasks (e.g., object detection, traffic prediction).
 *   **Database & Services:**
-    *   **Firebase:**
-        *   **Firestore:** NoSQL document database for storing traffic data, system configurations, and user information.
-        *   **Firebase Authentication:** User authentication and authorization.
-        *   **Cloud Functions:** Serverless backend logic for data processing and notifications.
-    * **CesiumJS:** 3D mapping library.
-
+    *   **SQLite:** For structured data like prediction logs.
+    *   **MongoDB (Optional):** For raw and processed traffic data.
+    *   **WebSockets:** For real-time communication.
+    *   **Firebase Admin SDK:** For authentication and user management.
 
 ## Setup Instructions
 
 1.  **Prerequisites:**
     *   Node.js (version 16 or later)
     *   npm or yarn
-    *   Firebase project set up (Firestore, Authentication, Cloud Functions enabled)
+    *   Python 3.9+
+    *   `pip` (Python package installer)
+    *   Firebase project set up (Authentication enabled, service account key for Admin SDK).
+
 2.  **Installation:**
-```
-bash
+
+    ```bash
+    # Clone the repository
     git clone <repository_url>
     cd traffic-management-hub
+
+    # Install frontend dependencies
+    cd frontend
     npm install
-    
-```
+    cd ..
+
+    # Install backend dependencies
+    pip install -r backend/requirements.txt
+    ```
+
 3.  **Firebase Configuration:**
-    *   Create a `.env.local` file in the project root.
-    *   Add the following environment variables (replace with your Firebase project's configuration):
-```
-        NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
-        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
-        NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
-        NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
-        NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
-        NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
-        
-```
+
+    *   Download your Firebase service account key JSON file from the Firebase Console (`Project settings > Service accounts > Generate new private key`).
+    *   Place this file in `backend/configs/firebase/service-account-key.json`.
+    *   Create a `.env` file in the project root and add your Firebase project ID:
+
+        ```
+        FIREBASE_PROJECT_ID=your_project_id
+        ```
+
 4.  **Running the Application:**
-```
-bash
-    npm run dev
-    
-```
-This will start the development server. Open your browser and go to `http://localhost:3000` to view the application.
+
+    *   **Start Backend:**
+
+        ```bash
+        uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+        ```
+
+    *   **Start Frontend:**
+
+        ```bash
+        cd frontend
+        npm run dev
+        ```
+
+    Open your browser and go to `http://localhost:3000` to view the application.
 
 ## Development Plans
 
 ### Near-Term
 
-*   **Firebase Integration:**
-    *   Define Firestore data models.
-    *   Implement user authentication and role-based access.
-    *   Set up real-time data updates with Firestore.
-*   **Map Visualization:**
-    *   Finalize ThreeJS setup and integration.
-    *   Display traffic data overlays on the map.
-    *   Enable map interactions (zoom, pan, select).
-*   **Dashboard:**
-    *   Create a dashboard with placeholder content.
-    *   Set up basic navigation.
-* **Complete Data Models:**
-    *   Complete and validate database setup.
-    *   Link data to backend services.
+*   **Data Ingestion:** Refine Kafka integration and data processing pipelines.
+*   **ML Integration:** Fully integrate YOLOv8 for object detection and initial traffic prediction models.
+*   **Analytics Service:** Enhance data aggregation, trend analysis, and prediction outcome summaries.
+*   **Real-time Updates:** Improve WebSocket communication for various data streams.
 
 ### Mid-Term
 
-*   **Control Panels:**
-    *   Develop control panels for traffic signals, incidents, and configuration.
-    *   Implement control actions.
-*   **Backend Logic:**
-    *   Implement any necessary Cloud Functions or API endpoints.
-*   **Alerts and Notifications:**
-    *   Set up alert triggers and notification delivery.
+*   **Advanced ML Models:** Explore and integrate more sophisticated traffic prediction and anomaly detection algorithms.
+*   **UI Enhancements:** Develop interactive dashboards, alert management, and historical data visualization.
+*   **User Management:** Implement comprehensive user roles and permissions.
 
 ### Long-Term
 
-*   **Performance Optimization:**
-    *   Optimize map rendering and data handling.
-    *   Ensure scalability for large datasets.
-*   **Advanced Features:**
-    *   Explore potential advanced features like AI-driven traffic prediction.
-    *   Integrate with other traffic management systems.
-    * **Test Suite:**
-    * Set up a full test suite.
+*   **Scalability:** Optimize for high-volume data and distributed deployments.
+*   **External Integrations:** Connect with external data sources (e.g., weather APIs, public transport data).
+*   **Simulation & Control:** Implement advanced traffic simulation and signal control mechanisms.
 
 ## Contributing
 

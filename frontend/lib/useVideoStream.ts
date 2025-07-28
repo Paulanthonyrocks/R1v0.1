@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import useVideoSocket from './useVideoSocket';
 
 const SAMPLE_VIDEO_URL = '/sample-video.mp4';

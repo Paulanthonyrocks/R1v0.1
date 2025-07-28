@@ -3,6 +3,7 @@ from app.dependencies import get_current_active_user
 
 router = APIRouter()
 
+
 @router.get("/test-auth", summary="Test authentication")
 async def test_auth(current_user: dict = Depends(get_current_active_user)):
     """
@@ -15,5 +16,5 @@ async def test_auth(current_user: dict = Depends(get_current_active_user)):
             "uid": current_user.get("uid"),
             "email": current_user.get("email"),
             "name": current_user.get("name"),
-        }
+        },
     }

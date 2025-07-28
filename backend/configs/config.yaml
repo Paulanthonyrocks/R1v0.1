@@ -255,14 +255,26 @@ feed_manager:
 
 # --- Video Input / Worker Configuration ---
 video_input:
-  sample_video: ../frontend/public/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
+  sample_video: C:/Users/HP/Desktop/R1v0.1/frontend/public/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
   webcam_index: 0 # Default index if source is "webcam" or "webcam:N" is invalid
   webcam_buffer_size: 20 # Camera buffer size (increase might help with frame drops on some systems)
-  max_queue_size: 100 # Max size for the frame queue between worker and manager
+  max_queue_size: 1000 # Max size for the frame queue between worker and manager
 
 # --- Vehicle Detection (YOLO & Tracking) ---
 vehicle_detection:
-  model_path: ./models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
+  model_path: backend/models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
+  frame_resolution: [480, 360] # Target resolution for processing [width, height]
+  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
+  confidence_threshold: 0.4 # Minimum detection confidence
+  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
+  track_timeout: 10 # Seconds before a track is considered stale and removed
+  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
+  yolo_imgsz: 256 # Image size for YOLO model inference
+  skip_frames: 2 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+analytics_service:
+  traffic_predictor:
+    model_path: ./models/traffic_predictor_model.h5 # Path to the traffic prediction model
+
   frame_resolution: [480, 360] # Target resolution for processing [width, height]
   vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
   confidence_threshold: 0.4 # Minimum detection confidence
@@ -271,6 +283,11 @@ vehicle_detection:
   max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
   yolo_imgsz: 256 # Image size for YOLO model inference
   skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+  vehicle_type_map:
+    2: car
+    3: motorcycle
+    5: bus
+    7: truck
 
 # --- Kalman Filter Parameters ---
 kalman_filter_params:
@@ -367,3 +384,29 @@ ml_model:
 storage:
   image_output_dir: ./data/pavement_images
   report_output_dir: ./data/pavement_reports
+
+# --- Prediction Scheduler Configuration ---
+prediction_scheduler:
+  prediction_interval_minutes: 15
+  likelihood_threshold: 70 # Percentage (0-100) for high likelihood incident alerts
+  accuracy_cache_ttl_minutes: 60 # How long to cache prediction accuracy data
+  min_verified_predictions_for_accuracy: 5 # Min predictions needed to trust accuracy score
+  default_low_data_weight: 0.75 # Weight for locations with insufficient accuracy data
+  default_no_accuracy_weight: 0.8 # Weight for locations with no accuracy data
+  max_locations_to_select_factor: 0.5 # Factor of total locations to select (e.g., 0.5 for half)
+  monitored_locations:
+    - latitude: 34.0522
+      longitude: -118.2437
+      name: Los Angeles Downtown
+    - latitude: 40.7128
+      longitude: -74.0060
+      name: New York Times Square
+    - latitude: 41.8781
+      longitude: -87.6298
+      name: Chicago The Loop
+    - latitude: 37.7749
+      longitude: -122.4194
+      name: San Francisco Embarcadero
+    - latitude: 33.7490
+      longitude: -84.3880
+      name: Atlanta Centennial Park

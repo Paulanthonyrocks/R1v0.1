@@ -7,6 +7,7 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 @router.get("/token/status", response_model=APIResponse[Dict])
 async def check_token_status(current_user: dict = Depends(get_current_active_user)):
     """
@@ -15,7 +16,9 @@ async def check_token_status(current_user: dict = Depends(get_current_active_use
     """
     try:
         if not current_user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+            )
 
         # Extract relevant token information
         token_info = {
@@ -24,14 +27,15 @@ async def check_token_status(current_user: dict = Depends(get_current_active_use
             "email": current_user.get("email"),
             "role": current_user.get("role"),
             "auth_time": current_user.get("auth_time"),
-            "exp": current_user.get("exp")
+            "exp": current_user.get("exp"),
         }
 
         return APIResponse.success(
-            data=token_info,
-            message="Token status retrieved successfully"
+            data=token_info, message="Token status retrieved successfully"
         )
 
     except Exception as e:
         logger.error(f"Error checking token status: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )

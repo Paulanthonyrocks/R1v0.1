@@ -25,5 +25,4 @@ __all__ = [
     "token",
     "video",
     "weather",
-    
 ]

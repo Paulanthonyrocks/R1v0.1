@@ -6,7 +6,7 @@ import { gsap } from 'gsap';
 import { useRouter } from 'next/navigation';
 import type { FeedStatusData } from '@/lib/types';
 import { db } from '@/lib/firebase'; // Assuming db is a Firestore instance from Firebase v9+
-import { collection, getDocs, QueryDocumentSnapshot, DocumentData, onSnapshot } from 'firebase/firestore'; // Firebase v9+ imports
+import { collection, onSnapshot } from 'firebase/firestore'; // Firebase v9+ imports
 
 // Define Constants
 const GLOBE_RADIUS = 50;
@@ -17,8 +17,6 @@ const CAMERA_MIN_DISTANCE = 60;
 const CAMERA_MAX_DISTANCE = 300;
 const CAMERA_OFFSET_DISTANCE = 20;
 const CAMERA_ANIMATION_DURATION = 1.5;
-const FEED_FETCH_INTERVAL = 5000; // 5 seconds
-const ALERT_FETCH_INTERVAL = 15000; // 15 seconds
 
 // Define GeoJSON Interfaces
 interface GeoJSONFeature {
@@ -39,7 +37,7 @@ interface FeedMarker {
     position: THREE.Vector3;
     mesh?: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>;
     status: 'error' | 'stopped' | 'running' | 'starting';
-    latest_metrics?: Record<string, any>; // Add latest_metrics to the interface
+    latest_metrics?: Record<string, unknown>; // Add latest_metrics to the interface
 }
 
 interface AlertMarker {
@@ -99,12 +97,11 @@ const ThreeGrid: React.FC = () => {
         Object.values(feedMarkers).forEach(marker => {
             let labelText = marker.name;
             if (marker.latest_metrics) {
-                if (marker.latest_metrics.avg_speed !== undefined) {
+                if (marker.latest_metrics.avg_speed !== undefined && marker.latest_metrics.avg_speed !== null) {
                     labelText += `\nSpeed: ${marker.latest_metrics.avg_speed.toFixed(1)} km/h`;
                 }
-                if (marker.latest_metrics.vehicle_count !== undefined) {
+                if (marker.latest_metrics.vehicle_count !== undefined && marker.latest_metrics.vehicle_count !== null) {
                     labelText += `\nVehicles: ${marker.latest_metrics.vehicle_count}`;
-                }
             }
             newFeedLabels[marker.id] = { text: labelText, position: marker.position, screenPosition: { x: 0, y: 0 } };
         });
@@ -123,25 +120,16 @@ const ThreeGrid: React.FC = () => {
 
     // Helper to create feed meshes
     const createFeedMesh = useCallback((position: THREE.Vector3, status: FeedMarker['status']): THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial> => {
-        let color: THREE.ColorRepresentation;
-        switch (status) {
-            case 'running':
-                color = 0x00FF00; // Bright green for running (matrix)
-                break;
-            case 'starting':
-                color = 0xFFA500; // Orange for starting (warning)
-                break;
-            case 'stopped':
-                color = 0x808080; // Gray for stopped
-                break;
-            case 'error':
-                color = 0xFF0000; // Red for error (destructive)
-                break;
-            default:
-                color = 0x00FF00; // Default to green
-        }
         const geometry = new THREE.ConeGeometry(0.5, 2, 8); // Cone shape
-        const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+        const material = new THREE.MeshBasicMaterial({ color: (() => {
+            switch (status) {
+                case 'running': return 0x00FF00;
+                case 'starting': return 0xFFA500;
+                case 'stopped': return 0x808080;
+                case 'error': return 0xFF0000;
+                default: return 0x00FF00;
+            }
+        })(), transparent: true, opacity: 0.9 });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(position);
         mesh.userData = { isFeed: true, status: status };
@@ -150,28 +138,17 @@ const ThreeGrid: React.FC = () => {
 
     // Helper to create alert meshes
     const createAlertMesh = useCallback((position: THREE.Vector3, severity: AlertMarker['severity']): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> => {
-        let color: THREE.ColorRepresentation;
-        switch (severity) {
-            case 'Critical':
-                color = 0xFF0000; // Red (destructive)
-                break;
-            case 'Warning':
-                color = 0xFFA500; // Orange (warning)
-                break;
-            case 'INFO':
-                color = 0x00FFFF; // Cyan (info)
-                break;
-            case 'ERROR':
-                color = 0x8B0000; // Dark Red (more severe error)
-                break;
-            case 'Anomaly':
-                color = 0xFF00FF; // Magenta (accent-anomaly)
-                break;
-            default:
-                color = 0x00FF00; // Default to matrix green
-        }
         const geometry = new THREE.SphereGeometry(0.7, 16, 16); // Small sphere
-        const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+        const material = new THREE.MeshBasicMaterial({ color: (() => {
+            switch (severity) {
+                case 'Critical': return 0xFF0000;
+                case 'Warning': return 0xFFA500;
+                case 'INFO': return 0x00FFFF;
+                case 'ERROR': return 0x8B0000;
+                case 'Anomaly': return 0xFF00FF;
+                default: return 0x00FF00;
+            }
+        })(), transparent: true, opacity: 0.9 });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(position);
         mesh.userData = { isAlert: true, severity: severity };
@@ -200,7 +177,7 @@ const ThreeGrid: React.FC = () => {
         return new THREE.Vector3(x, y, z);
     }, []);
 
-    const addPolygonToScene = useCallback((polygonCoords: number[][][], scene: THREE.Scene, color: THREE.ColorRepresentation = 0x00cc00) => {
+    const addPolygonToScene = useCallback((polygonCoords: number[][][], scene: THREE.Scene) => {
         polygonCoords.forEach((ringCoords: number[][]) => {
             if (!Array.isArray(ringCoords) || ringCoords.length < 3 || !Array.isArray(ringCoords[0]) || ringCoords[0].length !== 2) {
                 return;
@@ -364,10 +341,10 @@ const ThreeGrid: React.FC = () => {
                     object.geometry?.dispose();
                     if (object.material) {
                         if (Array.isArray(object.material)) {
-                            object.material.forEach(mat => { mat.map?.dispose(); mat.dispose(); });
+                            object.material.forEach((mat: THREE.Material) => { mat.map?.dispose(); mat.dispose(); });
                         } else {
-                            object.material.map?.dispose();
-                            object.material.dispose();
+                            (object.material as THREE.Material).map?.dispose();
+                            (object.material as THREE.Material).dispose();
                         }
                     }
                 }
@@ -477,15 +454,13 @@ const ThreeGrid: React.FC = () => {
                         existingFeedMarker.status = feed.status;
                         existingFeedMarker.latest_metrics = feed.latest_metrics;
                         if (existingFeedMarker.mesh) {
-                            let color: THREE.ColorRepresentation;
                             switch (feed.status) {
-                                case 'running': color = 0x00FF00; break;
-                                case 'starting': color = 0xFFA500; break;
-                                case 'stopped': color = 0x808080; break;
-                                case 'error': color = 0xFF0000; break;
-                                default: color = 0x00FF00;
+                                case 'running': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00); break;
+                                case 'starting': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
+                                case 'stopped': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x808080); break;
+                                case 'error': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
+                                default: (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
                             }
-                            (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
                             existingFeedMarker.mesh.position.copy(position);
                         }
                     } else {
@@ -557,16 +532,14 @@ const ThreeGrid: React.FC = () => {
                         existingAlertMarker.position.copy(position);
                         existingAlertMarker.severity = alert.severity;
                         if (existingAlertMarker.mesh) {
-                            let color: THREE.ColorRepresentation;
                             switch (alert.severity) {
-                                case 'Critical': color = 0xFF0000; break;
-                                case 'Warning': color = 0xFFA500; break;
-                                case 'INFO': color = 0x00FFFF; break;
-                                case 'ERROR': color = 0x8B0000; break;
-                                case 'Anomaly': color = 0xFF00FF; break;
-                                default: color = 0x00FF00;
+                                case 'Critical': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
+                                case 'Warning': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
+                                case 'INFO': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FFFF); break;
+                                case 'ERROR': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x8B0000); break;
+                                case 'Anomaly': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF00FF); break;
+                                default: (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
                             }
-                            (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
                             existingAlertMarker.mesh.position.copy(position);
                         }
                     } else {

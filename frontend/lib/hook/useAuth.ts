@@ -4,16 +4,6 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { WebSocketClient } from '../websocket/WebSocketClient';
 import { TokenManager } from '../auth/TokenManager'; // Import TokenManager
 
-const getOrCreateClientId = () => {
-    if (typeof window === 'undefined') return '';
-    let clientId = localStorage.getItem('ws_client_id');
-    if (!clientId) {
-        clientId = crypto.randomUUID();
-        localStorage.setItem('ws_client_id', clientId);
-    }
-    return clientId;
-};
-
 const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -46,9 +36,10 @@ const useAuth = () => {
 
         // Initialize WebSocket client with token
         const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-        const wsUrl = `${wsBase.replace(/\/$/, '')}/ws/${getOrCreateClientId()}`;
+        const wsUrl = `${wsBase.replace(/\/$/, '')}/api/v1/ws`;
         const client = new WebSocketClient(wsUrl);
         wsClientRef.current = client;
+        // Removed direct client.connect call here. Connection will be managed by useRealtimeUpdates.
 
       } else {
         setUser(null);
@@ -69,7 +60,7 @@ const useAuth = () => {
         wsClientRef.current.disconnect();
       }
     };
-  }, []);
+  }, [tokenManager]);
 
   return { user, token, wsClient: wsClientRef.current, loading };
 };

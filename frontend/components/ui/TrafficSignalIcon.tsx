@@ -2,12 +2,11 @@ import React, { useId } from 'react'; // Import useId
 
 interface TrafficSignalIconProps {
   status: 'red' | 'yellow' | 'green' | string; // Allow string for invalid case, but primarily expect the union type
-  size?: number;
 }
 
 const VALID_STATUSES = ['red', 'yellow', 'green'];
 
-const TrafficSignalIcon: React.FC<TrafficSignalIconProps> = ({ status, size = 12 }) => {
+const TrafficSignalIcon: React.FC<TrafficSignalIconProps> = ({ status }) => {
   const uniqueIdSuffix = useId();
 
   if (!VALID_STATUSES.includes(status)) {

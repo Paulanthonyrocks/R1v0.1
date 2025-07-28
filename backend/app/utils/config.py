@@ -3,9 +3,12 @@ from pathlib import Path
 import logging
 from typing import Dict, Any
 
+
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
+
     pass
+
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "llm": {
@@ -17,17 +20,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "logging": {
         "level": "INFO",
         "file": "app.log",
-        "log_path": "./logs/backend_main.log", # Default log path for main application
+        "log_path": "./logs/backend_main.log",  # Default log path for main application
     },
     "github": {
         "token": None,  # Replace with your GitHub token
-        "username": None, # Replace with your GitHub username
-        "repositories": [], # list of repositories to process by default
+        "username": None,  # Replace with your GitHub username
+        "repositories": [],  # list of repositories to process by default
     },
     "database": {
-        "url": "sqlite:///./app.db", # Default SQLite database
-    }
+        "url": "sqlite:///./app.db",  # Default SQLite database
+    },
 }
+
 
 def merge_dicts(source: Dict[Any, Any], destination: Dict[Any, Any]) -> Dict[Any, Any]:
     """
@@ -47,6 +51,7 @@ def merge_dicts(source: Dict[Any, Any], destination: Dict[Any, Any]) -> Dict[Any
             destination[key] = value
     return destination
 
+
 def load_config(config_file: Path = Path("config.yaml")) -> Dict[str, Any]:
     """
     Loads the YAML configuration file, merging it with default settings.
@@ -62,14 +67,18 @@ def load_config(config_file: Path = Path("config.yaml")) -> Dict[str, Any]:
         try:
             with open(config_file, "r") as f:
                 user_config = yaml.safe_load(f)
-            if user_config: # Check if the user_config is not None
+            if user_config:  # Check if the user_config is not None
                 config = merge_dicts(user_config, config)
         except yaml.YAMLError as e:
             logging.error(f"Error parsing YAML file: {e}")
             raise ConfigError(f"Error parsing YAML file: {e}") from e
-        except Exception as e: # Catch any other unexpected errors during file processing
+        except (
+            Exception
+        ) as e:  # Catch any other unexpected errors during file processing
             logging.error(f"Error loading configuration file: {e}")
             raise ConfigError(f"Error loading configuration file: {e}") from e
     else:
-        logging.warning(f"Configuration file not found at {config_file}. Using default settings.")
+        logging.warning(
+            f"Configuration file not found at {config_file}. Using default settings."
+        )
     return config

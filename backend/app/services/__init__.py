@@ -13,8 +13,9 @@ from .services import (
     get_personalized_routing_service,
     get_weather_service,
     get_event_service,
-    feed_manager_instance, # Expose instance if needed directly (less common)
-    connection_manager_instance # Expose instance if needed directly (less common)
+    get_analytics_service,
+    feed_manager_instance,  # Expose instance if needed directly (less common)
+    connection_manager_instance,  # Expose instance if needed directly (less common)
 )
 # Optional: Import specific classes if they are needed elsewhere directly
 # from .feed_manager import FeedManager # If FeedManager class is in its own file
@@ -34,6 +35,7 @@ __all__ = [
     "get_personalized_routing_service",
     "get_weather_service",
     "get_event_service",
+    "get_analytics_service",
     "feed_manager_instance",
     "connection_manager_instance",
     # Add class names here if you want them included in '*' import

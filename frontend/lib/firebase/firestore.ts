@@ -1,4 +1,4 @@
-import { collection, onSnapshot, addDoc, QuerySnapshot, DocumentData, FirestoreError, DocumentReference, QueryDocumentSnapshot, withConverter, Unsubscribe } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, QuerySnapshot, DocumentData, FirestoreError, DocumentReference, QueryDocumentSnapshot, Unsubscribe } from 'firebase/firestore';
 import { db } from '@/lib/firebase'; // Import db from your firebase configuration file
 
 export interface TrafficData {

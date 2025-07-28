@@ -16,27 +16,31 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading) {
-      if (!user) {
-        // Store the current path before redirecting
-        const currentPath = pathname ?? '/';
-        sessionStorage.setItem('redirectPath', currentPath);
-        // Redirect to the login page if not authenticated
-        router.push('/login');
-      } else if (requiredRole) {
-        // Add a small delay to allow for token refresh
-        const timer = setTimeout(() => {
-          // Check if user has required role or is admin
-          const hasAccess = userRole === requiredRole || userRole === UserRole.ADMIN;
-          if (!hasAccess) {
-            console.warn(`User with role ${userRole} attempted to access content requiring role ${requiredRole}`);
-            router.push('/unauthorized');
-          }
-        }, 1000);
-        return () => clearTimeout(timer);
+    console.log('AuthGuard: user, loading, userRole changed', { user, loading, userRole, requiredRole, pathname });
+
+    if (loading) {
+      // Still loading user data, do nothing yet
+      return;
+    }
+
+    if (!user) {
+      // User is not authenticated, redirect to login
+      console.log('AuthGuard: User not authenticated, redirecting to login.');
+      const currentPath = pathname ?? '/';
+      sessionStorage.setItem('redirectPath', currentPath);
+      router.push('/login');
+      return;
+    }
+
+    // User is authenticated, check roles if required
+    if (requiredRole) {
+      const hasAccess = userRole === requiredRole || userRole === UserRole.ADMIN;
+      if (!hasAccess) {
+        console.warn(`AuthGuard: User with role ${userRole} attempted to access content requiring role ${requiredRole}. Redirecting to unauthorized.`);
+        router.push('/unauthorized');
       }
     }
-  }, [user, loading, userRole, requiredRole, router, pathname]); // Add userRole and requiredRole to dependencies
+  }, [user, loading, userRole, requiredRole, router, pathname]);
 
   // Render a loading indicator while authentication state is being determined
   if (loading) {

@@ -4,12 +4,11 @@ import React, { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { Chart } from "react-google-charts";
 import MatrixCard from '../../components/MatrixCard';
-import MatrixButton from '../../components/MatrixButton';
-import AuthGuard from "@/components/auth/AuthGuard";
-import { UserRole } from "@/lib/auth/roles";
-import useAuth from '@/lib/hook/useAuth'; // Import useAuth
+import { Signal, Clock, BatteryFull, Activity, Zap, AlertTriangle, Users } from 'lucide-react'; // Import missing icons
+import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
+import axios from 'axios'; // Import axios
 
-
+const fetcher = (url: string) => axios.get(url).then(res => res.data);
 
 const MAX_HISTORY = 20;
 
@@ -62,7 +61,6 @@ const StreamPage: React.FC = () => {
   };
 
   return (
-    <AuthGuard requiredRole={UserRole.OPERATOR}>
       <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
         {/* Status Bar */}
         <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
@@ -81,10 +79,10 @@ const StreamPage: React.FC = () => {
 
           {/* Metric Cards */}
           <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-            <MetricCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" />
-            <MetricCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" />
-            <MetricCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} />
-            <MetricCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running">
+            <StatCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" icon={Activity} change="N/A" changeText="N/A" />
+            <StatCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
+            <StatCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} icon={AlertTriangle} change="N/A" changeText="N/A" />
+            <StatCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running" icon={Users} change="N/A" changeText="N/A">
               <div className="text-xs text-lcd-text mt-1 tracking-normal"> {/* Changed color, added tracking */}
                 {metrics?.feed_statuses && (
                   <>
@@ -93,7 +91,7 @@ const StreamPage: React.FC = () => {
                   </>
                 )}
               </div>
-            </MetricCard>
+            </StatCard>
           </div>
 
           {/* Chart */}
@@ -110,7 +108,6 @@ const StreamPage: React.FC = () => {
           </div>
         </div>
       </div>
-    </AuthGuard>
   );
 };
 

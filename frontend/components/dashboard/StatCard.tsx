@@ -14,8 +14,6 @@ interface StatCardProps extends OriginalStatCardProps {
 
 const StatCard = React.memo(({ title, value, change, changeText, icon: Icon, statusIcon: StatusIconComponent }: StatCardProps) => {
     const isPositive = change.startsWith('+');
-    // const defaultChangeColor = isPositive ? "text-primary" : "text-warning"; // Original
-    const defaultChangeColor = "text-primary"; // Neutralized to black
 
     return (
         // Relies on parent grid gap, added hover effect

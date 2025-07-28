@@ -9,24 +9,22 @@ import { Signal, BatteryFull } from 'lucide-react'; // Import Signal and Battery
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
+import useAuth from '@/lib/hook/useAuth'; // Import the useAuth hook
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react'; // Import Lucide icons & new status icons
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed
-
-import useAuth from '@/lib/hook/useAuth';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
-  const { token } = useAuth();
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs
+  const { token } = useAuth();
   const { /* kpis, */ alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(token);
-  // const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 }); // Removed SWR
 
   // State for REST API congestion index
   const [congestionIndex, setCongestionIndex] = useState<number | null>(null);
@@ -41,7 +39,7 @@ const DashboardPage: React.FC = () => {
     console.log("DashboardPage: Attempting to start WebSocket connection.");
     startWebSocket();
     // No explicit cleanup needed here as the hook manages its own lifecycle
-  }, [startWebSocket]); // Dependency array includes startWebSocket as it's a stable function reference from the hook
+  }, [startWebSocket]); // Dependency array includes startWebSocket
 
   // Optional: Log connection status for debugging
   useEffect(() => {
@@ -81,12 +79,6 @@ const DashboardPage: React.FC = () => {
   }
 
   useEffect(() => {
-    // Only fetch if token is available
-    if (!token) {
-      console.log("DashboardPage: Token not available, skipping KPI fetch.");
-      return;
-    }
-
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
       try {
@@ -137,19 +129,17 @@ const DashboardPage: React.FC = () => {
           setTotalFlow(null);
           setActiveIncidents(null);
         }
-      } catch (error) {
-        console.error("Error fetching KPIs from API:", error);
+      } catch {
         setCongestionIndex(null);
         setAverageSpeed(null);
         setTotalFlow(null);
         setActiveIncidents(null);
       }
     };
-
     fetchKpisFromApi();
     const interval = setInterval(fetchKpisFromApi, 30000);
     return () => clearInterval(interval);
-  }, [token]); // Add token to dependency array
+  }, [token]);
 
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}>

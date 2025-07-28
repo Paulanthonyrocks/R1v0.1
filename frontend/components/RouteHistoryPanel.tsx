@@ -1,3 +1,4 @@
+"use client";
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { AlertTriangle, XOctagon, CheckCircle2 } from 'lucide-react'; // Import error icon & traffic impact icons

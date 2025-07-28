@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Calendar, Clock, MessageSquare, MapPin, Video } from 'lucide-react';
 import { cn } from "@/lib/utils";
-import { AnomalyDetailsModalProps, SeverityLevel, AlertData } from '@/lib/types'; // Import AlertData
+import { AnomalyDetailsModalProps, SeverityLevel } from '@/lib/types';
 
 // Severity config (can be moved to shared utils if needed elsewhere)
 const severityConfig: Record<SeverityLevel, { color: string; text: string; icon: React.ElementType }> = {

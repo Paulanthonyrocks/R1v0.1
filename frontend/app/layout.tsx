@@ -1,10 +1,8 @@
 "use client";
 
-import { usePathname } from "next/navigation";
 import { Inter } from "next/font/google";
 
 import { UserProvider } from "@/lib/auth/UserContext"; // Import UserProvider
-import Nav from "@/components/layout/Nav"; // Import the new Nav component
 import "@/styles/globals.css";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "@/components/ui/toast";

@@ -4,14 +4,15 @@ import React, { useEffect } from 'react';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { UserRole } from '@/lib/auth/roles';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import useAuth from '@/lib/hook/useAuth'; // Import useAuth
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 import { FeedStatusData } from '@/lib/types';
 import LoadingMessage from '@/components/ui/LoadingMessage';
-import { WS_URL } from '@/lib/hook';
 import { Signal, Clock, BatteryFull } from 'lucide-react';
 
 const SurveillancePage = () => {
-  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates(WS_URL);
+  const { token } = useAuth();
+  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates(token);
 
   useEffect(() => {
     // Start WebSocket connection on component mount

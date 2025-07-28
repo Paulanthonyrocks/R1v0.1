@@ -5,7 +5,6 @@ import { Eye, AlertTriangle, Loader2, RotateCw } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook';
-import { useUser } from '@/lib/auth/UserContext';
 import useVideoStream from '@/lib/useVideoStream';
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
@@ -15,7 +14,6 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const { sendMessage, isConnected } = useRealtimeUpdates();
-    const { token } = useUser();
     const { videoUrl, isLoading, error, isLive, kpis } = useVideoStream({ streamId: id });
 
     const [isToggling, setIsToggling] = useState<boolean>(false);

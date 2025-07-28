@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
 
+
 class RoutePreferenceType(str, Enum):
     HIGHWAYS = "highways"
     SCENIC = "scenic"
@@ -10,15 +11,17 @@ class RoutePreferenceType(str, Enum):
     LEAST_TRAFFIC = "least_traffic"
     AVOID_TOLLS = "avoid_tolls"
 
+
 class TimeOfDay(str, Enum):
     EARLY_MORNING = "early_morning"  # 5-7 AM
-    MORNING_RUSH = "morning_rush"    # 7-9 AM
-    MID_MORNING = "mid_morning"      # 9-11 AM
-    MIDDAY = "midday"               # 11 AM-2 PM
-    AFTERNOON = "afternoon"         # 2-4 PM
-    EVENING_RUSH = "evening_rush"   # 4-7 PM
-    EVENING = "evening"             # 7-9 PM
-    NIGHT = "night"                 # 9 PM-5 AM
+    MORNING_RUSH = "morning_rush"  # 7-9 AM
+    MID_MORNING = "mid_morning"  # 9-11 AM
+    MIDDAY = "midday"  # 11 AM-2 PM
+    AFTERNOON = "afternoon"  # 2-4 PM
+    EVENING_RUSH = "evening_rush"  # 4-7 PM
+    EVENING = "evening"  # 7-9 PM
+    NIGHT = "night"  # 9 PM-5 AM
+
 
 class RoadType(str, Enum):
     HIGHWAY = "highway"
@@ -27,10 +30,14 @@ class RoadType(str, Enum):
     SCENIC_ROUTE = "scenic_route"
     TOLL_ROAD = "toll_road"
 
+
 class UserRoutePreferences(BaseModel):
     """User's general routing preferences"""
+
     user_id: str
-    default_preference: RoutePreferenceType = Field(default=RoutePreferenceType.LEAST_TRAFFIC)
+    default_preference: RoutePreferenceType = Field(
+        default=RoutePreferenceType.LEAST_TRAFFIC
+    )
     avoid_road_types: List[RoadType] = Field(default_factory=list)
     preferred_road_types: List[RoadType] = Field(default_factory=list)
     max_tolls_amount: Optional[float] = None
@@ -39,8 +46,10 @@ class UserRoutePreferences(BaseModel):
     favorite_routes: List[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class RouteHistoryEntry(BaseModel):
     """Single route history entry"""
+
     user_id: str
     route_id: str
     start_location: Dict[str, float]
@@ -56,18 +65,24 @@ class RouteHistoryEntry(BaseModel):
     user_rating: Optional[int]
     feedback: Optional[str]
 
+
 class UserRoutingProfile(BaseModel):
     """Combined user routing profile with preferences and learned behaviors"""
+
     user_id: str
     preferences: UserRoutePreferences
     time_patterns: Dict[str, Dict[TimeOfDay, float]]  # Route -> TimeOfDay -> Frequency
-    road_type_preferences: Dict[TimeOfDay, Dict[RoadType, float]]  # TimeOfDay -> RoadType -> Preference Score
+    road_type_preferences: Dict[
+        TimeOfDay, Dict[RoadType, float]
+    ]  # TimeOfDay -> RoadType -> Preference Score
     common_destinations: List[Dict[str, Any]]
     routing_features: Dict[str, float]  # Learned feature weights
     last_updated: datetime = Field(default_factory=datetime.utcnow)
 
+
 class PersonalizedRouteRequest(BaseModel):
     """Request for a personalized route"""
+
     user_id: str
     start_location: Dict[str, float]
     end_location: Dict[str, float]
@@ -77,8 +92,10 @@ class PersonalizedRouteRequest(BaseModel):
     consider_events: bool = True
     max_alternatives: int = Field(default=3, ge=1, le=5)
 
+
 class PersonalizedRouteResponse(BaseModel):
     """Response containing personalized route options"""
+
     primary_route: Dict[str, Any]
     alternative_routes: List[Dict[str, Any]]
     route_metadata: Dict[str, Any]

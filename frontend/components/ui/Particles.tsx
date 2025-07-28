@@ -2,10 +2,9 @@ import React from 'react';
 
 interface ParticlesProps {
   className?: string;
-  quantity?: number;
 }
 
-const Particles: React.FC<ParticlesProps> = ({ className, quantity }) => {
+const Particles: React.FC<ParticlesProps> = ({ className }) => {
   return (
     <div className={className}>
       {/* Placeholder for particles animation */}

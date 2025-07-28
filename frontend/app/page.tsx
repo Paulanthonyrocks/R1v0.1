@@ -34,8 +34,6 @@ const NokiaHomeScreen = () => {
   const hoverSoundRef = useRef<HTMLAudioElement | null>(null);
   const confirmSoundRef = useRef<HTMLAudioElement | null>(null);
 
-  const [userInteracted, setUserInteracted] = useState(false);
-
   useEffect(() => {
     const handleFirstInteraction = () => {
       

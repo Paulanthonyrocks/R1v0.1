@@ -6,6 +6,7 @@ import logging
 
 logger = logging.getLogger("firebase_auth")
 
+
 async def verify_firebase_token(token: str) -> Dict[str, Any]:
     """Verify Firebase ID token and return decoded token data."""
     logger.info(f"Verifying Firebase token: {token[:40]}... (truncated)")

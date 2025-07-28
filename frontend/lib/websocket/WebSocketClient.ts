@@ -64,6 +64,7 @@ export enum WebSocketMessageType {
     ALERT_STATUS_UPDATE = 'alert_status_update',
     NODE_CONGESTION_UPDATE = 'node_congestion_update',
     USER_SPECIFIC_ALERT = 'user_specific_alert',
+    INITIAL_FEED_STATUSES = 'initial_feed_statuses', // Added missing type
     PONG = 'pong',
     AUTH_SUCCESS = 'auth_success',
     AUTH_FAILURE = 'auth_failure',
@@ -73,7 +74,7 @@ export enum WebSocketMessageType {
 
 export interface WebSocketMessage<T = unknown> {
     type: WebSocketMessageType;
-    data: T;
+    data?: T | null; // Make data optional and allow null
     client_id?: string;
     correlation_id?: string;
     timestamp?: number;
@@ -125,10 +126,6 @@ export class WebSocketClient implements IWebSocketClient {
             this.ws.close();
         }
 
-        // Update the URL with the new token
-        const clientId = getOrCreateClientId();
-        this.url = `${this.url.split('?')[0].split('/').slice(0, -1).join('/')}/${clientId}?token=${token}`;
-
         // Reset reconnection parameters
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
@@ -137,16 +134,24 @@ export class WebSocketClient implements IWebSocketClient {
         await this.connect(token);
     }
 
-    public async connect(token: string): Promise<void> {
+    public async connect(token: string | null): Promise<void> {
         if (this.isConnecting) return;
         this.isConnecting = true;
+
+        if (!token) {
+            this.notifyError('auth_error', 'Cannot connect: No valid authentication token available.');
+            this.isConnecting = false;
+            return;
+        }
 
         try {
             const clientId = getOrCreateClientId();
             const fullUrl = `${this.url}/${clientId}?token=${token}`;
+            console.log('Attempting to connect to WebSocket:', fullUrl); // Add this line
             this.ws = new WebSocket(fullUrl);
 
             this.ws.onopen = () => {
+                console.log('WebSocket opened.');
                 this.isConnecting = false;
                 this.reconnectAttempts = 0;
                 this.reconnectDelay = 1000;
@@ -194,12 +199,7 @@ export class WebSocketClient implements IWebSocketClient {
 
             this.ws.onerror = (error: Event) => {
                 const wsError = error as ErrorEvent;
-                console.error('WebSocket error:', {
-                    message: wsError.message || 'Unknown error',
-                    type: wsError.type,
-                    error: wsError.error,
-                    url: this.ws?.url
-                });
+                console.error('WebSocket error:', wsError.message, wsError.type, wsError);
                 this.isConnecting = false;
                 
                 // Emit error notification to listeners
@@ -220,7 +220,7 @@ export class WebSocketClient implements IWebSocketClient {
             const now = Date.now();
             this.send({
                 type: WebSocketMessageType.INTERNAL_PING,
-                data: null,
+                data: {}, // Send an empty object for data
                 timestamp: now
             });
             
@@ -256,8 +256,8 @@ export class WebSocketClient implements IWebSocketClient {
             }
 
             // Validate message structure
-            if (!Object.values(WebSocketMessageType).includes(message.type)) {
-                console.error('Invalid message type received:', message.type);
+            if (!Object.values(WebSocketMessageType).includes(message.type as WebSocketMessageType)) {
+                console.error('Invalid message type received:', message.type, 'Expected one of:', Object.values(WebSocketMessageType));
                 return;
             }
 
@@ -292,15 +292,15 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public send(message: WebSocketMessage): void {
-        // Transform internal ping to proper pong for the server
+        // Transform internal ping to proper ping for the server
         if (message.type === WebSocketMessageType.INTERNAL_PING) {
-            const pongMessage: WebSocketMessage = {
-                type: WebSocketMessageType.PONG,
-                data: null,
+            const pingMessage: WebSocketMessage = {
+                type: WebSocketMessageType.PING, // Send PING to the server
+                data: {}, // Send an empty object for data
                 timestamp: message.timestamp ?? Date.now()
             };
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify(pongMessage));
+                this.ws.send(JSON.stringify(pingMessage));
             }
             return;
         }

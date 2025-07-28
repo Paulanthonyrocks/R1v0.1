@@ -1,12 +1,11 @@
 "use client";
 
-import Link from 'next/link';
 import React, { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
 import { Signal, BatteryFull, Clock } from 'lucide-react';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // Dynamically import CesiumGlobe to ensure it's client-side rendered
 const DynamicCesiumGlobe = dynamic(() => import('@/components/CesiumGlobe'), {

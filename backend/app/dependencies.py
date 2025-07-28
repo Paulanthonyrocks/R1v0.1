@@ -7,13 +7,13 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from .database import get_database_manager
 from .utils.auth_utils import verify_firebase_token
 from .services.services import (
-    get_feed_manager, 
-    get_traffic_signal_service, 
+    get_feed_manager,
+    get_traffic_signal_service,
     get_analytics_service,
     get_route_optimization_service,
     get_weather_service,
     get_event_service,
-    get_personalized_routing_service
+    get_personalized_routing_service,
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService
@@ -30,20 +30,24 @@ async def get_db():
     db = get_database_manager()
     return db
 
+
 async def get_fm():
     """Dependency to get the feed manager instance."""
     fm = get_feed_manager()
     return fm
+
 
 async def get_config() -> Dict[str, Any]:
     """Dependency to get the currently loaded configuration dictionary."""
     config = get_current_config()
     return config
 
+
 async def get_tss() -> TrafficSignalService:
     """Dependency to get the TrafficSignalService instance."""
     tss = get_traffic_signal_service()
     return tss
+
 
 async def get_as() -> AnalyticsService:
     """Dependency to get the AnalyticsService instance."""
@@ -56,12 +60,14 @@ async def get_ros() -> RouteOptimizationService:
     route_service = get_route_optimization_service()
     return route_service
 
+
 async def get_weather_service_api() -> WeatherService:
     """Dependency to get the WeatherService instance."""
     weather_service = get_weather_service()
     if weather_service is None:
         raise RuntimeError("WeatherService not initialized")
     return weather_service
+
 
 async def get_event_service_api() -> EventService:
     """Dependency to get the EventService instance."""
@@ -70,12 +76,14 @@ async def get_event_service_api() -> EventService:
         raise RuntimeError("EventService not initialized")
     return event_service
 
+
 async def get_prs() -> PersonalizedRoutingService:
     """Dependency to get the PersonalizedRoutingService instance."""
     prs = get_personalized_routing_service()
     if prs is None:
         raise RuntimeError("PersonalizedRoutingService not initialized")
     return prs
+
 
 # Initialize the authentication scheme
 auth_scheme = HTTPBearer(auto_error=False)
@@ -85,15 +93,22 @@ ADMIN_ROLE = "admin"
 USER_ROLE = "user"
 SUPER_ADMIN_ROLE = "super_admin"
 
+
 def is_admin(user_data: dict) -> bool:
     """Check if the user has admin role."""
-    return user_data.get("role") == ADMIN_ROLE or user_data.get("role") == SUPER_ADMIN_ROLE
+    return (
+        user_data.get("role") == ADMIN_ROLE or user_data.get("role") == SUPER_ADMIN_ROLE
+    )
+
 
 def is_super_admin(user_data: dict) -> bool:
     """Check if the user has super admin role."""
     return user_data.get("role") == SUPER_ADMIN_ROLE
 
-async def get_current_user(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Dict[str, Any]:
+
+async def get_current_user(
+    token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
+) -> Dict[str, Any]:
     """Get the current authenticated user's data."""
     if not token or not token.credentials:
         raise HTTPException(
@@ -101,22 +116,28 @@ async def get_current_user(token: Optional[HTTPAuthorizationCredentials] = Depen
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return await verify_firebase_token(token.credentials)
 
-async def get_current_active_user(token: HTTPAuthorizationCredentials = Depends(auth_scheme)) -> Dict[str, Any]:
+
+async def get_current_active_user(
+    token: HTTPAuthorizationCredentials = Depends(auth_scheme),
+) -> Dict[str, Any]:
     """Get the current authenticated user's data and verify account is active."""
     user_data = await get_current_user(token)
-    
+
     if user_data.get("disabled", False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled",
         )
-    
+
     return user_data
 
-async def get_current_admin(user: Dict[str, Any] = Depends(get_current_active_user)) -> Dict[str, Any]:
+
+async def get_current_admin(
+    user: Dict[str, Any] = Depends(get_current_active_user),
+) -> Dict[str, Any]:
     """Get the current authenticated admin user's data."""
     if not is_admin(user):
         raise HTTPException(
@@ -125,7 +146,10 @@ async def get_current_admin(user: Dict[str, Any] = Depends(get_current_active_us
         )
     return user
 
-async def get_current_super_admin(user: Dict[str, Any] = Depends(get_current_active_user)) -> Dict[str, Any]:
+
+async def get_current_super_admin(
+    user: Dict[str, Any] = Depends(get_current_active_user),
+) -> Dict[str, Any]:
     """Get the current authenticated super admin user's data."""
     if not is_super_admin(user):
         raise HTTPException(
@@ -134,16 +158,18 @@ async def get_current_super_admin(user: Dict[str, Any] = Depends(get_current_act
         )
     return user
 
-async def get_current_active_user_optional(token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme)) -> Optional[Dict[str, Any]]:
+
+async def get_current_active_user_optional(
+    token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
+) -> Optional[Dict[str, Any]]:
     """Optionally get the current authenticated user's data."""
     if not token or not token.credentials:
         return None
-    
+
     try:
         return await verify_firebase_token(token.credentials)
     except HTTPException:
         return None
-
 
 
 async def get_token_from_query(websocket: WebSocket) -> Optional[str]:

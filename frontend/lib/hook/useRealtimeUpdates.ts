@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { v4 as uuidv4 } from 'uuid';
-import { AlertData, FeedStatusData } from '@/lib/types';
+import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
+import { WebSocketClient, WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 
 interface KPIData {
   // Define the expected structure of your KPIs here
@@ -10,76 +10,97 @@ interface KPIData {
 interface RealtimeUpdates {
   kpis: KPIData | null;
   alerts: AlertData[];
+  nodeCongestionData: BackendCongestionNodeData[]; // Added for WebSocket node congestion updates
   isConnected: boolean;
   isReady: boolean;
+  error: string | null; // Added error property
   startWebSocket: () => void;
 }
 
 export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { feeds: FeedStatusData[] } => {
   const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-  const CLIENT_ID = typeof window !== 'undefined' ? (window.localStorage.getItem('client_id') || (() => { const id = uuidv4(); window.localStorage.setItem('client_id', id); return id; })()) : 'default-client';
-  const wsUrl = token ? `${WS_BASE_URL.replace(/\/$/, '')}/ws/${CLIENT_ID}?token=${token}` : null;
+  const webSocketClientRef = useRef<WebSocketClient | null>(null);
   const [kpis, setKpis] = useState<KPIData | null>(null);
   const [alerts, setAlerts] = useState<AlertData[]>([]);
   const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
+  const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]); // Added nodeCongestionData state
   const [isConnected, setIsConnected] = useState(false);
   const [isReady, setIsReady] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [error, setError] = useState<string | null>(null); // Added error state
 
   const startWebSocket = useCallback(() => {
-    if (wsRef.current || !wsUrl) return; // Prevent multiple connections or if wsUrl is null
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      setIsConnected(true);
-      setIsReady(true);
-    };
-    ws.onclose = () => {
-      setIsConnected(false);
-      setIsReady(false);
-      wsRef.current = null;
-    };
-    ws.onerror = () => {
-      setIsConnected(false);
-      setIsReady(false);
-    };
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'feed_status_update') {
-          const updatedFeed = message.data.feed_status_data;
-          setFeeds(prevFeeds => {
-            const feedIndex = prevFeeds.findIndex(f => f.feed_id === updatedFeed.feed_id);
-            if (feedIndex > -1) {
-              const newFeeds = [...prevFeeds];
-              newFeeds[feedIndex] = updatedFeed;
-              return newFeeds;
-            }
-            return [...prevFeeds, updatedFeed];
-          });
-        } else if (message.type === 'initial_feed_statuses') {
-          // This handles the initial bulk feed update
-          setFeeds(message.data.feeds);
-        } else if (message.type === 'global_realtime_metrics_update') {
-          setKpis(message.data);
-        } else if (message.type === 'new_alert') {
-          setAlerts(prevAlerts => [...prevAlerts, message.data.alert_data]);
-        }
+    if (webSocketClientRef.current) {
+      return; // Prevent multiple connections
+    }
 
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+    const client = new WebSocketClient(`${WS_BASE_URL.replace(/\/$/, '')}/api/v1/ws`);
+    webSocketClientRef.current = client;
+
+    client.onError((type, message) => {
+      console.error(`WebSocket Error (${type}):`, message);
+      setIsConnected(false);
+      setIsReady(false);
+      setError(message); // Set the error state
+    });
+
+    client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
+      const updatedFeed = data.feed_status_data;
+      setFeeds(prevFeeds => {
+        const feedIndex = prevFeeds.findIndex(f => f.id === updatedFeed.id);
+        if (feedIndex > -1) {
+          const newFeeds = [...prevFeeds];
+          newFeeds[feedIndex] = updatedFeed;
+          return newFeeds;
+        }
+        return [...prevFeeds, updatedFeed];
+      });
+    });
+
+    client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
+      setFeeds(data.feeds);
+    });
+
+    client.subscribe(WebSocketMessageType.GLOBAL_REALTIME_METRICS_UPDATE, (data: KPIData) => {
+      setKpis(data);
+    });
+
+    client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
+      setAlerts(prevAlerts => [...prevAlerts, data.alert_data]);
+    });
+
+    client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: BackendCongestionNodeData[] }) => {
+      setNodeCongestionData(data.nodes);
+    });
+
+    // Add a general notification listener to track connection status
+    client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: { message_type: string }) => {
+      if (data.message_type === 'auth_success') {
+        setIsConnected(true);
+        setIsReady(true);
       }
-    };
-  }, [wsUrl]);
+    });
+
+    // Connect the WebSocket client
+    const currentToken = token;
+    if (currentToken) {
+      client.connect(currentToken);
+    } else {
+      // No token available, not connecting WebSocketClient.
+    }
+
+  }, [token, WS_BASE_URL]);
 
   useEffect(() => {
+    if (token) {
+      startWebSocket();
+    }
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+      if (webSocketClientRef.current) {
+        webSocketClientRef.current.disconnect();
+        webSocketClientRef.current = null;
       }
     };
-  }, []);
+  }, [token, startWebSocket]);
 
-  return { kpis, alerts, isConnected, isReady, startWebSocket, feeds };
+  return { kpis, alerts, nodeCongestionData, isConnected, isReady, error, startWebSocket, feeds };
 };

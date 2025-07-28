@@ -14,6 +14,7 @@ from app.models.processed_video import ProcessedVideo
 
 logger = logging.getLogger(__name__)
 
+
 class VideoProcessor:
     def __init__(self, stream_id: str, feed_manager: FeedManager):
         self.stream_id = stream_id
@@ -26,19 +27,25 @@ class VideoProcessor:
         self._frame_size: tuple = (1280, 720)  # Default frame size (width, height)
         logger.info(f"VideoProcessor: Initializing for stream_id: {self.stream_id}")
 
-    async def start_recording(self, output_filename: str, frame_rate: float, frame_size: tuple):
+    async def start_recording(
+        self, output_filename: str, frame_rate: float, frame_size: tuple
+    ):
         if self._is_recording:
             logger.warning(f"Recording already in progress for stream {self.stream_id}")
             return False
 
-        self._output_path = os.path.join("backend", "data", "processed_videos", output_filename)
+        self._output_path = os.path.join(
+            "backend", "data", "processed_videos", output_filename
+        )
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
 
         self._frame_rate = frame_rate
         self._frame_size = frame_size
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4 files
-        self._video_writer = cv2.VideoWriter(self._output_path, fourcc, self._frame_rate, self._frame_size)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 files
+        self._video_writer = cv2.VideoWriter(
+            self._output_path, fourcc, self._frame_rate, self._frame_size
+        )
 
         if not self._video_writer.isOpened():
             logger.error(f"Could not open video writer for {self._output_path}")
@@ -47,7 +54,9 @@ class VideoProcessor:
 
         self._is_recording = True
         self._recording_start_time = time.time()
-        logger.info(f"Started recording processed video for stream {self.stream_id} to {self._output_path}")
+        logger.info(
+            f"Started recording processed video for stream {self.stream_id} to {self._output_path}"
+        )
         return True
 
     async def stop_recording(self):
@@ -58,7 +67,9 @@ class VideoProcessor:
         if self._video_writer:
             self._video_writer.release()
             self._video_writer = None
-            logger.info(f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}")
+            logger.info(
+                f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}"
+            )
 
             # Save metadata to database
             if self._output_path and self._recording_start_time:
@@ -68,7 +79,7 @@ class VideoProcessor:
                     file_path=self._output_path,
                     start_time=datetime.fromtimestamp(self._recording_start_time),
                     end_time=datetime.now(),
-                    duration=datetime.now().timestamp() - self._recording_start_time
+                    duration=datetime.now().timestamp() - self._recording_start_time,
                 )
                 await db_manager.save_processed_video_metadata(processed_video_entry)
                 logger.info(f"Saved processed video metadata for {self.stream_id}")
@@ -86,9 +97,13 @@ class VideoProcessor:
         try:
             while True:
                 feed_entry = await self.feed_manager.get_feed_entry(self.stream_id)
-                if feed_entry and feed_entry.get('latest_frame_bytes') and feed_entry.get('latest_metrics'):
-                    raw_frame_bytes = feed_entry['latest_frame_bytes']
-                    kpis = feed_entry['latest_metrics']
+                if (
+                    feed_entry
+                    and feed_entry.get("latest_frame_bytes")
+                    and feed_entry.get("latest_metrics")
+                ):
+                    raw_frame_bytes = feed_entry["latest_frame_bytes"]
+                    kpis = feed_entry["latest_metrics"]
 
                     # Broadcast KPIs over WebSocket (for frontend display)
                     await video_ws_manager.broadcast_kpis(self.stream_id, kpis)
@@ -100,40 +115,61 @@ class VideoProcessor:
 
                         if frame is not None:
                             # Resize frame to match writer's expected size if necessary
-                            if frame.shape[1] != self._frame_size[0] or frame.shape[0] != self._frame_size[1]:
+                            if (
+                                frame.shape[1] != self._frame_size[0]
+                                or frame.shape[0] != self._frame_size[1]
+                            ):
                                 frame = cv2.resize(frame, self._frame_size)
 
                             # Draw overlays (example: bounding boxes, vehicle IDs, speed)
                             # This part needs actual implementation based on KPI structure
                             # For now, a placeholder:
-                            if 'detections' in kpis:
-                                for det in kpis['detections']:
-                                    bbox = det['bbox'] # Assuming [x1, y1, x2, y2]
-                                    label = det.get('label', 'Object')
-                                    confidence = det.get('confidence', 0.0)
-                                    speed = det.get('speed', None)
+                            if "detections" in kpis:
+                                for det in kpis["detections"]:
+                                    bbox = det["bbox"]  # Assuming [x1, y1, x2, y2]
+                                    label = det.get("label", "Object")
+                                    confidence = det.get("confidence", 0.0)
+                                    speed = det.get("speed", None)
 
                                     x1, y1, x2, y2 = map(int, bbox)
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    cv2.rectangle(
+                                        frame, (x1, y1), (x2, y2), (0, 255, 0), 2
+                                    )
                                     text = f"{label}: {confidence:.2f}"
-                                    if speed is not None: 
+                                    if speed is not None:
                                         text += f" Speed: {speed:.1f}km/h"
-                                    cv2.putText(frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    cv2.putText(
+                                        frame,
+                                        text,
+                                        (x1, y1 - 10),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.5,
+                                        (0, 255, 0),
+                                        2,
+                                    )
 
                             # Write processed frame to video file
                             self._video_writer.write(frame)
                         else:
-                            logger.warning(f"Failed to decode raw frame for stream {self.stream_id} for recording.")
+                            logger.warning(
+                                f"Failed to decode raw frame for stream {self.stream_id} for recording."
+                            )
 
                     yield raw_frame_bytes  # Yield raw frame bytes for frontend
                 else:
-                    logger.debug(f"No new frame or metrics available for stream_id: {self.stream_id}. Waiting...")
-                
-                await asyncio.sleep(0.01) 
+                    logger.debug(
+                        f"No new frame or metrics available for stream_id: {self.stream_id}. Waiting..."
+                    )
+
+                await asyncio.sleep(0.01)
 
         except Exception as e:
-            logger.error(f"Error in video frame generator for stream_id {self.stream_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error in video frame generator for stream_id {self.stream_id}: {e}",
+                exc_info=True,
+            )
             raise
+
 
 class VideoManager:
     _instance = None
@@ -142,12 +178,14 @@ class VideoManager:
         self.video_processors: Dict[str, VideoProcessor] = {}
 
     @classmethod
-    def get_instance(cls) -> 'VideoManager':
+    def get_instance(cls) -> "VideoManager":
         if cls._instance is None:
             cls._instance = VideoManager()
         return cls._instance
 
-    def get_processor(self, stream_id: str, feed_manager: FeedManager) -> VideoProcessor:
+    def get_processor(
+        self, stream_id: str, feed_manager: FeedManager
+    ) -> VideoProcessor:
         """Get or create a video processor for the given stream_id."""
         if stream_id not in self.video_processors:
             self.video_processors[stream_id] = VideoProcessor(stream_id, feed_manager)
@@ -159,4 +197,3 @@ class VideoManager:
             if processor._is_recording:
                 await processor.stop_recording()
         self.video_processors.clear()
- 

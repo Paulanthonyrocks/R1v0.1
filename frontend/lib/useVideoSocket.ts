@@ -24,10 +24,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     const connect = async () => {
       try {
-        await wsClient.connect();
+        await wsClient.connect(token);
         setIsConnected(true);
       } catch (err) {
-        setError('Failed to connect to video WebSocket');
+        setError('Failed to connect to video WebSocket: ' + (err instanceof Error ? err.message : 'Unknown error'));
       }
     };
 
@@ -39,7 +39,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       wsClient.unsubscribe(WebSocketMessageType.METRICS_UPDATE, handleKpiUpdate);
       wsClient.disconnect();
     };
-  }, [streamId, handleKpiUpdate]);
+  }, [streamId, handleKpiUpdate, token]);
 
   return { kpis, isConnected, error };
 };

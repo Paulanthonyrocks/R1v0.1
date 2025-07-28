@@ -4,6 +4,7 @@ from datetime import datetime
 
 Base = declarative_base()
 
+
 class ProcessedVideo(Base):
     __tablename__ = "processed_videos"
 

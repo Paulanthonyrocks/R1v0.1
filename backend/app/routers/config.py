@@ -1,13 +1,13 @@
 # backend/app/routers/config.py
 
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
-from app.dependencies import get_config, get_current_admin # Added get_current_active_user
-from app.utils import load_config, ConfigError  # Import config loading function
-from app.models.common import APIResponse # Re-use standard response model
-from app.models.feeds import StandardResponse # Re-use standard response model
-from pathlib import Path
+from app.dependencies import (
+    get_config,
+    get_current_admin,
+)  # Added get_current_active_user
+from app.models.common import APIResponse  # Re-use standard response model
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,7 @@ router = APIRouter()
 
 # Basic filtering of sensitive keys (expand as needed)
 SENSITIVE_KEYS = ["gemini_api_key", "db_password", "secret"]
+
 
 def filter_sensitive_data(data: Any) -> Any:
     """Recursively filter sensitive keys from config dict."""
@@ -31,24 +32,34 @@ def filter_sensitive_data(data: Any) -> Any:
     else:
         return data
 
+
 @router.get(
     "/",
-    response_model=APIResponse[Dict[str, Any]], # Or define a Pydantic model for config structure
+    response_model=APIResponse[
+        Dict[str, Any]
+    ],  # Or define a Pydantic model for config structure
     summary="Get Current Configuration",
     description="Retrieves the currently loaded backend configuration, masking sensitive values.",
 )
 async def get_current_config(
     config: Dict[str, Any] = Depends(get_config),
-    current_user: dict = Depends(get_current_admin) # Protected
+    current_user: dict = Depends(get_current_admin),  # Protected
 ) -> Dict[str, Any]:
-    logger.info(f"GET /config endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}")
+    logger.info(
+        f"GET /config endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}"
+    )
     """
     Endpoint to retrieve the active configuration. Requires authentication.
     Sensitive keys like API keys will be masked.
     """
-    logger.info(f"Admin user {current_user.get('uid', 'unknown_admin_uid')} retrieved configuration.")
+    logger.info(
+        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} retrieved configuration."
+    )
     # IMPORTANT: Filter sensitive data before returning
-    return APIResponse.success(data=filter_sensitive_data(config.copy()), message="Configuration retrieved successfully.")
+    return APIResponse.success(
+        data=filter_sensitive_data(config.copy()),
+        message="Configuration retrieved successfully.",
+    )
 
 
 # Architectural Note: Configuration Reload

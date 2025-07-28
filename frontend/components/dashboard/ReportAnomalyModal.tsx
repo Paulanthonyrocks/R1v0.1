@@ -49,7 +49,7 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
       setFormData(initialFormData);
       setError(null);
     }
-  }, [open]);
+  }, [open, initialFormData]);
 
   // Generic handler for input/textarea changes
   const handleInputChange = (field: keyof typeof formData) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {

@@ -11,15 +11,19 @@ router = APIRouter(
 )
 logger = logging.getLogger(__name__)
 
+
 @router.post("/analyze", response_model=PavementAnalysisResponse)
 async def analyze_pavement(
-    image: UploadFile = File(...),
-    current_user: dict = Depends(get_current_active_user)
+    image: UploadFile = File(...), current_user: dict = Depends(get_current_active_user)
 ):
-    logger.info(f"POST /api/pavement/analyze endpoint called by user: {current_user.get('email')}")
+    logger.info(
+        f"POST /api/pavement/analyze endpoint called by user: {current_user.get('email')}"
+    )
     try:
         contents = await image.read()
         results = await analyze_pavement_image(contents)
         return results
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )

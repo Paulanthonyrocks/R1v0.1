@@ -5,6 +5,7 @@ from datetime import datetime
 
 from app.models.traffic import LocationModel
 
+
 class RawTrafficDataInputModel(BaseModel):
     sensor_id: str
     timestamp: datetime
@@ -13,10 +14,11 @@ class RawTrafficDataInputModel(BaseModel):
     average_speed: float = Field(..., ge=0, le=300)
     congestion_level: float = Field(..., ge=0, le=100)
 
+
 class ProcessedTrafficDataDBModel(RawTrafficDataInputModel):
     congestion_score: float = Field(..., ge=0, le=100)
     processing_timestamp: datetime
-    status: str = 'validated'
+    status: str = "validated"
     hour_of_day: int
     day_of_week: int
     is_weekend: bool
@@ -25,6 +27,7 @@ class ProcessedTrafficDataDBModel(RawTrafficDataInputModel):
     truck_percentage: float
     is_outlier: bool
     incident_occurred: int = Field(..., ge=0, le=1)
+
 
 class RegionalAggregatedTrafficDBModel(BaseModel):
     region_id: str
