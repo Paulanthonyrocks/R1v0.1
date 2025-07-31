@@ -7,16 +7,26 @@ interface MultipartStreamData {
   isLoading: boolean;
 }
 
-const useMultipartStream = (url: string | null, token: string | null): MultipartStreamData => {
-  const [imageData, setImageData] = useState<string | null>(null);
+const useMultipartStream = (url: string | null, token: string | null): MultipartStreamData & { drawFrame: (ctx: CanvasRenderingContext2D, frame: Uint8Array) => void } => {
+  const [frameData, setFrameData] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array) => {
+    const img = new Image();
+    const blob = new Blob([frame], { type: 'image/jpeg' });
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      URL.revokeObjectURL(img.src); // Clean up the object URL
+    };
+    img.src = URL.createObjectURL(blob);
+  }, []);
+
   useEffect(() => {
     if (!url) {
-      setImageData(null);
+      setFrameData(null);
       setError(null);
       setIsLoading(false);
       return;
@@ -57,7 +67,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
           throw new Error('Could not find boundary in Content-Type header');
         }
         const boundary = '--' + boundaryMatch[1];
-        const boundaryBytes = new new TextEncoder().encode(`\r\n${boundary}`);
+        const boundaryBytes = new TextEncoder().encode(`\r\n${boundary}`);
         const chunkReader = response.body.getReader();
 
         let buffer = new Uint8Array();
@@ -90,23 +100,14 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
               buffer = buffer.slice(boundaryIndex + boundaryBytes.length); // Keep the rest of the buffer
 
               // Process the part
-              const partText = new TextDecoder().decode(part);
-              const headersEnd = partText.indexOf('\r\n\r\n');
+              const headersEnd = findSequence(part, new TextEncoder().encode('\r\n\r\n'));
 
               if (headersEnd > -1) {
-                const headers = partText.substring(0, headersEnd);
+                const headersText = new TextDecoder().decode(part.slice(0, headersEnd));
 
-                if (headers.includes('Content-Type: image/jpeg')) {
-                   // Find the actual start of the image data (after headers and potential newline)
-                    const imageStart = partText.substring(0, headersEnd).length + 4;
-                    const imagePart = part.slice(imageStart);
-                    const imageUrl = URL.createObjectURL(new Blob([imagePart], { type: 'image/jpeg' }));
-                    setImageData(imageUrl);
-
-                    // Clean up old blob URL to prevent memory leaks
-                    if (imageData && typeof imageData === 'string' && imageData.startsWith('blob:')) {
-                        URL.revokeObjectURL(imageData);
-                    }
+                if (headersText.includes('Content-Type: image/jpeg')) {
+                   const imagePart = part.slice(headersEnd + 4);
+                   setFrameData(imagePart);
                 }
               }
 
@@ -140,15 +141,11 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
     return () => {
       console.log("Aborting stream fetch");
       abortControllerRef.current?.abort();
-       // Clean up the last blob URL on unmount
-       if (imageData && typeof imageData === 'string' && imageData.startsWith('blob:')) {
-            URL.revokeObjectURL(imageData);
-       }
     };
 
-  }, [url, token, imageData]); // Added imageData to dependency array
+  }, [url, token]);
 
-  return { image: imageData, error, isLoading };
+  return { image: frameData, error, isLoading, drawFrame };
 };
 
 // Helper function to find byte sequence
@@ -171,5 +168,26 @@ function indexOf(buffer: Uint8Array, sequence: Uint8Array): number {
     return -1;
 }
 
+// Optimized helper to find a sequence within a Uint8Array
+function findSequence(buffer: Uint8Array, sequence: Uint8Array): number {
+  const len = buffer.length;
+  const seqLen = sequence.length;
+  if (seqLen === 0) return 0;
+  if (seqLen > len) return -1;
+
+  for (let i = 0; i <= len - seqLen; i++) {
+    let match = true;
+    for (let j = 0; j < seqLen; j++) {
+      if (buffer[i + j] !== sequence[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 export default useMultipartStream;

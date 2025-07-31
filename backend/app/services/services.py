@@ -72,6 +72,7 @@ async def initialize_services(
                 )
             # Initialize shared multiprocessing values after app startup
             feed_manager_instance.initialize_shared_values()
+            await feed_manager_instance.start_background_tasks() # New: Start background tasks
             logger.info("FeedManager initialized via app.services.")
         except Exception as e:
             logger.error(

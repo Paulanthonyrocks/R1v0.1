@@ -1,7 +1,7 @@
 import logging
 from typing import Optional, Dict, Any, List  # Added List
 import json  # For pretty printing dicts in logs
-from datetime import datetime, timedelta  # Added datetime, timedelta
+from datetime import datetime, timedelta, timezone  # Added datetime, timedelta, timezone
 
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.personalized_routing_service import (
@@ -340,7 +340,7 @@ class AgentCore:
         # Use the sample_user_id passed to the method for focused testing, or expand later
         sample_user_ids_for_proactive_alerts = [sample_user_id]
 
-        current_time = datetime.now()  # Consider timezone: datetime.now(timezone.utc)
+        current_time = datetime.now(timezone.utc)
 
         for user_id in sample_user_ids_for_proactive_alerts:
             self.logger.info(f"Processing predictive alerts for user: {user_id}")

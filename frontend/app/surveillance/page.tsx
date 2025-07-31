@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect } from 'react';
+import Link from 'next/link'; // Import Link
 import AuthGuard from '@/components/auth/AuthGuard';
 import { UserRole } from '@/lib/auth/roles';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
@@ -9,6 +10,7 @@ import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 import { FeedStatusData } from '@/lib/types';
 import LoadingMessage from '@/components/ui/LoadingMessage';
 import { Signal, Clock, BatteryFull } from 'lucide-react';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 
 const SurveillancePage = () => {
   const { token } = useAuth();
@@ -52,11 +54,32 @@ const SurveillancePage = () => {
     <AuthGuard requiredRole={UserRole.AGENCY}>
       <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
         {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-          <div className="flex items-center space-x-2">
-            <Signal size={20} />
-            <span className="font-lcd matrix-glow">SURVEILLANCE</span>
-          </div>
+        <header className="bg-lcd-bg text-lcd-text font-lcd flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center space-x-2 cursor-pointer">
+                <Signal size={20} />
+                <span className="font-lcd matrix-glow">SURVEILLANCE</span>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="matrix-card">
+              <DropdownMenuItem asChild>
+                <Link href="/" className="w-full tracking-normal font-lcd matrix-glow">HOME</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/preferences" className="w-full tracking-normal font-lcd matrix-glow">PREFERENCES</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/history" className="w-full tracking-normal font-lcd matrix-glow">ROUTE HISTORY</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href="/impacts" className="w-full tracking-normal font-lcd matrix-glow">WEATHER & EVENTS</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow">DASHBOARD</Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <div className="flex items-center space-x-2">
             <Clock size={20} />
             <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

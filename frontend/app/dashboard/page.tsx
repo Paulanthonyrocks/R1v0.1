@@ -37,7 +37,9 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     // Start WebSocket connection on component mount
     console.log("DashboardPage: Attempting to start WebSocket connection.");
-    startWebSocket();
+    if (token) {
+      startWebSocket();
+    }
     // No explicit cleanup needed here as the hook manages its own lifecycle
   }, [startWebSocket]); // Dependency array includes startWebSocket
 
@@ -81,6 +83,7 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
+      if (!token) return; // Don't fetch if token is not available
       try {
         const res = await fetch('/api/v1/analytics/nodes/congestion', {
           headers: {
@@ -165,6 +168,9 @@ const DashboardPage: React.FC = () => {
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <a href="/impacts" className="w-full tracking-normal font-lcd matrix-glow">WEATHER & EVENTS</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/surveillance" className="w-full tracking-normal font-lcd matrix-glow">SURVEILLANCE</Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

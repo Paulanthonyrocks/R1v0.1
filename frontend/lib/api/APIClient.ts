@@ -128,8 +128,12 @@ export class APIClient {
             return this.handleResponse<T>(response, fetchOptions);
         } catch (error: unknown) {
             if (error instanceof Error && error.name === 'AbortError') {
-                throw new Error('Request timeout');
+                const errorMessage = 'Request timed out. Please check your internet connection or try again later.';
+                errorNotifier.error(errorMessage);
+                throw new Error(errorMessage);
             }
+            const errorMessage = `An API error occurred: ${error.message || 'Unknown error'}`;
+            errorNotifier.error(errorMessage);
             throw error;
         }
     }

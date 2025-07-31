@@ -102,6 +102,7 @@ def process_video(
     vis_options: Set[str],
     reduce_frame_rate_event: Any,  # multiprocessing.Event
     global_fps: Any,  # multiprocessing.Value
+    global_skip_factor: Any, # multiprocessing.Value
     db_queue: Optional["multiprocessing.Queue[Dict]"] = None,
     error_queue: Optional["multiprocessing.Queue[str]"] = None,
     feed_config_info: Optional[Dict] = None,  # New argument for feed-specific config
@@ -148,9 +149,9 @@ def process_video(
     consecutive_core_errors = 0  # Counter for core module errors
     MAX_CONSECUTIVE_CORE_ERRORS = 10  # Threshold to stop worker
 
+    reader = None
+    video_writer = None
     try:
-        target_resolution = tuple(config["vehicle_detection"]["frame_resolution"])
-
         # --- Webcam Index Parsing ---
         source_type = "video"
         source_location: Union[str, int] = video_path  # Default to video path
@@ -185,6 +186,7 @@ def process_video(
             max_queue_size=config["video_input"].get(
                 "max_queue_size", 1000
             ),  # Pass max_queue_size from config
+            queue_put_timeout=config["video_input"].get("queue_put_timeout_ms", 1000) / 1000.0, # Convert ms to seconds
         )
         # Add a small delay for camera/reader thread to initialize
         time.sleep(config["interface"].get("camera_warmup_time", 0.5))
@@ -197,6 +199,20 @@ def process_video(
             raise RuntimeError(error_msg)
 
         logger.info(f"FrameReader successfully opened source for {feed_id}")
+
+        video_output_config = config.get("video_output", {})
+        if video_output_config.get("enabled", False):
+            output_dir = Path(video_output_config.get("output_directory", "./data/processed_videos"))
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{feed_id}.mp4"
+            fourcc = cv2.VideoWriter_fourcc(*video_output_config.get("codec", "mp4v"))
+            
+            fps = config.get("fps", 30)
+            resolution = tuple(config["vehicle_detection"]["frame_resolution"])
+
+            video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, resolution)
+            logger.info(f"Video writer initialized for {output_path} with resolution {resolution} and FPS {fps}")
+        target_resolution = tuple(config["vehicle_detection"]["frame_resolution"])
 
         if CoreModule is None:
             raise ImportError("CoreModule could not be imported.")
@@ -232,6 +248,7 @@ def process_video(
                     logger.info(
                         f"[{feed_id}] End of video/stream detected by reader, or reader stopped. Exiting worker loop."
                     )
+                    stop_event.set() # Explicitly set stop event
                     break  # Exit loop gracefully if end of video
                 else:
                     logger.debug(
@@ -266,12 +283,15 @@ def process_video(
                     continue
 
             # Dynamic Frame Rate Adjustment
+            current_global_skip_factor = global_skip_factor.value # Read current global skip factor
+            dynamic_skip_interval = max(1, int(base_frame_skip_interval * current_global_skip_factor))
+
             if reduce_frame_rate_event.is_set():
                 dynamic_skip_interval = min(
                     base_frame_skip_interval * 3, 90
                 )  # Increase skip more aggressively
-            elif dynamic_skip_interval != base_frame_skip_interval:
-                dynamic_skip_interval = base_frame_skip_interval
+            # No else-if here, as dynamic_skip_interval is now primarily controlled by global_skip_factor
+            # and reduce_frame_rate_event can further increase it.
 
             # Ensure both are scalars before using %
             if current_frame_index is not None:
@@ -388,12 +408,20 @@ def process_video(
                 )
                 combined_frame = processing_frame  # Fallback
 
+            if video_writer:
+                # Ensure frame is BGR and 8-bit unsigned for VideoWriter
+                if combined_frame.shape[2] == 4: # If it has an alpha channel
+                    combined_frame = cv2.cvtColor(combined_frame, cv2.COLOR_BGRA2BGR)
+                if combined_frame.dtype != np.uint8:
+                    combined_frame = combined_frame.astype(np.uint8)
+                video_writer.write(combined_frame)
+
             queue_put_start_time = time.time()
             # Send data back to main process
             output_data = (
                 feed_id,
                 current_frame_index,
-                combined_frame,
+                processing_frame, # Send the raw frame for live streaming
                 metrics,
                 tracked_vehicles_raw,
                 timer.timings.copy(),
@@ -475,6 +503,10 @@ def process_video(
                 f"[{feed_id}] Stop event not set during cleanup initiation, setting now."
             )
             stop_event.set()
+
+        if video_writer:
+            video_writer.release()
+            logger.info(f"[{feed_id}] Video writer released.")
 
         # Stop FrameReader safely
         if reader:

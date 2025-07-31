@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, Union, List
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 
 from app.models.alerts import Alert
@@ -133,9 +133,7 @@ class NodeCongestionUpdateData(BaseModel):
     average_speed: Optional[float] = Field(
         None, description="Average speed of vehicles at the node (km/h)."
     )
-    timestamp: datetime = Field(
-        ..., description="Timestamp of the latest data point for this node."
-    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # Add other fields if needed, ensure consistency with NodeCongestionData in routers/analytics.py
 
 
@@ -172,7 +170,7 @@ class UserSpecificConditionAlert(BaseModel):  # Renamed and adjusted
         None,
         description="Optional details about the route or location relevant to this alert.",
     )  # Renamed from related_location and changed type
-    issued_at: datetime = Field(default_factory=datetime.utcnow)
+    issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # --- WebSocket Message Wrapper ---
@@ -181,6 +179,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     GLOBAL_REALTIME_METRICS_UPDATE = "global_realtime_metrics_update"
     NEW_ALERT = "new_alert"
     SIGNAL_UPDATE = "signal_update"
+    VIDEO_FRAME = "VIDEO_FRAME"
     FEED_METRICS = "FEED_METRICS"  # Added for feed-specific metrics
     FEED_STATUS_UPDATE = "feed_status_update"
     GENERAL_NOTIFICATION = "general_notification"

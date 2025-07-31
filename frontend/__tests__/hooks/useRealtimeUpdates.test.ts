@@ -1,5 +1,5 @@
 import { renderHook, act } from '@testing-library/react-hooks';
-import { useRealtimeUpdates } from '@/lib/hook'; // Assuming hook.ts is where useRealtimeUpdates is
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { AlertData, BackendCongestionNodeData } from '@/lib/types';
 
 // Define WebSocketMessageTypeEnum values used by the hook, mirroring backend

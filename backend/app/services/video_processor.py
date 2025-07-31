@@ -130,10 +130,23 @@ class VideoProcessor:
                                     label = det.get("label", "Object")
                                     confidence = det.get("confidence", 0.0)
                                     speed = det.get("speed", None)
+                                    behavior = det.get("behavior", "unknown")
+
+                                    # Define colors based on behavior
+                                    color_map = {
+                                        "moving": (0, 255, 0),  # Green
+                                        "stopped": (0, 0, 255),  # Red
+                                        "speeding": (255, 0, 0),  # Blue
+                                        "accelerating": (255, 255, 0),  # Yellow
+                                        "decelerating": (0, 255, 255),  # Cyan
+                                        "lane_changing": (255, 0, 255),  # Magenta
+                                        "unknown": (128, 128, 128),  # Gray
+                                    }
+                                    color = color_map.get(behavior, (128, 128, 128)) # Default to gray
 
                                     x1, y1, x2, y2 = map(int, bbox)
                                     cv2.rectangle(
-                                        frame, (x1, y1), (x2, y2), (0, 255, 0), 2
+                                        frame, (x1, y1), (x2, y2), color, 2
                                     )
                                     text = f"{label}: {confidence:.2f}"
                                     if speed is not None:
@@ -144,7 +157,7 @@ class VideoProcessor:
                                         (x1, y1 - 10),
                                         cv2.FONT_HERSHEY_SIMPLEX,
                                         0.5,
-                                        (0, 255, 0),
+                                        color,
                                         2,
                                     )
 

@@ -248,20 +248,20 @@ class TestAnalyticsService(unittest.TestCase):
             title, message_text, severity
         )
 
-        self.mock_connection_manager.broadcast.assert_awaited_once()
-        args, kwargs = self.mock_connection_manager.broadcast.call_args
+        self.mock_connection_manager.broadcast_to_topic.assert_awaited_once()
+        args, kwargs = self.mock_connection_manager.broadcast_to_topic.call_args
 
         sent_message: WebSocketMessage = args[0]
         self.assertEqual(
             sent_message.type, WebSocketMessageTypeEnum.GENERAL_NOTIFICATION
         )
         self.assertIsInstance(sent_message.data, GeneralNotification)
-        self.assertEqual(sent_message.data.message_type, "traffic_analysis")
+        self.assertEqual(sent_message.data.message_type, "operational_alert")
         self.assertEqual(sent_message.data.title, title)
         self.assertEqual(sent_message.data.message, message_text)
         self.assertEqual(sent_message.data.severity, severity)
 
-        self.assertEqual(kwargs.get("specific_topic"), "operational_alerts")
+        self.assertEqual(kwargs.get("topic"), "operational_alerts")
 
     async def test_broadcast_node_congestion_updates_direct_call(self):
         mock_node_data_list = [
@@ -284,10 +284,10 @@ class TestAnalyticsService(unittest.TestCase):
         await self.analytics_service._broadcast_node_congestion_updates()
 
         self.analytics_service.get_all_location_congestion_data.assert_awaited_once()
-        self.mock_connection_manager.broadcast.assert_awaited_once()
+        self.mock_connection_manager.broadcast_to_topic.assert_awaited_once()
 
-        # Check the call arguments for broadcast
-        args, kwargs = self.mock_connection_manager.broadcast.call_args
+        # Check the call arguments for broadcast_to_topic
+        args, kwargs = self.mock_connection_manager.broadcast_to_topic.call_args
         sent_message: WebSocketMessage = args[0]
         self.assertEqual(
             sent_message.type, WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE
@@ -297,7 +297,7 @@ class TestAnalyticsService(unittest.TestCase):
         # Pydantic would have converted dict to NodeCongestionUpdateData instance if models are compatible
         # Here we check if the data passed to NodeCongestionUpdatePayload matches our mock
         self.assertEqual(sent_message.data.nodes[0].id, mock_node_data_list[0]["id"])
-        self.assertEqual(kwargs.get("specific_topic"), "node_congestion")
+        self.assertEqual(kwargs.get("topic"), "node_congestion")
 
     async def test_broadcast_node_congestion_updates_no_data(self):
         self.analytics_service.get_all_location_congestion_data = AsyncMock(
@@ -307,7 +307,7 @@ class TestAnalyticsService(unittest.TestCase):
         await self.analytics_service._broadcast_node_congestion_updates()
 
         self.analytics_service.get_all_location_congestion_data.assert_awaited_once()
-        self.mock_connection_manager.broadcast.assert_not_awaited()
+        self.mock_connection_manager.broadcast_to_topic.assert_not_awaited()
 
     async def test_node_congestion_broadcast_loop(self):
         mock_node_data_list = [
@@ -333,12 +333,12 @@ class TestAnalyticsService(unittest.TestCase):
         await asyncio.sleep(0.25)
 
         self.assertTrue(
-            self.mock_connection_manager.broadcast.call_count >= 2
+            self.mock_connection_manager.broadcast_to_topic.call_count >= 2
         )
 
         # Verify one of the calls (e.g., the first one)
         args, kwargs = (
-            self.mock_connection_manager.broadcast.call_args_list[0]
+            self.mock_connection_manager.broadcast_to_topic.call_args_list[0]
         )
         sent_message: WebSocketMessage = args[0]
         self.assertEqual(

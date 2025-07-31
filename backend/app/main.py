@@ -247,7 +247,6 @@ async def startup_event():
     # 4. Initialize Services, including ConnectionManager
     try:
         logger.info("Initializing application services...")
-        logger.info("Attempting to initialize WebSocket ConnectionManager...")
         await initialize_services(loaded_config, logger=logger)
         app.state.connection_manager = get_connection_manager()
         if app.state.connection_manager is None:
@@ -257,23 +256,9 @@ async def startup_event():
             raise RuntimeError(
                 "WebSocket ConnectionManager failed to initialize: get_connection_manager returned None."
             )
-        logging.getLogger("app.websocket.connection_manager").info(
-            "ConnectionManager initialized."
-        )
         logger.info("WebSocket ConnectionManager initialized via app.services.")
-        logger.info("WebSocket ConnectionManager initialization: Successful.")
-        logger.info(
-            f"ConnectionManager instance after initialization attempt: {app.state.connection_manager}"
-        )
         fm = get_feed_manager()
         logger.info("FeedManager initialized via app.services.")
-        logger.info("FeedManager initialization: Successful.")
-        db_manager = None
-        try:
-            db_manager = "DatabaseManager instance obtained for service initialization."
-            logger.info(db_manager)
-        except Exception:
-            pass
         analytics_service = get_analytics_service()
         if analytics_service:
             logger.info("AnalyticsService initialized successfully.")
@@ -282,9 +267,6 @@ async def startup_event():
             logger.warning(
                 "AnalyticsService not available during startup; cannot initialize prediction log table."
             )
-        logger.info("PersonalizedRoutingService initialized successfully")
-        logger.info("WeatherService initialized successfully")
-        logger.info("EventService initialized successfully")
         logger.info("Application services initialized.")
     except Exception as e:
         logger.error(f"Service Initialization Failed during startup: {e}")
@@ -302,6 +284,7 @@ async def startup_event():
             logger.info(
                 "Prediction scheduler initialized and injected into FeedManager."
             )
+            await fm.start_processing() # Start processing after initialization
         else:
             logger.warning(
                 "AnalyticsService not available, prediction scheduler not initialized."
@@ -488,66 +471,10 @@ async def websocket_endpoint(
     logger.info(f"[WS {client_id}] manager.connect finished.")
     logger.info(f"Client {client_id} WebSocket connection established.")
 
-    try:
-        while True:
-            # The websocket.receive_text() or receive_json() call will raise WebSocketDisconnect
-            # if the client disconnects.
-            data_raw = (
-                await websocket.receive_text()
-            )  # Or receive_json() if clients always send JSON
-            # active_connection should be self.active_connections.get(client_id) from manager
-            # which is now passed to handle_incoming_message.
-            # No, handle_incoming_message is a method of ActiveWebSocketConnection itself.
-            await active_connection.handle_incoming_message(data_raw)
+    await active_connection.listen_for_messages()
 
-    except WebSocketDisconnect as e:
-        logger.info(
-            f"Client {client_id} disconnected. Code: {e.code}, Reason: {e.reason}"
-        )
-        # ActiveWebSocketConnection.close() is responsible for calling manager.disconnect()
-        # So, we should call active_connection.close() here, or ensure manager.disconnect() is robustly called.
-        # If WebSocketDisconnect is raised, the socket is already considered closed by FastAPI.
-        # We just need to ensure our manager cleans up.
-        manager.disconnect(
-            client_id
-        )  # Explicitly tell manager to clean up this client_id
-    except Exception as e:
-        logger.error(
-            f"Unexpected error in WebSocket loop for client {client_id}: {e}",
-            exc_info=True,
-        )
-        # Attempt to close the connection gracefully from server-side if an error occurs
-        if (
-            active_connection
-            and active_connection.websocket.client_state == WebSocketState.CONNECTED
-        ):
-            error_payload = ErrorNotification(
-                code="UNEXPECTED_SERVER_ERROR", message=str(e)
-            )
-            ws_msg = WebSocketMessage(
-                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, data=error_payload
-            )
-            try:
-                await active_connection.send_json_model(ws_msg)
-            except Exception as send_err:
-                logger.error(
-                    f"Failed to send error to client {client_id} before closing: {send_err}"
-                )
-            try:
-                await active_connection.close(
-                    code=1011, reason=f"Server error: {str(e)[:100]}"
-                )  # Reason has length limit
-            except Exception as close_err:
-                logger.error(
-                    f"Error trying to close connection for {client_id} after exception: {close_err}"
-                )
-        # Ensure cleanup even if close fails
-        manager.disconnect(client_id)
-    finally:
-        # This block might not be strictly necessary if disconnects are handled well in exceptions
-        # but serves as a final check.
-        logger.info(f"WebSocket connection for client {client_id} is ending.")
-        # manager.disconnect(client_id) # Called in exception blocks
+    # The finally block in listen_for_messages will handle cleanup
+    logger.info(f"WebSocket connection for client {client_id} is ending.")
 
 
 @app.websocket("/api/v1/ws/{client_id}")
@@ -580,6 +507,7 @@ async def websocket_endpoint_v1(
         )
         return
     await websocket.accept()
+    await asyncio.sleep(0.01) # Give the WebSocket a moment to fully establish
     logger.info(f"[WS v1 {client_id}] WebSocket connection accepted.")
     await manager.connect(websocket, client_id, user_data)
     active_connection = manager.active_connections.get(client_id)
@@ -594,54 +522,14 @@ async def websocket_endpoint_v1(
         return
     logger.info(f"[WS v1 {client_id}] manager.connect finished.")
     logger.info(f"Client {client_id} WebSocket v1 connection established.")
-    try:
-        while True:
-            data_raw = await websocket.receive_text()
-            await active_connection.handle_incoming_message(data_raw)
-    except WebSocketDisconnect as e:
-        logger.info(
-            f"Client {client_id} disconnected. Code: {e.code}, Reason: {e.reason}"
-        )
-        manager.disconnect(client_id)
-    except Exception as e:
-        logger.error(
-            f"Unexpected error in WebSocket v1 loop for client {client_id}: {e}",
-            exc_info=True,
-        )
-        if (
-            active_connection
-            and active_connection.websocket.client_state == WebSocketState.CONNECTED
-        ):
-            error_payload = ErrorNotification(
-                code="UNEXPECTED_SERVER_ERROR", message=str(e)
-            )
-            ws_msg = WebSocketMessage(
-                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, data=error_payload
-            )
-            try:
-                await active_connection.send_json_model(ws_msg)
-            except Exception as send_err:
-                logger.error(
-                    f"Failed to send error to client {client_id} before closing: {send_err}"
-                )
-            try:
-                await active_connection.close(
-                    code=1011, reason=f"Server error: {str(e)[:100]}"
-                )
-            except Exception as close_err:
-                logger.error(
-                    f"Error trying to close connection for {client_id} after exception: {close_err}"
-                )
-        manager.disconnect(client_id)
-    finally:
-        logger.info(f"WebSocket v1 connection for client {client_id} is ending.")
+    await active_connection.listen_for_messages()
+
+    # The finally block in listen_for_messages will handle cleanup
+    logger.info(f"WebSocket v1 connection for client {client_id} is ending.")
 
 
 ## Removed duplicate FastAPI app definition
 
 if __name__ == "__main__":
     import uvicorn
-    import multiprocessing
-
-    multiprocessing.set_start_method("spawn", force=True)
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, log_level="debug")

@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -77,7 +77,7 @@ class UserRoutingProfile(BaseModel):
     ]  # TimeOfDay -> RoadType -> Preference Score
     common_destinations: List[Dict[str, Any]]
     routing_features: Dict[str, float]  # Learned feature weights
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PersonalizedRouteRequest(BaseModel):

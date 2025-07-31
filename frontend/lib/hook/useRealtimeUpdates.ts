@@ -94,6 +94,13 @@ export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { fe
     if (token) {
       startWebSocket();
     }
+
+    return () => {
+      if (webSocketClientRef.current) {
+        webSocketClientRef.current.disconnect();
+        webSocketClientRef.current = null;
+      }
+    };
     return () => {
       if (webSocketClientRef.current) {
         webSocketClientRef.current.disconnect();

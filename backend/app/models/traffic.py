@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import enum
 
@@ -127,7 +127,7 @@ class IncidentReport(BaseModel):
         description="Current status of the incident",
     )
     last_updated: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of the last update to this incident report (UTC)",
     )
     estimated_clearance_time: Optional[datetime] = Field(

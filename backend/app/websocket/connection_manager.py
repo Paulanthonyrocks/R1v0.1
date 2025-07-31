@@ -57,7 +57,7 @@ class ActiveWebSocketConnection:
                 )
             else:
                 logger.warning(
-                    f"Attempted to send to non-connected websocket: {self.client_id}, state: {self.websocket.client_state}"
+                    f"Attempted to send to non-connected websocket: {self.client_id}, state: {self.websocket.client_state}. Message type: {message.type}"
                 )
         except (
             RuntimeError,
@@ -423,6 +423,50 @@ class ActiveWebSocketConnection:
                 )
             )
 
+    async def listen_for_messages(self):
+        try:
+            while True:
+                data_raw = await self.websocket.receive_text()
+                await self.handle_incoming_message(data_raw)
+        except WebSocketDisconnect as e:
+            logger.info(
+                f"Client {self.client_id} disconnected. Code: {e.code}, Reason: {e.reason}"
+            )
+            self.manager.disconnect(self.client_id)
+        except Exception as e:
+            logger.error(
+                f"Unexpected error in WebSocket loop for client {self.client_id}: {e}",
+                exc_info=True,
+            )
+            # Attempt to close the connection gracefully from server-side if an error occurs
+            if (
+                self.websocket.client_state == WebSocketState.CONNECTED
+            ):
+                error_payload = ErrorNotification(
+                    code="UNEXPECTED_SERVER_ERROR", message=str(e)
+                )
+                ws_msg = WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, data=error_payload
+                )
+                try:
+                    await self.send_json_model(ws_msg)
+                except Exception as send_err:
+                    logger.error(
+                        f"Failed to send error to client {self.client_id} before closing: {send_err}"
+                    )
+                try:
+                    await self.close(
+                        code=1011, reason=f"Server error: {str(e)[:100]}"
+                    )  # Reason has length limit
+                except Exception as close_err:
+                    logger.error(
+                        f"Error trying to close connection for {self.client_id} after exception: {close_err}"
+                    )
+            # Ensure cleanup even if close fails
+            self.manager.disconnect(self.client_id)
+        finally:
+            logger.info(f"WebSocket connection for client {self.client_id} is ending.")
+
 
 class ConnectionManager:
     """Manages active WebSocket connections."""
@@ -483,6 +527,16 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error broadcasting message to {client_id}: {e}")
                 self.disconnect(client_id) # Disconnect problematic client
+
+    async def broadcast_to_topic(self, message: WebSocketMessage, topic: str):
+        """Broadcasts a message to all clients subscribed to a specific topic."""
+        for client_id, connection in list(self.active_connections.items()):
+            if topic in connection.subscriptions:
+                try:
+                    await connection.send_json_model(message)
+                except Exception as e:
+                    logger.error(f"Error broadcasting message to subscribed client {client_id} for topic {topic}: {e}")
+                    self.disconnect(client_id) # Disconnect problematic client
 
     async def send_to_client(self, client_id: str, message: WebSocketMessage):
         """Sends a message to a specific client."""

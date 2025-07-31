@@ -18,7 +18,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from enum import Enum
 from pathlib import Path
 import queue  # For queue.Empty exception
-from datetime import datetime  # For alert timestamps
+from datetime import datetime, timezone  # For alert timestamps
 
 # Import custom exceptions
 from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
@@ -84,6 +84,7 @@ class FeedManager:
         self._feed_id_counter = 1  # Simple counter for unique IDs
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
+        self._skip_factor_adjustment_task: Optional[asyncio.Task] = None
         self._connection_manager = None  # Added type hint
         self._prediction_scheduler = None  # New: Reference to PredictionScheduler
         self._analytics_service = None  # New: Reference to AnalyticsService
@@ -99,6 +100,14 @@ class FeedManager:
             str, asyncio.Event
         ] = {}  # New: Events to signal when a feed is running
         self.logger = logger  # Assign the module-level logger to the instance
+
+        # Adaptive delay for result queue reading
+        self._min_read_delay = self.config.get("min_frame_read_delay_ms", 1) / 1000.0  # Minimum delay (e.g., 1ms)
+        self._max_read_delay = self.config.get("max_frame_read_delay_ms", 100) / 1000.0 # Maximum delay (e.g., 100ms)
+        self._current_read_delay = self._min_read_delay
+        self._delay_adjustment_factor = self.config.get("delay_adjustment_factor", 1.1) # Factor to increase/decrease delay
+        self._last_queue_log_time = 0.0
+        self._queue_log_interval = self.config.get("queue_log_interval", 15.0) # Log queue size every 15 seconds
 
         # Load available feeds from config if needed (or assume they are added dynamically)
         self._initialize_available_feeds()
@@ -165,6 +174,7 @@ class FeedManager:
         if self._global_fps is None:
             manager = multiprocessing.Manager()
             self._global_fps = manager.Value("i", self.config.get("fps", 30))
+            self._global_skip_factor = manager.Value("f", 3.5) # Start at 3.5 frames per skip
             logger.info(
                 "FeedManager shared values initialized using multiprocessing.Manager().Value."
             )
@@ -405,9 +415,7 @@ class FeedManager:
 
             # Broadcast to a specific topic for this feed
             topic = f"feed:{feed_id}"
-            await self._connection_manager.broadcast(
-            message, specific_topic=topic
-        )
+            await self._connection_manager.broadcast_to_topic(message, topic)
             # Also broadcast a general version to a generic "feeds" topic for overview listeners
             # This might be too noisy if many feeds update frequently. Consider if needed.
             # await self._connection_manager.broadcast_message_model(message, specific_topic="feeds_all")
@@ -446,12 +454,12 @@ class FeedManager:
         )
 
         # Broadcast to a general alerts topic, and potentially a feed-specific alert topic
-        await self._connection_manager.broadcast(
-            message, specific_topic="alerts"
+        await self._connection_manager.broadcast_to_topic(
+            message, topic="alerts"
         )
         if feed_id:
-            await self._connection_manager.broadcast_message_model(
-                message, specific_topic=f"feed_alerts:{feed_id}"
+            await self._connection_manager.broadcast_to_topic(
+                message, topic=f"feed_alerts:{feed_id}"
             )
 
         logger.info(
@@ -544,8 +552,8 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.GLOBAL_REALTIME_METRICS_UPDATE,
             data=metrics_payload,
         )
-        await self._connection_manager.broadcast(
-            message, specific_topic="kpis"
+        await self._connection_manager.broadcast_to_topic(
+            message, topic="kpis"
         )
         logger.debug(
             f"Broadcasted KPI update: {metrics_payload.model_dump_json(indent=2)}"
@@ -634,7 +642,37 @@ class FeedManager:
             )
 
             if not processed_any_item_in_cycle:
-                await asyncio.sleep(0.1)
+                # If no items were processed, it means queues were empty or we hit queue.Empty
+                # Decrease delay, but not below minimum
+                self._current_read_delay = max(self._min_read_delay, self._current_read_delay / self._delay_adjustment_factor)
+                await asyncio.sleep(self._current_read_delay)
+            else:
+                # If items were processed, increase delay slightly to prevent overwhelming
+                # This is a simple heuristic; more advanced might consider queue fullness
+                self._current_read_delay = min(self._max_read_delay, self._current_read_delay * self._delay_adjustment_factor)
+                # Still yield control to event loop briefly
+                await asyncio.sleep(0.001) # Smallest possible sleep to yield control
+
+            # Log queue sizes periodically
+            current_time = time.time()
+            if current_time - self._last_queue_log_time >= self._queue_log_interval:
+                for feed_id, result_q in active_queues_info["result_queues"]:
+                    try:
+                        qsize = result_q.qsize()
+                        logger.info(f"Feed '{feed_id}' result queue size: {qsize}. Current read delay: {self._current_read_delay:.4f}s")
+                    except NotImplementedError:
+                        logger.debug(f"Queue.qsize() not implemented for {feed_id} result queue.")
+                    except Exception as e:
+                        logger.warning(f"Error getting queue size for {feed_id} result queue: {e}")
+                for feed_id, db_q in active_queues_info["db_queues"]:
+                    try:
+                        qsize = db_q.qsize()
+                        logger.info(f"Feed '{feed_id}' DB queue size: {qsize}")
+                    except NotImplementedError:
+                        logger.debug(f"Queue.qsize() not implemented for {feed_id} DB queue.")
+                    except Exception as e:
+                        logger.warning(f"Error getting queue size for {feed_id} DB queue: {e}")
+                self._last_queue_log_time = current_time
 
         logger.info("Result queue reader task stopped.")
 
@@ -679,9 +717,7 @@ class FeedManager:
                                     metrics["timestamp"], tz=datetime.timezone.utc
                                 )
                             elif "timestamp" not in metrics:
-                                metrics["timestamp"] = datetime.now(
-                                    datetime.timezone.utc
-                                )
+                                metrics["timestamp"] = datetime.now(datetime.timezone.utc)
                             entry["latest_metrics"] = metrics
                             entry["latest_frame_bytes"] = (
                                 frame_bytes  # Store the frame bytes
@@ -702,9 +738,14 @@ class FeedManager:
                                 if feed_id in self._feed_running_events:
                                     self._feed_running_events[feed_id].set()
 
+                    # Broadcast metrics and frame separately
                     await self._broadcast(
                         WebSocketMessageTypeEnum.FEED_METRICS,
                         {"feed_id": feed_id, "metrics": metrics},
+                    )
+                    await self._broadcast(
+                        WebSocketMessageTypeEnum.VIDEO_FRAME,
+                        {"feed_id": feed_id, "frame": frame_bytes},
                     )
 
                     if self._analytics_service:
@@ -733,7 +774,7 @@ class FeedManager:
                 else:
                     logger.warning(f"Result queue item feed_id mismatch for {feed_id}")
 
-                await asyncio.sleep(0.0001)
+                await asyncio.sleep(self._current_read_delay)
             except queue.Empty:
                 break
             except Exception as e:
@@ -784,8 +825,7 @@ class FeedManager:
                 processed_items = True
                 if self._analytics_service:
                     await self._analytics_service.save_vehicle_data(vehicle_data)
-                await asyncio.sleep(0.0001)
-            except queue.Empty:
+                await asyncio.sleep(self._current_read_delay)
                 break
             except Exception as e:
                 logger.error(
@@ -1133,6 +1173,7 @@ class FeedManager:
             vis_options,  # Pass default or dynamically configured options
             reduce_event,
             self._global_fps,
+            self._global_skip_factor, # New: Pass global skip factor
             None,  # Pass None for db_queue, DB handled centrally if needed or via results
             error_queue,
             entry.get("config_info"),  # Pass the feed's specific config_info
@@ -1372,7 +1413,70 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error waiting for result reader task: {e}")
 
+        # Wait for the skip factor adjustment task to finish
+        if self._skip_factor_adjustment_task:
+            try:
+                logger.debug("Waiting for skip factor adjustment task to finish...")
+                await asyncio.wait_for(self._skip_factor_adjustment_task, timeout=5.0)
+                logger.info("Skip factor adjustment task finished.")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Skip factor adjustment task did not finish within timeout during shutdown."
+                )
+            except Exception as e:
+                logger.error(f"Error waiting for skip factor adjustment task: {e}")
+
         logger.info("FeedManager shutdown complete.")
+
+    async def start_background_tasks(self):
+        """Starts the FeedManager's background tasks."""
+        self._skip_factor_adjustment_task = asyncio.create_task(self.adjust_global_skip_factor())
+        self.logger.info("FeedManager background tasks started.")
+
+    async def adjust_global_skip_factor(self):
+        """Periodically adjusts the global skip factor based on system load."""
+        cpu_threshold_high = self.config.get("performance", {}).get("cpu_threshold_high", 80) # %
+        cpu_threshold_low = self.config.get("performance", {}).get("cpu_threshold_low", 50) # %
+        mem_threshold_high = self.config.get("performance", {}).get("memory_threshold_high", 85) # %
+        mem_threshold_low = self.config.get("performance", {}).get("memory_threshold_low", 70) # %
+        
+        skip_factor_increase_step = self.config.get("performance", {}).get("skip_factor_increase_step", 0.1)
+        skip_factor_decrease_step = self.config.get("performance", {}).get("skip_factor_decrease_step", 0.05)
+        
+        min_global_skip_factor = self.config.get("performance", {}).get("min_global_skip_factor", 1.0)
+        max_global_skip_factor = self.config.get("performance", {}).get("max_global_skip_factor", 5.0)
+
+        while not self._stop_reader_flag:
+            try:
+                cpu_percent = psutil.cpu_percent(interval=1)
+                mem_percent = psutil.virtual_memory().percent
+
+                current_skip_factor = self._global_skip_factor.value
+                
+                # Increase skip factor if resources are high
+                if cpu_percent > cpu_threshold_high or mem_percent > mem_threshold_high:
+                    new_skip_factor = min(max_global_skip_factor, current_skip_factor + skip_factor_increase_step)
+                    if new_skip_factor != current_skip_factor:
+                        self._global_skip_factor.value = new_skip_factor
+                        logger.warning(f"Increasing global skip factor to {new_skip_factor:.2f} due to high resource usage (CPU: {cpu_percent}%, Mem: {mem_percent}%).")
+                        # After increasing skip factor, wait longer to allow queues to drain
+                        await asyncio.sleep(self.config.get("performance", {}).get("long_sleep_after_increase", 10))
+                # Decrease skip factor if resources are low and not at minimum
+                elif (cpu_percent < cpu_threshold_low and mem_percent < mem_threshold_low) and current_skip_factor > min_global_skip_factor:
+                    new_skip_factor = max(min_global_skip_factor, current_skip_factor - skip_factor_decrease_step)
+                    if new_skip_factor != current_skip_factor:
+                        self._global_skip_factor.value = new_skip_factor
+                        logger.info(f"Decreasing global skip factor to {new_skip_factor:.2f} due to low resource usage (CPU: {cpu_percent}%, Mem: {mem_percent}%).")
+                else:
+                    logger.debug(f"Current resource usage (CPU: {cpu_percent}%, Mem: {mem_percent}%) within thresholds. Skip factor remains {current_skip_factor:.2f}.")
+
+                await asyncio.sleep(self.config.get("performance", {}).get("skip_factor_adjustment_interval", 5)) # Original check interval
+            except Exception as e:
+                logger.error(f"Error in global skip factor adjustment: {e}", exc_info=True)
+                await asyncio.sleep(5) # Wait before retrying
+            except Exception as e:
+                logger.error(f"Error in global skip factor adjustment: {e}", exc_info=True)
+                await asyncio.sleep(5) # Wait before retrying
 
     # --- Sample Feed Management ---
 

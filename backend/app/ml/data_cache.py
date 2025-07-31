@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from collections import defaultdict
 
@@ -42,7 +42,7 @@ class TrafficDataCache:
         if not self.location_data[location_key]:
             return
 
-        cutoff_time = datetime.now() - timedelta(hours=self.max_history_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self.max_history_hours)
         self.location_data[location_key] = [
             point
             for point in self.location_data[location_key]
@@ -62,7 +62,7 @@ class TrafficDataCache:
         if hours is None:
             return data
 
-        cutoff_time = datetime.now() - timedelta(hours=hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
         return [point for point in data if point["timestamp"] > cutoff_time]
 
     def get_statistics(

@@ -253,35 +253,57 @@ feed_manager:
   db_write_interval: 0.5 # Seconds between batch writes to DB from queue
   error_check_interval: 5.0 # Seconds between checking worker error queues
 
+queue_log_interval: 120.0 # How often (seconds) to log the queue size
+
 # --- Video Input / Worker Configuration ---
 video_input:
   sample_video: C:/Users/HP/Desktop/R1v0.1/frontend/public/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
   webcam_index: 0 # Default index if source is "webcam" or "webcam:N" is invalid
   webcam_buffer_size: 20 # Camera buffer size (increase might help with frame drops on some systems)
   max_queue_size: 1000 # Max size for the frame queue between worker and manager
+  queue_put_timeout_ms: 1000 # Timeout in milliseconds for the FrameReader to put frames into the queue
+
+# --- Video Output Configuration ---
+video_output:
+  enabled: true
+  output_directory: ./data/processed_videos
+  codec: mp4v
+  fps: 30
 
 # --- Vehicle Detection (YOLO & Tracking) ---
 vehicle_detection:
   model_path: backend/models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
-  frame_resolution: [480, 360] # Target resolution for processing [width, height]
+  frame_resolution: [640, 480] # Target resolution for processing [width, height]
   vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
   confidence_threshold: 0.4 # Minimum detection confidence
   proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
   track_timeout: 10 # Seconds before a track is considered stale and removed
   max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 256 # Image size for YOLO model inference
-  skip_frames: 2 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+  yolo_imgsz: 640 # Image size for YOLO model inference
+  skip_frames: 3 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
 analytics_service:
   traffic_predictor:
     model_path: ./models/traffic_predictor_model.h5 # Path to the traffic prediction model
 
-  frame_resolution: [480, 360] # Target resolution for processing [width, height]
+  frame_resolution: [640, 480] # Target resolution for processing [width, height]
+  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
+  confidence_threshold: 0.25 # Minimum detection confidence
+  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
+  track_timeout: 10 # Seconds before a track is considered stale and removed
+  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
+  yolo_imgsz: 640 # Image size for YOLO model inference
+  skip_frames: 3 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+analytics_service:
+  traffic_predictor:
+    model_path: ./models/traffic_predictor_model.h5 # Path to the traffic prediction model
+
+  frame_resolution: [640, 480] # Target resolution for processing [width, height]
   vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
   confidence_threshold: 0.4 # Minimum detection confidence
   proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
   track_timeout: 10 # Seconds before a track is considered stale and removed
   max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 256 # Image size for YOLO model inference
+  yolo_imgsz: 640 # Image size for YOLO model inference
   skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
   vehicle_type_map:
     2: car
@@ -352,6 +374,15 @@ performance:
   gpu_acceleration: false # Enable GPU for YOLO detection/tracking if available
   memory_limit_percent: 85 # Max virtual memory % before blocking new feeds
   cpu_limit_percent: 90 # Optional: Max CPU % before potentially reducing worker FPS
+  # Dynamic Frame Skipping Configuration
+  min_global_skip_factor: 1.0 # Minimum value for the global skip factor
+  max_global_skip_factor: 3.0 # Maximum value for the global skip factor
+  skip_factor_increase_step: 0.1 # How much to increase the skip factor when under pressure
+  skip_factor_decrease_step: 0.05 # How much to decrease the skip factor when load is low
+  cpu_threshold_for_skip_increase: 80 # CPU % at which to increase skip factor
+  queue_fullness_threshold_for_skip_increase: 0.7 # Percentage of queue fullness (0.0-1.0) at which to increase skip factor
+  skip_factor_adjustment_interval: 360.0 # How often (seconds) the FeedManager adjusts the skip factor
+  long_sleep_after_increase: 10 # Seconds to sleep after increasing skip factor to allow system to stabilize
 
 # --- Visualization ---
 # Default set of visualization options enabled for new feeds

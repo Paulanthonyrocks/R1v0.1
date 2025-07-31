@@ -83,8 +83,8 @@ class TrafficSignalService:
             type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE, data=ws_payload
         )
         topic = f"signal:{signal_id}"
-        await self._connection_manager.broadcast(
-            message, specific_topic="signal_updates"
+        await self._connection_manager.broadcast_to_topic(
+            message, topic="signal_updates"
         )
         logger.debug(
             f"Broadcasted signal state update for {signal_id} to topic {topic}"

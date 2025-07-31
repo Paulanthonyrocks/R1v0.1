@@ -65,7 +65,7 @@ def generate_analysis_report(
 
         # Prepare report data
         report_data = {
-            "analysis_timestamp": datetime.now().isoformat(),
+            "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
             "original_image_ref": base_filename,
             "pci_score": round(pci_score, 2),
             "distresses": distresses,

@@ -9,12 +9,42 @@ interface KpiData {
 }
 
 const useVideoSocket = (streamId: string, token: string | null) => {
-  const [kpis, setKpis] = useState<KpiData | null>(null);
+  const [frameData, setFrameData] = useState<Uint8Array | null>(null);
+  const [metrics, setMetrics] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [frameRate, setFrameRate] = useState<number>(0);
+  const lastFrameTimeRef = useRef<number>(0);
 
-  const handleKpiUpdate = useCallback((data: KpiData) => {
-    setKpis(data);
+  const handleFrame = useCallback((data: { frame: string }) => {
+    // Assuming data.frame is a base64 encoded string
+    const byteCharacters = atob(data.frame);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    setFrameData(new Uint8Array(byteNumbers));
+
+    const now = performance.now();
+    if (lastFrameTimeRef.current !== 0) {
+      const frameTime = now - lastFrameTimeRef.current;
+      setFrameRate(1000 / frameTime);
+    }
+    lastFrameTimeRef.current = now;
+  }, []);
+
+  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array) => {
+    const img = new Image();
+    const blob = new Blob([frame], { type: 'image/jpeg' });
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      URL.revokeObjectURL(img.src); // Clean up the object URL
+    };
+    img.src = URL.createObjectURL(blob);
+  }, []);
+
+  const handleMetrics = useCallback((data: any) => {
+    setMetrics(data);
   }, []);
 
   useEffect(() => {
@@ -33,15 +63,17 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     connect();
 
-    wsClient.subscribe(WebSocketMessageType.METRICS_UPDATE, handleKpiUpdate);
+    wsClient.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
+    wsClient.subscribe(WebSocketMessageType.FEED_METRICS, handleMetrics);
 
     return () => {
-      wsClient.unsubscribe(WebSocketMessageType.METRICS_UPDATE, handleKpiUpdate);
+      wsClient.unsubscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
+      wsClient.unsubscribe(WebSocketMessageType.FEED_METRICS, handleMetrics);
       wsClient.disconnect();
     };
-  }, [streamId, handleKpiUpdate, token]);
+  }, [streamId, handleFrame, handleMetrics, token]);
 
-  return { kpis, isConnected, error };
+  return { frameData, metrics, isConnected, error, drawFrame, frameRate };
 };
 
 export default useVideoSocket;

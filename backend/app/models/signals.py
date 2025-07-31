@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 
 from app.models.traffic import LocationModel  # For SignalState location
@@ -55,7 +55,7 @@ class SignalControlCommandResponse(BaseModel):
         description="Detailed message about the outcome",
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of the command response (UTC)",
     )
     details: Optional[Dict[str, Any]] = Field(

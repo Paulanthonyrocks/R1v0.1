@@ -73,7 +73,7 @@ async def analyze_pavement_image(
     Processes the image, detects distresses, measures them, calculates PCI, and generates a report.
     """
     try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         base_filename = f"{timestamp}_{Path(image_filename).stem}"
 
         logger.info(

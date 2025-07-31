@@ -100,11 +100,11 @@ class AnalyticsService:
             "timestamp", datetime.now(timezone.utc)
         )  # Use current UTC time if not provided
 
-        if latitude is not None and longitude is not None:
+        if latitude is not None and longitude is not None and (latitude != 0.0 or longitude != 0.0):
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)
         else:
             logger.warning(
-                f"Metrics for feed {feed_id} missing latitude or longitude. Cannot add to TrafficDataCache."
+                f"Metrics for feed {feed_id} missing or invalid latitude/longitude (0.0, 0.0). Cannot add to TrafficDataCache."
             )
 
     async def save_vehicle_data(self, vehicle_data: Dict[str, Any]):
@@ -280,8 +280,8 @@ class AnalyticsService:
         message = WebSocketMessage(
             type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification
         )
-        await self._connection_manager.broadcast(
-            message, specific_topic="operational_alerts"
+        await self._connection_manager.broadcast_to_topic(
+            message, topic="operational_alerts"
         )
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):
@@ -358,7 +358,7 @@ class AnalyticsService:
                     vehicle_count=node.get("vehicle_count"),
                     average_speed=node.get("average_speed"),
                     timestamp=node.get(
-                        "timestamp", datetime.utcnow()
+                        "timestamp", datetime.now(timezone.utc)
                     ),  # Ensure timestamp is present
                 )
                 for node in node_data_list
@@ -367,8 +367,8 @@ class AnalyticsService:
             message = WebSocketMessage(
                 type=WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE, data=payload
             )
-            await self._connection_manager.broadcast(
-                message, specific_topic="node_congestion"
+            await self._connection_manager.broadcast_to_topic(
+                message, topic="node_congestion"
             )
             logger.debug(
                 f"Broadcasted {len(nodes_for_broadcast)} node congestion updates."

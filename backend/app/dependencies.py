@@ -175,6 +175,4 @@ async def get_current_active_user_optional(
 async def get_token_from_query(websocket: WebSocket) -> Optional[str]:
     """Dependency to get the token from the query parameter for WebSocket authentication."""
     token = websocket.query_params.get("token")
-    if token and token.startswith("?token="):
-        token = token.split("?token=", 1)[1]
     return token

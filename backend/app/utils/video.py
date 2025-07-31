@@ -65,11 +65,13 @@ class FrameReader:
         buffer_size: int = 1,
         target_fps: Optional[int] = None,
         max_queue_size: int = 100,
+        queue_put_timeout: float = 1.0, # New: Timeout for putting frames into the queue
     ):
         self.source_name = str(source)
         self.cap = None
         self.buffer_size = buffer_size
         self.target_fps = target_fps
+        self.queue_put_timeout = queue_put_timeout
         self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(
             maxsize=max_queue_size
         )
@@ -120,7 +122,7 @@ class FrameReader:
     @property
     def isOpened(self) -> bool:
         """Returns True if the video capture is opened, False otherwise."""
-        return self.cap.isOpened()
+        return self.cap.isOpened() if self.cap else False
 
     @property
     def end_of_video(self) -> bool:
@@ -133,7 +135,7 @@ class FrameReader:
             self._end_of_video_flag = value
 
     def _update_loop(self):
-        max_read_fails = 100
+        max_read_fails = 10 # Reduced to 10 tries
         consecutive_fails = 0
         last_read_time = time.monotonic()
 
@@ -160,7 +162,7 @@ class FrameReader:
                         try:
                             # Wait with a timeout to avoid blocking indefinitely
                             self.frame_queue.put(
-                                (self.frame_index, frame.copy()), timeout=0.1
+                                (self.frame_index, frame), timeout=self.queue_put_timeout
                             )
                             self.frame_index += 1
                         except queue.Full:
@@ -171,7 +173,7 @@ class FrameReader:
                             pass
                     else:
                         # Put a copy of the frame into the queue
-                        self.frame_queue.put((self.frame_index, frame.copy()))
+                        self.frame_queue.put((self.frame_index, frame))
                         self.frame_index += 1
 
                 else:  # ret is False

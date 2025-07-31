@@ -244,7 +244,7 @@ class UserPreferenceLearner:
             profile.road_type_preferences = road_type_preferences
             profile.time_patterns = time_patterns
             profile.routing_features = routing_features
-            profile.last_updated = datetime.utcnow()
+            profile.last_updated = datetime.now(timezone.utc)
 
             return profile
 

@@ -28,7 +28,7 @@ class RouteOptimizationService:
         """Get an optimized route with predictions and recommendations"""
         try:
             if departure_time is None:
-                departure_time = datetime.now()
+                departure_time = datetime.now(timezone.utc)
 
             # Get weather and event impacts
             weather_impact = await self.weather_service.get_weather_impact(

@@ -184,59 +184,66 @@ def visualize_data(
             "Tracked Vehicles" in visualization_options
             or "Vehicle Data" in visualization_options
         ):
-            speed_limit = config.get("speed_limit", 60)  # Default speed limit
-            color_normal = (0, 255, 0)  # Green
-            color_warning = (0, 255, 255)  # Yellow
-            color_speeding = (0, 0, 255)  # Red
+            # Define colors based on behavior
+            color_map = {
+                "moving": (0, 255, 0),  # Green
+                "stopped": (0, 0, 255),  # Red
+                "speeding": (255, 0, 0),  # Blue
+                "accelerating": (255, 255, 0),  # Yellow
+                "decelerating": (0, 255, 255),  # Cyan
+                "lane_changing": (255, 0, 255),  # Magenta
+                "unknown": (128, 128, 128),  # Gray
+            }
 
             for veh_id, data in tracked_vehicles.items():
                 bbox = data.get("bbox")
                 speed = data.get("speed", 0.0)
                 plate = data.get("license_plate", "")
-                class_id = data.get("class_id", -1)  # Use -1 for unknown if not present
-                class_name = TrafficMonitor.vehicle_type_map.get(
-                    class_id, "?"
-                )  # Default to '?'
+                class_id = data.get("class_id", -1)
+                class_name = TrafficMonitor.vehicle_type_map.get(class_id, "?")
+                behavior = data.get("behavior", "unknown")
 
                 if bbox:
                     x1, y1, x2, y2 = map(int, bbox)
-                    color = (
-                        color_speeding
-                        if speed > speed_limit
-                        else (
-                            color_warning if speed > speed_limit * 0.8 else color_normal
-                        )
-                    )
+                    color = color_map.get(behavior, (128, 128, 128))
 
                     if "Tracked Vehicles" in visualization_options:
-                        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 1) # Thinner border
 
                     if "Vehicle Data" in visualization_options:
                         lines = [f"ID:{veh_id}({class_name})", f"Spd:{speed:.1f}km/h"]
-                        line_height = 15  # Approximate height for text
                         if plate:
                             lines.append(f"LP:{plate}")
 
+                        font_scale = 0.3
+                        font_thickness = 1
+                        line_height = 10
+
                         # Position text: above bbox if space, else below
-                        text_y = (
-                            y1 - 7
-                            if y1 - 7 >= line_height * len(lines)
+                        text_y_start = (
+                            y1 - 5 - (len(lines) * line_height)
+                            if y1 - 5 - (len(lines) * line_height) >= 0
                             else y2 + line_height
                         )
+
                         for i, line_text in enumerate(lines):
+                            (text_width, _), _ = cv2.getTextSize(
+                                line_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
+                            )
+                            text_x_center = x1 + (x2 - x1 - text_width) // 2 # Center horizontally
                             cv2.putText(
                                 vis_frame,
                                 line_text,
-                                (x1 + 5, text_y + i * line_height),
+                                (text_x_center, text_y_start + i * line_height),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                0.4,
+                                font_scale,
                                 color,
-                                1,
+                                font_thickness,
                                 cv2.LINE_AA,
                             )
 
         # Banner for general info
-        banner_height = 25
+        banner_height = 30 # Increased height slightly for better fit
         banner_text = f"{time.strftime('%Y-%m-%d %H:%M:%S')} | Feed: {feed_id} | Vehicles: {traffic_metrics.get('total_vehicles', 0)} | Avg Speed: {traffic_metrics.get('average_speed_kmh', 0.0):.1f} km/h"
         if traffic_metrics.get("is_congested", False):
             banner_text += " | CONGESTED"
@@ -245,12 +252,20 @@ def visualize_data(
         cv2.rectangle(
             vis_frame, (0, 0), (w, banner_height), (0, 0, 0, 180), -1
         )  # Black with alpha
+
+        # Calculate text size and position for centering
+        (text_width, text_height), baseline = cv2.getTextSize(
+            banner_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1
+        )
+        text_x = (w - text_width) // 2 # Center horizontally
+        text_y = (banner_height + text_height) // 2 # Center vertically
+
         cv2.putText(
             vis_frame,
             banner_text,
-            (10, banner_height - 8),
+            (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.4, # Slightly reduced font size
             (255, 255, 255),
             1,
             cv2.LINE_AA,

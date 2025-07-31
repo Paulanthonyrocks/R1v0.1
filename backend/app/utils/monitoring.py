@@ -146,10 +146,10 @@ class TrafficMonitor:
             congestion_score = round(congestion_score, 1)
 
         return {
-            "vehicle_count": total_vehicles,  # Renamed from total_vehicles
+            "total_vehicles": total_vehicles,
             "stopped_vehicles": stopped_count,
             "speeding_vehicles": speeding_count,
-            "average_speed": round(avg_speed_kmh, 1),  # Renamed from average_speed_kmh
+            "average_speed_kmh": round(avg_speed_kmh, 1),
             "congestion_level_percent": round(congestion_lvl_percent, 1),
             "is_congested": is_congested,
             "congestion_score": congestion_score,  # Added congestion_score

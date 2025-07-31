@@ -1,4 +1,5 @@
 import { TokenManager } from '../auth/TokenManager';
+import { errorNotifier } from '../utils/errorNotifier';
 
 // Utility function to get or create a client ID
 const getOrCreateClientId = () => {
@@ -57,6 +58,7 @@ export enum WebSocketMessageType {
     GLOBAL_REALTIME_METRICS_UPDATE = 'global_realtime_metrics_update',
     NEW_ALERT = 'new_alert',
     SIGNAL_UPDATE = 'signal_update',
+    VIDEO_FRAME = 'video_frame',
     FEED_STATUS_UPDATE = 'feed_status_update',
     GENERAL_NOTIFICATION = 'general_notification',
     ERROR_NOTIFICATION = 'error_notification',
@@ -69,7 +71,8 @@ export enum WebSocketMessageType {
     AUTH_SUCCESS = 'auth_success',
     AUTH_FAILURE = 'auth_failure',
     // Special type for internal ping messages that will be translated to pong responses
-    INTERNAL_PING = '__internal_ping'
+    INTERNAL_PING = '__internal_ping',
+    PING = 'ping'
 }
 
 export interface WebSocketMessage<T = unknown> {
@@ -98,6 +101,7 @@ export class WebSocketClient implements IWebSocketClient {
     private tokenManager: TokenManager;
     private url: string;
     private messageQueue: WebSocketMessage[] = [];
+    private maxMessageQueueSize = 100; // Limit the queue size to 100 messages
     private isConnecting = false;
     private pingInterval: NodeJS.Timeout | null = null;
     private lastPongTime: number = Date.now();
@@ -114,10 +118,10 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private async handleTokenRefresh(token: string): Promise<void> {
-        // If we have an active connection, need to reconnect with new token
-        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-            await this.reconnectWithNewToken(token);
-        }
+        // Always attempt to reconnect with the new token, regardless of current WebSocket state.
+        // This ensures that even if the WebSocket was closing or closed, it tries to re-establish
+        // with the fresh token.
+        await this.reconnectWithNewToken(token);
     }
 
     public async reconnectWithNewToken(token: string): Promise<void> {
@@ -138,20 +142,26 @@ export class WebSocketClient implements IWebSocketClient {
         if (this.isConnecting) return;
         this.isConnecting = true;
 
+        // If no token is provided, try to get it from TokenManager
         if (!token) {
-            this.notifyError('auth_error', 'Cannot connect: No valid authentication token available.');
-            this.isConnecting = false;
-            return;
+            token = this.tokenManager.getCurrentToken();
+            if (!token) {
+                // If still no token, wait and retry
+                console.warn('No token available for WebSocket connection. Retrying in 2 seconds...');
+                this.isConnecting = false; // Allow new connection attempts
+                setTimeout(() => this.connect(null), 2000); // Retry after 2 seconds
+                return;
+            }
         }
 
         try {
             const clientId = getOrCreateClientId();
             const fullUrl = `${this.url}/${clientId}?token=${token}`;
-            console.log('Attempting to connect to WebSocket:', fullUrl); // Add this line
+            console.log('Attempting to connect to WebSocket:', fullUrl);
             this.ws = new WebSocket(fullUrl);
 
             this.ws.onopen = () => {
-                console.log('WebSocket opened.');
+                console.log('WebSocket opened. Client ID:', clientId);
                 this.isConnecting = false;
                 this.reconnectAttempts = 0;
                 this.reconnectDelay = 1000;
@@ -167,6 +177,7 @@ export class WebSocketClient implements IWebSocketClient {
             };
 
             this.ws.onclose = async (event: CloseEvent) => {
+                console.log(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'No reason'}, WasClean: ${event.wasClean}`);
                 this.isConnecting = false;
                 this.stopPingInterval();
                 
@@ -215,6 +226,7 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private startPingInterval(): void {
+        console.log('Starting ping interval.');
         this.stopPingInterval();
         this.pingInterval = setInterval(() => {
             const now = Date.now();
@@ -239,6 +251,7 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private handleConnectionTimeout(): void {
+        console.log('Connection timeout detected. Closing WebSocket.');
         if (this.ws) {
             this.ws.close();
             // Reconnection will be handled by onclose handler
@@ -314,6 +327,11 @@ export class WebSocketClient implements IWebSocketClient {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(messageToSend));
         } else {
+            // If queue is full, remove the oldest message
+            if (this.messageQueue.length >= this.maxMessageQueueSize) {
+                this.messageQueue.shift(); // Remove the oldest message
+                console.warn('WebSocket message queue full. Dropping oldest message.');
+            }
             // Queue message if not connected
             this.messageQueue.push(messageToSend);
         }
@@ -341,12 +359,26 @@ export class WebSocketClient implements IWebSocketClient {
             }
         });
 
+        // Display user-friendly message using errorNotifier
+        let userMessage = message;
+        if (type === 'auth_error') {
+            userMessage = 'Authentication failed. Please log in again.';
+        } else if (type === 'max_reconnect_attempts') {
+            userMessage = 'Lost connection to the server. Please refresh the page.';
+        } else if (type === 'connection_closed') {
+            userMessage = 'Connection to server lost. Attempting to reconnect...';
+        } else if (type === 'connection_error') {
+            userMessage = 'Failed to connect to the server. Please check your network.';
+        }
+        errorNotifier.error(userMessage);
+
         // Also emit as an error notification message
         this.send({
             type: WebSocketMessageType.ERROR_NOTIFICATION,
             data: {
                 error_code: type,
                 message: message,
+                details: type === 'connection_error' ? message : undefined, // Include message as details for connection_error
                 timestamp: new Date().toISOString()
             } as ErrorNotification
         });

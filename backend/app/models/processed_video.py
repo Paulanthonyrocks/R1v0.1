@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -12,7 +12,7 @@ class ProcessedVideo(Base):
     stream_id = Column(String, index=True, nullable=False)
     file_path = Column(String, nullable=False)
     start_time = Column(DateTime, default=datetime.now, nullable=False)
-    end_time = Column(DateTime, default=datetime.now, nullable=False)
+    end_time = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     duration = Column(Float, nullable=False)
 
     def __repr__(self):

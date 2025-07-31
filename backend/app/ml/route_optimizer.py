@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from dataclasses import dataclass
 import networkx as nx
@@ -91,7 +91,7 @@ class RouteOptimizer:
             "average_speed": 40.0,  # Placeholder
             "congestion_level": 3.0,  # Placeholder
             "congestion_score": 50.0,  # Placeholder
-            "processing_timestamp": datetime.now(),
+            "processing_timestamp": datetime.now(timezone.utc),
             "status": "simulated",
             "hour_of_day": prediction_time.hour,
             "day_of_week": prediction_time.weekday(),

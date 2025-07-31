@@ -1,22 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2, RotateCw } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw, Settings } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
-import { useRealtimeUpdates } from '@/lib/hook';
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoStream from '@/lib/useVideoStream';
+import StreamOverlayControls from './StreamOverlayControls'; // Import the new component
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
-    const { id, name: feedName, source, status, fps } = feed;
+    const { id, name: feedName, source, status } = feed;
+    const { videoUrl, isLoading, error, isLive, kpis, canvasRef, frameRate: fps } = useVideoStream({
+        streamId: id,
+        forceSample: false,
+        streamType: 'websocket'
+    });
     const component_name = feedName ?? `Feed ${id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
 
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    
     const { sendMessage, isConnected } = useRealtimeUpdates();
-    const { videoUrl, isLoading, error, isLive, kpis } = useVideoStream({ streamId: id });
+    
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
+    const [showOverlays, setShowOverlays] = useState<boolean>(true);
+    const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
+    const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
+    const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); // New state for panel visibility
 
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
@@ -34,15 +44,24 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         // Clear canvas before drawing new boxes
         context.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (kpis && kpis.bounding_boxes) {
-            context.strokeStyle = '#FF0000'; // Red color for boxes
-            context.lineWidth = 2;
+        if (showOverlays && kpis && kpis.vehicles) {
+            context.font = '10px monospace';
+            context.fillStyle = '#00FF00'; // Green color for text
 
-            kpis.bounding_boxes.forEach((box: { x: number; y: number; width: number; height: number; }) => {
-                context.strokeRect(box.x, box.y, box.width, box.height);
+            kpis.vehicles.forEach((vehicle: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
+                if (showBoundingBoxes) {
+                    context.strokeStyle = '#FF0000'; // Red color for boxes
+                    context.lineWidth = 2;
+                    context.strokeRect(vehicle.x1, vehicle.y1, vehicle.x2 - vehicle.x1, vehicle.y2 - vehicle.y1);
+                }
+
+                if (showVehicleDetails) {
+                    context.fillText(`ID: ${vehicle.id}`, vehicle.x1, vehicle.y1 - 10);
+                    context.fillText(`SPD: ${vehicle.speed} KM/H`, vehicle.x1, vehicle.y1 - 25);
+                }
             });
         }
-    }, [kpis]);
+    }, [kpis, showOverlays, showBoundingBoxes, showVehicleDetails]);
 
     const toggleFeed = () => {
         if (isToggling || !isConnected) {
@@ -77,11 +96,8 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
             tabIndex={0}
         >
             <div className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden">
-                {videoUrl ? (
-                    <>
-                        <img src={videoUrl} alt={`${feedName} Feed`} className="w-full h-full object-cover image-rendering-pixelated filter-contrast-125" />
-                        <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full" />
-                    </>
+                {isLive ? (
+                    <canvas ref={canvasRef} className="w-full h-full object-cover image-rendering-pixelated filter-contrast-125" width="640" height="480" />
                 ) : (
                     <div className="absolute inset-0 flex items-center justify-center opacity-30">
                         <Eye className="text-lcd-bg group-hover:text-lcd-text text-4xl" />
@@ -121,7 +137,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                 {kpis && isLive && !isToggling && !isLoading && !error && (
                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow">
                         <span>VEH: {kpis.vehicle_count ?? '--'}</span>
-                        <span>AVG SPEED: {kpis.motion_level ?? '--'} KM/H</span>
+                        <span>AVG SPEED: {kpis.avg_speed ?? '--'} KM/H</span>
                     </div>
                 )}
                 {!isToggling && !isLoading && (
@@ -133,6 +149,30 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <RotateCw className="h-4 w-4" />
                     </button>)
                 }
+                {/* New: Overlay Controls Button */}
+                {!isToggling && !isLoading && !error && (
+                    <button
+                        className="absolute top-1.5 right-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
+                        onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
+                        title="Overlay Controls"
+                    >
+                        <Settings className="h-4 w-4" />
+                    </button>
+                )}
+
+                {/* New: Overlay Controls Panel */}
+                {showControlsPanel && (
+                    <div className="absolute top-10 right-1.5 z-30">
+                        <StreamOverlayControls
+                            showOverlays={showOverlays}
+                            setShowOverlays={setShowOverlays}
+                            showBoundingBoxes={showBoundingBoxes}
+                            setShowBoundingBoxes={setShowBoundingBoxes}
+                            showVehicleDetails={showVehicleDetails}
+                            setShowVehicleDetails={setShowVehicleDetails}
+                        />
+                    </div>
+                )}
             </div>
             <CardContent className="p-2 rounded-none">
                 <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>
