@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, HTTPException, WebSocket, Request
 from app.exceptions import (
     ResourceNotFound,
     OperationFailed,
@@ -16,7 +16,7 @@ from app.exceptions import (
     Unauthorized,
     Forbidden,
 )
-from starlette.websockets import WebSocketState
+
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
 from fastapi.responses import JSONResponse
@@ -50,14 +50,11 @@ from .services import initialize_services, get_connection_manager, get_analytics
 from app.utils.service_getters import (
     get_feed_manager,
 )  # Import get_feed_manager from the new utility file
-from app.models.websocket import (
-    WebSocketMessage,
-    WebSocketMessageTypeEnum,
-    ErrorNotification,
-)  # Added imports
+
 from app.tasks.prediction_scheduler import (
     PredictionScheduler,
 )  # Import the new scheduler
+from app.utils.file_watcher import FileSystemWatcher # Import the new file watcher
 
 # Logging will be reconfigured by initialize_config
 logger = logging.getLogger("main")
@@ -69,18 +66,7 @@ app = FastAPI(
     description="API for managing traffic analysis feeds, data, and real-time updates.",
 )
 
-# --- Initialize Firebase ---
-# This function is not currently used in startup_event, but keeping it for reference
-# def initialize_firebase():
-#     config = get_current_config()
-#     if config.get("firebase", {}).get("auth_enabled", False):
-#         try:
-#             cred = credentials.Certificate(config["firebase"]["service_account_path"])
-#             firebase_admin.initialize_app(cred)
-#             logger.info("Firebase initialized successfully")
-#         except Exception as e:
-#             logger.error(f"Failed to initialize Firebase: {e}")
-#             raise
+
 
 
 # --- Exception Handlers ---
@@ -229,13 +215,13 @@ async def startup_event():
     # 3. Initialize Database
     try:
         logging.getLogger("app.utils.database").info(
-            "SQLite database path configured to: C:/Users/HP/Desktop/R1v0.1/backend/data/vehicle_data.db"
+            f"SQLite database path configured to: {loaded_config['database']['db_path']}"
         )
         logging.getLogger("app.utils.database").info(
             "MongoDB not fully configured (URI or database_name missing). MongoDB will not be used."
         )
         logging.getLogger("app.utils.database").info(
-            "Initializing SQLite DB schema at C:/Users/HP/Desktop/R1v0.1/backend/data/vehicle_data.db..."
+            "Initializing SQLite DB schema at {loaded_config['database']['db_path']}..."
         )
         await initialize_database(loaded_config)
         logging.getLogger("app.utils.database").info(
@@ -284,7 +270,11 @@ async def startup_event():
             logger.info(
                 "Prediction scheduler initialized and injected into FeedManager."
             )
-            await fm.start_processing() # Start processing after initialization
+            # Check config to see if prediction scheduler should be started
+            if loaded_config.get("prediction_scheduler", {}).get("enabled", True):
+                await fm.start_processing() # Start processing after initialization
+            else:
+                logger.info("Prediction scheduler is disabled in config. Skipping startup.")
         else:
             logger.warning(
                 "AnalyticsService not available, prediction scheduler not initialized."
@@ -292,6 +282,34 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Prediction scheduler initialization failed: {e}", exc_info=True)
         raise RuntimeError(f"Prediction scheduler initialization failed: {e}") from e
+
+    # 6. Initialize and Start File System Watcher (Optional)
+    app.state.file_watcher = None
+    if loaded_config.get("file_watcher", {}).get("enabled", False):
+        watch_directory = loaded_config["file_watcher"]["watch_directory"]
+        # Resolve relative path to absolute path based on backend directory
+        abs_watch_directory = (Path(__file__).parent.parent / watch_directory).resolve()
+        
+        # Ensure the directory exists
+        if not abs_watch_directory.is_dir():
+            logger.warning(f"File watcher directory does not exist: {abs_watch_directory}. Creating it.")
+            abs_watch_directory.mkdir(parents=True, exist_ok=True)
+
+        # Define a wrapper for the async callback
+        def new_video_callback_wrapper(video_path: str):
+            """Synchronous wrapper to schedule the async callback."""
+            logger.info(f"File watcher triggered for new video: {video_path}. Scheduling for processing.")
+            asyncio.create_task(fm.add_dynamic_sample_feed(video_path))
+
+        try:
+            app.state.file_watcher = FileSystemWatcher(
+                path=str(abs_watch_directory),
+                on_new_video_callback=new_video_callback_wrapper
+            )
+            app.state.file_watcher.start()
+            logger.info(f"File system watcher started for directory: {abs_watch_directory}")
+        except Exception as e:
+            logger.error(f"Failed to start file system watcher: {e}", exc_info=True)
 
     logger.info("Application startup complete.")
 
@@ -301,6 +319,8 @@ async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
     fm = get_feed_manager()
     await fm.shutdown()
+    if app.state.file_watcher:
+        app.state.file_watcher.stop()
     logging.getLogger("app.utils.database").info("DatabaseManager close called.")
     logging.getLogger("app.utils.database").info(
         "MongoDB client was not initialized or already closed."
@@ -317,6 +337,7 @@ async def shutdown_event():
 origins = [
     "http://localhost",
     "http://localhost:3000",  # Frontend port
+    "https://*.ngrok-free.app", # Allow ngrok origins
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -345,7 +366,7 @@ try:
     app.include_router(video.router, prefix="/api/v1", tags=["Video"])
     app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
     app.include_router(
-        personalized_routes.router, prefix="/api/routes", tags=["personalized-routing"]
+        personalized_routes.router, prefix="/api/v1/routes", tags=["personalized-routing"]
     )
     app.include_router(api, prefix="/api/v1", tags=["API"])
     # Register weather and events routers
@@ -407,37 +428,36 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
     await websocket.close(code=1000)
 
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(
-    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
-):
+async def _handle_websocket_connection(websocket: WebSocket, client_id: str, token: str, endpoint_prefix: str = ""):
     """
-    Handles WebSocket connections.
+    Handles WebSocket connections, encapsulating common logic for authentication and message listening.
 
-    Authentication is performed at connection time using a token from the query parameters.
+    Note on Security:
+    Passing tokens in query parameters is common for browser-based WebSocket clients due to limitations
+    in the WebSocket API. However, be aware that this can expose the token in server logs, browser history,
+    and network appliances. For server-to-server WebSocket communication, using the Authorization header
+    is the recommended approach.
     """
     try:
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
         user_data = await verify_firebase_token(token)
-        # Add logging after token verification
-        logger.info(f"[WS {client_id}] Token verified. User data: {user_data}")
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Token verified. User data: {user_data}")
         logger.info(
-            f"WebSocket connection attempt by authenticated user: {user_data.get('email')}"
+            f"[{endpoint_prefix}WS {client_id}] Connection attempt by authenticated user: {user_data.get('email')}"
         )
     except HTTPException as e:
         logger.warning(
-            f"WebSocket authentication failed for client {client_id}: {e.detail}"
+            f"[{endpoint_prefix}WS {client_id}] Authentication failed: {e.detail}"
         )
         await websocket.close(code=e.status_code, reason=e.detail)
-        # Add logging before returning on auth failure
-        logger.info(f"[WS {client_id}] Authentication failed, closing connection.")
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Authentication failed, closing connection.")
         return
-    # Retrieve manager from app.state, which is set during startup
+
     manager = websocket.app.state.connection_manager
     if manager is None:
         logger.error(
-            f"WebSocket connection for {client_id} rejected: ConnectionManager not initialized in app.state."
+            f"[{endpoint_prefix}WS {client_id}] Connection rejected: ConnectionManager not initialized in app.state."
         )
         await websocket.close(
             code=1011, reason="ConnectionManager not initialized in app.state"
@@ -445,87 +465,45 @@ async def websocket_endpoint(
         return
 
     await websocket.accept()
-    # Add logging after accepting connection
-    logger.info(f"[WS {client_id}] WebSocket connection accepted.")
+    logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.")
 
-    # Create the ActiveWebSocketConnection instance
-    logger.info(f"[WS {client_id}] Calling manager.connect.")
-    await manager.connect(websocket, client_id, user_data)
-    # At this point, manager.active_connections[client_id] should be the ActiveWebSocketConnection instance
-    # However, direct access might not be needed here if all logic is in ActiveWebSocketConnection
-
-    active_connection = manager.active_connections.get(client_id)
-    if (
-        not active_connection
-    ):  # Should not happen if manager.connect succeeded and didn't throw error
-        logger.error(
-            f"Failed to establish ActiveWebSocketConnection for {client_id} post-connect. Closing."
-        )
-        try:
-            await websocket.close(code=1011, reason="Internal connection setup error")
-        except Exception:
-            pass  # Already trying to close
-        return
-
-    # Add logging after successful connection establishment
-    logger.info(f"[WS {client_id}] manager.connect finished.")
-    logger.info(f"Client {client_id} WebSocket connection established.")
-
-    await active_connection.listen_for_messages()
-
-    # The finally block in listen_for_messages will handle cleanup
-    logger.info(f"WebSocket connection for client {client_id} is ending.")
-
-
-@app.websocket("/api/v1/ws/{client_id}")
-async def websocket_endpoint_v1(
-    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
-):
-    # Reuse the same logic as /ws/{client_id}
-    try:
-        if not token:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        user_data = await verify_firebase_token(token)
-        logger.info(f"[WS v1 {client_id}] Token verified. User data: {user_data}")
-        logger.info(
-            f"WebSocket v1 connection attempt by authenticated user: {user_data.get('email')}"
-        )
-    except HTTPException as e:
-        logger.warning(
-            f"WebSocket v1 authentication failed for client {client_id}: {e.detail}"
-        )
-        await websocket.close(code=e.status_code, reason=e.detail)
-        logger.info(f"[WS v1 {client_id}] Authentication failed, closing connection.")
-        return
-    manager = websocket.app.state.connection_manager
-    if manager is None:
-        logger.error(
-            f"WebSocket v1 connection for {client_id} rejected: ConnectionManager not initialized in app.state."
-        )
-        await websocket.close(
-            code=1011, reason="ConnectionManager not initialized in app.state"
-        )
-        return
-    await websocket.accept()
-    await asyncio.sleep(0.01) # Give the WebSocket a moment to fully establish
-    logger.info(f"[WS v1 {client_id}] WebSocket connection accepted.")
     await manager.connect(websocket, client_id, user_data)
     active_connection = manager.active_connections.get(client_id)
     if not active_connection:
         logger.error(
-            f"Failed to establish ActiveWebSocketConnection for {client_id} post-connect. Closing."
+            f"[{endpoint_prefix}WS {client_id}] Failed to establish ActiveWebSocketConnection post-connect. Closing."
         )
         try:
             await websocket.close(code=1011, reason="Internal connection setup error")
         except Exception:
             pass
         return
-    logger.info(f"[WS v1 {client_id}] manager.connect finished.")
-    logger.info(f"Client {client_id} WebSocket v1 connection established.")
-    await active_connection.listen_for_messages()
 
-    # The finally block in listen_for_messages will handle cleanup
-    logger.info(f"WebSocket v1 connection for client {client_id} is ending.")
+    logger.info(f"[{endpoint_prefix}WS {client_id}] manager.connect finished.")
+    logger.info(f"Client {client_id} WebSocket connection established.")
+
+    await active_connection.listen_for_messages()
+    logger.info(f"WebSocket connection for client {client_id} is ending.")
+
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(
+    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
+):
+    """
+    Handles WebSocket connections for the /ws/{client_id} endpoint.
+    """
+    await _handle_websocket_connection(websocket, client_id, token, endpoint_prefix="")
+
+
+@app.websocket("/api/v1/ws/{client_id}")
+async def websocket_endpoint_v1(
+    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
+):
+    """
+    Handles WebSocket connections for the /api/v1/ws/{client_id} endpoint.
+    """
+    await _handle_websocket_connection(websocket, client_id, token, endpoint_prefix="v1 ")
 
 
 ## Removed duplicate FastAPI app definition

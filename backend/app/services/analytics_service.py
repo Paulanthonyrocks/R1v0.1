@@ -17,7 +17,6 @@ from app.models.websocket import (
 )
 from app.models.alerts import AlertSeverityEnum
 from app.models.analytics import (
-    PredictionLogBase,
     PredictionLogModel,
 )  # Assuming these models exist
 from app.ml.data_cache import TrafficDataCache  # Assuming this class exists
@@ -31,16 +30,13 @@ logger = logging.getLogger("app.services.analytics_service")
 
 class AnalyticsService:
     def __init__(
-        self,
-        config: Dict[str, Any],
-        connection_manager: ConnectionManager,
-        database_manager,
+      self, config: Dict[str, Any], connection_manager: ConnectionManager, database_manager, traffic_predictor=None
     ):
         self.config = config
         self._connection_manager = connection_manager
         self._db_manager = database_manager
         self._data_cache = TrafficDataCache()  # Initialize data cache
-        self._traffic_predictor = MagicMock()  # Placeholder for traffic predictor
+        self._traffic_predictor = traffic_predictor if traffic_predictor else MagicMock()  # Use provided or placeholder
         print("AnalyticsService: Before _prediction_log_table_initialized = False")
         self._prediction_log_table_initialized = False
         print("AnalyticsService: After _prediction_log_table_initialized = False")
@@ -62,26 +58,69 @@ class AnalyticsService:
         logger.info(
             f"Predicting incident likelihood for {location.get('name', 'N/A')} at {prediction_time}"
         )
-        # In a real scenario, this would involve feeding data to a trained ML model
-        # For now, return a dummy prediction
-        return {
-            "location": location,
-            "prediction_time": prediction_time.isoformat(),
-            "incident_likelihood": 0.75,  # Dummy value
-            "confidence_score": 0.8,  # Dummy value
-            "contributing_factors": ["high_traffic_density", "recent_accidents"],
-            "recommendations": ["suggest_alternative_routes", "monitor_area_closely"],
-            "likelihood_score_percent": 75.0,  # Add this for prediction_scheduler
-            "message": "High likelihood of minor incident due to traffic patterns.",
-            "severity": "warning",
-            "suggested_actions": ["Adjust signal timing", "Deploy traffic control"],
-        }
+
+        # Retrieve recent traffic data for the location from the data cache
+        # Assuming location has 'latitude' and 'longitude' keys
+        latitude = location.get("latitude")
+        longitude = location.get("longitude")
+
+        if latitude is None or longitude is None:
+            logger.error("Location must contain latitude and longitude for prediction.")
+            return {"incident_likelihood": 0.0, "error": "Missing location coordinates"}
+
+        # Fetch recent data points for the specific location
+        # The number of data points to fetch should correspond to the model's sequence_length
+        # This assumes TrafficPredictor has a 'sequence_length' attribute
+        sequence_length = getattr(self._traffic_predictor, 'sequence_length', 10) # Default to 10 if not found
+        recent_traffic_data = self._data_cache.get_recent_data(latitude, longitude, hours=int(sequence_length / 6)) # Assuming 6 data points per hour
+
+        # Check if traffic prediction is enabled in config
+        if not self.config.get("traffic_prediction", {}).get("enabled", True):
+            logger.info("Traffic prediction is disabled in config. Returning dummy prediction.")
+            return {
+                "location": location,
+                "prediction_time": prediction_time.isoformat(),
+                "incident_likelihood": 0.5,  # Dummy value
+                "confidence_score": 0.5,  # Dummy value
+                "contributing_factors": ["traffic_prediction_disabled"],
+                "recommendations": ["enable_traffic_prediction_in_config"],
+                "likelihood_score_percent": 50.0,
+                "message": "Traffic prediction is currently disabled by configuration.",
+                "severity": "info",
+                "suggested_actions": [],
+            }
+
+        if not self._traffic_predictor or not hasattr(self._traffic_predictor, 'predict_incident_likelihood'):
+            logger.warning("Traffic predictor not initialized or missing prediction method. Returning dummy prediction.")
+            return {
+                "location": location,
+                "prediction_time": prediction_time.isoformat(),
+                "incident_likelihood": 0.5,  # Dummy value
+                "confidence_score": 0.5,  # Dummy value
+                "contributing_factors": ["predictor_unavailable"],
+                "recommendations": ["check_predictor_setup"],
+                "likelihood_score_percent": 50.0,
+                "message": "Predictor unavailable.",
+                "severity": "info",
+                "suggested_actions": [],
+            }
+
+        try:
+            prediction_result = self._traffic_predictor.predict_incident_likelihood(
+                recent_traffic_data=recent_traffic_data,
+                location=location,
+                prediction_time=prediction_time,
+            )
+            return prediction_result
+        except Exception as e:
+            logger.error(f"Error during traffic prediction: {e}", exc_info=True)
+            return {"incident_likelihood": 0.0, "error": str(e)}
 
     async def initialize_prediction_log_table(self):
         if not self._prediction_log_table_initialized:
             try:
                 async with self._db_manager.async_engine.begin() as conn:
-                    await conn.run_sync(PredictionLogBase.metadata.create_all)
+                    await conn.run_sync(PredictionLogModel.metadata.create_all)
                 self._prediction_log_table_initialized = True
                 logger.info("PredictionLog table initialized/checked successfully.")
             except Exception as e:

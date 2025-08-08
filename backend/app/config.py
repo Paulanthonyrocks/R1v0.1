@@ -61,17 +61,18 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         ).parent.parent.parent  # Assumes config.py is in backend/app/
 
         # Resolve sample_video path
-        sample_video_path_relative = _config_instance.get("video_input", {}).get(
+        sample_video_path_str = _config_instance.get("video_input", {}).get(
             "sample_video"
         )
-        if sample_video_path_relative:
-            # Get the directory of the config.yaml file
-            config_file_dir = Path(config_path).parent
-
-            # Resolve the path relative to the config.yaml's directory
-            resolved_sample_video_path = (
-                config_file_dir / sample_video_path_relative
-            ).resolve()
+        if sample_video_path_str:
+            resolved_sample_video_path = Path(sample_video_path_str)
+            if not resolved_sample_video_path.is_absolute():
+                # If it's not absolute, assume it's relative to the project root
+                project_root = Path(__file__).parent.parent.parent
+                resolved_sample_video_path = (project_root / sample_video_path_str).resolve()
+            else:
+                # If it's already absolute, just resolve it to get the canonical form
+                resolved_sample_video_path = resolved_sample_video_path.resolve()
 
             _config_instance["video_input"]["sample_video"] = str(
                 resolved_sample_video_path
@@ -115,41 +116,17 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
                 f"Resolved database db_path to: {_config_instance['database']['db_path']}"
             )
 
-        # --- Reconfigure Logging Here (Centralized) ---
-        # It's good practice to configure logging as soon as config is loaded
-        print("Attempting to configure logging with dictConfig...")
-        try:
-            logging.config.dictConfig(_config_instance["logging"])
-            print("Logging configured successfully using dictConfig.")
-            logger.info("Logging configured successfully using dictConfig.")
-        except Exception as e:
-            print(f"Failed to configure logging with dictConfig: {e}")
-            logger.error(
-                f"Failed to configure logging with dictConfig: {e}", exc_info=True
-            )
-            # Fallback to basic config if dictConfig fails
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            )
-            print("Falling back to basic logging configuration.")
-            logger.warning("Falling back to basic logging configuration.")
-        # --- End Logging Reconfiguration ---
-
         return _config_instance
-    except ConfigError as e:
-        logger.critical(
-            f"CRITICAL CONFIGURATION ERROR during initialization: {e}", exc_info=True
-        )
-        _config_instance = None  # Ensure it's None on failure
-        raise RuntimeError(f"Configuration loading failed: {e}") from e
-    except Exception as e:
-        logger.critical(
-            f"Unexpected error initializing configuration: {e}", exc_info=True
-        )
-        _config_instance = None
-        raise RuntimeError(f"Unexpected configuration error: {e}") from e
 
+        
+
+
+    except ConfigError as e:
+        logger.error(f"Failed to load configuration from {path_to_load}: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to load configuration: {e}") from e
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during configuration initialization: {e}", exc_info=True)
+        raise RuntimeError(f"An unexpected error occurred during configuration initialization: {e}") from e
 
 def get_current_config() -> Dict[str, Any]:
     """

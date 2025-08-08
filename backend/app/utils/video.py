@@ -169,6 +169,7 @@ class FrameReader:
                             logger.warning(
                                 f"FrameReader queue for '{self.source_name}' still full after waiting. Discarding frame {self.frame_index}."
                             )
+                            self.frame_index += 1
                             # Discard the current frame if still full after waiting
                             pass
                     else:

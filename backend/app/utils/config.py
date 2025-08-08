@@ -68,7 +68,7 @@ def load_config(config_file: Path = Path("config.yaml")) -> Dict[str, Any]:
             with open(config_file, "r") as f:
                 user_config = yaml.safe_load(f)
             if user_config:  # Check if the user_config is not None
-                config = merge_dicts(user_config, config)
+                config = merge_dicts(config, user_config)
         except yaml.YAMLError as e:
             logging.error(f"Error parsing YAML file: {e}")
             raise ConfigError(f"Error parsing YAML file: {e}") from e

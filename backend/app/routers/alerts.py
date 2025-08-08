@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query, HTTPException, status, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 
-from app.dependencies import get_db, get_current_admin
+from app.dependencies import get_db, get_current_admin, get_current_active_user
 from app.services.services import get_connection_manager  # Added get_connection_manager
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
@@ -57,6 +57,7 @@ async def get_alerts(
     ),
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
+    current_user: dict = Depends(get_current_active_user), # Secure this endpoint
 ) -> AlertsResponse:
     logger.info("GET /alerts endpoint called")
     """

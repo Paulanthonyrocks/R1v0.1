@@ -42,6 +42,12 @@ class PredictionScheduler:
         )  # How long to trust cached accuracy data
         self._last_accuracy_cache_refresh: Optional[datetime] = None
 
+    async def set_priority_locations(self, locations: List[LocationModel]):
+        """Sets a list of priority locations for the next prediction cycle."""
+        async with self._priority_lock:
+            self._priority_locations = locations
+            self.logger.info(f"Set {len(locations)} priority locations for next cycle.")
+
     def _get_location_key(self, location: LocationModel) -> str:
         """Helper to create a consistent dictionary key for a location."""
         return f"{location.latitude:.4f}_{location.longitude:.4f}"

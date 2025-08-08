@@ -6,7 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .reporting.report_generator import generate_analysis_report
 from ...models.pavement import PavementAnalysisResponse, PavementDistress, DistressType

@@ -126,8 +126,8 @@ class TestAlertsRouter(unittest.TestCase):
             sent_message.type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE
         )
         self.assertIsInstance(sent_message.data, AlertStatusUpdatePayload)
-        self.assertEqual(sent_message.payload.alert_id, alert_id_to_ack)
-        self.assertEqual(sent_message.payload.status, "acknowledged")
+        self.assertEqual(sent_message.data.alert_id, alert_id_to_ack)
+        self.assertEqual(sent_message.data.status, "acknowledged")
 
     def test_unacknowledge_alert_success(self):
         alert_id_to_unack = 2

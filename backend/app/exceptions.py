@@ -26,3 +26,10 @@ class Unauthorized(HTTPException):
 class Forbidden(HTTPException):
     def __init__(self, detail: str = "Not authorized to perform this action."):
         super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+class ConnectionLimitExceeded(HTTPException):
+    def __init__(self, detail: str = "Connection limit exceeded."):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail
+        )

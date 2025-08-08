@@ -5,135 +5,194 @@ import time
 import numpy as np
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
-from scipy.spatial import KDTree
+from scipy.optimize import linear_sum_assignment
 from multiprocessing import Queue as MPQueue
 import queue  # For queue.Full exception
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 from collections import deque  # Import deque
 
-# Import LicensePlatePreprocessor from utils
+from concurrent.futures import ThreadPoolExecutor
+
+# Import LicensePlatePreprocessor and lane_detection functions from utils
 try:
     from ..utils.image_processing import LicensePlatePreprocessor
+    from ..utils.lane_detection import process_frame_for_lanes, get_lane_boundaries_from_lines
 except ImportError:
     print("Error importing utils for CoreModule. Ensure utils.py is accessible.")
     LicensePlatePreprocessor = None
+    process_frame_for_lanes = None
+    get_lane_boundaries_from_lines = None
 
 # Logging setup
-logger = logging.getLogger("app.core.core_module")
+logger = logging.getLogger("app.ml")
 
 
 class CoreModule:
-    vehicle_id_counter = (
-        1  # Counter remains class-level, reset for each process instance
-    )
 
     def __init__(
         self,
         feed_id: str,
-        gemini_api_key: str,
         model_path: str,
         config: Dict,
         fps: int,
-        db_queue: Optional[MPQueue],
+        db_queue: MPQueue,
+        gemini_api_key: Optional[str] = None,
     ):
-        self.feed_id = feed_id  # Store the feed_id for unique vehicle IDs
+        self.feed_id = feed_id
+        self.model_path = model_path
         self.config = config
-        self.model_path = str(Path(model_path).resolve())
-        self.fps = max(1, fps)
+        self.fps = fps
         self.db_queue = db_queue
+        self.gemini_api_key = gemini_api_key
 
-        # Config extraction with defaults
-        vehicle_detection_cfg = self.config.get("vehicle_detection", {})
-        lane_detection_cfg = self.config.get("lane_detection", {})
-        performance_cfg = self.config.get("performance", {})
-        self.ocr_cfg = self.config.get("ocr_engine", {})  # <-- Store as self.ocr_cfg
-        perspective_cfg = self.config.get("perspective_calibration", {})
-        self.kf_params = self.config.get(
-            "kalman_filter_params", {}
-        )  # <-- Store as self.kf_params
+        self.vehicle_data: Dict[str, Dict] = {}
+        self.model = None
+        self.preprocessor = None
 
-        # Use stored self attributes where needed
-        self.vehicle_class_ids = vehicle_detection_cfg.get(
-            "vehicle_class_ids", [2, 3, 5, 7]
+        # Configuration parameters from config
+        self.vehicle_class_ids = config["vehicle_detection"].get(
+            "vehicle_class_ids", []
         )
-        self.confidence_threshold = vehicle_detection_cfg.get(
-            "confidence_threshold", 0.5
+        self.confidence_threshold = config["vehicle_detection"].get(
+            "confidence_threshold", 0.4
         )
-        self.proximity_threshold = vehicle_detection_cfg.get("proximity_threshold", 50)
-        self.track_timeout = vehicle_detection_cfg.get("track_timeout", 5)
-        self.max_active_tracks = vehicle_detection_cfg.get("max_active_tracks", 50)
-        self.yolo_imgsz = vehicle_detection_cfg.get("yolo_imgsz", 640)
-        frame_w, frame_h = vehicle_detection_cfg.get("frame_resolution", [640, 480])
+        self.proximity_threshold = config["vehicle_detection"].get(
+            "proximity_threshold", 60
+        )
+        self.track_timeout = config["vehicle_detection"].get("track_timeout", 5)
+        self.reid_timeout = config["vehicle_detection"].get("reid_timeout", 10) # New parameter for re-identification timeout
+        self.max_active_tracks = config["vehicle_detection"].get(
+            "max_active_tracks", 50
+        )
+        self.yolo_imgsz = config["vehicle_detection"].get("yolo_imgsz", 640)
+        self.num_lanes = config["lane_detection"].get("num_lanes", 4)
+        self.lane_width_pixels = (
+            config["vehicle_detection"]["frame_resolution"][0] / self.num_lanes
+        )
+        self.perspective_matrix = None  # Initialize as None, load if needed
+        self.roi_polygon_points = config["roi_processing"].get("polygon_points", None)
+        self.ocr_cfg = config.get("ocr_engine", {})
+        self.stopped_speed_threshold_kmh = config["behavior_analysis"].get(
+            "stopped_speed_threshold_kmh", 5
+        )
+        self.speed_limit = config["behavior_analysis"].get("speed_limit", 60)
+        self.accel_threshold_mps2 = config["behavior_analysis"].get(
+            "accel_threshold_mps2", 0.5
+        )
+        self.lane_change_buffer = config["behavior_analysis"].get(
+            "lane_change_buffer", 20
+        )
+        self.pixels_per_meter = config.get("pixels_per_meter", 40)
+        self.kf_params = config.get("kalman_filter_params", {})
+        self.ewma_alpha = config["behavior_analysis"].get("ewma_alpha", 0.2) # New parameter for EWMA smoothing
+        self.occlusion_confidence_threshold = config["vehicle_detection"].get("occlusion_confidence_threshold", 0.2) # New parameter for occlusion detection
+        self.vehicle_id_counter = 1 # Initialize instance-specific counter
+
+        # Lane detection caching
+        self.lane_detection_interval = config["lane_detection"].get("lane_detection_interval", 10)
+        self.last_lane_detection_frame = -1
+        self.cached_lane_boundaries = None
+
+        # Thread pool for asynchronous OCR
+        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+
+        # Vehicle type mapping
         self.vehicle_type_map = {
-            int(k): v
-            for k, v in vehicle_detection_cfg.get("vehicle_type_map", {}).items()
+            0: "person",
+            1: "bicycle",
+            2: "car",
+            3: "motorcycle",
+            4: "airplane",
+            5: "bus",
+            6: "train",
+            7: "truck",
+            8: "boat",
+            9: "traffic light",
+            10: "fire hydrant",
+            11: "stop sign",
+            12: "parking meter",
+            13: "bench",
+            14: "bird",
+            15: "cat",
+            16: "dog",
+            17: "horse",
+            18: "sheep",
+            19: "cow",
+            20: "elephant",
+            21: "bear",
+            22: "zebra",
+            23: "giraffe",
+            24: "backpack",
+            25: "umbrella",
+            26: "handbag",
+            27: "tie",
+            28: "suitcase",
+            29: "frisbee",
+            30: "skis",
+            31: "snowboard",
+            32: "sports ball",
+            33: "kite",
+            34: "baseball bat",
+            35: "baseball glove",
+            36: "skateboard",
+            37: "surfboard",
+            38: "tennis racket",
+            39: "bottle",
+            40: "wine glass",
+            41: "cup",
+            42: "fork",
+            43: "knife",
+            44: "spoon",
+            45: "bowl",
+            46: "banana",
+            47: "apple",
+            48: "sandwich",
+            49: "orange",
+            50: "broccoli",
+            51: "carrot",
+            52: "hot dog",
+            53: "pizza",
+            54: "donut",
+            55: "cake",
+            56: "chair",
+            57: "couch",
+            58: "potted plant",
+            59: "bed",
+            60: "dining table",
+            61: "toilet",
+            62: "tv",
+            63: "laptop",
+            64: "mouse",
+            65: "remote",
+            66: "keyboard",
+            67: "cell phone",
+            68: "microwave",
+            69: "oven",
+            70: "toaster",
+            71: "sink",
+            72: "refrigerator",
+            73: "book",
+            74: "clock",
+            75: "vase",
+            76: "scissors",
+            77: "teddy bear",
+            78: "hair drier",
+            79: "toothbrush",
         }
 
-        self.num_lanes = lane_detection_cfg.get("num_lanes", 6)
-        self.lane_width_pixels = lane_detection_cfg.get(
-            "lane_width",
-            frame_w / (self.num_lanes + 1) if self.num_lanes > 0 else frame_w / 4,
-        )
-        self.lane_change_buffer = lane_detection_cfg.get("lane_change_buffer", 5)
-
-        self.lane_width_meters = 3.7
-        self.pixels_per_meter = self.config.get(
-            "pixels_per_meter",
-            self.lane_width_pixels / self.lane_width_meters
-            if self.lane_width_meters > 0
-            else 50,
-        )
-        self.speed_limit = self.config.get("speed_limit", 60)
-
-        # Perspective matrix loading (remains the same)
-        matrix_path_str = perspective_cfg.get("matrix_path", "")
-        perspective_matrix = None
-        if matrix_path_str:
-            matrix_path = Path(matrix_path_str)
-            if not matrix_path.is_absolute():
-                app_dir = Path(
-                    __file__
-                ).parent.parent.parent.parent.resolve()  # Go up to project root
-                matrix_path = app_dir / matrix_path
-            if matrix_path.exists():
-                try:
-                    perspective_matrix = np.load(matrix_path)
-                    logger.info(f"Loaded perspective matrix from: {matrix_path}")
-                except Exception as e:
-                    logger.error(
-                        f"Failed to load perspective matrix from {matrix_path}: {e}"
-                    )
-                    perspective_matrix = None  # Ensure it's None on failure
-            else:
-                logger.warning(
-                    f"Perspective matrix path specified but not found: {matrix_path}"
-                )
-                perspective_matrix = None  # Ensure it's None if not found
+        self._load_model(config["performance"].get("gpu_acceleration", False))
+        if self.ocr_cfg.get("enabled", False) and self.gemini_api_key:
+            try:
+                self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
+            except Exception as e:
+                logger.error(f"Failed to initialize LicensePlatePreprocessor: {e}")
+                self.preprocessor = None
         else:
-            perspective_matrix = None
-            logger.info("No perspective matrix path specified.")
+            logger.info("OCR engine disabled or Gemini API key not provided.")
 
-        # Initialize LPP
-        if LicensePlatePreprocessor:
-            # Pass self.config directly, LPP handles its own sub-dictionary access
-            self.preprocessor = LicensePlatePreprocessor(
-                config=self.config, perspective_matrix=perspective_matrix
-            )
-        else:
-            self.preprocessor = None
-            logger.error("LicensePlatePreprocessor not available.")
 
-        # Behavior thresholds
-        self.stopped_speed_threshold_kmh = config.get("stopped_speed_threshold_kmh", 5)
-        self.accel_threshold_mps2 = config.get("accel_threshold_mps2", 0.5)
-
-        # Tracking state
-        self.vehicle_data: Dict[str, Dict] = {}
-
-        self.model = None
-        # Pass GPU preference from performance config
-        self._load_model(performance_cfg.get("gpu_acceleration", True))
+    
 
     def _load_model(self, use_gpu: bool):
         if not Path(self.model_path).exists():
@@ -252,186 +311,21 @@ class CoreModule:
     def _detect_vehicles(
         self, frame: np.ndarray, frame_index: int, confidence_threshold: float
     ) -> List[Tuple]:
-        detections = []
         try:
-            img_size = self.yolo_imgsz
-            if not isinstance(img_size, int) or img_size <= 0:
-                img_size = 640
+            processed_frame, roi_enabled, x1_crop, y1_crop = self._preprocess_frame(frame)
 
-            # --- ROI Processing ---
-            roi_cfg = self.config.get("roi_processing", {})
-            roi_enabled = roi_cfg.get("enabled", False)
-            crop_rect = roi_cfg.get("crop_rect", [0, 0, frame.shape[1], frame.shape[0]])
-
-            preprocess_start_time = time.time()
-            if roi_enabled:
-                x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
-                processed_frame = frame[y1_crop:y2_crop, x1_crop:x2_crop]
+            if self.model_path.endswith(('.onnx', '_quant.onnx')):
+                detections = self._run_onnx_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
             else:
-                processed_frame = frame
-            logger.debug(
-                f"Frame {frame_index}: Preprocessing took {(time.time() - preprocess_start_time) * 1000:.2f}ms"
-            )
+                detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
 
-            # --- Model-specific prediction ---
-            inference_start_time = time.time()
-            is_onnx = self.model_path.endswith(".onnx") or self.model_path.endswith(
-                "_quant.onnx"
-            )
-            if is_onnx:
-                # Pre-process frame for ONNX model
-                input_img = cv2.resize(processed_frame, (img_size, img_size))
-                input_img = input_img.astype(np.float32) / 2.55
-                input_img = np.transpose(input_img, (2, 0, 1))
-                input_tensor = np.expand_dims(input_img, axis=0)
+            logger.info(f"Frame {frame_index}: Detections after ROI processing: {len(detections)}")
 
-                # Run ONNX inference
-                input_name = self.model.get_inputs()[0].name
-                output_name = self.model.get_outputs()[0].name
-                outputs = self.model.run([output_name], {input_name: input_tensor})[0]
-                logger.debug(
-                    f"Frame {frame_index}: ONNX Inference took {(time.time() - inference_start_time) * 1000:.2f}ms"
-                )
+            # --- Custom Merging Logic for Overlapping Detections ---
+            merged_detections = self._merge_overlapping_detections(detections)
 
-                postprocess_start_time = time.time()
-                # Post-process ONNX output
-                # This part needs to be adapted based on the exact output format of your ONNX model
-                # Assuming output is [1, 84, 8400] where 84 is (cx, cy, w, h, conf, cls...)
-                output = outputs[0].T  # Transpose to (8400, 84)
-                scores = np.max(output[:, 4:], axis=1)
-                output = output[scores > confidence_threshold]
-                scores = scores[scores > confidence_threshold]
-                class_ids = np.argmax(output[:, 4:], axis=1)
-                boxes = output[:, :4]
-
-                # Convert boxes from (cx, cy, w, h) to (x1, y1, x2, y2)
-                input_shape = np.array([img_size, img_size, img_size, img_size])
-                boxes = np.divide(boxes, input_shape, dtype=np.float32)
-                # Scale to original processed_frame size
-                scale_w = processed_frame.shape[1] / img_size
-                scale_h = processed_frame.shape[0] / img_size
-                boxes[:, 0] = (boxes[:, 0] - boxes[:, 2] / 2) * processed_frame.shape[1]
-                boxes[:, 1] = (boxes[:, 1] - boxes[:, 3] / 2) * processed_frame.shape[0]
-                boxes[:, 2] = boxes[:, 0] + boxes[:, 2] * processed_frame.shape[1]
-                boxes[:, 3] = boxes[:, 1] + boxes[:, 3] * processed_frame.shape[0]
-
-                # Filter by class_ids
-                valid_indices = np.isin(class_ids, self.vehicle_class_ids)
-                boxes = boxes[valid_indices]
-                scores = scores[valid_indices]
-                class_ids = class_ids[valid_indices]
-
-                # Convert boxes from (cx, cy, w, h) to (x1, y1, x2, y2)
-                # This part is already vectorized, ensure it's correct
-                x1 = boxes[:, 0] - boxes[:, 2] / 2
-                y1 = boxes[:, 1] - boxes[:, 3] / 2
-                x2 = boxes[:, 0] + boxes[:, 2] / 2
-                y2 = boxes[:, 1] + boxes[:, 3] / 2
-
-                # Scale to original processed_frame size
-                scale_w = processed_frame.shape[1] / img_size
-                scale_h = processed_frame.shape[0] / img_size
-                x1 *= scale_w
-                y1 *= scale_h
-                x2 *= scale_w
-                y2 *= scale_h
-
-                # Apply ROI offset if enabled
-                if roi_enabled:
-                    x1 += x1_crop
-                    y1 += y1_crop
-                    x2 += x1_crop
-                    y2 += y1_crop
-
-                # Calculate center_x, center_y
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-
-                # Combine into detections list
-                for i in range(len(boxes)):
-                    detections.append(
-                        (
-                            float(center_x[i]),
-                            float(center_y[i]),
-                            float(scores[i]),
-                            int(class_ids[i]),
-                            frame_index,
-                            [int(x1[i]), int(y1[i]), int(x2[i]), int(y2[i])],
-                        )
-                    )
-                logger.debug(
-                    f"Frame {frame_index}: ONNX Postprocessing took {(time.time() - postprocess_start_time) * 1000:.2f}ms"
-                )
-
-            else:  # Existing PyTorch logic
-                results = self.model.predict(
-                    processed_frame,
-                    conf=confidence_threshold,
-                    imgsz=img_size,
-                    classes=self.vehicle_class_ids,
-                    max_det=self.max_active_tracks,
-                    verbose=False,
-                )
-                logger.debug(
-                    f"Frame {frame_index}: PyTorch Inference took {(time.time() - inference_start_time) * 1000:.2f}ms"
-                )
-                postprocess_start_time = time.time()
-                for r in results:
-                    if r.boxes.xyxy.size == 0:  # Check if there are any detections
-                        continue
-
-                    # Extract data as numpy arrays
-                    xyxy = r.boxes.xyxy.cpu().numpy()
-                    confs = r.boxes.conf.cpu().numpy()
-                    clss = r.boxes.cls.cpu().numpy()
-
-                    # Filter by confidence threshold and vehicle class IDs
-                    valid_indices = (confs > confidence_threshold) & (
-                        np.isin(clss, self.vehicle_class_ids)
-                    )
-
-                    if not np.any(
-                        valid_indices
-                    ):  # Check if any valid detections remain
-                        continue
-
-                    filtered_xyxy = xyxy[valid_indices]
-                    filtered_confs = confs[valid_indices]
-                    filtered_clss = clss[valid_indices]
-
-                    # Apply ROI offset if enabled (vectorized)
-                    if roi_enabled:
-                        filtered_xyxy[:, 0] += x1_crop
-                        filtered_xyxy[:, 1] += y1_crop
-                        filtered_xyxy[:, 2] += x1_crop
-                        filtered_xyxy[:, 3] += y1_crop
-
-                    # Calculate center_x, center_y (vectorized)
-                    center_x = (filtered_xyxy[:, 0] + filtered_xyxy[:, 2]) / 2
-                    center_y = (filtered_xyxy[:, 1] + filtered_xyxy[:, 3]) / 2
-
-                    # Append to detections list
-                    for i in range(len(filtered_xyxy)):
-                        detections.append(
-                            (
-                                float(center_x[i]),
-                                float(center_y[i]),
-                                float(filtered_confs[i]),
-                                int(filtered_clss[i]),
-                                frame_index,
-                                [
-                                    int(filtered_xyxy[i, 0]),
-                                    int(filtered_xyxy[i, 1]),
-                                    int(filtered_xyxy[i, 2]),
-                                    int(filtered_xyxy[i, 3]),
-                                ],
-                            )
-                        )
-                logger.debug(
-                    f"Frame {frame_index}: PyTorch Postprocessing took {(time.time() - postprocess_start_time) * 1000:.2f}ms"
-                )
-
-            return detections
+            logger.info(f"Frame {frame_index}: Detections after merging: {len(merged_detections)}")
+            return merged_detections
 
         except Exception as e:
             logger.error(
@@ -439,6 +333,292 @@ class CoreModule:
                 exc_info=True,
             )
             return []
+
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
+        roi_cfg = self.config.get("roi_processing", {})
+        roi_enabled = roi_cfg.get("enabled", False)
+        crop_rect = roi_cfg.get("crop_rect", [0, 0, frame.shape[1], frame.shape[0]])
+        x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
+
+        processed_frame = frame.copy()
+
+        if self.perspective_matrix is not None:
+            h, w = processed_frame.shape[:2]
+            processed_frame = cv2.warpPerspective(processed_frame, self.perspective_matrix, (w, h))
+
+        if roi_enabled:
+            if self.roi_polygon_points:
+                mask = np.zeros(processed_frame.shape[:2], dtype=np.uint8)
+                points_np = np.array(self.roi_polygon_points, dtype=np.int32)
+                cv2.fillPoly(mask, [points_np], (255, 255, 255))
+                processed_frame = cv2.bitwise_and(processed_frame, processed_frame, mask=mask)
+            else:
+                processed_frame = processed_frame[y1_crop:y2_crop, x1_crop:x2_crop]
+
+        return processed_frame, roi_enabled, x1_crop, y1_crop
+
+    def _run_onnx_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+        img_size = self.yolo_imgsz
+        input_img = cv2.resize(processed_frame, (img_size, img_size))
+        input_img = input_img.astype(np.float32) / 255.0
+        input_img = np.transpose(input_img, (2, 0, 1))
+        input_tensor = np.expand_dims(input_img, axis=0)
+
+        input_name = self.model.get_inputs()[0].name
+        output_name = self.model.get_outputs()[0].name
+        outputs = self.model.run([output_name], {input_name: input_tensor})[0]
+
+        return self._postprocess_onnx_output(outputs, confidence_threshold, processed_frame.shape, img_size, roi_enabled, x1_crop, y1_crop)
+
+    def _run_pytorch_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+        results = self.model.predict(
+            processed_frame,
+            conf=confidence_threshold,
+            imgsz=self.yolo_imgsz,
+            classes=self.vehicle_class_ids,
+            max_det=self.max_active_tracks,
+            verbose=False,
+        )
+        return self._postprocess_pytorch_output(results, confidence_threshold, roi_enabled, x1_crop, y1_crop)
+
+    def _postprocess_onnx_output(self, outputs: np.ndarray, confidence_threshold: float, frame_shape: Tuple[int, int], img_size: int, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+        detections = []
+        output = outputs[0].T
+        scores = np.max(output[:, 4:], axis=1)
+        output = output[scores > confidence_threshold]
+        scores = scores[scores > confidence_threshold]
+        class_ids = np.argmax(output[:, 4:], axis=1)
+        boxes = output[:, :4]
+
+        scale_x = frame_shape[1] / img_size
+        scale_y = frame_shape[0] / img_size
+
+        x1 = (boxes[:, 0] - boxes[:, 2] / 2) * scale_x
+        y1 = (boxes[:, 1] - boxes[:, 3] / 2) * scale_y
+        x2 = (boxes[:, 0] + boxes[:, 2] / 2) * scale_x
+        y2 = (boxes[:, 1] + boxes[:, 3] / 2) * scale_y
+
+        if roi_enabled and not self.roi_polygon_points:
+            x1 += x1_crop
+            y1 += y1_crop
+            x2 += x1_crop
+            y2 += y1_crop
+
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+
+        for i in range(len(boxes)):
+            detections.append(
+                (
+                    float(center_x[i]),
+                    float(center_y[i]),
+                    float(scores[i]),
+                    int(class_ids[i]),
+                    0, # frame_index is not available here, but it is not used in the caller
+                    [int(x1[i]), int(y1[i]), int(x2[i]), int(y2[i])],
+                )
+            )
+        return detections
+
+    def _postprocess_pytorch_output(self, results: list, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+        detections = []
+        for r in results:
+            if r.boxes.xyxy.numel() == 0:
+                continue
+
+            xyxy = r.boxes.xyxy.cpu().numpy()
+            confs = r.boxes.conf.cpu().numpy()
+            clss = r.boxes.cls.cpu().numpy()
+
+            valid_indices = (confs > confidence_threshold) & (np.isin(clss, self.vehicle_class_ids))
+
+            if not np.any(valid_indices):
+                continue
+
+            filtered_xyxy = xyxy[valid_indices]
+            filtered_confs = confs[valid_indices]
+            filtered_clss = clss[valid_indices]
+
+            if roi_enabled and not self.roi_polygon_points:
+                filtered_xyxy[:, 0] += x1_crop
+                filtered_xyxy[:, 1] += y1_crop
+                filtered_xyxy[:, 2] += x1_crop
+                filtered_xyxy[:, 3] += y1_crop
+
+            center_x = (filtered_xyxy[:, 0] + filtered_xyxy[:, 2]) / 2
+            center_y = (filtered_xyxy[:, 1] + filtered_xyxy[:, 3]) / 2
+
+            for i in range(len(filtered_xyxy)):
+                detections.append(
+                    (
+                        float(center_x[i]),
+                        float(center_y[i]),
+                        float(filtered_confs[i]),
+                        int(filtered_clss[i]),
+                        0, # frame_index is not available here, but it is not used in the caller
+                        [
+                            int(filtered_xyxy[i, 0]),
+                            int(filtered_xyxy[i, 1]),
+                            int(filtered_xyxy[i, 2]),
+                            int(filtered_xyxy[i, 3]),
+                        ],
+                    )
+                )
+        return detections
+
+    def _merge_overlapping_detections(self, detections: List[Tuple]) -> List[Tuple]:
+        if not detections:
+            return []
+
+        detections.sort(key=lambda x: x[2], reverse=True)
+        is_merged = [False] * len(detections)
+        merged_detections = []
+
+        for i, det1 in enumerate(detections):
+            if is_merged[i]:
+                continue
+
+            x1_1, y1_1, x2_1, y2_1 = det1[5]
+            class_id_1 = det1[3]
+
+            current_merged_bbox = list(det1[5])
+            current_merged_conf = det1[2]
+
+            for j, det2 in enumerate(detections):
+                if i == j or is_merged[j]:
+                    continue
+
+                x1_2, y1_2, x2_2, y2_2 = det2[5]
+                class_id_2 = det2[3]
+
+                if class_id_1 == class_id_2 and self._calculate_iou(det1[5], det2[5]) > 0.6:
+                    current_merged_bbox[0] = min(current_merged_bbox[0], x1_2)
+                    current_merged_bbox[1] = min(current_merged_bbox[1], y1_2)
+                    current_merged_bbox[2] = max(current_merged_bbox[2], x2_2)
+                    current_merged_bbox[3] = max(current_merged_bbox[3], y2_2)
+                    current_merged_conf = max(current_merged_conf, det2[2])
+                    is_merged[j] = True
+
+            merged_center_x = (current_merged_bbox[0] + current_merged_bbox[2]) / 2
+            merged_center_y = (current_merged_bbox[1] + current_merged_bbox[3]) / 2
+            merged_detections.append((
+                float(merged_center_x),
+                float(merged_center_y),
+                float(current_merged_conf),
+                int(class_id_1),
+                det1[4], # frame_index
+                [int(val) for val in current_merged_bbox]
+            ))
+
+        return merged_detections
+
+    def _calculate_iou(self, box1, box2):
+        # Ensure box1 and box2 are not None and are valid bounding box formats
+        if box1 is None or box2 is None or len(box1) < 4 or len(box2) < 4:
+            return 0.0  # Return 0.0 if inputs are invalid
+
+        # Extract coordinates
+        x1, y1, x2, y2 = box1
+        x1_g, y1_g, x2_g, y2_g = box2
+
+        # Determine the coordinates of the intersection rectangle
+        ix1 = max(x1, x1_g)
+        iy1 = max(y1, y1_g)
+        ix2 = min(x2, x2_g)
+        iy2 = min(y2, y2_g)
+
+        # Compute the area of intersection
+        intersection_area = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+
+        # Compute the area of both bounding boxes
+        box1_area = (x2 - x1) * (y2 - y1)
+        box2_area = (x2_g - x1_g) * (y2_g - y1_g)
+
+        # Compute the area of union
+        union_area = box1_area + box2_area - intersection_area
+
+        # Handle the case where union_area is zero to avoid division by zero
+        if union_area == 0:
+            return 0.0
+
+        # Compute the IoU
+        iou = intersection_area / union_area
+        return iou
+
+    def _calculate_cost_matrix(self, tracks: Dict, detections: List[Tuple], predicted_positions: List[np.ndarray], proximity_threshold: int, max_cost: float) -> np.ndarray:
+        num_tracks = len(tracks)
+        num_detections = len(detections)
+        cost_matrix = np.full((num_tracks, num_detections), max_cost)
+
+        for i in range(num_tracks):
+            predicted_pos = predicted_positions[i]
+
+            if np.isnan(predicted_pos).any():
+                continue
+
+            for j in range(num_detections):
+                detection = detections[j]
+                detection_pos = np.array([detection[0], detection[1]])
+                
+                dist = np.linalg.norm(predicted_pos - detection_pos)
+
+                if dist < proximity_threshold:
+                    # Cost can be a combination of distance and other factors, like appearance
+                    # For now, just use distance
+                    cost_matrix[i, j] = dist
+        
+        return cost_matrix
+
+    def _match_tracks_to_detections(self, tracks: Dict, detections: List[Tuple], cost_matrix: np.ndarray, kalman_filters: List[KalmanFilter], current_time: float, frame: np.ndarray, frame_index: int, matched_detection_indices: set) -> Dict:
+        updated_tracks_in_frame = {}
+        if not tracks or not detections:
+            return updated_tracks_in_frame
+
+        track_indices, detection_indices = linear_sum_assignment(cost_matrix)
+        track_ids = list(tracks.keys())
+
+        for track_idx, detection_idx in zip(track_indices, detection_indices):
+            if cost_matrix[track_idx, detection_idx] < self.proximity_threshold:
+                vehicle_id = track_ids[track_idx]
+                track = tracks[vehicle_id]
+                detection = detections[detection_idx]
+                
+                self._update_track(track, detection, current_time, frame, frame_index)
+                track["last_seen"] = current_time
+                track["status"] = "active"
+                updated_tracks_in_frame[vehicle_id] = track
+                matched_detection_indices.add(detection_idx)
+
+        return updated_tracks_in_frame
+
+    def _predict_track_positions(self, tracks: Dict, current_time: float) -> Tuple[List[np.ndarray], List[KalmanFilter]]:
+        predicted_positions = []
+        kalman_filters = []
+        for vehicle_id in tracks.keys():
+            track = tracks[vehicle_id]
+            kf = track.get("kalman_filter")
+            if kf:
+                dt = min(1.0, max(0.01, current_time - track.get("last_seen", current_time)))
+                kf.F[0, 2] = dt
+                kf.F[1, 3] = dt
+                kf.predict()
+                predicted_positions.append(kf.x[:2])
+                kalman_filters.append(kf)
+            else:
+                predicted_positions.append(np.array([np.nan, np.nan]))
+                kalman_filters.append(None)
+        return predicted_positions, kalman_filters
+
+    def _initialize_new_tracks_from_unmatched(self, unmatched_detections_indices: set, detections: List[Tuple], current_time: float, frame: np.ndarray, frame_index: int) -> Dict:
+        new_tracks_in_frame = {}
+        for idx in unmatched_detections_indices:
+            if len(self.vehicle_data) >= self.max_active_tracks:
+                break
+            new_vehicle_id = self._initialize_new_track(frame, detections[idx], current_time, frame_index)
+            if new_vehicle_id:
+                self.vehicle_data[new_vehicle_id]["status"] = "active"
+                new_tracks_in_frame[new_vehicle_id] = self.vehicle_data[new_vehicle_id]
+        return new_tracks_in_frame
 
     def _update_tracks(
         self,
@@ -455,80 +635,46 @@ class CoreModule:
                     track["kalman_filter"].predict()
             return current_tracks_in_frame
 
-        detection_centers = np.array([d[:2] for d in detections])
         detection_indices = list(range(len(detections)))
         matched_detection_indices = set()
+        max_cost = 1e5 # Define max_cost here
 
-        track_ids_to_match = list(self.vehicle_data.keys())
-        predicted_positions = []
-        kalman_filters = []  # Store KFs to update dt correctly
+        # Separate active and lost tracks
+        active_tracks = {vid: track for vid, track in self.vehicle_data.items() if track.get("status", "active") == "active"}
+        lost_tracks = {vid: track for vid, track in self.vehicle_data.items() if track.get("status", "active") == "lost"}
 
-        for vehicle_id in track_ids_to_match:
-            track = self.vehicle_data[vehicle_id]
-            kf = track.get("kalman_filter")
-            if kf:
-                # Kalman dt calculation - robust against time gaps
-                dt = min(
-                    1.0, max(0.01, current_time - track.get("last_seen", current_time))
-                )  # Bounded dt
-                kf.F[0, 2] = dt
-                kf.F[1, 3] = dt
-                kf.predict()
-                predicted_positions.append(kf.x[:2])
-                kalman_filters.append(kf)  # Keep reference
-            else:
-                predicted_positions.append(np.array([np.nan, np.nan]))
-                kalman_filters.append(None)
+        # 1. Process active tracks for matching
+        if active_tracks and detections:
+            predicted_positions_active, kalman_filters_active = self._predict_track_positions(active_tracks, current_time)
+            cost_matrix_active = self._calculate_cost_matrix(active_tracks, detections, predicted_positions_active, proximity_threshold, max_cost)
+            current_tracks_in_frame.update(self._match_tracks_to_detections(active_tracks, detections, cost_matrix_active, kalman_filters_active, current_time, frame, frame_index, matched_detection_indices))
 
-        if predicted_positions and detection_centers.size > 0:
-            try:
-                kdtree = KDTree(detection_centers)
-                distances, indices = kdtree.query(predicted_positions, k=1)
+        # 2. Attempt to re-identify lost tracks with unmatched detections
+        unmatched_detections_indices = set(detection_indices) - matched_detection_indices
+        if lost_tracks and unmatched_detections_indices:
+            unmatched_detections_list = [detections[idx] for idx in unmatched_detections_indices]
+            predicted_positions_lost, kalman_filters_lost = self._predict_track_positions(lost_tracks, current_time)
+            cost_matrix_lost = self._calculate_cost_matrix(lost_tracks, unmatched_detections_list, predicted_positions_lost, proximity_threshold, max_cost)
+            
+            # Need to map back the matched indices from unmatched_detections_list to original detections
+            temp_matched_indices = set()
+            reidentified_tracks = self._match_tracks_to_detections(lost_tracks, unmatched_detections_list, cost_matrix_lost, kalman_filters_lost, current_time, frame, frame_index, temp_matched_indices)
+            
+            # Correctly update matched_detection_indices
+            unmatched_detections_indices_list = list(unmatched_detections_indices)
+            for i in temp_matched_indices:
+                matched_detection_indices.add(unmatched_detections_indices_list[i])
+            
+            current_tracks_in_frame.update(reidentified_tracks)
 
-                for i, vehicle_id in enumerate(track_ids_to_match):
-                    if np.isnan(distances[i]):
-                        continue
-                    best_match_idx = indices[i]
-                    distance = distances[i]
-
-                    if (
-                        distance < proximity_threshold
-                        and best_match_idx not in matched_detection_indices
-                    ):
-                        track = self.vehicle_data[vehicle_id]
-                        track["kalman_filter"] = kalman_filters[
-                            i
-                        ]  # Ensure using the predicted KF
-                        detection_data = detections[best_match_idx]
-                        self._update_track(
-                            track, detection_data, current_time, frame, frame_index
-                        )
-                        current_tracks_in_frame[vehicle_id] = track
-                        matched_detection_indices.add(best_match_idx)
-
-            except ValueError as ve:
-                logger.error(f"KDTree query error: {ve}")
-            except Exception as tree_err:
-                logger.error(f"Error during KDTree matching: {tree_err}", exc_info=True)
-
-        unmatched_detections_indices = (
-            set(detection_indices) - matched_detection_indices
-        )
-        for idx in unmatched_detections_indices:
-            if len(self.vehicle_data) >= self.max_active_tracks:
-                break
-            new_vehicle_id = self._initialize_new_track(
-                detections[idx], current_time, frame_index
-            )
-            if new_vehicle_id:
-                current_tracks_in_frame[new_vehicle_id] = self.vehicle_data[
-                    new_vehicle_id
-                ]
+        # 3. Initialize new tracks for remaining unmatched detections
+        unmatched_detections_indices = set(detection_indices) - matched_detection_indices
+        current_tracks_in_frame.update(self._initialize_new_tracks_from_unmatched(unmatched_detections_indices, detections, current_time, frame, frame_index))
 
         return current_tracks_in_frame
 
     def _initialize_new_track(
-        self, detection: Tuple, current_time: float, frame_index: int
+        self, frame: np.ndarray, detection: Tuple, current_time: float, frame_index: int
     ) -> Optional[str]:
         try:
             center_x, center_y, conf, class_id, _, vehicle_bbox = detection
@@ -538,11 +684,15 @@ class CoreModule:
                 return None
 
             # Generate globally unique vehicle ID using feed_id prefix
-            vehicle_id = f"{self.feed_id}-{CoreModule.vehicle_id_counter}"
-            CoreModule.vehicle_id_counter += 1
+            vehicle_id = f"{self.feed_id}-{self.vehicle_id_counter}"
+            self.vehicle_id_counter += 1
 
-            kf = self._initialize_kalman_filter(center_x, center_y)
-            lane = self._estimate_lane(vehicle_bbox)
+            # Use bottom-center of bbox for more stable tracking
+            initial_x = (vehicle_bbox[0] + vehicle_bbox[2]) / 2
+            initial_y = vehicle_bbox[3] # Use the bottom of the bounding box
+
+            kf = self._initialize_kalman_filter(initial_x, initial_y)
+            lane = self._estimate_lane(frame, vehicle_bbox, frame_index)
 
             self.vehicle_data[vehicle_id] = {
                 "vehicle_id": vehicle_id,
@@ -561,6 +711,8 @@ class CoreModule:
                 "behavior": "unknown",
                 "class_id": class_id,
                 "timestamp": current_time,
+                "status": "active", # New tracks are active
+                "is_occluded": False, # Initialize occlusion status
             }
             logger.info(
                 f"Initialized vehicle {vehicle_id} (Class: {class_id}), lane {lane}"
@@ -580,36 +732,82 @@ class CoreModule:
     ) -> None:
         try:
             center_x, center_y, conf, class_id, _, vehicle_bbox = detection
-            prev_time = track["last_seen"]
-            track["last_seen"] = current_time
-            track["timestamp"] = current_time
-            track["frame_index"] = frame_index
-            track["bbox"] = vehicle_bbox
-            track["confidence"] = conf
+            # Recalculate center_x and center_y to use bottom-center of bbox for Kalman filter
+            measurement_x = (vehicle_bbox[0] + vehicle_bbox[2]) / 2
+            measurement_y = vehicle_bbox[3] # Use the bottom of the bounding box
 
             kf = track.get("kalman_filter")
             if kf:
+                # Adaptive R: Adjust measurement noise based on detection confidence
+                # Lower confidence -> higher measurement noise (larger R)
+                # Higher confidence -> lower measurement noise (smaller R)
+                # We'll scale the base R values. A confidence of 1.0 means no scaling (factor 1.0).
+                # A confidence of 0.5 might mean a factor of 2.0 (1.0 / 0.5).
+                # Add a small epsilon to avoid division by zero if confidence is 0.
+                confidence_factor = max(0.1, 1.0 / (conf + 1e-6)) # Ensure factor is not excessively large
+
+                # Create a temporary R matrix for this update, scaled by confidence
+                # Use the base R values from kf_params, or default if not set
+                base_sigma_mx = self.kf_params.get("kf_sigma_mx", 2.0)
+                base_sigma_my = self.kf_params.get("kf_sigma_my", 2.0)
+                
+                # Scale the base measurement noise variances
+                scaled_r_x = (base_sigma_mx * confidence_factor) ** 2
+                scaled_r_y = (base_sigma_my * confidence_factor) ** 2
+
+                # Create a temporary R matrix for the update
+                temp_R = np.diag([scaled_r_x, scaled_r_y])
+
                 try:
-                    kf.update(np.array([center_x, center_y], dtype=np.float32))
+                    kf.update(np.array([measurement_x, measurement_y], dtype=np.float32), R=temp_R)
                 except Exception as kf_err:
                     logger.warning(
                         f"Kalman update failed for {track['vehicle_id']}: {kf_err}"
                     )
                     track["kalman_filter"] = self._initialize_kalman_filter(
-                        center_x, center_y
+                        measurement_x, measurement_y
                     )
             else:
                 track["kalman_filter"] = self._initialize_kalman_filter(
-                    center_x, center_y
+                    measurement_x, measurement_y
                 )
+
+            # Occlusion detection
+            if conf < self.occlusion_confidence_threshold and track.get("status") == "active":
+                track["is_occluded"] = True
+                logger.debug(f"Vehicle {track['vehicle_id']} marked as occluded due to low confidence ({conf}).")
+            else:
+                track["is_occluded"] = False
+
+            # If occluded, use Kalman filter's predicted state for bbox
+            if track["is_occluded"] and kf:
+                predicted_x, predicted_y = kf.x[0], kf.x[1]
+                # Estimate bbox based on predicted center and last known size
+                last_bbox = track["bbox"]
+                width = last_bbox[2] - last_bbox[0]
+                height = last_bbox[3] - last_bbox[1]
+                
+                # Use the predicted bottom-center for the bbox
+                pred_x1 = predicted_x - width / 2
+                pred_y1 = predicted_y - height # predicted_y is the bottom of the bbox
+                pred_x2 = predicted_x + width / 2
+                pred_y2 = predicted_y # predicted_y is the bottom of the bbox
+
+                track["bbox"] = [int(pred_x1), int(pred_y1), int(pred_x2), int(pred_y2)]
+                track["confidence"] = 0.0 # Set confidence to 0 for occluded tracks
+                logger.debug(f"Vehicle {track['vehicle_id']} bbox updated with predicted state due to occlusion.")
+            else:
+                # Update bbox and confidence with current detection if not occluded
+                track["bbox"] = vehicle_bbox
+                track["confidence"] = conf
 
             # Estimate Speed (using Kalman velocity)
             track["speed"] = self._estimate_speed_kalman(
-                track, current_time, prev_time
+                track, current_time, track.get("last_seen", current_time)
             )  # Pass prev_time
             track["speed_history"].append(track["speed"])
 
-            new_lane = self._estimate_lane(track["bbox"])
+            new_lane = self._estimate_lane(frame, track["bbox"], frame_index)
             last_recorded_lane = (
                 track["lane_history"][-1][1] if track["lane_history"] else -1
             )
@@ -643,6 +841,7 @@ class CoreModule:
                 and self.preprocessor
                 and track.get("plate_attempts", 0) < max_ocr_attempts
                 and frame_index % max(1, ocr_interval_frames) == 0
+                and not track["is_occluded"] # Do not attempt OCR if occluded
             ):
                 # --- Selective OCR Trigger ---
                 if self._is_roi_optimal_for_ocr(track["bbox"]):
@@ -650,40 +849,38 @@ class CoreModule:
                         f"Attempting OCR for vehicle {track['vehicle_id']} (Attempt {track.get('plate_attempts', 0) + 1})"
                     )
 
-                    # --- Asynchronous OCR (Placeholder) ---
-                    # In a real implementation, this would be offloaded to a separate process or thread pool
-                    # For now, we'll call it directly but structure it as if it were async
-                    plate_text = self._ocr_license_plate(frame, track["bbox"])
-
-                    if plate_text not in [
-                        "Unknown",
-                        "Unknown (Error)",
-                        "Unknown (BadROI)",
-                        "Unknown (SmallROI)",
-                        "Unknown (NoPrep)",
-                        "Unknown (RetryFail)",
-                        "Unknown (Refused)",
-                        "Unknown (Blocked)",
-                        "Unknown (GenFail)",
-                        "Unknown (InvalidResp)",
-                        "Unknown (OCRError)",
-                        "Unknown (PreprocFail)",
-                        "Unknown (TessFail)",
-                        "Unknown (NoTess)",
-                        "Unknown (TessError)",
-                        None,
-                    ]:
-                        track["license_plate"] = plate_text
-                        logger.info(
-                            f"OCR Success for {track['vehicle_id']}: {plate_text}"
-                        )
-                    track["plate_attempts"] = track.get("plate_attempts", 0) + 1
+                    # --- Asynchronous OCR ---
+                    self.ocr_executor.submit(self._run_ocr, frame, track)
 
         except Exception as e:
             logger.error(
                 f"Error updating track {track.get('vehicle_id', 'N/A')}: {e}",
                 exc_info=True,
             )
+
+    def _run_ocr(self, frame: np.ndarray, track: Dict):
+        plate_text = self._ocr_license_plate(frame, track["bbox"])
+        if plate_text not in [
+            "Unknown",
+            "Unknown (Error)",
+            "Unknown (BadROI)",
+            "Unknown (SmallROI)",
+            "Unknown (NoPrep)",
+            "Unknown (RetryFail)",
+            "Unknown (Refused)",
+            "Unknown (Blocked)",
+            "Unknown (GenFail)",
+            "Unknown (InvalidResp)",
+            "Unknown (OCRError)",
+            "Unknown (PreprocFail)",
+            "Unknown (TessFail)",
+            "Unknown (NoTess)",
+            "Unknown (TessError)",
+            None,
+        ]:
+            track["license_plate"] = plate_text
+            logger.info(f"OCR Success for {track['vehicle_id']}: {plate_text}")
+        track["plate_attempts"] = track.get("plate_attempts", 0) + 1
 
     def _is_roi_optimal_for_ocr(self, bbox: List[int]) -> bool:
         """
@@ -762,9 +959,11 @@ class CoreModule:
             pixel_speed_per_sec = (
                 np.sqrt(vx**2 + vy**2) / time_diff if time_diff > 0 else 0
             )
+            # Get dynamic pixels_per_meter based on the vehicle's current y-position
+            dynamic_ppm = self._get_dynamic_pixels_per_meter(kf.x[1])
             speed_mps = (
-                pixel_speed_per_sec / self.pixels_per_meter
-                if self.pixels_per_meter > 0
+                pixel_speed_per_sec / dynamic_ppm
+                if dynamic_ppm > 0
                 else 0
             )
             speed_kmph = speed_mps * 3.6
@@ -775,13 +974,55 @@ class CoreModule:
             current_history.append(
                 speed_kmph
             )  # Add current estimate to history for smoothing
-            smoothed_speed = np.mean(current_history)  # Smooth over the window
+            
+            # Apply EWMA smoothing
+            smoothed_speed = speed_kmph
+            if len(current_history) > 1:
+                # Calculate EWMA: S_t = alpha * Y_t + (1 - alpha) * S_{t-1}
+                # Where Y_t is the current speed_kmph, and S_{t-1} is the previous smoothed speed
+                # For the first few points, we can use a simple average or just the current value
+                # For simplicity, we'll apply EWMA iteratively over the history
+                smoothed_speed = current_history[0]
+                for i in range(1, len(current_history)):
+                    smoothed_speed = (self.ewma_alpha * current_history[i]) + ((1 - self.ewma_alpha) * smoothed_speed)
+
             return round(max(0, smoothed_speed), 1)
         except Exception as e:
             logger.warning(
                 f"Speed estimation error for {track.get('vehicle_id', 'N/A')}: {e}"
             )
             return 0.0
+
+    def _get_dynamic_pixels_per_meter(self, y_pixel: float) -> float:
+        """
+        Calculates pixels per meter dynamically based on the y-coordinate.
+        Assumes a linear or non-linear relationship where pixels per meter
+        decrease as y_pixel decreases (objects further away).
+        """
+        if self.perspective_matrix is None:
+            # Fallback to static value if no perspective matrix is provided
+            return self.pixels_per_meter
+
+        # Normalize y_pixel to a 0-1 range based on frame height
+        frame_height = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])[1]
+        if frame_height == 0:
+            return self.pixels_per_meter
+
+        normalized_y = y_pixel / frame_height
+
+        # Define a scaling factor. This can be tuned.
+        # For example, a linear interpolation between a min and max ppm.
+        # Let's assume ppm_at_bottom (max ppm) and ppm_at_top (min ppm).
+        # These values should ideally come from calibration or config.
+        # For now, let's use a simple linear scaling.
+        # You might want to add these to your config.yaml
+        ppm_at_bottom = self.config.get("ppm_at_bottom", 60)  # Pixels per meter at the bottom of the frame
+        ppm_at_top = self.config.get("ppm_at_top", 20)      # Pixels per meter at the top of the frame
+
+        # Linear interpolation: ppm = ppm_at_top + (ppm_at_bottom - ppm_at_top) * normalized_y
+        dynamic_ppm = ppm_at_top + (ppm_at_bottom - ppm_at_top) * normalized_y
+
+        return max(1.0, dynamic_ppm) # Ensure it's at least 1.0
 
     def _ocr_license_plate(self, frame: np.ndarray, bbox: List[int]) -> str:
         if not self.preprocessor:
@@ -836,20 +1077,20 @@ class CoreModule:
             # --- Use self.kf_params ---
             kf.P = np.diag(
                 [
-                    self.kf_params.get("kf_sigma_px", 2.0) ** 2,
-                    self.kf_params.get("kf_sigma_py", 2.0) ** 2,
-                    self.kf_params.get("kf_sigma_pvx", 5.0) ** 2,
-                    self.kf_params.get("kf_sigma_pvy", 5.0) ** 2,
+                    self.kf_params.get("kf_sigma_px", 10.0) ** 2,  # Increased initial position uncertainty
+                    self.kf_params.get("kf_sigma_py", 10.0) ** 2,
+                    self.kf_params.get("kf_sigma_pvx", 10.0) ** 2, # Increased initial velocity uncertainty
+                    self.kf_params.get("kf_sigma_pvy", 10.0) ** 2,
                 ]
             )
             kf.R = np.diag(
                 [
-                    self.kf_params.get("kf_sigma_mx", 0.5) ** 2,
-                    self.kf_params.get("kf_sigma_my", 0.5) ** 2,
+                    self.kf_params.get("kf_sigma_mx", 2.0) ** 2,  # Increased measurement noise
+                    self.kf_params.get("kf_sigma_my", 2.0) ** 2,
                 ]
             )
-            q_ax = self.kf_params.get("kf_sigma_ax", 0.5) ** 2
-            q_ay = self.kf_params.get("kf_sigma_ay", 0.5) ** 2
+            q_ax = self.kf_params.get("kf_sigma_ax", 1.0) ** 2  # Increased process noise for acceleration
+            q_ay = self.kf_params.get("kf_sigma_ay", 1.0) ** 2
             # Simplified Q matrix based on typical state-space noise models
             # Assuming dt=1 for initial Q calculation. It scales with dt^n in predict step.
             dt = 1  # Reference dt for Q
@@ -863,37 +1104,92 @@ class CoreModule:
             logger.error(f"Kalman filter initialization failed: {e}", exc_info=True)
             raise
 
-    def _estimate_lane(self, bbox: List[int]) -> int:
+    def _estimate_lane(self, frame: np.ndarray, bbox: List[int], frame_index: int) -> int:
         if not bbox or len(bbox) != 4:
             return -1
+
+        # Check if we should use cached lane boundaries
+        if (
+            self.cached_lane_boundaries is not None
+            and self.last_lane_detection_frame != -1
+            and (frame_index - self.last_lane_detection_frame) < self.lane_detection_interval
+        ):
+            lane_boundaries = self.cached_lane_boundaries
+        else:
+            # Process the frame to detect lane lines dynamically
+            detected_lines = process_frame_for_lanes(frame, self.config)
+            if detected_lines:
+                # Get dynamic lane boundaries based on detected lines
+                self.cached_lane_boundaries = get_lane_boundaries_from_lines(
+                    frame.shape[1], detected_lines, self.config
+                )
+                self.last_lane_detection_frame = frame_index
+                lane_boundaries = self.cached_lane_boundaries
+            else:
+                logger.debug("Dynamic lane boundaries could not be determined. Falling back to static.")
+                lane_boundaries = None
+
+        if lane_boundaries and len(lane_boundaries) > 1:
+            x_center = (bbox[0] + bbox[2]) / 2
+            # Determine which lane the vehicle is in based on dynamic boundaries
+            for i in range(len(lane_boundaries) - 1):
+                if lane_boundaries[i] <= x_center < lane_boundaries[i + 1]:
+                    return i + 1  # Lane numbers are 1-indexed
+            # If outside detected lanes, return -1 or closest lane
+            return -1
+
+        # Fallback to static lane estimation if dynamic detection fails or is disabled
         x_center = (bbox[0] + bbox[2]) / 2
         if self.lane_width_pixels <= 0:
             return -1
-        # Correct calculation: lane based on which width segment the center falls into
         lane = int(x_center // self.lane_width_pixels) + 1
         return max(1, min(lane, self.num_lanes))  # Clamp
 
     def _remove_stale_tracks(self, current_time: float, track_timeout: int) -> None:
-        stale_ids = [
-            vid
-            for vid, track in self.vehicle_data.items()
-            if current_time - track["last_seen"] > track_timeout
-        ]
-        for vid in stale_ids:
+        to_delete = []
+        for vid, track in list(self.vehicle_data.items()): # Iterate over a copy to allow modification
+            time_since_last_seen = current_time - track["last_seen"]
+            if time_since_last_seen > self.reid_timeout:
+                to_delete.append(vid)
+            elif time_since_last_seen > track_timeout:
+                track["status"] = "lost" # Mark as lost
+            else:
+                track["status"] = "active" # Ensure active if seen recently
+
+        for vid in to_delete:
             del self.vehicle_data[vid]
 
+        # Also handle max_active_tracks, prioritizing removal of lost tracks first
         if len(self.vehicle_data) > self.max_active_tracks:
-            sorted_tracks = sorted(
-                self.vehicle_data.items(), key=lambda item: item[1]["last_seen"]
-            )
-            num_to_remove = len(self.vehicle_data) - self.max_active_tracks
-            for i in range(num_to_remove):
-                vid_to_remove = sorted_tracks[i][0]
-                del self.vehicle_data[vid_to_remove]
+            # Separate active and lost tracks
+            active_tracks = {vid: track for vid, track in self.vehicle_data.items() if track["status"] == "active"}
+            lost_tracks = {vid: track for vid, track in self.vehicle_data.items() if track["status"] == "lost"}
 
-        if stale_ids or len(self.vehicle_data) > self.max_active_tracks:
+            # Sort lost tracks by last_seen (oldest first) for removal
+            sorted_lost_tracks = sorted(lost_tracks.items(), key=lambda item: item[1]["last_seen"])
+
+            num_to_remove = len(self.vehicle_data) - self.max_active_tracks
+            removed_count = 0
+
+            # Remove lost tracks first
+            for vid, _ in sorted_lost_tracks:
+                if removed_count >= num_to_remove:
+                    break
+                del self.vehicle_data[vid]
+                removed_count += 1
+
+            # If still more to remove, remove active tracks (oldest first)
+            if removed_count < num_to_remove:
+                sorted_active_tracks = sorted(active_tracks.items(), key=lambda item: item[1]["last_seen"])
+                for vid, _ in sorted_active_tracks:
+                    if removed_count >= num_to_remove:
+                        break
+                    del self.vehicle_data[vid]
+                    removed_count += 1
+
+        if to_delete or len(self.vehicle_data) > self.max_active_tracks:
             logger.debug(
-                f"Removed {len(stale_ids)} stale. Active tracks: {len(self.vehicle_data)}"
+                f"Removed {len(to_delete)} stale/excess tracks. Active tracks: {len(self.vehicle_data)}"
             )
 
     def _save_vehicle_data(self, current_tracks: Dict[str, Dict]) -> None:

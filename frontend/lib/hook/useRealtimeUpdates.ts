@@ -33,7 +33,7 @@ export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { fe
       return; // Prevent multiple connections
     }
 
-    const client = new WebSocketClient(`${WS_BASE_URL.replace(/\/$/, '')}/api/v1/ws`);
+    const client = new WebSocketClient(`${WS_BASE_URL.replace(/\/$/, '')}/api/v1`);
     webSocketClientRef.current = client;
 
     client.onError((type, message) => {

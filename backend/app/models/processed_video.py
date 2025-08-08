@@ -1,8 +1,8 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime
-from sqlalchemy.ext.declarative import declarative_base
+from app.models.base import Base
 from datetime import datetime, timezone
 
-Base = declarative_base()
+
 
 
 class ProcessedVideo(Base):

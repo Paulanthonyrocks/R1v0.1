@@ -11,7 +11,6 @@ from app.core.processing_worker import process_video
 # We need to mock them at the level they are imported in processing_worker.py
 # which is from ..utils.video and ..core.core_module
 @patch('app.core.processing_worker.FrameReader')
-@patch('app.core.processing_worker.FrameReader')
 @patch('cv2.VideoCapture')
 def mock_imports(mock_frame_reader, mock_video_capture, mock_core_module, mock_traffic_monitor, mock_visualize_data):
         

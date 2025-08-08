@@ -34,7 +34,6 @@ class ActiveWebSocketConnection:
         self.manager = manager
         self.user_info: Optional[Dict[str, Any]] = user_info
         self.subscriptions: Set[str] = set()
-        self.auth_pending: bool = True
         self.last_ping: float = time.time()
         self.ping_timeout: float = 30.0  # 30 seconds timeout
         self.token_refresh_time: Optional[float] = None
@@ -135,7 +134,7 @@ class ActiveWebSocketConnection:
             # For PONG messages, 'data' field is optional
             if "type" not in data:
                 logger.warning(
-                    f"Invalid message format from client {self.client_id}: {data}. Missing 'type' field."
+                    f"Invalid message format from client {self.client_id}: Missing 'type' field. Raw data: {data_raw}"
                 )
                 await self.send_json_model(
                     WebSocketMessage(
@@ -151,7 +150,7 @@ class ActiveWebSocketConnection:
             # For PONG messages, 'data' field is optional
             if data.get("type") != WebSocketMessageTypeEnum.PONG and "data" not in data:
                 logger.warning(
-                    f"Invalid message format from client {self.client_id}: {data}. Missing 'data' field for message type {data.get('type')}."
+                    f"Invalid message format from client {self.client_id}: Missing 'data' field for message type {data.get('type')}. Raw data: {data_raw}"
                 )
                 await self.send_json_model(
                     WebSocketMessage(
@@ -163,9 +162,9 @@ class ActiveWebSocketConnection:
                     )
                 )
                 return
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             logger.error(
-                f"Failed to decode JSON message from {self.client_id}: {data_raw}"
+                f"Failed to decode JSON message from {self.client_id}: {e}. Raw data: {data_raw}"
             )
             await self.send_json_model(
                 WebSocketMessage(
@@ -178,7 +177,7 @@ class ActiveWebSocketConnection:
             return
         except Exception as e:
             logger.error(
-                f"Error processing incoming message from {self.client_id}: {e}",
+                f"Error processing incoming message from {self.client_id}: {e}. Raw data: {data_raw}",
                 exc_info=True,
             )
             await self.send_json_model(
@@ -198,7 +197,7 @@ class ActiveWebSocketConnection:
             message = WebSocketMessage(**data)
         except Exception as e:  # Pydantic validation error or other
             logger.warning(
-                f"Invalid WebSocketMessage structure from {self.client_id}: {data}. Error: {e}"
+                f"Invalid WebSocketMessage structure from {self.client_id}: {e}. Raw data: {data_raw}"
             )
             await self.send_json_model(
                 WebSocketMessage(
@@ -211,67 +210,7 @@ class ActiveWebSocketConnection:
             )
             return
 
-        if message.type == WebSocketMessageTypeEnum.AUTHENTICATE:
-            token = (
-                message.data.get("token") if isinstance(message.data, dict) else None
-            )
-            if token:
-                user = await self.manager._verify_firebase_token(token)
-                if user:
-                    self.user_info = user
-                    self.auth_pending = False
-                    logger.info(
-                        f"Client {self.client_id} authenticated successfully. UID: {user.get('uid')}"
-                    )
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                            data=GeneralNotification(
-                                message_type="auth_success",
-                                message="Authentication successful.",
-                            ),
-                        )
-                    )
-                else:
-                    logger.warning(f"Client {self.client_id} authentication failed.")
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                            data=ErrorNotification(
-                                code="AUTH_FAILED",
-                                message="Authentication failed. Invalid token.",
-                            ),
-                        )
-                    )
-                    # Optionally, close connection after failed auth attempt
-                    # await self.close(code=4001, reason="Authentication Failed")
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="AUTH_TOKEN_MISSING",
-                            message="Authentication token missing.",
-                        ),
-                    )
-                )
-            return
-
-        # All further messages require authentication
-        if self.auth_pending and not self.user_info:
-            logger.warning(
-                f"Client {self.client_id} attempted action before authentication. Message: {message.type}"
-            )
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                    data=ErrorNotification(
-                        code="AUTH_REQUIRED",
-                        message="Authentication required before sending other messages.",
-                    ),
-                )
-            )
-            return
+        
 
         # Handle other message types (subscriptions, commands, etc.)
         if message.type == WebSocketMessageTypeEnum.SUBSCRIBE:
@@ -341,17 +280,66 @@ class ActiveWebSocketConnection:
             )
 
         elif message.type == WebSocketMessageTypeEnum.ERROR_NOTIFICATION:
-            logger.warning(
+            logger.info(
                 f"Client {self.client_id} sent an ERROR_NOTIFICATION: {message.data}"
             )
             # Do not re-send an error notification back to the client for an incoming error notification.
             # Just log it and acknowledge.
 
-        elif message.type == "refresh_feed":  # Handle the new refresh_feed event type
-            feed_id = (
-                message.data.get("feed_id") if isinstance(message.data, dict) else None
-            )
-            if feed_id and isinstance(feed_id, str):
+        elif message.type == WebSocketMessageTypeEnum.AUTHENTICATE:
+            new_token = message.data.get("token") if isinstance(message.data, dict) else None
+            if new_token:
+                try:
+                    user_data = await self.manager._verify_firebase_token(new_token)
+                    if user_data:
+                        self.token = new_token
+                        # Assuming token_expiry can be derived from user_data or is handled by Firebase SDK
+                        # For now, we'll just update user_info and log success
+                        self.user_info = user_data
+                        # Firebase ID tokens are typically valid for 1 hour (3600 seconds)
+                        # We can set token_expiry based on 'exp' claim if available, or a default
+                        self.token_expiry = time.time() + 3600 # Default to 1 hour from now
+                        logger.info(f"Client {self.client_id} successfully re-authenticated.")
+                        await self.send_json_model(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                                data={"message": "Authentication successful."},
+                            )
+                        )
+                    else:
+                        logger.warning(f"Client {self.client_id} authentication failed: Invalid token.")
+                        await self.send_json_model(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                                data=ErrorNotification(
+                                    code="AUTH_FAILED", message="Invalid token."
+                                ),
+                            )
+                        )
+                except Exception as e:
+                    logger.error(f"Error during re-authentication for client {self.client_id}: {e}")
+                    await self.send_json_model(
+                        WebSocketMessage(
+                            type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                            data=ErrorNotification(
+                                code="AUTH_ERROR", message=f"Authentication error: {str(e)}"
+                            ),
+                        )
+                    )
+            else:
+                logger.warning(f"Client {self.client_id} sent AUTHENTICATE message without a token.")
+                await self.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                        data=ErrorNotification(
+                            code="MISSING_TOKEN", message="Authentication message missing token."
+                        ),
+                    )
+                )
+
+        elif message.type == WebSocketMessageTypeEnum.REFRESH_FEED:  # Handle the new refresh_feed event type
+            if isinstance(message.data, RefreshFeedData):
+                feed_id = message.data.feed_id
                 logger.info(
                     f"Client {self.client_id} requested refresh for feed: {feed_id}"
                 )
@@ -401,17 +389,17 @@ class ActiveWebSocketConnection:
             else:
                 await self.send_json_model(
                     WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR,
+                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                         data=ErrorNotification(
                             code="INVALID_REFRESH_REQUEST",
                             message="Invalid or missing feed_id for refresh.",
-                        ).model_dump(),
+                        ),
                     )
                 )
 
         else:
             logger.warning(
-                f"Unhandled message type from {self.client_id}: {message.type}"
+                f"Unhandled message type from {self.client_id}: {message.type}. Data: {message.data}"
             )
             await self.send_json_model(
                 WebSocketMessage(
@@ -471,13 +459,25 @@ class ActiveWebSocketConnection:
 class ConnectionManager:
     """Manages active WebSocket connections."""
 
-    def __init__(self):
+    from app.exceptions import ConnectionLimitExceeded # Import the new exception
+
+class ConnectionManager:
+    """Manages active WebSocket connections.""" # Add max_connections to __init__
+
+    def __init__(self, max_connections: int = 1000, token_refresh_interval: int = 300): # 5 minutes
         self.active_connections: Dict[str, ActiveWebSocketConnection] = {}
         self.ping_interval_seconds: int = 15  # Send ping every 15 seconds
         self.ping_task: Optional[asyncio.Task] = None
-        logger.info("ConnectionManager initialized.")
+        self.max_connections = max_connections  # Set the maximum number of connections
+        self.token_refresh_interval = token_refresh_interval # Interval to check for token refresh
+        logger.info(f"ConnectionManager initialized with max_connections={self.max_connections}, token_refresh_interval={self.token_refresh_interval}.")
 
     async def connect(self, websocket: WebSocket, client_id: str, user_data: Dict[str, Any]):
+        if len(self.active_connections) >= self.max_connections:
+            logger.warning(f"Connection limit ({self.max_connections}) exceeded. Rejecting new connection from {client_id}.")
+            raise ConnectionLimitExceeded(detail="Maximum number of connections reached.")
+
+        await websocket.accept()
         connection = ActiveWebSocketConnection(websocket, client_id, self, user_data)
         self.active_connections[client_id] = connection
         logger.info(f"Client {client_id} connected. Total active connections: {len(self.active_connections)}")
@@ -604,7 +604,7 @@ class ConnectionManager:
                 )
                 clients_to_remove.append(client_id)
 
-        # Check for clients that haven't responded to pings
+        # Check for clients that haven't responded to pings or need token refresh
         current_time = time.time()
         for client_id, connection in list(self.active_connections.items()):
             if current_time - connection.last_ping > connection.ping_timeout:
@@ -612,6 +612,15 @@ class ConnectionManager:
                     f"Client {client_id} timed out (no PONG response). Disconnecting."
                 )
                 clients_to_remove.append(client_id)
+            # Check if token needs refreshing
+            if connection.token_expiry and current_time >= (connection.token_expiry - self.token_refresh_interval):
+                logger.info(f"Client {client_id} token expiring soon. Requesting refresh.")
+                await connection.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.TOKEN_REFRESH_REQUEST,
+                        data={"message": "Your token is expiring soon. Please refresh."},
+                    )
+                )
 
         for client_id in clients_to_remove:
             self.disconnect(client_id)

@@ -1,5 +1,5 @@
 // frontend/lib/useMultipartStream.ts
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface MultipartStreamData {
   image: string | null; // Data URL for the image

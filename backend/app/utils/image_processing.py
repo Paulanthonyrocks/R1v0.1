@@ -28,8 +28,10 @@ class LicensePlatePreprocessor:
     ):  # perspective_matrix not used in current impl
         self.config = config.get("ocr_engine", {})
         self.gemini_api_key = self.config.get("gemini_api_key")
+        self.use_gemini_ocr = self.config.get("use_gemini_ocr", True) # Default to True for backward compatibility
+        self.use_tesseract = self.config.get("use_tesseract", False) # Default to False
         self.model = None
-        if self.gemini_api_key:
+        if self.gemini_api_key and self.use_gemini_ocr:
             try:
                 genai.configure(api_key=self.gemini_api_key)
                 self.model = genai.GenerativeModel("gemini-pro-vision")
@@ -39,10 +41,12 @@ class LicensePlatePreprocessor:
                     f"Failed to initialize Gemini Pro Vision model: {e}", exc_info=True
                 )
                 self.model = None
-        else:
+        elif self.use_gemini_ocr:
             logger.warning(
                 "Gemini API key not provided. Gemini OCR will not be available."
             )
+        else:
+            logger.info("Gemini OCR explicitly disabled in config.")
 
         self.cool_down_secs = self.config.get("gemini_cool_down_secs", 60)
         self.last_api_error_time = (
@@ -219,8 +223,55 @@ class LicensePlatePreprocessor:
             logger.debug("Received empty ROI for OCR.")
             return ""
 
-        # --- Attempt Gemini OCR first if available and configured ---
-        if self.model and self.gemini_api_key:
+        # --- Attempt Tesseract OCR first if configured ---
+        if self.use_tesseract:
+            logger.debug("Attempting OCR using Tesseract...")
+            processed_roi_for_tesseract = self._preprocess_for_tesseract(roi)
+
+            if processed_roi_for_tesseract is not None:
+                try:
+                    # Standard Tesseract config for license plates
+                    custom_config = r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                    # Add a timeout to Tesseract call to prevent indefinite blocking
+                    text = pytesseract.image_to_string(
+                        processed_roi_for_tesseract, config=custom_config, timeout=5
+                    )
+
+                    ocr_result = "".join(
+                        filter(str.isalnum, text)
+                    ).upper()  # Clean and format
+                    if ocr_result:
+                        logger.info(
+                            f"Tesseract OCR Raw: '{text.strip()}', Processed: '{ocr_result}'"
+                        )
+                    else:
+                        logger.debug(
+                            "Tesseract OCR: No text found or empty result after processing."
+                        )
+                except (
+                    RuntimeError
+                ) as e:  # Catches Tesseract not found, timeout, or other runtime issues
+                    logger.error(f"Tesseract runtime error: {e}", exc_info=False)
+                    ocr_result = ""
+                except Exception as e:  # Catch any other unexpected Tesseract error
+                    logger.error(f"Tesseract OCR unexpected error: {e}", exc_info=True)
+                    ocr_result = ""
+            else:
+                logger.warning(
+                    "Preprocessing for Tesseract failed or yielded None, cannot perform Tesseract OCR."
+                )
+                ocr_result = ""  # Ensure it's empty if preprocessing fails
+
+            if ocr_result:  # If Tesseract found something, return it.
+                logger.info(f"Tesseract OCR successful, result: '{ocr_result}'")
+                return ocr_result
+            else:  # Tesseract failed or found nothing, fall through to Gemini if enabled.
+                logger.info(
+                    "Tesseract OCR did not yield a result or failed. Falling back to Gemini if available."
+                )
+
+        # --- Attempt Gemini OCR if available and configured ---
+        if self.model and self.gemini_api_key and self.use_gemini_ocr:
             logger.debug("Attempting OCR using Gemini...")
             try:
                 ocr_result = self._call_gemini_ocr(
@@ -243,60 +294,8 @@ class LicensePlatePreprocessor:
             if ocr_result:  # If Gemini found something, return it.
                 logger.info(f"Gemini OCR successful, result: '{ocr_result}'")
                 return ocr_result
-            else:  # Gemini failed or found nothing, log and fall through to Tesseract.
-                logger.info(
-                    "Gemini OCR did not yield a result or failed. Falling back to Tesseract if available."
-                )
+            else:
+                logger.info("Gemini OCR did not yield a result or failed.")
 
-        # --- Fallback to Tesseract OCR ---
-        # Check if pytesseract module itself was successfully imported
-        if "pytesseract" not in globals() and "pytesseract" not in locals():
-            # This check might be tricky depending on how pytesseract is imported (e.g. import pytesseract vs from foo import pytesseract)
-            # A more robust check is to see if the variable 'pytesseract' exists and is not None.
-            # However, the original code checked `if not pytesseract:` which assumes `import pytesseract` was attempted.
-            if not (
-                self.model and self.gemini_api_key
-            ):  # Only log this warning if Gemini wasn't tried/configured
-                logger.warning(
-                    "Pytesseract module not available. No OCR will be performed."
-                )
-            return ""
-
-        logger.debug("Attempting OCR using Tesseract...")
-        processed_roi_for_tesseract = self._preprocess_for_tesseract(roi)
-
-        if processed_roi_for_tesseract is not None:
-            try:
-                # Standard Tesseract config for license plates
-                custom_config = r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                # Add a timeout to Tesseract call to prevent indefinite blocking
-                text = pytesseract.image_to_string(
-                    processed_roi_for_tesseract, config=custom_config, timeout=5
-                )
-
-                ocr_result = "".join(
-                    filter(str.isalnum, text)
-                ).upper()  # Clean and format
-                if ocr_result:
-                    logger.info(
-                        f"Tesseract OCR Raw: '{text.strip()}', Processed: '{ocr_result}'"
-                    )
-                else:
-                    logger.debug(
-                        "Tesseract OCR: No text found or empty result after processing."
-                    )
-            except (
-                RuntimeError
-            ) as e:  # Catches Tesseract not found, timeout, or other runtime issues
-                logger.error(f"Tesseract runtime error: {e}", exc_info=False)
-                ocr_result = ""
-            except Exception as e:  # Catch any other unexpected Tesseract error
-                logger.error(f"Tesseract OCR unexpected error: {e}", exc_info=True)
-                ocr_result = ""
-        else:
-            logger.warning(
-                "Preprocessing for Tesseract failed or yielded None, cannot perform Tesseract OCR."
-            )
-            ocr_result = ""  # Ensure it's empty if preprocessing fails
-
+        # If neither Tesseract nor Gemini yielded a result
         return ocr_result

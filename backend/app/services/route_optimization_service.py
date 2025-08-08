@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.ml.route_optimizer import RouteOptimizer, OptimizedRoute

@@ -13,6 +13,7 @@ from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
 from app.database import get_database_manager
 from app.services.analytics_service import AnalyticsService
+from app.ml.traffic_predictor import TrafficPredictor # Import TrafficPredictor
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +101,24 @@ async def initialize_services(
     try:
         from app.services.analytics_service import AnalyticsService
 
+        # Load the TrafficPredictor model
+        traffic_predictor_model_path = config.get("analytics_service", {}).get("model_path")
+        loaded_traffic_predictor = None
+        if traffic_predictor_model_path:
+            try:
+                loaded_traffic_predictor = TrafficPredictor(config=config.get("analytics_service", {}))
+                loaded_traffic_predictor.load_model(traffic_predictor_model_path)
+                logger.info(f"TrafficPredictor model loaded from {traffic_predictor_model_path}")
+            except Exception as e:
+                logger.error(f"Failed to load TrafficPredictor model from {traffic_predictor_model_path}: {e}", exc_info=True)
+        else:
+            logger.warning("No model_path configured for TrafficPredictor. AnalyticsService will use a mock predictor.")
+
         _analytics_service_instance = AnalyticsService(
             config=config.get("analytics_service", {}),
             connection_manager=connection_manager_instance,
-            database_manager=db_manager,  # Add this line
+            database_manager=db_manager,
+            traffic_predictor=loaded_traffic_predictor, # Pass the loaded predictor
         )
         logger.info("AnalyticsService initialized successfully in services.py.")
         print(

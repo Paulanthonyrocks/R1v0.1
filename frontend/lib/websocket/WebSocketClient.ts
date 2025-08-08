@@ -106,6 +106,7 @@ export class WebSocketClient implements IWebSocketClient {
     private pingInterval: NodeJS.Timeout | null = null;
     private lastPongTime: number = Date.now();
     private errorListeners: Set<(type: string, message: string) => void> = new Set();
+    private statusListeners: Set<(status: string, message?: string) => void> = new Set();
 
     constructor(baseUrl: string) {
         this.url = baseUrl;
@@ -115,6 +116,15 @@ export class WebSocketClient implements IWebSocketClient {
         this.tokenManager.onTokenRefresh((token) => {
             this.handleTokenRefresh(token);
         });
+    }
+
+    private notifyStatus(status: string, message?: string) {
+        this.statusListeners.forEach(listener => listener(status, message));
+    }
+
+    public onStatusChange(listener: (status: string, message?: string) => void): () => void {
+        this.statusListeners.add(listener);
+        return () => this.statusListeners.delete(listener);
     }
 
     private async handleTokenRefresh(token: string): Promise<void> {
@@ -141,6 +151,7 @@ export class WebSocketClient implements IWebSocketClient {
     public async connect(token: string | null): Promise<void> {
         if (this.isConnecting) return;
         this.isConnecting = true;
+        this.notifyStatus('connecting', 'Attempting to connect...');
 
         // If no token is provided, try to get it from TokenManager
         if (!token) {
@@ -149,6 +160,7 @@ export class WebSocketClient implements IWebSocketClient {
                 // If still no token, wait and retry
                 console.warn('No token available for WebSocket connection. Retrying in 2 seconds...');
                 this.isConnecting = false; // Allow new connection attempts
+                this.notifyStatus('error', 'No authentication token available.');
                 setTimeout(() => this.connect(null), 2000); // Retry after 2 seconds
                 return;
             }
@@ -166,6 +178,7 @@ export class WebSocketClient implements IWebSocketClient {
                 this.reconnectAttempts = 0;
                 this.reconnectDelay = 1000;
                 this.startPingInterval();
+                this.notifyStatus('connected', 'Connection established.');
                 
                 // Send any queued messages
                 while (this.messageQueue.length > 0) {
@@ -192,6 +205,7 @@ export class WebSocketClient implements IWebSocketClient {
                     if (!wasClean) {
                         this.notifyError('connection_closed', 
                             `Connection closed unexpectedly (${closeReason}). Attempting to reconnect in ${delay/1000} seconds...`);
+                        this.notifyStatus('reconnecting', `Connection lost. Attempting to reconnect...`);
                     }
                     
                     setTimeout(async () => {
@@ -200,11 +214,13 @@ export class WebSocketClient implements IWebSocketClient {
                             await this.connect(currentToken);
                         } else {
                             this.notifyError('auth_error', 'Unable to reconnect: No valid authentication token available');
+                            this.notifyStatus('error', 'Authentication expired. Please log in again.');
                         }
                     }, delay);
                 } else {
                     this.notifyError('max_reconnect_attempts', 
                         `Maximum reconnection attempts (${this.maxReconnectAttempts}) reached. Please refresh the page.`);
+                    this.notifyStatus('disconnected', 'Could not reconnect to the server.');
                 }
             };
 
@@ -222,6 +238,7 @@ export class WebSocketClient implements IWebSocketClient {
         } catch (error) {
             console.error('WebSocket connection error:', error);
             this.isConnecting = false;
+            this.notifyStatus('error', 'Failed to initialize WebSocket connection.');
         }
     }
 
@@ -343,6 +360,7 @@ export class WebSocketClient implements IWebSocketClient {
             this.ws.close();
             this.ws = null;
         }
+        this.notifyStatus('disconnected', 'User disconnected.');
     }
 
     public onError(listener: (type: string, message: string) => void): () => void {

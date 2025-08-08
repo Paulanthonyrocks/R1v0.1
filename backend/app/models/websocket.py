@@ -173,6 +173,40 @@ class UserSpecificConditionAlert(BaseModel):  # Renamed and adjusted
     issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+# --- Specific Payload Models for WebSocket Communication ---
+class PingData(BaseModel):
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PongData(BaseModel):
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AuthSuccessData(BaseModel):
+    message: str = "Authentication successful."
+    user_info: Optional[Dict[str, Any]] = None
+
+
+class AuthFailureData(ErrorNotification):
+    pass  # Inherits from ErrorNotification
+
+
+class AuthenticateData(BaseModel):
+    token: str = Field(..., description="Firebase ID token for authentication.")
+
+
+class SubscribeData(BaseModel):
+    topic: str = Field(..., description="Topic to subscribe to.")
+
+
+class UnsubscribeData(BaseModel):
+    topic: str = Field(..., description="Topic to unsubscribe from.")
+
+
+class RefreshFeedData(BaseModel):
+    feed_id: str = Field(..., description="ID of the feed to refresh.")
+
+
 # --- WebSocket Message Wrapper ---
 class WebSocketMessageTypeEnum(str, enum.Enum):
     METRICS_UPDATE = "metrics_update"
@@ -203,6 +237,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE = "subscribe"
     UNSUBSCRIBE = "unsubscribe"
     PING = "ping"
+    TOKEN_REFRESH_REQUEST = "token_refresh_request" # Request for client to refresh token
+    REFRESH_FEED = "refresh_feed" # Client requests a feed refresh
 
 
 class WebSocketMessage(BaseModel):
@@ -221,12 +257,23 @@ class WebSocketMessage(BaseModel):
             AlertStatusUpdatePayload,
             NodeCongestionUpdatePayload,
             UserSpecificConditionAlert,  # Updated to new model name
-            Dict[str, Any],  # For simple payloads like pong or auth status
+            PingData,
+            PongData,
+            AuthSuccessData,
+            AuthFailureData,
+            AuthenticateData,
+            SubscribeData,
+            UnsubscribeData,
+            RefreshFeedData,
         ]
     ] = None
     client_id: Optional[str] = Field(
         None,
         description="Identifier for a specific client if the message is targeted, otherwise None for broadcast.",
+    )
+    correlation_id: Optional[str] = Field(
+        None,
+        description="Optional ID to correlate requests and responses if applicable",
     )
     correlation_id: Optional[str] = Field(
         None,

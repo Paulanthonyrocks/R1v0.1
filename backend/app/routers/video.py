@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pathlib import Path
-import os
+
 import logging
-from ..services.video_processor import VideoManager
+from app.config import get_current_config
 from app.dependencies import get_current_active_user, get_token_from_query
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
 from app.services.video_ws_manager import video_ws_manager
+from app.services.video_manager import VideoManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -20,16 +21,12 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
     logger.info(
         f"GET /video/sample-video/stream endpoint called by user: {current_user.get('email')}"
     )
-    VIDEO_PATH = os.getenv(
-        "SAMPLE_VIDEO_PATH",
-        str(
-            Path(__file__).parent.parent.parent.parent
-            / "frontend"
-            / "public"
-            / "sample_traffic.mp4"
-        ),
-    )
-    video_path = Path(VIDEO_PATH)
+    config = get_current_config()
+    video_path_str = config.get("video_input", {}).get("sample_video")
+    if not video_path_str:
+        logger.error("Sample video path not configured.")
+        raise ResourceNotFound(detail="Sample video path not configured.")
+    video_path = Path(video_path_str)
     logger.info(f"Attempting to stream video from: {video_path.resolve()}")
     if not video_path.exists():
         logger.error(
@@ -87,16 +84,12 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
     logger.info(
         f"GET /video/sample-video/kpis endpoint called by user: {current_user.get('email')}"
     )
-    VIDEO_PATH = os.getenv(
-        "SAMPLE_VIDEO_PATH",
-        str(
-            Path(__file__).parent.parent.parent.parent
-            / "frontend"
-            / "public"
-            / "sample_traffic.mp4"
-        ),
-    )
-    video_path = Path(VIDEO_PATH)
+    config = get_current_config()
+    video_path_str = config.get("video_input", {}).get("sample_video")
+    if not video_path_str:
+        logger.error("Sample video path not configured.")
+        raise ResourceNotFound(detail="Sample video path not configured.")
+    video_path = Path(video_path_str)
     try:
         try:
             video_manager = VideoManager.get_instance()

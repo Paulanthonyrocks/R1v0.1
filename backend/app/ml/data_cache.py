@@ -50,7 +50,7 @@ class TrafficDataCache:
         ]
 
     def get_recent_data(
-        self, latitude: float, longitude: float, hours: Optional[int] = None
+        self, latitude: float, longitude: float, hours: Optional[int] = None, num_points: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Get recent data points for a location"""
         location_key = self._get_location_key(latitude, longitude)
@@ -59,11 +59,14 @@ class TrafficDataCache:
         if not data:
             return []
 
-        if hours is None:
-            return data
+        if hours is not None:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            data = [point for point in data if point["timestamp"] > cutoff_time]
 
-        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-        return [point for point in data if point["timestamp"] > cutoff_time]
+        if num_points is not None:
+            data = data[-num_points:]
+
+        return data
 
     def get_statistics(
         self, latitude: float, longitude: float, hours: Optional[int] = None

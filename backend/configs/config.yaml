@@ -1,23 +1,15 @@
-# backend/configs/config.yaml
-# Example Configuration for Route One Hub Backend
-
-# --- General Settings ---
-fps: 5 # Target processing FPS (workers might adjust dynamically)
-speed_limit: 60 # Speed limit in km/h for 'speeding' classification
-
-# --- Firebase Configuration ---
+fps: 5
+speed_limit: 60
 firebase_admin:
   service_account_key_path: configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
-
-# --- Logging Configuration ---
 logging:
   version: 1
-  disable_existing_loggers: False
+  disable_existing_loggers: false
   formatters:
     standardFormatter:
-      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+      format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   handlers:
     consoleHandler:
       class: logging.StreamHandler
@@ -28,385 +20,450 @@ logging:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_main.log
-      maxBytes: 10485760 # 10 MB
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_main.log
+      maxBytes: 10485760
       backupCount: 5
     workerFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_worker.log
-      maxBytes: 10485760 # 10 MB
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_worker.log
+      maxBytes: 10485760
       backupCount: 5
     databaseFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_database.log
-      maxBytes: 10485760 # 10 MB
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_database.log
+      maxBytes: 10485760
       backupCount: 5
     servicesFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_services.log
-      maxBytes: 10485760 # 10 MB
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_services.log
+      maxBytes: 10485760
       backupCount: 5
     mlFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_ml.log
-      maxBytes: 10485760 # 10 MB
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_ml.log
+      maxBytes: 10485760
       backupCount: 5
   loggers:
-    # Root logger
-    '':
-      handlers: [consoleHandler, mainFileHandler]
+    root:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: True
-    # Specific logger for the main application
-    'app.main':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: true
+    app.main:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False # Prevent messages from being handled by root logger as well
-    # Logger for processing workers (their loggers will be named 'Process-feed_id')
-    'Process':
-      handlers: [workerFileHandler]
+      propagate: false
+    Process:
+      handlers:
+      - workerFileHandler
       level: INFO
-      propagate: False # Prevent messages from being handled by root logger
-    # Logger for database operations
-    'app.database':
-      handlers: [consoleHandler, databaseFileHandler]
+      propagate: false
+    app.database:
+      handlers:
+      - consoleHandler
+      - databaseFileHandler
       level: INFO
-      propagate: False
-    # Logger for service operations
-    'app.services':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    # Logger for machine learning operations
-    'app.ml':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    # Logger for ML submodules
-    'app.ml.traffic_predictor':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.traffic_predictor:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.route_optimizer':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.route_optimizer:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.preference_learner':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.preference_learner:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    # Logger for ML pavement analysis submodules
-    'app.ml.pavement_analysis.utils.image_preprocessing':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.utils.image_preprocessing:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.utils.camera_calibration':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.utils.camera_calibration:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.reporting.report_generator':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.reporting.report_generator:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.analyze_pavement':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.analyze_pavement:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.detection_modules.ml_detector':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.detection_modules.ml_detector:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.analysis_modules.rutting_analysis':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.analysis_modules.rutting_analysis:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.analysis_modules.pothole_measurement':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.analysis_modules.pothole_measurement:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.analysis_modules.pci_calculator':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.analysis_modules.pci_calculator:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.pavement_analysis.analysis_modules.crack_measurement':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.pavement_analysis.analysis_modules.crack_measurement:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'app.ml.data_cache':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    app.ml.data_cache:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    # Logger for service submodules
-    'app.services.feed_manager':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.feed_manager:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.analytics_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.analytics_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.weather_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.weather_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.video_processor':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.video_processor:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.traffic_signal_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.traffic_signal_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.personalized_routing_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.personalized_routing_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.route_optimization_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.route_optimization_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    'app.services.event_service':
-      handlers: [consoleHandler, servicesFileHandler]
+      propagate: false
+    app.services.event_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
       level: INFO
-      propagate: False
-    # Logger for WebSocket connection manager
-    'app.websocket.connection_manager':
-      handlers: [consoleHandler, mainFileHandler] # Using mainFileHandler for now, can create a separate one if needed
+      propagate: false
+    app.websocket.connection_manager:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-    # Logger for short names used in code
-    'main':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    main:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-    'ml_detector':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    ml_detector:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    'analyze_pavement':
-      handlers: [consoleHandler, mlFileHandler]
+      propagate: false
+    analyze_pavement:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
       level: INFO
-      propagate: False
-    # Logger for HTTP access logs
-    'uvicorn.access':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    uvicorn.access:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-    'fastapi':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    fastapi:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-
-    # Logger for Firebase authentication events
-    'firebase_auth':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    firebase_auth:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-
-    # Logger for core agent module
-    'app.core.agent_core':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    app.core.agent_core:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-
-    # Logger for core module
-    'app.core.core_module':
-      handlers: [consoleHandler, mainFileHandler]
+      propagate: false
+    app.core.core_module:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
-      propagate: False
-
-# --- Database Configuration ---
+      propagate: false
 database:
-  db_path: ./data/vehicle_data.db # Path to SQLite database file (ensure directory exists)
-  chunk_size: 100 # Batch size for DB writer
-  cache_size: 128 # LRU cache size for DB read methods
-  schema: # Define the structure of the 'vehicles' table
-    vehicle_id: TEXT PRIMARY KEY # Unique ID (includes feed prefix)
-    timestamp: REAL # UNIX timestamp (float)
-    frame_index: INTEGER # Frame number from the source feed
-    license_plate: TEXT # Detected license plate (or "Unknown")
-    vehicle_type: TEXT # e.g., 'car', 'truck', 'bus', 'motorcycle', 'unknown'
-    first_seen: REAL # Timestamp when first detected
-    last_seen: REAL # Timestamp when last updated
-    x1: REAL # Bounding box top-left x
-    y1: REAL # Bounding box top-left y
-    x2: REAL # Bounding box bottom-right x
-    y2: REAL # Bounding box bottom-right y
-    speed: REAL # Estimated speed in km/h
-    lane: INTEGER # Estimated lane number (1-based) or -1 if unknown
-    confidence: REAL # Detection confidence (if available)
-    car_model: TEXT # Placeholder for future feature
-    car_color: TEXT # Placeholder for future feature
-    # Add other fields as needed
-
-# --- Feed Manager Configuration ---
+  db_path: ./data/vehicle_data.db
+  chunk_size: 100
+  cache_size: 128
+  schema:
+    vehicle_id: TEXT PRIMARY KEY
+    timestamp: REAL
+    frame_index: INTEGER
+    license_plate: TEXT
+    vehicle_type: TEXT
+    first_seen: REAL
+    last_seen: REAL
+    x1: REAL
+    y1: REAL
+    x2: REAL
+    y2: REAL
+    speed: REAL
+    lane: INTEGER
+    confidence: REAL
+    car_model: TEXT
+    car_color: TEXT
 feed_manager:
-  max_concurrent_feeds: 10 # Limit the number of feeds running simultaneously
-  db_write_interval: 0.5 # Seconds between batch writes to DB from queue
-  error_check_interval: 5.0 # Seconds between checking worker error queues
-
-queue_log_interval: 120.0 # How often (seconds) to log the queue size
-
-# --- Video Input / Worker Configuration ---
+  max_concurrent_feeds: 10
+  db_write_interval: 0.5
+  error_check_interval: 5.0
+queue_log_interval: 120.0
 video_input:
-  sample_video: C:/Users/HP/Desktop/R1v0.1/frontend/public/sample_traffic.mp4 # Optional: Path to a sample video for easy testing
-  webcam_index: 0 # Default index if source is "webcam" or "webcam:N" is invalid
-  webcam_buffer_size: 20 # Camera buffer size (increase might help with frame drops on some systems)
-  max_queue_size: 1000 # Max size for the frame queue between worker and manager
-  queue_put_timeout_ms: 1000 # Timeout in milliseconds for the FrameReader to put frames into the queue
-
-# --- Video Output Configuration ---
+  sample_videos:
+    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic.mp4
+    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_2.mp4 # Placeholder for additional sample video
+    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_3.mp4 # Placeholder for additional sample video
+    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_4.mp4 # Placeholder for additional sample video
+    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_5.mp4 # Placeholder for additional sample video
+  webcam_index: 0
+  webcam_buffer_size: 20
+  max_queue_size: 1000
+  queue_put_timeout_ms: 1000
 video_output:
   enabled: true
   output_directory: ./data/processed_videos
   codec: mp4v
   fps: 30
-
-# --- Vehicle Detection (YOLO & Tracking) ---
 vehicle_detection:
-  model_path: backend/models/yolov8n.pt # Path to the YOLO model file (e.g., yolov8n.pt)
-  frame_resolution: [640, 480] # Target resolution for processing [width, height]
-  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
-  confidence_threshold: 0.4 # Minimum detection confidence
-  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
-  track_timeout: 10 # Seconds before a track is considered stale and removed
-  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 640 # Image size for YOLO model inference
-  skip_frames: 3 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+  model_path: backend/models/yolov8n.pt
+  frame_resolution:
+  - 1920
+  - 1080
+  vehicle_class_ids:
+  - 2
+  - 3
+  - 5
+  - 7
+  confidence_threshold: 0.4
+  proximity_threshold: 50
+  track_timeout: 20
+  max_active_tracks: 50
+  yolo_imgsz: 640
+  skip_frames: 3
 analytics_service:
   traffic_predictor:
-    model_path: ./models/traffic_predictor_model.h5 # Path to the traffic prediction model
-
-  frame_resolution: [640, 480] # Target resolution for processing [width, height]
-  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
-  confidence_threshold: 0.25 # Minimum detection confidence
-  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
-  track_timeout: 10 # Seconds before a track is considered stale and removed
-  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 640 # Image size for YOLO model inference
-  skip_frames: 3 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
-analytics_service:
-  traffic_predictor:
-    model_path: ./models/traffic_predictor_model.h5 # Path to the traffic prediction model
-
-  frame_resolution: [640, 480] # Target resolution for processing [width, height]
-  vehicle_class_ids: [2, 3, 5, 7] # COCO IDs for car, motorcycle, bus, truck
-  confidence_threshold: 0.4 # Minimum detection confidence
-  proximity_threshold: 50 # Max distance (pixels) for matching detections to tracks
-  track_timeout: 10 # Seconds before a track is considered stale and removed
-  max_active_tracks: 50 # Maximum number of vehicles to track simultaneously per feed
-  yolo_imgsz: 640 # Image size for YOLO model inference
-  skip_frames: 1 # Base interval for frame skipping (1 = process every frame, 2 = every other, etc.)
+    model_path: ./models/traffic_predictor_model.h5
+  traffic_prediction:
+    enabled: true
+  frame_resolution:
+  - 1920
+  - 1080
+  vehicle_class_ids:
+  - 2
+  - 3
+  - 5
+  - 7
+  confidence_threshold: 0.4
+  proximity_threshold: 75
+  track_timeout: 20
+  max_active_tracks: 50
+  yolo_imgsz: 640
+  skip_frames: 3
   vehicle_type_map:
     2: car
     3: motorcycle
     5: bus
     7: truck
-
-# --- Kalman Filter Parameters ---
+behavior_analysis:
+  stopped_speed_threshold_kmh: 5
+  speed_limit: 60
+  accel_threshold_mps2: 0.5
+  lane_change_buffer: 20
+  ewma_alpha: 0.2
 kalman_filter_params:
-  # Initial state uncertainties (stddev)
-  kf_sigma_px: 2.0  # Position x uncertainty (pixels)
-  kf_sigma_py: 2.0  # Position y uncertainty (pixels)
-  kf_sigma_pvx: 5.0 # Velocity x uncertainty (pixels/dt) - higher allows faster initial velocity adaptation
-  kf_sigma_pvy: 5.0 # Velocity y uncertainty (pixels/dt)
-  # Measurement uncertainties (stddev)
-  kf_sigma_mx: 0.5  # Measurement x uncertainty (pixels) - lower means trust detection more
-  kf_sigma_my: 0.5  # Measurement y uncertainty (pixels)
-  # Process noise (stddev of acceleration) - how much velocity can change unexpectedly between steps
-  kf_sigma_ax: 0.5  # Acceleration x noise (pixels/dt^2)
-  kf_sigma_ay: 0.5  # Acceleration y noise (pixels/dt^2)
-
-# --- Lane Detection & Speed Estimation ---
+  kf_sigma_px: 2.0
+  kf_sigma_py: 2.0
+  kf_sigma_pvx: 5.0
+  kf_sigma_pvy: 5.0
+  kf_sigma_mx: 0.5
+  kf_sigma_my: 0.5
+  kf_sigma_ax: 0.5
+  kf_sigma_ay: 0.5
 lane_detection:
-  num_lanes: 4 # Number of lanes expected in the primary view
-  lane_width: 120 # Approximate width of a lane in pixels (used for lane assignment) - ADJUST BASED ON RESOLUTION/VIEW
-  lane_change_buffer: 10 # Pixel buffer to prevent rapid lane switching near lines
-
-pixels_per_meter: 30 # Estimated pixels per meter AT A REFERENCE POINT IN THE IMAGE - CRUCIAL for speed estimation, needs calibration
-stopped_speed_threshold_kmh: 5 # Speed below which a vehicle is considered 'stopped'
-accel_threshold_mps2: 0.5 # Acceleration threshold (m/s^2) for 'accelerating'/'decelerating' classification
-
-# --- OCR Engine (Gemini / Tesseract) ---
+  dynamic_lane_detection_enabled: true
+  num_lanes: 4 # Fallback if dynamic detection fails or is disabled
+  lane_width: 120 # Fallback if dynamic detection fails or is disabled
+  lane_change_buffer: 10
+  gaussian_blur_kernel_size: 5
+  canny_low_threshold: 50
+  canny_high_threshold: 150
+  hough_rho: 2
+  hough_theta_divisor: 180
+  hough_threshold: 15
+  hough_min_line_length: 40
+  hough_max_line_gap: 20
+  roi_vertices_percent: # [x_percent, y_percent] for top-left, top-right, bottom-right, bottom-left
+    - [0.1, 1.0] # Bottom-left
+    - [0.45, 0.6] # Top-left
+    - [0.55, 0.6] # Top-right
+    - [0.9, 1.0] # Bottom-right
+pixels_per_meter: 30
+stopped_speed_threshold_kmh: 5
+accel_threshold_mps2: 0.5
 ocr_engine:
-  # --- Gemini API (Optional) ---
-  # Set environment variable GEMINI_API_KEY or replace placeholder below
-  gemini_api_key: ${GEMINI_API_KEY} # Read from environment variable or paste key here directly (less secure)
-  use_gpu_ocr: false # Whether to attempt GPU acceleration for preprocessing (requires OpenCV CUDA build)
-  min_roi_size: 600 # Minimum pixel area of the vehicle ROI before attempting OCR
-  sharpen_kernel: [[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]] # Kernel for sharpening
-  morph_kernel: [[1, 1, 1], [1, 1, 1], [1, 1, 1]] # Kernel for morphological opening
-  min_aspect_ratio: 2.0 # Min width/height ratio for rotated plate detection
-  max_aspect_ratio: 5.5 # Max width/height ratio
-  ocr_interval: 10 # Minimum seconds between Gemini OCR attempts *per vehicle*
-  gemini_max_retries: 3 # Max retries for Gemini API calls
-  gemini_retry_delay: 1.0 # Initial delay (seconds) before retrying Gemini
+  use_gemini_ocr: false
+  use_tesseract: true
+  use_gpu_ocr: false
+  min_roi_size: 600
+  sharpen_kernel:
+  - - -1
+    - -1
+    - -1
+  - - -1
+    - 9
+    - -1
+  - - -1
+    - -1
+    - -1
+  morph_kernel:
+  - - 1
+    - 1
+    - 1
+  - - 1
+    - 1
+    - 1
+  - - 1
+    - 1
+    - 1
+  min_aspect_ratio: 2.0
+  max_aspect_ratio: 5.5
+  ocr_interval: 10
+  gemini_max_retries: 3
+  gemini_retry_delay: 1.0
   min_ocr_bbox_height: 50
   min_ocr_bbox_width: 100
   ocr_sweet_spot_y_start: 0.5
-  # --- ROI Adjustment for OCR ---
-  # Factors applied to vehicle bounding box to isolate potential plate region
-  # Values are proportions (0.0 to 1.0)
-  roi_top_margin_factor: 0.5    # Start ROI lower down (e.g., 0.5 = start halfway down the bbox)
-  roi_bottom_margin_factor: 0.1 # End ROI slightly higher (e.g., 0.1 = cut 10% from bottom)
-  roi_left_margin_factor: 0.15  # Crop from left side (e.g., 0.15 = cut 15% from left)
-  roi_right_margin_factor: 0.15 # Crop from right side
-
-# --- Incident Detection (Example thresholds) ---
+  roi_top_margin_factor: 0.5
+  roi_bottom_margin_factor: 0.1
+  roi_left_margin_factor: 0.15
+  roi_right_margin_factor: 0.15
 incident_detection:
-  density_threshold: 10 # Vehicles per lane considered 'high density'
-  congestion_speed_threshold: 20 # Average speed (km/h) below which general congestion might be indicated
-
-# --- Perspective Calibration (Optional) ---
+  density_threshold: 10
+  congestion_speed_threshold: 20
 perspective_calibration:
-  matrix_path: ./configs/perspective_matrix.npy # Path to saved NumPy perspective matrix file (if used by OCR)
-
-# --- Performance & Resource Limits ---
+  matrix_path: ./configs/perspective_matrix.npy
 performance:
-  gpu_acceleration: false # Enable GPU for YOLO detection/tracking if available
-  memory_limit_percent: 85 # Max virtual memory % before blocking new feeds
-  cpu_limit_percent: 90 # Optional: Max CPU % before potentially reducing worker FPS
-  # Dynamic Frame Skipping Configuration
-  min_global_skip_factor: 1.0 # Minimum value for the global skip factor
-  max_global_skip_factor: 3.0 # Maximum value for the global skip factor
-  skip_factor_increase_step: 0.1 # How much to increase the skip factor when under pressure
-  skip_factor_decrease_step: 0.05 # How much to decrease the skip factor when load is low
-  cpu_threshold_for_skip_increase: 80 # CPU % at which to increase skip factor
-  queue_fullness_threshold_for_skip_increase: 0.7 # Percentage of queue fullness (0.0-1.0) at which to increase skip factor
-  skip_factor_adjustment_interval: 360.0 # How often (seconds) the FeedManager adjusts the skip factor
-  long_sleep_after_increase: 10 # Seconds to sleep after increasing skip factor to allow system to stabilize
-
-# --- Visualization ---
-# Default set of visualization options enabled for new feeds
+  gpu_acceleration: false
+  memory_limit_percent: 85
+  cpu_limit_percent: 90
+  min_global_skip_factor: 1.0
+  max_global_skip_factor: 3.0
+  skip_factor_increase_step: 0.1
+  skip_factor_decrease_step: 0.05
+  cpu_threshold_for_skip_increase: 80
+  queue_fullness_threshold_for_skip_increase: 0.7
+  skip_factor_adjustment_interval: 360.0
+  long_sleep_after_increase: 10
 vis_options_default:
-  - Tracked Vehicles
-  - Vehicle Data
-  # - Lane Dividers
-  # - Lane Density Overlay # Can be performance intensive
-  # - Grid Overlay
-
-# --- Interface / Worker Communication ---
+- Tracked Vehicles
+- Vehicle Data
 interface:
-  camera_warmup_time: 0.5 # Seconds to wait after initializing camera source
-
-# --- Region of Interest (ROI) Processing ---
+  camera_warmup_time: 0.5
 roi_processing:
   enabled: true
-  # Defines the rectangle to keep for processing, in [x1, y1, x2, y2] format.
-  # Any part of the video frame outside this rectangle will be ignored by the model.
-  # This is highly recommended for static cameras to focus only on the road.
-  # Example for a 640x480 stream: [0, 200, 640, 480] would crop the top 200 pixels.
-  crop_rect: [0, 180, 640, 480] # Default for 640x480, crops top area
-
-# --- Pavement Analysis Configuration ---
+  crop_rect:
+  - 0
+  - 525
+  - 1920
+  - 1080
+  polygon_points:
+  - - 0
+    - 1080
+  - - 1920
+    - 1080
+  - - 1920
+    - 730
+  - - 1440
+    - 525
+  - - 480
+    - 525
+  - - 0
+    - 730
 pavement_analysis:
   camera_calibration:
     calibration_file: ./calibration_params.npz
@@ -415,29 +472,37 @@ ml_model:
 storage:
   image_output_dir: ./data/pavement_images
   report_output_dir: ./data/pavement_reports
-
-# --- Prediction Scheduler Configuration ---
+log_files:
+  allowed_log_files:
+    - backend_main.log
+    - uvicorn_access.log
+    - uvicorn_error.log
+    - app.log
 prediction_scheduler:
+  enabled: true
   prediction_interval_minutes: 15
-  likelihood_threshold: 70 # Percentage (0-100) for high likelihood incident alerts
-  accuracy_cache_ttl_minutes: 60 # How long to cache prediction accuracy data
-  min_verified_predictions_for_accuracy: 5 # Min predictions needed to trust accuracy score
-  default_low_data_weight: 0.75 # Weight for locations with insufficient accuracy data
-  default_no_accuracy_weight: 0.8 # Weight for locations with no accuracy data
-  max_locations_to_select_factor: 0.5 # Factor of total locations to select (e.g., 0.5 for half)
+  likelihood_threshold: 70
+  accuracy_cache_ttl_minutes: 60
+  min_verified_predictions_for_accuracy: 5
+  default_low_data_weight: 0.75
+  default_no_accuracy_weight: 0.8
+  max_locations_to_select_factor: 0.5
   monitored_locations:
-    - latitude: 34.0522
-      longitude: -118.2437
-      name: Los Angeles Downtown
-    - latitude: 40.7128
-      longitude: -74.0060
-      name: New York Times Square
-    - latitude: 41.8781
-      longitude: -87.6298
-      name: Chicago The Loop
-    - latitude: 37.7749
-      longitude: -122.4194
-      name: San Francisco Embarcadero
-    - latitude: 33.7490
-      longitude: -84.3880
-      name: Atlanta Centennial Park
+  - latitude: 34.0522
+    longitude: -118.2437
+    name: Los Angeles Downtown
+  - latitude: 40.7128
+    longitude: -74.006
+    name: New York Times Square
+  - latitude: 41.8781
+    longitude: -87.6298
+    name: Chicago The Loop
+  - latitude: 37.7749
+    longitude: -122.4194
+    name: San Francisco Embarcadero
+  - latitude: 33.749
+    longitude: -84.388
+    name: Atlanta Centennial Park
+file_watcher:
+  enabled: true
+  watch_directory: ./data/new_sample_videos

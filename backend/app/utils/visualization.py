@@ -2,8 +2,9 @@ import cv2
 import numpy as np
 import logging
 import time  # Used in visualize_data for banner timestamp
-from typing import Dict, Any, Optional, Set, Tuple
+from typing import Dict, Any, Optional, Set, Tuple, List
 from .monitoring import TrafficMonitor
+from .lane_detection import process_frame_for_lanes, get_lane_boundaries_from_lines
 
 logger = logging.getLogger(__name__)
 # No longer need the placeholder class TrafficMonitor here
@@ -16,8 +17,7 @@ overlay_cache_size: Optional[Tuple[int, int]] = None
 
 def create_lane_overlay(
     shape: Tuple[int, int, int],
-    num_lanes: int,
-    lane_width: float,
+    lane_boundaries: List[int],
     density_per_lane: Dict[int, int],
     config: Dict[str, Any],
 ) -> np.ndarray:
@@ -35,9 +35,14 @@ def create_lane_overlay(
         "high": (255, 0, 0, 100),  # Reddish with even more transparency
     }
 
-    for lane_num in range(1, num_lanes + 1):
-        x1 = int((lane_num - 1) * lane_width)
-        x2 = int(lane_num * lane_width)
+    if len(lane_boundaries) < 2:
+        logger.warning("Not enough lane boundaries to draw overlay.")
+        return overlay
+
+    for i in range(len(lane_boundaries) - 1):
+        x1 = lane_boundaries[i]
+        x2 = lane_boundaries[i+1]
+        lane_num = i + 1 # 1-indexed lane number
         density = density_per_lane.get(lane_num, 0)
 
         color = (
@@ -152,6 +157,21 @@ def visualize_data(
         h, w = vis_frame.shape[:2]
         current_size = (w, h)
 
+        # Ensure vis_frame has an alpha channel for blending if needed later
+        if vis_frame.shape[2] == 3:
+            vis_frame = cv2.cvtColor(vis_frame, cv2.COLOR_BGR2BGRA)
+
+        # --- Draw ROI Polygon ---
+        roi_cfg = config.get("roi_processing", {})
+        roi_enabled = roi_cfg.get("enabled", False)
+        roi_polygon_points = roi_cfg.get("polygon_points", None)
+
+        if roi_enabled and roi_polygon_points:
+            # The ROI polygon is no longer drawn on the video frame.
+            # It is still drawn on debug images generated separately.
+            logger.debug(f"[{feed_id}] ROI polygon drawing skipped for video frame.")
+        # --- End Draw ROI Polygon ---
+
         # Reset cached overlays if frame size changes
         if overlay_cache_size != current_size:
             logger.debug(
@@ -162,28 +182,55 @@ def visualize_data(
             overlay_cache_size = current_size
 
         lane_cfg = config.get("lane_detection", {})
-        num_lanes = lane_cfg.get("num_lanes", 0)
-        lane_width = w / num_lanes if num_lanes > 0 else w  # Avoid division by zero
+        dynamic_lane_detection_enabled = lane_cfg.get("dynamic_lane_detection_enabled", False)
+
+        detected_lane_lines = None
+        lane_boundaries = None
+
+        if dynamic_lane_detection_enabled:
+            detected_lane_lines = process_frame_for_lanes(vis_frame, config)
+            if detected_lane_lines:
+                lane_boundaries = get_lane_boundaries_from_lines(w, detected_lane_lines, config)
+                logger.debug(f"[{feed_id}] Dynamically detected lane boundaries: {lane_boundaries}")
+            else:
+                logger.debug(f"[{feed_id}] No dynamic lane lines detected.")
+
+        # Fallback to static lane configuration if dynamic detection is disabled or fails
+        if not dynamic_lane_detection_enabled or not lane_boundaries:
+            num_lanes = lane_cfg.get("num_lanes", 0)
+            lane_width = w / num_lanes if num_lanes > 0 else w
+            if num_lanes > 0:
+                lane_boundaries = [int(i * lane_width) for i in range(num_lanes + 1)]
+            else:
+                lane_boundaries = []
+            logger.debug(f"[{feed_id}] Using static lane boundaries: {lane_boundaries}")
 
         if "Grid Overlay" in visualization_options:
-            if cached_grid_overlay is None:  # Or if relevant config for grid changed
+            if cached_grid_overlay is None or overlay_cache_size != current_size:  # Recreate if size changes
                 cached_grid_overlay = create_grid_overlay(vis_frame.shape, config)
             if cached_grid_overlay is not None:
                 vis_frame = alpha_blend(cached_grid_overlay, vis_frame)
 
-        if "Lane Density Overlay" in visualization_options and num_lanes > 0:
+        if "Lane Density Overlay" in visualization_options and lane_boundaries:
             density_per_lane = traffic_metrics.get("vehicles_per_lane", {})
-            # Re-create lane overlay dynamically as density changes, or cache if density is also stable
-            # For now, let's assume it's dynamic enough to recreate or passed in if cached by caller
             lane_overlay = create_lane_overlay(
-                vis_frame.shape, num_lanes, lane_width, density_per_lane, config
+                vis_frame.shape, lane_boundaries, density_per_lane, config
             )
             vis_frame = alpha_blend(lane_overlay, vis_frame)
+
+        # Draw detected lane lines if dynamic detection is enabled and lines are found
+        if dynamic_lane_detection_enabled and detected_lane_lines and "Lane Lines" in visualization_options:
+            for line in detected_lane_lines:
+                x1, y1, x2, y2 = line
+                cv2.line(vis_frame, (x1, y1), (x2, y2), (0, 255, 255, 200), 2) # Cyan color for detected lines
 
         if (
             "Tracked Vehicles" in visualization_options
             or "Vehicle Data" in visualization_options
         ):
+            logger.debug(f"[{feed_id}] 'Tracked Vehicles' or 'Vehicle Data' option is active.")
+            logger.debug(f"[{feed_id}] tracked_vehicles content: {tracked_vehicles}")
+
             # Define colors based on behavior
             color_map = {
                 "moving": (0, 255, 0),  # Green
@@ -203,21 +250,23 @@ def visualize_data(
                 class_name = TrafficMonitor.vehicle_type_map.get(class_id, "?")
                 behavior = data.get("behavior", "unknown")
 
+                logger.debug(f"[{feed_id}] Processing vehicle {veh_id}. Bbox: {bbox}, Behavior: {behavior}")
+
                 if bbox:
                     x1, y1, x2, y2 = map(int, bbox)
                     color = color_map.get(behavior, (128, 128, 128))
 
                     if "Tracked Vehicles" in visualization_options:
-                        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 1) # Thinner border
+                        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2) # Increased thickness
 
                     if "Vehicle Data" in visualization_options:
                         lines = [f"ID:{veh_id}({class_name})", f"Spd:{speed:.1f}km/h"]
                         if plate:
                             lines.append(f"LP:{plate}")
 
-                        font_scale = 0.3
-                        font_thickness = 1
-                        line_height = 10
+                        font_scale = 0.5 # Increased font size
+                        font_thickness = 2 # Increased font thickness
+                        line_height = 35 # Increased line height for more spacing
 
                         # Position text: above bbox if space, else below
                         text_y_start = (
@@ -227,14 +276,14 @@ def visualize_data(
                         )
 
                         for i, line_text in enumerate(lines):
-                            (text_width, _), _ = cv2.getTextSize(
+                            (text_width, _), baseline = cv2.getTextSize(
                                 line_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
                             )
                             text_x_center = x1 + (x2 - x1 - text_width) // 2 # Center horizontally
                             cv2.putText(
                                 vis_frame,
                                 line_text,
-                                (text_x_center, text_y_start + i * line_height),
+                                (text_x_center, text_y_start + i * line_height + baseline), # Add baseline for correct vertical alignment
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 font_scale,
                                 color,

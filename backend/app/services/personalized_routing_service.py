@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta  # Added timedelta for time-based filtering
 from sqlalchemy import Column, String, DateTime, JSON, Float, Integer, func, select
 from typing import Tuple
-from sqlalchemy.ext.declarative import declarative_base
+from app.models.base import Base
 from sqlalchemy.exc import SQLAlchemyError  # For more specific exception handling
 import uuid  # For generating unique suggestion IDs & pattern_ids
 from pydantic import BaseModel  # For CommonTravelPattern
@@ -14,59 +14,16 @@ from app.ml.route_optimizer import RouteOptimizer
 
 logger = logging.getLogger(__name__)
 
-Base = declarative_base()
 
 
-class RouteHistoryModel(Base):
-    __tablename__ = "route_history"
 
-    id = Column(String, primary_key=True)
-    user_id = Column(String, index=True)
-    start_location = Column(JSON)
-    end_location = Column(JSON)
-    start_time = Column(DateTime)
-    end_time = Column(DateTime)
-    route_preference_used = Column(String)
-    road_types_used = Column(JSON)
-    distance_km = Column(Float)
-    duration_minutes = Column(Float)
-    traffic_conditions = Column(String)
-    weather_conditions = Column(String, nullable=True)
-    user_rating = Column(Integer, nullable=True)
-    feedback = Column(String, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+from app.models.route_history import RouteHistoryModel
 
 
-class ProactiveSuggestionFeedbackLog(Base):
-    __tablename__ = "proactive_suggestion_feedback_log"
-
-    id = Column(
-        String, primary_key=True
-    )  # A unique ID for this feedback entry, e.g., str(uuid.uuid4())
-    suggestion_id = Column(
-        String, index=True, unique=True
-    )  # The ID of the suggestion this feedback is for
-    user_id = Column(String, index=True)
-    timestamp = Column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )  # Record creation/update time
-    suggestion_details = Column(
-        JSON
-    )  # Store what was suggested, e.g., route, destination, type of suggestion
-    interaction_status = Column(
-        String
-    )  # e.g., "suggested", "accepted", "rejected", "ignored", "modified", "pending_feedback", "error_in_suggestion"
-    user_feedback_text = Column(String, nullable=True)
-    user_rating = Column(Integer, nullable=True)  # e.g., 1-5 stars
-    created_at = Column(DateTime, server_default=func.now())  # Record creation time
+from app.models.proactive_suggestion_feedback_log import ProactiveSuggestionFeedbackLog
 
 
-class UserProfileModel(Base):
-    __tablename__ = "user_profiles"
-
-    user_id = Column(String, primary_key=True)
-    profile_data = Column(JSON)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+from app.models.user_profile import UserProfileModel
 
 
 # Pydantic model for common travel patterns

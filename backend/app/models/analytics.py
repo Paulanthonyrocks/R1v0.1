@@ -1,13 +1,13 @@
 from sqlalchemy import Column, String, DateTime, JSON, Boolean, Float
-from sqlalchemy.ext.declarative import declarative_base
+from app.models.base import Base
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 
-PredictionLogBase = declarative_base()
 
 
-class PredictionLogModel(PredictionLogBase):
+
+class PredictionLogModel(Base):
     __tablename__ = "prediction_logs"
 
     id = Column(String, primary_key=True, index=True)
@@ -34,7 +34,7 @@ class PredictionLogModel(PredictionLogBase):
 
 
 # Pydantic model for data transfer (optional, but good practice)
-class PredictionLogCreate(BaseModel):
+class PredictionLogBase(BaseModel):
     location_name: Optional[str] = None
     location_latitude: float
     location_longitude: float
@@ -45,7 +45,11 @@ class PredictionLogCreate(BaseModel):
     source_of_prediction: str
 
 
-class PredictionLogResponse(PredictionLogCreate):
+class PredictionLogCreate(PredictionLogBase):
+    pass
+
+
+class PredictionLogResponse(PredictionLogBase):
     id: str
     prediction_made_at: datetime
     outcome_verified: bool

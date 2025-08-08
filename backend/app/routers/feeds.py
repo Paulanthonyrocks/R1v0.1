@@ -292,8 +292,8 @@ async def stop_all_feeds(
 
 @router.delete(
     "/{feed_id}",
-    status_code=status.HTTP_200_OK,
-    response_model=APIResponse[None],
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
     summary="Delete a Specific Feed",
 )
 async def delete_feed(

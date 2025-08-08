@@ -10,19 +10,20 @@ logger = logging.getLogger(__name__)
 
 
 class TrafficPredictor:
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], model_object=None):
         self.config = config
-        self.model = None
+        self.model = model_object
         self.scaler = StandardScaler()
         self.sequence_length = 10  # Number of time steps to use for prediction
 
-        model_path = self.config.get("model_path")
-        if model_path:
-            self.load_model(model_path)
-        else:
-            logger.warning(
-                "No model_path provided in config for TrafficPredictor. Model will not be loaded."
-            )
+        if self.model is None:
+            model_path = self.config.get("model_path")
+            if model_path:
+                self.load_model(model_path)
+            else:
+                logger.warning(
+                    "No model_path or model_object provided in config for TrafficPredictor. Model will not be loaded."
+                )
 
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""
@@ -201,11 +202,19 @@ class TrafficPredictor:
             # Scale features
             scaled_features = self.scaler.transform(processed_features)
 
+            # Ensure we have enough data points for the sequence length
+            if len(scaled_features) < self.sequence_length:
+                logger.warning(f"Not enough recent traffic data ({len(scaled_features)}) for sequence length ({self.sequence_length}). Padding with zeros.")
+                # Pad with zeros or a more sophisticated padding strategy
+                padding_needed = self.sequence_length - len(scaled_features)
+                padding_array = np.zeros((padding_needed, scaled_features.shape[1]))
+                scaled_features = np.vstack((padding_array, scaled_features))
+            
+            # Take the last 'sequence_length' data points
+            scaled_features_sequence = scaled_features[-self.sequence_length:]
+            
             # Reshape for LSTM: (samples, timesteps, features)
-            # For prediction of a single instance, create a sequence of self.sequence_length identical data points
-            scaled_features_reshaped = np.tile(
-                scaled_features, (1, self.sequence_length, 1)
-            )
+            scaled_features_reshaped = np.expand_dims(scaled_features_sequence, axis=0)
 
             prediction = self.model.predict(scaled_features_reshaped)[0][
                 0

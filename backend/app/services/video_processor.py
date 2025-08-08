@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 class VideoProcessor:
+    COLOR_MAP = {
+        "moving": (0, 255, 0),  # Green
+        "stopped": (0, 0, 255),  # Red
+        "speeding": (255, 0, 0),  # Blue
+        "accelerating": (255, 255, 0),  # Yellow
+        "decelerating": (0, 255, 255),  # Cyan
+        "lane_changing": (255, 0, 255),  # Magenta
+        "unknown": (128, 128, 128),  # Gray
+    }
     def __init__(self, stream_id: str, feed_manager: FeedManager):
         self.stream_id = stream_id
         self.feed_manager = feed_manager
@@ -35,7 +44,7 @@ class VideoProcessor:
             return False
 
         self._output_path = os.path.join(
-            "backend", "data", "processed_videos", output_filename
+            self.output_directory, output_filename
         )
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
 

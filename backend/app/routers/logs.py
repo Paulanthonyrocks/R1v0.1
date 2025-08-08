@@ -25,14 +25,8 @@ async def get_system_logs(
     Retrieves system logs from a specified log file.
     Requires authentication.
     """
-    # Define an allow-list of log files that can be accessed via the API
-    # This should ideally be configurable, but for now, it's hardcoded for security.
-    ALLOWED_LOG_FILES = [
-        "backend_main.log",
-        "uvicorn_access.log",
-        "uvicorn_error.log",
-        "app.log",
-    ]
+    config = get_current_config()
+    ALLOWED_LOG_FILES = config.get("log_files", {}).get("allowed_log_files", [])
 
     if log_file_name not in ALLOWED_LOG_FILES:
         raise HTTPException(
