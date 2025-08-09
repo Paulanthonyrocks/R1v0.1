@@ -8,6 +8,7 @@ node_modules/
 # Log files
 *.log
 
+
 # Secrets (NEVER commit secrets!)
 secrets.txt
 .env
@@ -19,7 +20,7 @@ backend/data
 .idx
 .cursor
 .firebase
-GEMINI.md
+.gemini/
 
 # Python cache files
 __pycache__/
@@ -27,4 +28,5 @@ __pycache__/
 *$py.class
 
 # Large data files (consider Git LFS if necessary)
-*.dat\"commit_message.txt\" 
+*.dat"commit_message.txt" 
+./venv

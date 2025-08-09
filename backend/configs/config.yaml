@@ -20,35 +20,35 @@ logging:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_main.log
+      filename: backend/logs/backend_main.log
       maxBytes: 10485760
       backupCount: 5
     workerFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_worker.log
+      filename: backend/logs/backend_worker.log
       maxBytes: 10485760
       backupCount: 5
     databaseFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_database.log
+      filename: backend/logs/backend_database.log
       maxBytes: 10485760
       backupCount: 5
     servicesFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_services.log
+      filename: backend/logs/backend_services.log
       maxBytes: 10485760
       backupCount: 5
     mlFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_ml.log
+      filename: backend/logs/backend_ml.log
       maxBytes: 10485760
       backupCount: 5
   loggers:
@@ -295,11 +295,11 @@ feed_manager:
 queue_log_interval: 120.0
 video_input:
   sample_videos:
-    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic.mp4
-    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_2.mp4 # Placeholder for additional sample video
-    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_3.mp4 # Placeholder for additional sample video
-    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_4.mp4 # Placeholder for additional sample video
-    - /content/drive/MyDrive/R1v0.1/backend/data/sample_traffic_5.mp4 # Placeholder for additional sample video
+    - backend/data/sample_traffic.mp4
+    - backend/data/sample_traffic_2.mp4 # Placeholder for additional sample video
+    - backend/data/sample_traffic_3.mp4 # Placeholder for additional sample video
+    - backend/data/sample_traffic_4.mp4 # Placeholder for additional sample video
+    - backend/data/sample_traffic_5.mp4 # Placeholder for additional sample video
   webcam_index: 0
   webcam_buffer_size: 20
   max_queue_size: 1000
@@ -327,7 +327,7 @@ vehicle_detection:
   skip_frames: 3
 analytics_service:
   traffic_predictor:
-    model_path: ./models/traffic_predictor_model.h5
+    model_path: backend/models/traffic_predictor_model.h5
   traffic_prediction:
     enabled: true
   frame_resolution:

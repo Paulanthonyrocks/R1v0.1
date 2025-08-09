@@ -14,7 +14,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/sample-video/stream")
+@router.get("/api/v1/stream/sample-feed")
 async def stream_video(current_user: dict = Depends(get_current_active_user)):
     """Stream sample traffic video with real-time processing"""
 
