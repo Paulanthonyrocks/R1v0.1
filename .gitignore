@@ -20,7 +20,7 @@ backend/data
 .idx
 .cursor
 .firebase
-.gemini/
+.gemini
 
 # Python cache files
 __pycache__/
@@ -29,4 +29,6 @@ __pycache__/
 
 # Large data files (consider Git LFS if necessary)
 *.dat"commit_message.txt" 
-./venv
+venv
+setup.sh
+=4.5.0

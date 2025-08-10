@@ -13,6 +13,7 @@ pyyaml>=6.0
 psutil>=5.9.0
 numpy>=1.21.0
 tenacity>=8.2.0
+watchdog>=2.1.0 # For file system monitoring
 aiofiles>=23.1.0
 
 # ML/CV Dependencies
