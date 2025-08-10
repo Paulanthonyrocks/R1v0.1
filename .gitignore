@@ -15,6 +15,7 @@ secrets.txt
 .env.local
 backend/configs/firebase/service-account-key.json
 backend/data
+data
 .vscode
 .next
 .idx
