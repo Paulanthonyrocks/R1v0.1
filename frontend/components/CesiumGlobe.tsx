@@ -36,7 +36,7 @@ interface FeedMarker {
     name: string;
     position: THREE.Vector3;
     mesh?: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>;
-    status: 'error' | 'stopped' | 'running' | 'starting';
+ status: 'error' | 'stopped' | 'running' | 'starting' | 'stopping'; // Added 'stopping'
     latest_metrics?: Record<string, unknown>; // Add latest_metrics to the interface
 }
 
@@ -96,12 +96,15 @@ const ThreeGrid: React.FC = () => {
         const newFeedLabels: Record<string, { text: string; position: THREE.Vector3; screenPosition: { x: number; y: number; }; }> = {};
         Object.values(feedMarkers).forEach(marker => {
             let labelText = marker.name;
+            // Add checks for latest_metrics and its properties
             if (marker.latest_metrics) {
-                if (marker.latest_metrics.avg_speed !== undefined && marker.latest_metrics.avg_speed !== null) {
-                    labelText += `\nSpeed: ${marker.latest_metrics.avg_speed.toFixed(1)} km/h`;
+                const metrics = marker.latest_metrics as { avg_speed?: number | null; vehicle_count?: number | null; }; // Cast for safer access
+                if (metrics.avg_speed !== undefined && metrics.avg_speed !== null) {
+                    labelText += `\nSpeed: ${metrics.avg_speed.toFixed(1)} km/h`;
                 }
-                if (marker.latest_metrics.vehicle_count !== undefined && marker.latest_metrics.vehicle_count !== null) {
-                    labelText += `\nVehicles: ${marker.latest_metrics.vehicle_count}`;
+                if (metrics.vehicle_count !== undefined && metrics.vehicle_count !== null) {
+                    labelText += `\nVehicles: ${metrics.vehicle_count}`;
+                } // Added missing brace here
             }
             newFeedLabels[marker.id] = { text: labelText, position: marker.position, screenPosition: { x: 0, y: 0 } };
         });
@@ -336,17 +339,12 @@ const ThreeGrid: React.FC = () => {
             if (sceneRefsToClean.animationId) cancelAnimationFrame(sceneRefsToClean.animationId);
             
             sceneRefsToClean.controls?.dispose();
+            // More robust cleanup of scene objects and materials
+            // More robust cleanup of scene objects and materials
             sceneRefsToClean.scene?.traverse((object) => {
-                if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
-                    object.geometry?.dispose();
-                    if (object.material) {
-                        if (Array.isArray(object.material)) {
-                            object.material.forEach((mat: THREE.Material) => { mat.map?.dispose(); mat.dispose(); });
-                        } else {
-                            (object.material as THREE.Material).map?.dispose();
-                            (object.material as THREE.Material).dispose();
-                        }
-                    }
+              if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points) { // Include Points for cleanup
+                object.geometry?.dispose(); // Dispose of geometry
+                // Check if material exists and is a valid Material instance
                 }
             });
             while(sceneRefsToClean.scene?.children.length > 0){
@@ -360,7 +358,6 @@ const ThreeGrid: React.FC = () => {
             sceneRefsToClean.renderer?.dispose();
             sceneRef.current = null;
             globeRef.current = null;
-            feedMarkersRef.current = {};
             setFeedMarkers({});
         };
     }, [loadGeoJSON, toScreenPosition]);
@@ -428,7 +425,7 @@ const ThreeGrid: React.FC = () => {
         if (!currentSceneRefs) return;
         const { scene } = currentSceneRefs;
 
-        const feedsCollection = collection(db, 'feeds');
+        const feedsCollection = collection(db!, 'feeds'); // Assert db is non-null
         const unsubscribe = onSnapshot(feedsCollection, (querySnapshot) => {
             const fetchedFeeds: FeedStatusData[] = [];
             querySnapshot.forEach((doc) => {
@@ -452,7 +449,7 @@ const ThreeGrid: React.FC = () => {
                         // Update existing feed marker
                         existingFeedMarker.position.copy(position);
                         existingFeedMarker.status = feed.status;
-                        existingFeedMarker.latest_metrics = feed.latest_metrics;
+                        existingFeedMarker.latest_metrics = feed.latest_metrics as FeedMarker['latest_metrics'];
                         if (existingFeedMarker.mesh) {
                             switch (feed.status) {
                                 case 'running': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00); break;
@@ -467,10 +464,10 @@ const ThreeGrid: React.FC = () => {
                         // Create new feed marker
                         const newFeedMarker: FeedMarker = {
                             id: feed.id,
-                            name: feed.name,
+                            name: feed.name ?? 'Unknown Feed', // Provide a default if name is undefined
                             position: position,
                             status: feed.status,
-                            latest_metrics: feed.latest_metrics,
+                            latest_metrics: feed.latest_metrics as FeedMarker['latest_metrics'],
                         };
                         const mesh = createFeedMesh(position, feed.status);
                         mesh.userData.id = feed.id; // Store ID for raycasting
@@ -505,7 +502,7 @@ const ThreeGrid: React.FC = () => {
         if (!currentSceneRefs) return;
         const { scene } = currentSceneRefs;
 
-        const alertsCollection = collection(db, 'alerts'); // Assuming 'alerts' is your Firestore collection
+        const alertsCollection = collection(db!, 'alerts'); // Assert db is non-null
         const unsubscribe = onSnapshot(alertsCollection, (querySnapshot) => {
             const fetchedAlerts: AlertData[] = [];
             querySnapshot.forEach((doc) => {

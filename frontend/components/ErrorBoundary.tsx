@@ -21,8 +21,7 @@ interface ErrorBoundaryState {
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   // Define state with the interface and initialize directly
   state: ErrorBoundaryState = { hasError: false, error: null };
-  props: Readonly<ErrorBoundaryProps>;
-  setState: (state: ErrorBoundaryState) => void;
+  
 
   constructor(props: ErrorBoundaryProps) {
     super(props);

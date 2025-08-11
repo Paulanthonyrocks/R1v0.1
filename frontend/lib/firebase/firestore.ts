@@ -45,6 +45,10 @@ export const subscribeToTrafficData = (
 
 export const createIncident = async (incidentData: IncidentData) => {
   try {
+    if (!db) {
+      throw new Error('Firestore database is not initialized.');
+    }
+
     const incidentsCollection = collection(db, 'incidents').withConverter<IncidentData>({
       toFirestore: (incident: IncidentData) => {
         return {

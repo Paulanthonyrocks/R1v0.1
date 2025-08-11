@@ -50,7 +50,7 @@ interface CustomTooltipProps {
 
 // Custom Tooltip Component
 const CustomTooltipComponent = ({ active, payload, label, timeRange }: CustomTooltipProps) => {
-    if (active && payload && payload.length) {
+    if (active && payload && payload.length && label) {
       return (
         <div className="bg-background/90 border border-border p-2 rounded-md shadow-lg text-xs backdrop-blur-sm">
           <p className="label text-muted-foreground">{`Time: ${formatXAxis(label, timeRange)}`}</p>

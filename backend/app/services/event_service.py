@@ -24,26 +24,14 @@ class EventService:
             return self._cache
 
         try:
-            # For demo/development, return sample events
-            # In production, this would fetch from self.api_url
-            events = [
-                {
-                    "type": "roadwork",
-                    "description": "Road maintenance on Main St",
-                    "severity": "Medium",
-                    "location": "Main St & 5th Ave",
-                    "start_time": (now - timedelta(hours=2)).isoformat(),
-                    "end_time": (now + timedelta(hours=4)).isoformat(),
-                },
-                {
-                    "type": "accident",
-                    "description": "Multi-vehicle collision",
-                    "severity": "High",
-                    "location": "Highway 101 North",
-                    "start_time": (now - timedelta(minutes=30)).isoformat(),
-                    "end_time": (now + timedelta(hours=1)).isoformat(),
-                },
-            ]
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.api_url) as response:
+                    response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+                    events = await response.json()
+
+            # Note: We assume the external API returns a list of event dictionaries
+            # If the structure is different, parsing logic will need adjustment here.
+            self.logger.debug(f"Fetched {len(events)} events from {self.api_url}")
 
             self._cache = events
             self._cache_expiry = now + self.cache_ttl

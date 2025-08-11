@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pathlib import Path
-
+from app.utils.auth_utils import verify_firebase_token
 import logging
 from app.config import get_current_config
-from app.dependencies import get_current_active_user, get_token_from_query
+from app.dependencies import get_current_active_user, get_token_from_query, get_feed_manager
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
+from app.services.feed_manager import FeedManager # Import FeedManager
 from app.services.video_ws_manager import video_ws_manager
 from app.services.video_manager import VideoManager
 
@@ -14,7 +15,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/api/v1/stream/sample-feed")
+@router.get("/stream/sample-feed")
 async def stream_video(current_user: dict = Depends(get_current_active_user)):
     """Stream sample traffic video with real-time processing"""
 
@@ -22,7 +23,8 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         f"GET /video/sample-video/stream endpoint called by user: {current_user.get('email')}"
     )
     config = get_current_config()
-    video_path_str = config.get("video_input", {}).get("sample_video")
+    sample_videos = config.get("video_input", {}).get("sample_videos")
+    video_path_str = sample_videos[0] if sample_videos else None
     if not video_path_str:
         logger.error("Sample video path not configured.")
         raise ResourceNotFound(detail="Sample video path not configured.")
@@ -85,7 +87,8 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         f"GET /video/sample-video/kpis endpoint called by user: {current_user.get('email')}"
     )
     config = get_current_config()
-    video_path_str = config.get("video_input", {}).get("sample_video")
+    sample_videos = config.get("video_input", {}).get("sample_videos")
+    video_path_str = sample_videos[0] if sample_videos else None
     if not video_path_str:
         logger.error("Sample video path not configured.")
         raise ResourceNotFound(detail="Sample video path not configured.")
@@ -117,26 +120,35 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         raise OperationFailed(detail=f"Error getting video KPIs: {e}")
 
 
-@router.websocket("/api/v1/video/ws/{stream_id}")
+@router.websocket("/video/ws/{stream_id}")
 async def video_ws_endpoint(
     websocket: WebSocket, stream_id: str, token: str = Depends(get_token_from_query)
 ):
     """WebSocket endpoint for real-time video KPIs."""
     try:
+        # Validate the token
         if not token:
             await websocket.close(code=4401, reason="Not authenticated")
             return
+        
+        # Verify the Firebase token
+        user_data = await verify_firebase_token(token) # Assuming verify_firebase_token takes the token string
 
-    except Exception:
-        await websocket.close(code=4401, reason="Authentication failed")
+    except HTTPException as e:
+        logger.warning(f"WebSocket authentication failed: {e.detail}")
+        await websocket.close(code=e.status_code, reason=e.detail)
         return
     await video_ws_manager.connect(websocket, stream_id)
+    
+    # Keep the connection open for sending messages. Receiving is optional unless needed for control messages.
     try:
-        while True:
-            await (
-                websocket.receive_text()
-            )  # Keep the connection alive, or handle pings, etc.
+        # The loop for receiving messages can be here if needed, or the connection stays open for sending.
+        # Example: while True: await websocket.receive_text()
+        pass # Keep the connection alive for sending
+
     except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for stream_id: {stream_id}")
         video_ws_manager.disconnect(websocket, stream_id)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Unexpected error in WebSocket connection for stream_id {stream_id}: {e}", exc_info=True)
         video_ws_manager.disconnect(websocket, stream_id)

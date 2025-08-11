@@ -12,12 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 class RouteOptimizationService:
-    def __init__(self, traffic_predictor, data_cache):
+    def __init__(
+        self, traffic_predictor, data_cache, weather_service: WeatherService
+    ):
         self.optimizer = RouteOptimizer(traffic_predictor, data_cache)
-        self.weather_service = WeatherService(data_cache)
         self.event_service = EventService(data_cache)
+        self.weather_service = weather_service
         logger.info("RouteOptimizationService initialized")
-
+ 
     async def get_optimized_route(
         self,
         start_location: LocationModel,

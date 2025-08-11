@@ -9,7 +9,6 @@ import { signOut, Auth } from 'firebase/auth'; // Import Auth type
 import { PanelLeftClose, PanelRightOpen, Power } from 'lucide-react'; // Remove unused icons
 import { cn } from '@/lib/utils';
 import { useUser } from '@/lib/auth/UserContext';
-import { UserRole } from '@/lib/auth/roles';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 import { auth } from '@/lib/firebase'; // Import the auth instance
@@ -20,7 +19,7 @@ interface HeaderProps {
 }
 
 export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderProps) {
-  const { user, userRole, setUserRole } = useUser(); // Get the user object
+  const { user } = useUser(); // Get the user object
   const router = useRouter(); // Get the router instance
   return (
     // Use bg-card, apply theme border color via border-border
@@ -49,24 +48,6 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
 
       {/* Placeholder action icons */}
       <div className="flex items-center space-x-2">
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="flex items-center space-x-2">
-                    {userRole}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.VIEWER)}>
-                    {UserRole.VIEWER}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.OPERATOR)}>
-                    {UserRole.OPERATOR}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="tracking-normal" onClick={() => setUserRole(UserRole.ADMIN)}>
-                    {UserRole.ADMIN}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
 
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>

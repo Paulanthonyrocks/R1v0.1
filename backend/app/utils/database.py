@@ -22,8 +22,11 @@ from pymongo import MongoClient
 from pymongo.database import Database as MongoDatabase
 from pymongo.errors import (
     ConnectionFailure,
-    ConfigurationError as MongoConfigurationError,
-)
+    ConfigurationError as MongoConfigurationError,)
+from app.models.processed_video import ProcessedVideo
+from app.models.alerts import Alert  # Import the Alert model
+import json  # Import json for serializing details
+
 
 # Attempt to import TrafficMonitor from where it's planned to be
 
@@ -220,7 +223,10 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
         )
         cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL DEFAULT (unixepoch('now', 'subsec')),
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
+                severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
+                feed_id TEXT, -- Allow NULL for system alerts
                 severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL')), feed_id TEXT NOT NULL,
                 message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
         # ... and other table creation statements ...
@@ -303,6 +309,42 @@ class DatabaseManager:
             else:
                 raise DatabaseError(f"Failed save vehicle: {e}") from e
 
+    async def save_alert(self, alert: Alert):
+        """
+        Saves an Alert object to the SQLite database.
+        """
+        logger.info(f"Saving alert with severity {alert.severity} to database.")
+        sql = """INSERT INTO alerts (timestamp, severity, feed_id, message, latitude, longitude, details, acknowledged, acknowledged_by, acknowledged_at, source_component, tags)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+        try:
+            # Convert timestamp to Unix timestamp (float)
+            timestamp_float = alert.timestamp.timestamp() if alert.timestamp else None
+            acknowledged_at_float = alert.acknowledged_at.timestamp() if alert.acknowledged_at else None
+
+            # Serialize details and tags to JSON strings
+            details_json = json.dumps(alert.details) if alert.details is not None else None
+            tags_json = json.dumps(alert.tags) if alert.tags is not None else None
+
+            params = (
+                timestamp_float,
+                alert.severity.value, # Use the enum value
+                alert.feed_id,
+                alert.message,
+                alert.latitude,
+                alert.longitude,
+                details_json,
+                int(alert.acknowledged), # Convert boolean to integer
+                alert.acknowledged_by,
+                acknowledged_at_float,
+                alert.source_component,
+                tags_json,
+            )
+            await asyncio.to_thread(self._execute_save_alert, sql, params)
+            logger.info("Alert saved successfully.")
+        except Exception as e:
+            logger.error(f"Error saving alert to database: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to save alert: {e}") from e
     # ... (all your other synchronous and asynchronous database methods like get_alerts_filtered,
     #      save_alert, acknowledge_alert, get_raw_traffic_data_mongo, etc., remain here unchanged)
 
@@ -321,18 +363,36 @@ class DatabaseManager:
                 f"Unexpected error in get_alerts_filtered via thread: {e}",
                 exc_info=True,
             )
+            raise DatabaseError(f"Failed to get alerts: {e}") from e
             return []
 
     def _execute_get_alerts_filtered(
         self, filters: Dict, limit: int, offset: int
     ) -> List[Dict]:
         # ... (implementation unchanged)
-        base_q = "SELECT id, timestamp, severity, feed_id, message, details, acknowledged FROM alerts WHERE 1=1"
+        base_q = "SELECT id, timestamp, severity, feed_id, message, latitude, longitude, details, acknowledged, acknowledged_by, acknowledged_at, source_component, tags FROM alerts WHERE 1=1"
         params = []
         conds = []
         if filters.get("acknowledged") is not None:
             conds.append("acknowledged = ?")
             params.append(1 if filters["acknowledged"] else 0)
+        # Add other filters based on your needs, similar to below
+        if filters.get("severity_in") is not None and isinstance(filters["severity_in"], list):
+             placeholders = ','.join('?' * len(filters["severity_in"]))
+             conds.append(f"severity IN ({placeholders})")
+             params.extend(filters["severity_in"])
+
+        if filters.get("latitude") is not None and filters.get("longitude") is not None and filters.get("radius_km") is not None:
+             # This is a very simplified bounding box approach; not a true radius
+             # For simplicity, assuming filters['radius_km'] is used to create a bounding box            
+             delta_lat = filters["radius_km"] / 111.0 # Approx degrees per km latitude
+             delta_lon = filters["radius_km"] / (111.0 * abs(math.cos(math.radians(filters["latitude"])))) # Approx degrees per km longitude
+             min_lat = filters["latitude"] - delta_lat
+             max_lat = filters["latitude"] + delta_lat
+             min_lon = filters["longitude"] - delta_lon
+             max_lon = filters["longitude"] + delta_lon
+             conds.append("(latitude BETWEEN ? AND ?) AND (longitude BETWEEN ? AND ?)")
+             params.extend([min_lat, max_lat, min_lon, max_lon])
         # ... other filters
         if conds:
             base_q += " AND " + " AND ".join(conds)
@@ -343,6 +403,20 @@ class DatabaseManager:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
+    def _execute_save_alert(self, sql: str, params: tuple):
+        """Synchronous execution of saving an alert."""
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, params)
+                    conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error during _execute_save_alert: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Error during _execute_save_alert: {e}", exc_info=True)
+            raise
     async def close(self):
         logger.info("DatabaseManager close called.")
         if self.async_engine:

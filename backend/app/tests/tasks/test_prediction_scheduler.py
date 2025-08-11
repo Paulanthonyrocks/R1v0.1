@@ -30,6 +30,10 @@ class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
         )  # Returns a mock log_id
         self.mock_analytics_service.get_prediction_outcome_summary = AsyncMock()
 
+        self.mock_analytics_service.predict_incident_likelihood = AsyncMock(
+            return_value={"likelihood_score_percent": 0}
+        )
+
         # Keep a reference to the original list of locations for testing _load_monitored_locations
         self.original_hardcoded_locations_with_names = [
             LocationModel(
@@ -170,10 +174,8 @@ class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
         mock_action_string = "Test action: dispatch drones"
 
         # Configure the mock to return a dictionary directly
-        mock_prediction_result_mock = MagicMock()
-        mock_prediction_result_mock.get.side_effect = lambda key, default=None: mock_prediction_result.get(key, default)
         self.mock_analytics_service.predict_incident_likelihood = AsyncMock(
-            return_value=mock_prediction_result_mock
+            return_value=mock_prediction_result
         )
 
         mock_determine_actions.return_value = mock_action_string
@@ -185,7 +187,7 @@ class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
 
         self.mock_analytics_service.predict_incident_likelihood.assert_called_once()
         mock_determine_actions.assert_called_once_with(
-            mock_prediction_result_mock, sample_location
+            mock_prediction_result, sample_location
         )
 
         self.mock_analytics_service._connection_manager.broadcast_to_topic.assert_awaited_once()
@@ -225,7 +227,7 @@ class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log_call_args["location_latitude"], sample_location.latitude)
         self.assertEqual(log_call_args["location_longitude"], sample_location.longitude)
         self.assertEqual(log_call_args["prediction_type"], "incident_likelihood")
-        self.assertEqual(log_call_args["predicted_value"], mock_prediction_result_mock)
+        self.assertEqual(log_call_args["predicted_value"], mock_prediction_result)
         self.assertEqual(
             log_call_args["source_of_prediction"], "PredictionScheduler_HighLikelihood"
         )

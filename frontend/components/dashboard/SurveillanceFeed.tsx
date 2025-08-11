@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2, RotateCw, Settings } from 'lucide-react';
@@ -6,22 +6,22 @@ import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoStream from '@/lib/useVideoStream';
+import useAuth from '@/lib/hook/useAuth'; // Import the useAuth hook
 import StreamOverlayControls from './StreamOverlayControls'; // Import the new component
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { id, name: feedName, source, status } = feed;
-    const { videoUrl, isLoading, error, isLive, kpis, canvasRef, frameRate: fps } = useVideoStream({
+    const { isLoading, error, isLive, kpis, canvasRef, frameRate: fps } = useVideoStream({
         streamId: id,
-        forceSample: false,
-        streamType: 'websocket'
+        streamType: 'websocket',
     });
     const component_name = feedName ?? `Feed ${id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
+    const { token } = useAuth(); // Get the authentication token
 
-    
-    const { sendMessage, isConnected } = useRealtimeUpdates();
-    
 
+    const { sendMessage, isConnected } = useRealtimeUpdates(token); // Pass the token to the hook
+    
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
@@ -61,7 +61,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                 }
             });
         }
-    }, [kpis, showOverlays, showBoundingBoxes, showVehicleDetails]);
+    }, [kpis, showOverlays, showBoundingBoxes, showVehicleDetails, canvasRef]);
 
     const toggleFeed = () => {
         if (isToggling || !isConnected) {

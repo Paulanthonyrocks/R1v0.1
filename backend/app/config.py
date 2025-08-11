@@ -54,31 +54,30 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             print("Falling back to basic logging configuration.")
             logger.warning("Falling back to basic logging configuration.")
         # --- End Logging Reconfiguration ---
-
+ 
         # Resolve relative paths to absolute paths
         project_root = Path(
             __file__
         ).parent.parent.parent  # Assumes config.py is in backend/app/
 
-        # Resolve sample_video path
-        sample_video_path_str = _config_instance.get("video_input", {}).get(
-            "sample_video"
+        # Resolve sample_videos paths
+        sample_video_paths = _config_instance.get("video_input", {}).get(
+            "sample_videos"
         )
-        if sample_video_path_str:
-            resolved_sample_video_path = Path(sample_video_path_str)
-            if not resolved_sample_video_path.is_absolute():
-                # If it's not absolute, assume it's relative to the project root
-                project_root = Path(__file__).parent.parent.parent
-                resolved_sample_video_path = (project_root / sample_video_path_str).resolve()
-            else:
-                # If it's already absolute, just resolve it to get the canonical form
-                resolved_sample_video_path = resolved_sample_video_path.resolve()
-
-            _config_instance["video_input"]["sample_video"] = str(
-                resolved_sample_video_path
-            )
+        if sample_video_paths and isinstance(sample_video_paths, list):
+            resolved_paths = []
+            project_root = Path(__file__).parent.parent.parent
+            for video_path_str in sample_video_paths:
+                resolved_path = Path(video_path_str)
+                if not resolved_path.is_absolute():
+                    resolved_path = (project_root / video_path_str).resolve()
+                else:
+                    resolved_path = resolved_path.resolve()
+                resolved_paths.append(str(resolved_path))
+            
+            _config_instance["video_input"]["sample_videos"] = resolved_paths
             logger.info(
-                f"Resolved sample_video path to: {_config_instance['video_input']['sample_video']}"
+                f"Resolved sample_video paths to: {resolved_paths}"
             )
 
         # Resolve model_path for vehicle_detection
@@ -118,7 +117,7 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
         return _config_instance
 
-        
+ 
 
 
     except ConfigError as e:

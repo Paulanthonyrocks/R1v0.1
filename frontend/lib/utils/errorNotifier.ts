@@ -2,31 +2,26 @@
 
 type NotificationType = 'info' | 'success' | 'warning' | 'error';
 
-interface NotificationOptions {
-  duration?: number; // in milliseconds
-  closable?: boolean;
-}
 
-// This is a placeholder for a real notification system (e.g., a toast library)
-// In a real application, you would integrate with a UI library here.
+
+// TODO: Integrate with a real notification library (e.g., react-toastify)
+// This function is a placeholder for displaying user-facing notifications.
 const showNotification = (
   message: string,
-  type: NotificationType = 'info',
-  options?: NotificationOptions
+  type: NotificationType = 'info'
 ) => {
   console.log(`[${type.toUpperCase()} Notification]: ${message}`);
   // In a real app, you'd call your toast/notification library here, e.g.:
-  // toast[type](message, { duration: options?.duration, closable: options?.closable });
-  alert(`[${type.toUpperCase()}]: ${message}`); // Using alert for demonstration
+  // toast[type](message, { duration: 5000, closable: true }); // Example with default options, removed reference to the removed 'options' parameter
 };
 
 export const errorNotifier = {
-  info: (message: string, options?: NotificationOptions) =>
-    showNotification(message, 'info', options),
-  success: (message: string, options?: NotificationOptions) =>
-    showNotification(message, 'success', options),
-  warning: (message: string, options?: NotificationOptions) =>
-    showNotification(message, 'warning', options),
-  error: (message: string, options?: NotificationOptions) =>
-    showNotification(message, 'error', options),
+  info: (message: string) =>
+    showNotification(message, 'info'),
+  success: (message: string) =>
+    showNotification(message, 'success'),
+  warning: (message: string) =>
+    showNotification(message, 'warning'),
+  error: (message: string) =>
+    showNotification(message, 'error'),
 };

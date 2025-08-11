@@ -1289,6 +1289,41 @@ class CoreModule:
             logger.warning(f"Error during CUDA cache clear on cleanup: {e}")
         logger.info(f"CoreModule cleanup finished for {self.feed_id}.")
 
+    def get_frame_generator(self):
+        video_capture = cv2.VideoCapture(self.feed_id)
+        if not video_capture.isOpened():
+            logger.error(f"Error opening video file: {self.feed_id}")
+            return
+
+        frame_index = 0
+        while True:
+            ret, frame = video_capture.read()
+            if not ret:
+                break
+
+            # Process the frame
+            tracked_vehicles = self.detect_and_track(frame, frame_index)
+
+            # Encode the frame
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
+            
+            frame_bytes = buffer.tobytes()
+
+            # Yield the data
+            yield {
+                "frame": frame_bytes,
+                "kpis": {
+                    "tracked_vehicles": len(tracked_vehicles),
+                    "vehicles": [v for v in tracked_vehicles.values()]
+                }
+            }
+
+            frame_index += 1
+
+        video_capture.release()
+
 
 # --- Example standalone usage ---
 if __name__ == "__main__":

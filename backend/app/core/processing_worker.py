@@ -121,11 +121,15 @@ def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_fra
     if not isinstance(frame, np.ndarray) or frame.size == 0:
         logger.warning(f"[{feed_id}] Invalid frame provided for preprocessing at index {current_frame_index}. Type: {type(frame)}. Skipping.")
         return None
-
+ 
     if not np.isscalar(current_frame_index):
         logger.warning(f"[{feed_id}] Non-scalar frame index: current_frame_index={current_frame_index}. Skipping frame.")
         return None
-    
+
+    # Dynamic frame skipping based on frame_queue fullness
+    queue_fill_ratio = frame_queue.qsize() / max_queue_size if max_queue_size > 0 else 0
+    dynamic_skip_interval = _adjust_skip_interval(dynamic_skip_interval, base_frame_skip_interval, queue_fill_ratio)
+
     try:
         # Ensure frame is 3 channels (BGR) before resizing
         if len(frame.shape) == 3 and frame.shape[2] == 4:
@@ -146,6 +150,16 @@ def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_fra
     except Exception as e:
         logger.error(f"[{feed_id}] Generic error preparing/resizing frame {current_frame_index}: {e}. Shape: {frame.shape}. Skip.")
         return None
+
+def _adjust_skip_interval(current_interval: int, base_interval: int, queue_fill_ratio: float) -> int:
+    """Adjusts the frame skip interval based on queue fullness."""
+    if queue_fill_ratio > 0.8: # If queue is over 80% full
+        return min(current_interval + 1, 10) # Increase skip, with a max limit
+    elif queue_fill_ratio < 0.5 and current_interval > base_interval: # If queue is below 50% and we are skipping
+        return max(current_interval - 1, base_interval) # Decrease skip, down to base
+    else:
+        return current_interval # No change
+
 
 def _process_detection_and_tracking(feed_id: str, core_module: Any, processing_frame: np.ndarray, current_frame_index: int, confidence_threshold: float, proximity_threshold: int, track_timeout: int, error_queue: Optional[MPQueue], logger: logging.Logger, log_level: int) -> Tuple[Dict, bool]:
     tracked_vehicles_raw = {}
@@ -333,9 +347,10 @@ def process_video(
     reader = None
     video_writer = None
     
+    source_type = "unknown" # Initialize source_type with a default value
     try:
+        # Code for initial setup (config loading, reader, writer, core_module init)
         # --- Webcam Index Parsing ---
-        source_type = "video"
         source_location: Union[str, int] = video_path  # Default to video path
 
         if isinstance(video_path, str) and video_path.startswith("webcam:"):
@@ -420,120 +435,136 @@ def process_video(
         )
         dynamic_skip_interval = base_frame_skip_interval
 
+        max_queue_size = config["video_input"].get("max_queue_size", 1000)
+
         # Main processing loop would go here
         logger.info(f"[{feed_id}] Starting main processing loop...")
         
-        while not stop_event.is_set():
-            loop_start_time = time.time()
+        # Inner try block for the main processing loop
+        try:
+            while not stop_event.is_set():
+                loop_start_time = time.time()
 
-            # 1. Read Frame
-            read_start_time = time.time()
-            current_frame_index, frame = _read_frame(feed_id, reader, stop_event, logger)
-            timer.log_time("read", time.time() - read_start_time)
+                # 1. Read Frame
+                read_start_time = time.time()
+                current_frame_index, frame = _read_frame(feed_id, reader, stop_event, logger)
+                timer.log_time("read", time.time() - read_start_time)
 
-            if frame is None:
-                if stop_event.is_set():
-                    break
-                time.sleep(0.01)  # Small sleep to prevent busy-waiting
-                continue
+                if frame is None:
+                    if stop_event.is_set():
+                        logger.info(f"[{feed_id}] Stop event set, exiting loop after read attempt.")
+                        break
+                    logger.debug(f"[{feed_id}] _read_frame returned None, waiting...")
+                    time.sleep(0.01)  # Small sleep to prevent busy-waiting
+                    continue
 
-            # Frame Skipping Logic
-            if current_frame_index % dynamic_skip_interval != 0:
-                continue
+                logger.debug(f"[{feed_id}] Successfully read frame {current_frame_index}. Shape: {frame.shape}")
 
-            # 2. Preprocess Frame
-            processing_frame = _preprocess_frame_for_detection(feed_id, frame, current_frame_index, target_resolution, logger)
-            if processing_frame is None:
-                continue
+                # Frame Skipping Logic (based on base_frame_skip_interval)
+                # The dynamic skipping adjusts the interval used here
+                if current_frame_index % dynamic_skip_interval != 0:
+                    logger.debug(f"[{feed_id}] Skipping frame {current_frame_index} based on dynamic interval {dynamic_skip_interval}")
+                    continue
 
-            # 3. Detect and Track
-            detect_start_time = time.time()
-            tracked_vehicles_raw, core_error_occurred = _process_detection_and_tracking(
-                feed_id, core_module, processing_frame, current_frame_index,
-                confidence_threshold, proximity_threshold, track_timeout,
-                error_queue, logger, log_level
-            )
-            timer.log_time("detect_track", time.time() - detect_start_time)
+                # 2. Preprocess Frame
+                processing_frame = _preprocess_frame_for_detection(feed_id, frame, current_frame_index, target_resolution, logger)
+                if processing_frame is None:
+                    logger.warning(f"[{feed_id}] Preprocessing returned None for frame {current_frame_index}. Skipping frame.")
+                    continue
+                logger.debug(f"[{feed_id}] Successfully preprocessed frame {current_frame_index}. Shape: {processing_frame.shape}")
 
-            if core_error_occurred:
-                consecutive_core_errors += 1
-                if consecutive_core_errors >= MAX_CONSECUTIVE_CORE_ERRORS:
-                    logger.critical(f"[{feed_id}] Exceeded max core errors. Stopping worker.")
-                    stop_event.set()
-                continue
-            else:
-                consecutive_core_errors = 0
+                # 3. Detect and Track
+                detect_start_time = time.time()
+                logger.debug(f"[{feed_id}] Calling detect_and_track for frame {current_frame_index}...")
+                tracked_vehicles_raw, core_error_occurred = _process_detection_and_tracking(
+                    feed_id, core_module, processing_frame, current_frame_index,
+                    confidence_threshold, proximity_threshold, track_timeout,
+                    error_queue, logger, log_level
+                )
+                timer.log_time("detect_track", time.time() - detect_start_time)
 
-            # 4. Update Metrics and Visualize
-            vis_start_time = time.time()
-            combined_frame = _update_metrics_and_visualize(
-                feed_id, processing_frame, tracked_vehicles_raw, traffic_monitor,
-                current_frame_index, feed_config_info, vis_options, config, core_module, logger
-            )
-            timer.log_time("visualize", time.time() - vis_start_time)
-
-            # 5. Handle Output Queue
-            put_start_time = time.time()
-            _handle_output_queue(
-                feed_id, frame_queue, current_frame_index, combined_frame,
-                traffic_monitor.get_metrics(), tracked_vehicles_raw, timer.timings, logger
-            )
-            timer.log_time("queue_put", time.time() - put_start_time)
-
-            if video_writer and combined_frame is not None:
-                # Ensure the frame is 3-channel BGR before writing
-                if len(combined_frame.shape) == 3 and combined_frame.shape[2] == 4:
-                    combined_frame_bgr = cv2.cvtColor(combined_frame, cv2.COLOR_BGRA2BGR)
+                if core_error_occurred:
+                    consecutive_core_errors += 1
+                    if consecutive_core_errors >= MAX_CONSECUTIVE_CORE_ERRORS:
+                        logger.critical(f"[{feed_id}] Exceeded max core errors. Stopping worker.")
+                        stop_event.set()
+                    continue
                 else:
-                    combined_frame_bgr = combined_frame
-                video_writer.write(combined_frame_bgr)
+                    consecutive_core_errors = 0
+                logger.debug(f"[{feed_id}] detect_and_track completed for frame {current_frame_index}. Found {len(tracked_vehicles_raw)} vehicles.")
 
-            frame_count_processed += 1
-            timer.log_time("loop_total", time.time() - loop_start_time)
+                # 4. Update Metrics and Visualize
+                vis_start_time = time.time()
+                combined_frame = _update_metrics_and_visualize(
+                    feed_id, processing_frame, tracked_vehicles_raw, traffic_monitor,
+                    current_frame_index, feed_config_info, vis_options, config, core_module, logger
+                )
+                timer.log_time("visualize", time.time() - vis_start_time)
 
-            # 6. Log Periodic Stats
-            last_log_time = _log_periodic_stats(
-                feed_id, timer, frame_queue, current_frame_index,
-                dynamic_skip_interval, consecutive_core_errors, last_log_time, logger
-            )
+                # 5. Handle Output Queue
+                put_start_time = time.time()
+                _handle_output_queue(
+                    feed_id, frame_queue, current_frame_index, combined_frame,
+                    traffic_monitor.get_metrics(), tracked_vehicles_raw, timer.timings, logger
+                )
+                timer.log_time("queue_put", time.time() - put_start_time)
 
-            # 7. Explicit Garbage Collection
-            if frame_count_processed % 100 == 0:
-                gc.collect()
-                logger.debug(f"[{feed_id}] Explicit garbage collection run at frame {current_frame_index}")
+                if video_writer and combined_frame is not None:
+                    # Ensure the frame is 3-channel BGR before writing
+                    if len(combined_frame.shape) == 3 and combined_frame.shape[2] == 4:
+                        combined_frame_bgr = cv2.cvtColor(combined_frame, cv2.COLOR_BGRA2BGR)
+                    else:
+                        combined_frame_bgr = combined_frame
+                    video_writer.write(combined_frame_bgr)
 
+                frame_count_processed += 1
+                timer.log_time("loop_total", time.time() - loop_start_time)
 
-    except KeyboardInterrupt:
-        logger.warning(f"[{feed_id}] KeyboardInterrupt received. Stopping worker.")
-        stop_event.set()
-    except RuntimeError:
-        # Catch runtime errors (like FrameReader init failure)
-        # Error message is already logged where the exception is raised
-        if not stop_event.is_set():
-            stop_event.set()  # Ensure stop is signaled
-    except ImportError as e:
-        # Catch import errors during setup (CoreModule)
-        error_msg = f"[{feed_id}] FATAL Import Error: {e}. Worker cannot run."
-        logger.critical(error_msg, exc_info=True)
-        if error_queue:
-            error_queue.put(error_msg)
-        if not stop_event.is_set():
+                # 6. Log Periodic Stats
+                last_log_time = _log_periodic_stats(
+                    feed_id, timer, frame_queue, current_frame_index,
+                    dynamic_skip_interval, consecutive_core_errors, last_log_time, logger
+                )
+
+                # 7. Explicit Garbage Collection
+                if frame_count_processed % 100 == 0:
+                    gc.collect()
+                    logger.debug(f"[{feed_id}] Explicit garbage collection run at frame {current_frame_index}")
+
+            # End of the processing loop (exit while loop)
+
+        # Exception handling specifically for the processing loop (inner try)
+        except KeyboardInterrupt:
+            logger.warning(f"[{feed_id}] KeyboardInterrupt received. Stopping worker.")
             stop_event.set()
-    except Exception as e:
-        # Catch any other unexpected exception during setup or the main loop
-        error_msg = f"[{feed_id}] FATAL Unhandled Error in process loop: {e}"
-        logger.critical(error_msg, exc_info=True)  # Log as critical
-        if error_queue:
-            error_queue.put(error_msg)
-        if not stop_event.is_set():
-            stop_event.set()  # Ensure stop is signaled
+        except RuntimeError:
+            # Catch runtime errors (like FrameReader init failure)
+            # Error message is already logged where the exception is raised
+            if not stop_event.is_set():
+                stop_event.set() # Ensure stop is signaled
+        except ImportError as e:
+            # Catch import errors during setup (CoreModule)
+            error_msg = f"[{feed_id}] FATAL Import Error: {e}. Worker cannot run."
+            logger.critical(error_msg, exc_info=True)
+            if error_queue:
+                error_queue.put(error_msg)
+            if not stop_event.is_set():
+                stop_event.set()
+        except Exception as e:
+            # Catch any other unexpected exception during the main loop
+            error_msg = f"[{feed_id}] FATAL Unhandled Error in process loop: {e}"
+            logger.critical(error_msg, exc_info=True) # Log as critical
+            if error_queue:
+                error_queue.put(error_msg)
+            if not stop_event.is_set():
+                stop_event.set() # Ensure stop is signaled
     finally:
         # --- Enhanced Cleanup ---
         pid = os.getpid()
         logger.info(f"[{feed_id}] Cleaning up process {pid}...")
         if not stop_event.is_set():
             logger.warning(
-                f"[{feed_id}] Stop event not set during cleanup initiation, setting now."
+                f"[{feed_id}] Stop event not set during cleanup initiation, setting now.\n"
             )
             stop_event.set()
 
@@ -542,7 +573,7 @@ def process_video(
                 video_writer.release()
                 logger.info(f"[{feed_id}] Video writer released.")
             except Exception as vw_release_err:
-                logger.error(f"[{feed_id}] Error releasing video writer: {vw_release_err}", exc_info=True)
+                logger.error(f"[{feed_id}] Error releasing video writer: {vw_release_err}\n", exc_info=True)
 
         # Stop FrameReader safely
         if reader:
@@ -550,7 +581,7 @@ def process_video(
                 logger.info(f"[{feed_id}] Stopping FrameReader...")
                 reader.stop()
                 logger.info(f"[{feed_id}] FrameReader stopped.")
-            except Exception as read_stop_err:
+            except Exception as read_stop_err: # Catch exceptions during reader stop as well
                 logger.error(
                     f"[{feed_id}] Error stopping FrameReader: {read_stop_err}",
                     exc_info=True,

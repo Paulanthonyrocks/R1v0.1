@@ -478,9 +478,11 @@ class ConnectionManager:
             raise ConnectionLimitExceeded(detail="Maximum number of connections reached.")
 
         await websocket.accept()
+        logger.debug(f"Client {client_id}: WebSocket connection accepted.")
         connection = ActiveWebSocketConnection(websocket, client_id, self, user_data)
         self.active_connections[client_id] = connection
-        logger.info(f"Client {client_id} connected. Total active connections: {len(self.active_connections)}")
+        logger.debug(f"Client {client_id}: Added to active connections.")
+        logger.info(f"Client {client_id} connected. Total active connections: {len(self.active_connections)}.")
         if not self.ping_task or self.ping_task.done():
             await self.start_ping_task()
 

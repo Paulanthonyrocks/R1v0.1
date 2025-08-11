@@ -1417,9 +1417,15 @@ class FeedManager:
             stopped_sample_feeds = [
                 feed_id for feed_id in self._sample_feed_ids
                 if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STOPPED
+                or self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.ERROR # Also consider error state as stoppable/startable
             ]
 
             if real_feeds_active:
+                # Explicitly check if there's at least one non-sample feed in the registry
+                # This prevents stopping sample feeds if real_feeds_active is true
+                # due to some transient state or bug, but no real feeds are actually configured.
+                if not any(not entry.get("is_sample_feed", False) for entry in self.process_registry.values()):
+                     self.logger.debug("Real feeds reported active, but no non-sample feeds found in registry. Skipping sample feed stop.")
                 if running_sample_feeds:
                     self.logger.info(f"Identified {len(running_sample_feeds)} sample feeds to stop as real feeds are active.")
                     feeds_to_stop.extend(running_sample_feeds)

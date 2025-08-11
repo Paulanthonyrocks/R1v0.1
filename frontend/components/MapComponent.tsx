@@ -2,13 +2,13 @@
 'use client'; // Add useId import
 import React, { useEffect, useRef, useId } from 'react'; // Removed useState
 import L from 'leaflet';
-import type { Anomaly } from '@/app/anomalies/page'; // Assuming Anomaly type is exported from page.tsx
+import type { Anomaly, SeverityLevel } from '@/lib/types'; // Assuming Anomaly type is exported from page.tsx
 
 // --- Custom Icons based on Severity ---
 // The '_severity' parameter is kept for future extension where different icon images might be used.
 // Prefixing with an underscore signals to the linter that it's intentionally not used in the current function body.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const createSeverityIcon = (_severity: "low" | "medium" | "high"): L.DivIcon => {
+const createSeverityIcon = (_severity: SeverityLevel): L.DivIcon => {
   // For now, all severities use the same generic black 1-bit marker.
   return new L.DivIcon({
     html: `<div style="background-color: black; width: 12px; height: 12px; border-radius: 3px;"></div>`,

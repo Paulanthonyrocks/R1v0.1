@@ -15,18 +15,22 @@ secrets.txt
 .env.local
 backend/configs/firebase/service-account-key.json
 backend/data
+data
 .vscode
 .next
 .idx
 .cursor
 .firebase
-.gemini/
+.gemini
 
 # Python cache files
+backend/__pycache__/
 __pycache__/
 *.py[cod]
 *$py.class
 
 # Large data files (consider Git LFS if necessary)
 *.dat"commit_message.txt" 
-./venv
+venv
+setup.sh
+=4.5.0

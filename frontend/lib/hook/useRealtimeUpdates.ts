@@ -2,8 +2,20 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
 import { WebSocketClient, WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 
+interface VehicleData {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    id: string;
+    speed: number;
+  }
+
 interface KPIData {
   // Define the expected structure of your KPIs here
+  vehicles: VehicleData[]; 
+  vehicle_count: number;
+  avg_speed: number;
   [key: string]: unknown;
 }
 
@@ -14,11 +26,11 @@ interface RealtimeUpdates {
   isConnected: boolean;
   isReady: boolean;
   error: string | null; // Added error property
+  sendMessage: (action: string, payload?: object) => boolean; // Added sendMessage
   startWebSocket: () => void;
 }
 
 export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { feeds: FeedStatusData[] } => {
-  const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
   const webSocketClientRef = useRef<WebSocketClient | null>(null);
   const [kpis, setKpis] = useState<KPIData | null>(null);
   const [alerts, setAlerts] = useState<AlertData[]>([]);
@@ -28,12 +40,16 @@ export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { fe
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null); // Added error state
 
+  const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+
   const startWebSocket = useCallback(() => {
     if (webSocketClientRef.current) {
       return; // Prevent multiple connections
     }
 
-    const client = new WebSocketClient(`${WS_BASE_URL.replace(/\/$/, '')}/api/v1`);
+    const wsUrl = new URL('/api/v1/ws', WS_BASE_URL).toString();
+    console.log('Constructed WebSocket URL:', wsUrl);
+    const client = new WebSocketClient(wsUrl);
     webSocketClientRef.current = client;
 
     client.onError((type, message) => {
@@ -109,5 +125,15 @@ export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { fe
     };
   }, [token, startWebSocket]);
 
-  return { kpis, alerts, nodeCongestionData, isConnected, isReady, error, startWebSocket, feeds };
+  const sendMessage = useCallback((action: string, payload?: object): boolean => {
+    if (webSocketClientRef.current && isConnected) {
+      webSocketClientRef.current.send({ type: action as WebSocketMessageType, data: payload });
+      return true; // Message sent
+    }
+    console.warn('WebSocket not connected. Message not sent:', { action, payload });
+    return false; // Message not sent
+  }, [isConnected]);
+
+
+  return { kpis, alerts, nodeCongestionData, isConnected, isReady, error, startWebSocket, feeds, sendMessage };
 };

@@ -41,7 +41,7 @@ const DashboardPage: React.FC = () => {
       startWebSocket();
     }
     // No explicit cleanup needed here as the hook manages its own lifecycle
-  }, [startWebSocket]); // Dependency array includes startWebSocket
+  }, [startWebSocket, token]); // Dependency array includes startWebSocket and token
 
   // Optional: Log connection status for debugging
   useEffect(() => {

@@ -2,15 +2,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface MultipartStreamData {
-  image: string | null; // Data URL for the image
+  videoUrl: string | null; // Data URL for the image
   error: string | null;
+  rawData: Uint8Array | null; // Raw Uint8Array data
   isLoading: boolean;
 }
 
 const useMultipartStream = (url: string | null, token: string | null): MultipartStreamData & { drawFrame: (ctx: CanvasRenderingContext2D, frame: Uint8Array) => void } => {
-  const [frameData, setFrameData] = useState<Uint8Array | null>(null);
+  const [frameData, setFrameData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [rawFrameData, setRawFrameData] = useState<Uint8Array | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -32,11 +34,10 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
       return;
     }
 
-    // Prepend API base URL if url is relative
     let fetchUrl = url;
     if (url.startsWith('/')) {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
-      fetchUrl = apiBase.replace(/.+$/, '') + url;
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'https://firebase-r1v01-1754696973098.cluster-fbfjltn375c6wqxlhoehbz44sk.cloudworkstations.dev:8000';
+      fetchUrl = new URL(url, apiBase).toString();
     }
 
     setIsLoading(true);
@@ -47,7 +48,8 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
     const readStream = async () => {
       try {
         const headers: HeadersInit = {};
-        if (token) {
+        // Only add Authorization header for relative URLs and if token is provided
+        if (url && url.startsWith('/') && token) {
           headers['Authorization'] = `Bearer ${token}`;
         }
 
@@ -107,7 +109,11 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
                 if (headersText.includes('Content-Type: image/jpeg')) {
                    const imagePart = part.slice(headersEnd + 4);
-                   setFrameData(imagePart);
+                   // Convert Uint8Array to Data URL
+                   const blob = new Blob([imagePart], { type: 'image/jpeg' }); // Assuming JPEG format
+                   const dataUrl = URL.createObjectURL(blob);
+                   setFrameData(dataUrl);
+                   setRawFrameData(imagePart);
                 }
               }
 
@@ -145,7 +151,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
   }, [url, token]);
 
-  return { image: frameData, error, isLoading, drawFrame };
+  return { videoUrl: frameData, rawData: rawFrameData, error, isLoading, drawFrame };
 };
 
 // Helper function to find byte sequence

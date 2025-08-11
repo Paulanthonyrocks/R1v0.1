@@ -103,3 +103,48 @@ class PersonalizedRouteResponse(BaseModel):
     weather_impact: Optional[Dict[str, Any]]
     event_impacts: List[Dict[str, Any]]
     confidence_score: float
+
+
+class SupportedAreaBounds(BaseModel):
+    north: float
+    south: float
+    east: float
+    west: float
+
+
+class SupportedArea(BaseModel):
+    name: str
+    bounds: SupportedAreaBounds
+    coverage_level: str  # e.g., "high", "medium", "low"
+
+
+class SupportedAreasResponse(BaseModel):
+    """Response model for supported route optimization areas."""
+    supported_areas: List[SupportedArea]
+    last_updated: datetime
+
+
+class RouteAnalyticsEntry(BaseModel):
+    """Model for a single entry in route history analytics."""
+    id: str
+    origin: str
+    destination: str
+    routeSummary: str
+    date: datetime
+    duration: float  # in seconds
+    distance: float  # in meters
+    trafficImpact: str
+    weatherImpact: Optional[str]
+
+
+class RouteAnalyticsSummary(BaseModel):
+    """Model for aggregated route analytics summary."""
+    total_routes: int
+    avg_duration: float  # in seconds
+    avg_traffic_impact: str
+    common_weather_impacts: List[str]
+
+class RouteAnalyticsResponse(BaseModel):
+    """Response model for route history analytics."""
+    routes: List[RouteAnalyticsEntry]
+    analytics: RouteAnalyticsSummary

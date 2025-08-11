@@ -4,7 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import logging
 
-from app.models.traffic import LocationModel
+from app.models.traffic import LocationModel # Assuming LocationModel is still needed for the request model
 from app.dependencies import get_route_optimization_service, get_current_active_user
 from app.services.route_optimization_service import RouteOptimizationService
 
@@ -23,6 +23,7 @@ class RouteOptimizationRequest(BaseModel):
             "minimize_congestion": True,
         }
     )
+from app.models.routing import SupportedAreasResponse, RouteAnalyticsResponse # Import new response models
 
 
 @router.post(
@@ -56,7 +57,7 @@ async def optimize_route(
 
 @router.get(
     "/supported-areas",
-    response_model=Dict[str, Any],
+    response_model=SupportedAreasResponse, # Use the new response model
     summary="Get Supported Areas",
     description="Get areas where route optimization is available",
 )
@@ -84,7 +85,7 @@ async def get_supported_areas(
 
 @router.get(
     "/analytics",
-    response_model=Dict[str, Any],
+    response_model=RouteAnalyticsResponse, # Use the new response model
     summary="Get Route History Analytics",
     description="Get historical route data and analytics for analysis",
 )

@@ -12,6 +12,13 @@ export interface FeedStatusData {
   status: 'stopped' | 'running' | 'starting' | 'error' | 'stopping'; // Added 'stopping'
   fps?: number | null;
   error_message?: string | null;
+  latitude?: number; // Added latitude
+  longitude?: number; // Added longitude
+  latest_metrics?: { // Added latest_metrics with a more specific structure
+    avg_speed?: number | null;
+    vehicle_count?: number | null;
+    [key: string]: unknown; // Allow for other potential metrics
+  } | null;
 }
 
 export interface AlertData {
@@ -179,3 +186,9 @@ export interface RealtimeDataActions {
 }
 
 export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { startWebSocket: () => void; sendMessage: (action: string, payload?: object) => boolean; };
+
+export interface SurveillanceFeedMessage {
+  vehicles?: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }[];
+  vehicle_count?: number;
+  avg_speed?: number;
+}

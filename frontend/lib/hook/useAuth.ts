@@ -35,8 +35,7 @@ const useAuth = () => {
         }
 
         // Initialize WebSocket client with token
-        const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-        const wsUrl = `${wsBase.replace(/\/$/, '')}/api/v1/ws`;
+        const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
         const client = new WebSocketClient(wsUrl);
         wsClientRef.current = client;
         // Removed direct client.connect call here. Connection will be managed by useRealtimeUpdates.

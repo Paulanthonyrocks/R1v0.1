@@ -3,10 +3,10 @@ import json
 import logging
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError, NoBrokersAvailable
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ConnectionFailure, OperationFailure
 from pydantic import ValidationError
 
@@ -34,20 +34,52 @@ def setup_logging():
     logging.getLogger("kafka").setLevel(logging.WARNING)
 
 
-# --- Dead Letter Queue (DLQ) Placeholder ---
+# --- Dead Letter Queue (DLQ) ---
 def send_to_dlq(
-    message_value: dict, error_details: str, kafka_producer=None, dlq_topic=None
+    message_value: Any,
+    error_type: str,
+    error_message: str,
+    original_message: Any,
+    kafka_producer,
+    dlq_topic: str,
 ):
     """
-    Placeholder function to simulate sending a failed message to a Dead Letter Queue.
-    In a real system, this would involve publishing to a different Kafka topic,
-    storing in a database, or writing to a file.
+    Sends a failed message to the Dead Letter Queue topic.
     """
-    logger.error(
-        f"DLQ: Sending message to DLQ. Error: {error_details}. Message: {message_value}"
-    )
-    # if kafka_producer and dlq_topic:
-    # try:
+    dlq_payload = {
+        "original_message": original_message,
+        "error_type": error_type,
+        "error_message": error_message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "original_topic": original_message.topic,
+        "original_partition": original_message.partition,
+        "original_offset": original_message.offset,
+    }
+    try:
+        # Ensure the payload is JSON serializable
+        kafka_producer.send(dlq_topic, value=dlq_payload)
+        kafka_producer.flush()  # Ensure the message is sent immediately
+        logger.warning(
+            f"Sent message at offset {original_message.offset} to DLQ due to {error_type}: {error_message}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to send message to DLQ topic {dlq_topic}: {e}", exc_info=True
+        )
+
+
+def initialize_kafka_producer():
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=config.KAFKA_BROKERS,
+            value_serializer=lambda x: json.dumps(x).encode("utf-8"),
+            # retries=3, # Optional: Configure retries for producer
+        )
+        logger.info(f"Successfully connected Kafka producer to {config.KAFKA_BROKERS}")
+        return producer
+    except Exception as e:
+        logger.error(f"Failed to initialize Kafka producer: {e}", exc_info=True)
+        raise
     # kafka_producer.send(dlq_topic, value=dlq_message)
     #         logger.info(f"Message successfully sent to DLQ topic: {dlq_topic}")
     #     except Exception as e:
@@ -384,7 +416,7 @@ def main():
 
     consumer = None
     mongo_client = None
-    # kafka_dlq_producer = None # Initialize if using Kafka for DLQ
+    kafka_dlq_producer = None
     last_window_check_time = time.time()
 
     # For manual commit tracking across a batch of messages
@@ -478,15 +510,24 @@ def main():
                             f"{error_str} for message at offset {msg.offset}. Data: {msg.value}",
                             exc_info=False,
                         )
-                        send_to_dlq(msg.value, error_str)
+                        if kafka_dlq_producer:
+                            send_to_dlq(
+                                msg.value,
+                                "ValidationError",
+                                str(e),
+                                msg,
+                                kafka_dlq_producer,
+                                config.KAFKA_DLQ_TOPIC,
+                            )
                         max_offsets_in_batch[tp] = (
                             msg.offset + 1
                         )  # Skip bad message, commit its offset
                         batch_had_errors = True  # Mark batch as having errors, but continue processing others
                     except OperationFailure as e:  # MongoDB specific operational errors from store_processed_data
                         error_str = f"MongoDB operation error: {e}"
+                        # Note: store_processed_data_to_db already has retries. This catches the final failure.
                         logger.error(
-                            f"{error_str} processing message at offset {msg.offset}. Message will be re-polled if not committed.",
+                            f"FINAL DB FAILURE: {error_str} processing message at offset {msg.offset}. Sending to DLQ.",
                             exc_info=True,
                         )
                         send_to_dlq(
@@ -500,13 +541,23 @@ def main():
                         error_str = f"Unexpected error: {e}"
                         logger.error(
                             f"{error_str} processing message at offset {msg.offset}. Data: {msg.value}",
-                            exc_info=True,
+                            exc_info=False, # Log traceback only if needed, often error_str is enough
                         )
-                        send_to_dlq(msg.value, error_str)
+                        if kafka_dlq_producer:
+                            send_to_dlq(
+                                msg.value,
+                                type(e).__name__,
+                                str(e),
+                                msg,
+                                kafka_dlq_producer,
+                                config.KAFKA_DLQ_TOPIC,
+                            )
                         max_offsets_in_batch[tp] = msg.offset + 1  # Skip bad message
                         batch_had_errors = True
 
                 if shutdown_flag:
+                    logger.info("Shutdown flag active, completing current message batch processing.")
+                    # Allow remaining messages in the current message_pack to be processed for graceful shutdown
                     break
 
             # After processing all messages in message_pack or if shutdown
@@ -578,7 +629,10 @@ def main():
         if consumer:
             logger.info("Closing Kafka consumer...")
             consumer.close()
-            logger.info("Kafka consumer closed.")
+            logger.info("Kafka consumer closed.\n")\n
+        if kafka_dlq_producer:\n
+            logger.info("Closing Kafka DLQ producer...")\n
+            kafka_dlq_producer.close()\n
         # if kafka_dlq_producer: kafka_dlq_producer.close()
         if mongo_client:
             logger.info("Closing MongoDB connection...")

@@ -1,5 +1,6 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
+import { errorNotifier } from '../utils/errorNotifier';
 
 export interface APIOptions {
     baseURL: string;
@@ -81,7 +82,7 @@ export class APIClient {
                 // auth is already imported at the top of the file
                 const user = auth.getAuth().currentUser;
                 if (user) {
-                    const newToken = await this.tokenManager.refreshToken(user);
+                    const newToken = await this.tokenManager.refreshToken();
                     if (newToken) {
                         // Retry the request with new token
                         const newHeaders = { ...originalRequestOptions.headers, 'Authorization': `Bearer ${newToken}` };
@@ -132,7 +133,11 @@ export class APIClient {
                 errorNotifier.error(errorMessage);
                 throw new Error(errorMessage);
             }
-            const errorMessage = `An API error occurred: ${error.message || 'Unknown error'}`;
+            let errorMessage = 'An unknown API error occurred';
+            if (error instanceof Error) {
+                errorMessage = `An API error occurred: ${error.message}`;
+            }
+
             errorNotifier.error(errorMessage);
             throw error;
         }

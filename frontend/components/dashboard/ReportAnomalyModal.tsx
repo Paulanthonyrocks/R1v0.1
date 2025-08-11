@@ -1,5 +1,5 @@
 // components/dashboard/ReportAnomalyModal.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label"; // Use standard quote ' or "
 import { AlertTriangle } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { ReportAnomalyModalProps, SeverityLevel } from '@/lib/types'
-
+import { useSession } from 'next-auth/react';
 // Define severity options available for reporting
 const severityOptions: { value: SeverityLevel; label: string }[] = [
   { value: 'Critical', label: 'Critical' },
@@ -32,16 +32,18 @@ const severityOptions: { value: SeverityLevel; label: string }[] = [
   { value: 'INFO', label: 'Info' },
 ];
 
+
 const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModalProps) => {
   // Initial form state
-  const initialFormData = {
+  const initialFormData = useMemo(() => ({
     message: '',
     severity: 'Anomaly' as SeverityLevel, // Default severity
     description: '',
     location: '',
-  };
-  const [formData, setFormData] = useState(initialFormData);
+ }), []);
+ const [formData, setFormData] = useState(initialFormData);
   const [error, setError] = useState<string | null>(null);
+  const { data: session } = useSession();
 
   // Reset form when modal opens/closes
   useEffect(() => {
@@ -53,7 +55,7 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
 
   // Generic handler for input/textarea changes
   const handleInputChange = (field: keyof typeof formData) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData(prev => ({ ...prev, [field]: event.target.value }));
+ setFormData((prev: typeof formData) => ({ ...prev, [field]: event.target.value }));
     // Clear error if the required field is being typed into
     if (field === 'message' && event.target.value.trim()) {
       setError(null);
@@ -63,7 +65,7 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
   // Handler for Select component change
   const handleSelectChange = (value: string) => {
      // Assert value is a SeverityLevel - use guard if necessary
-    setFormData(prev => ({ ...prev, severity: value as SeverityLevel }));
+ setFormData((prev: typeof formData) => ({ ...prev, severity: value as SeverityLevel }));
   };
 
 
@@ -76,11 +78,13 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
     }
     setError(null); // Clear error on successful validation
 
+    const userId = session?.user?.id; // Assuming session?.user?.id contains the user ID
     // Prepare data for submission (omit empty optional fields)
     const submissionData = {
       message: formData.message.trim(),
       severity: formData.severity,
       ...(formData.description.trim() && { description: formData.description.trim() }),
+      ...(userId && { reported_by_user_id: userId }), // Include userId if available
       ...(formData.location.trim() && { location: formData.location.trim() }),
     };
 

@@ -1,7 +1,5 @@
 import { User } from 'firebase/auth';
 
-import { User } from 'firebase/auth';
-
 export class TokenManager {
     private static instance: TokenManager;
     private currentToken: string | null = null;

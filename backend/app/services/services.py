@@ -127,12 +127,25 @@ async def initialize_services(
     except Exception as e:
         logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
         _analytics_service_instance = None
+
+    # Initialize weather service
+    try:
+        _weather_service_instance = WeatherService(
+            api_url=config.get("weather_service", {}).get("api_url", ""),
+            api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
+            cache_ttl_minutes=config.get("weather_service", {}).get(
+                "cache_ttl_minutes", 10
+            ),
+        )
+        logger.info("WeatherService initialized successfully")
+    except Exception as e:
         raise  # Re-raise the exception to propagate the error
 
     if _analytics_service_instance:
         _route_optimization_service_instance = RouteOptimizationService(
-            traffic_predictor=_analytics_service_instance._traffic_predictor,
-            data_cache=_analytics_service_instance._data_cache,
+            weather_service=_weather_service_instance,
+            data_cache=_analytics_service_instance._data_cache,  # Assuming data_cache is also needed by RouteOptimizationService
+            traffic_predictor=_analytics_service_instance._traffic_predictor,  # Pass the loaded predictor
         )
         logger.info("RouteOptimizationService initialized successfully.")
     else:
@@ -154,19 +167,6 @@ async def initialize_services(
     except Exception as e:
         logger.error(f"Failed to initialize PersonalizedRoutingService: {e}")
         _personalized_routing_service_instance = None
-
-    # Initialize weather service
-    try:
-        _weather_service_instance = WeatherService(
-            api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
-            cache_ttl_minutes=config.get("weather_service", {}).get(
-                "cache_ttl_minutes", 10
-            ),
-        )
-        logger.info("WeatherService initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize WeatherService: {e}")
-        _weather_service_instance = None
 
     # Initialize event service
     try:

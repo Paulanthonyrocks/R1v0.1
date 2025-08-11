@@ -1,7 +1,7 @@
 # backend/requirements.txt
 # Core FastAPI
 fastapi>=0.68.0
-uvicorn>=0.15.0
+uvicorn[standard]>=0.15.0
 python-multipart>=0.0.5
 httpx>=0.25.0 # For async HTTP calls
 python-jose[cryptography]>=3.3.0

@@ -160,7 +160,7 @@ const UserPreferencesPanel: React.FC = () => {
             type="checkbox"
             name="includeEvents"
             checked={prefs.trafficAlerts.includeEvents}
-            onChange={e => setPrefs({ ...prefs.trafficAlerts, includeEvents: e.target.checked })}
+            onChange={e => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: e.target.checked } })}
             className="matrix-input" />
           Include Events
         </label>

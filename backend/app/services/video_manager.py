@@ -1,6 +1,11 @@
 import logging
+import os
 from typing import Dict, Any, Optional
 from threading import Lock
+from multiprocessing import Queue as MPQueue
+
+from app.core.core_module import CoreModule
+from app.config import get_current_config
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +31,26 @@ class VideoManager:
         return cls()
 
     def get_processor(self, video_path: str) -> Any:
-        # Placeholder for getting a video processor
-        # In a real scenario, this would create or retrieve a video processing
-        # instance (e.g., a CoreModule instance) for the given video_path.
         logger.info(f"Getting processor for video_path: {video_path}")
         if video_path not in self.processors:
-            # This is where you'd typically instantiate your video processing logic
-            # For now, we'll just return a mock or raise an error if not found
-            logger.error(f"No processor found for {video_path}. This needs to be implemented.")
-            raise NotImplementedError(f"Processor for {video_path} not implemented yet.")
+            config = get_current_config()
+            model_path = config.get("vehicle_detection", {}).get("model_path")
+            fps = config.get("fps")
+            gemini_api_key = os.environ.get("GEMINI_API_KEY")
+
+            # This is a simplification. In a real app, the queue would be managed
+            # by a central process and passed down.
+            db_queue = MPQueue()
+
+            processor = CoreModule(
+                feed_id=video_path,
+                model_path=model_path,
+                config=config,
+                fps=fps,
+                db_queue=db_queue,
+                gemini_api_key=gemini_api_key,
+            )
+            self.add_processor(video_path, processor)
         return self.processors[video_path]
 
     def add_processor(self, video_path: str, processor: Any):

@@ -13,6 +13,7 @@ const TrafficSignalIcon: React.FC<TrafficSignalIconProps> = ({ status }) => {
     console.warn(`TrafficSignalIcon: Invalid status "${status}" provided. Expected one of ${VALID_STATUSES.join(', ')}. Rendering null.`);
     return null;
   }
+  const iconStyle: React.CSSProperties = { width: '100%', height: '100%' };
   const ditherPatternId = `dither-pattern-yellow-signal-${uniqueIdSuffix}`;
 
   switch (status) {

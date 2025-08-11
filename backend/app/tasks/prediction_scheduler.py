@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
 from app.models.traffic import LocationModel
+from unittest.mock import MagicMock # Import MagicMock for type checking
 from app.services.analytics_service import AnalyticsService
 from app.models.websocket import (
     WebSocketMessage,
@@ -92,7 +93,18 @@ class PredictionScheduler:
                         f"Exception fetching accuracy for {loc.name or self._get_location_key(loc)}: {e_fetch}",
                         exc_info=True,
                     )
-            self._location_accuracy_cache = temp_cache
+
+            # Validate data before caching
+            validated_cache = {}
+            for key, summary_data in temp_cache.items():
+                if (
+                    isinstance(summary_data, dict)
+                    and isinstance(summary_data.get("accuracy_metrics"), dict)
+                    and isinstance(summary_data["accuracy_metrics"].get("incident_hit_rate"), (int, float))
+                    and isinstance(summary_data.get("total_verified_predictions"), int)
+                ):
+                    validated_cache[key] = summary_data
+            self._location_accuracy_cache = validated_cache
             self._last_accuracy_cache_refresh = now
             self.logger.info(
                 f"Prediction accuracy cache refreshed. Total entries: {len(self._location_accuracy_cache)}"

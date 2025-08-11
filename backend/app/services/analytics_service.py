@@ -13,30 +13,34 @@ from app.models.websocket import (
     WebSocketMessageTypeEnum,
     GeneralNotification,
     NodeCongestionUpdatePayload,
-    NodeCongestionUpdateData,
-)
+    NodeCongestionUpdateData,)
+from app.models.alerts import Alert, AlertSeverityEnum
 from app.models.alerts import AlertSeverityEnum
 from app.models.analytics import (
+    LocationModel,
     PredictionLogModel,
 )  # Assuming these models exist
 from app.ml.data_cache import TrafficDataCache  # Assuming this class exists
+from app.ml.traffic_predictor import TrafficPredictor
 from app.websocket.connection_manager import (
     ConnectionManager,
 )  # Assuming this class exists
-from unittest.mock import MagicMock  # For placeholder for traffic_predictor
+from app.services.traffic_signal_service import TrafficSignalService
 
+from app.models.traffic import IncidentReport, IncidentTypeEnum, IncidentSeverityEnum
 logger = logging.getLogger("app.services.analytics_service")
 
 
 class AnalyticsService:
     def __init__(
-      self, config: Dict[str, Any], connection_manager: ConnectionManager, database_manager, traffic_predictor=None
+      self, config: Dict[str, Any], connection_manager: ConnectionManager, database_manager, traffic_predictor=None, traffic_signal_service: Optional[TrafficSignalService] = None
     ):
         self.config = config
         self._connection_manager = connection_manager
         self._db_manager = database_manager
+        self._traffic_signal_service = traffic_signal_service
         self._data_cache = TrafficDataCache()  # Initialize data cache
-        self._traffic_predictor = traffic_predictor if traffic_predictor else MagicMock()  # Use provided or placeholder
+        self._traffic_predictor = TrafficPredictor(config=config)  # Instantiate the actual TrafficPredictor
         print("AnalyticsService: Before _prediction_log_table_initialized = False")
         self._prediction_log_table_initialized = False
         print("AnalyticsService: After _prediction_log_table_initialized = False")
@@ -111,7 +115,26 @@ class AnalyticsService:
                 location=location,
                 prediction_time=prediction_time,
             )
+
             return prediction_result
+
+            # Check if prediction indicates a high likelihood of an incident
+            incident_likelihood_threshold = self.config.get("traffic_prediction", {}).get("incident_likelihood_threshold", 0.7)
+            if prediction_result.get("incident_likelihood", 0.0) > incident_likelihood_threshold:
+                 # Create an incident report based on the high likelihood prediction
+                 await self._create_and_save_incident(
+                    location=location,
+                    incident_type=IncidentTypeEnum.PREDICTION,
+                    severity=IncidentSeverityEnum.HIGH if prediction_result.get("incident_likelihood", 0.0) > 0.9 else IncidentSeverityEnum.MEDIUM, # Simple severity mapping
+                    description=f"High predicted incident likelihood ({prediction_result.get('incident_likelihood', 0.0):.2f}) at {location.get('name', 'N/A')}",
+                    details={"prediction_result": prediction_result})
+
+            # If the incident is severe, suggest a signal adjustment
+            if prediction_result.get("severity") in [IncidentSeverityEnum.HIGH, IncidentSeverityEnum.CRITICAL] and self._traffic_signal_service:
+                 logger.info(f"High likelihood prediction incident. Suggesting signal adjustment.")
+                 await self._traffic_signal_service.suggest_signal_adjustment(
+                     incident_location=location, # Use the location dict directly
+                     incident_severity=IncidentSeverityEnum[prediction_result.get("severity", "MEDIUM").upper()]) # Ensure severity is enum
         except Exception as e:
             logger.error(f"Error during traffic prediction: {e}", exc_info=True)
             return {"incident_likelihood": 0.0, "error": str(e)}
@@ -147,15 +170,53 @@ class AnalyticsService:
             )
 
     async def save_vehicle_data(self, vehicle_data: Dict[str, Any]):
-        # Placeholder for saving vehicle data to DB
-        logger.debug(f"Saving vehicle data: {vehicle_data}")
-        # Example: await self._db_manager.save_vehicle_data(vehicle_data)
+        """Saves vehicle data to the database."""
+        await self._db_manager.save_vehicle_data(vehicle_data)
 
     async def record_prediction_log(self, log_data: Dict[str, Any]) -> Optional[str]:
-        # Placeholder for recording prediction logs
-        logger.info(f"Recording prediction log: {log_data}")
-        # Example: await self._db_manager.record_prediction_log(log_data)
-        return "mock_log_id"
+        """Records prediction log data to the database."""
+        log_id = await self._db_manager.record_prediction_log(log_data)
+        return log_id
+
+    async def _create_and_save_incident(
+        self,
+        location: Dict[str, Any],
+        incident_type: IncidentTypeEnum,
+        severity: IncidentSeverityEnum,
+        description: str,
+        source_feed_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """Creates and saves a new incident report to the database."""
+        try:
+            # Ensure location is a LocationModel
+            location_model = LocationModel(**location) if isinstance(location, dict) else location
+
+            incident_report = IncidentReport(
+                location=location_model,
+                type=incident_type,
+                severity=severity,
+                description=description,
+                source_feed_id=source_feed_id,
+                details=details or {},
+            )
+            await self._db_manager.save_incident(incident_report)
+            logger.info(f"Created and saved incident: {incident_report.incident_id}")
+
+            # TODO: Broadcast new incident via WebSocket
+
+        except Exception as e:
+            logger.error(f"Error creating or saving incident: {e}", exc_info=True)
+
+    async def create_and_save_alert(self, alert: Alert):
+        """
+        Saves an alert to the database.
+        """
+        logger.info(f"Saving alert: Severity={alert.severity}, Message='{alert.message}'")
+        await self._db_manager.save_alert(alert)
+        logger.info("Alert saved successfully.")
+
+        return log_id
 
     async def get_critical_alert_summary(self) -> Dict[str, Any]:
         """
@@ -202,7 +263,6 @@ class AnalyticsService:
         except Exception as e:
             logger.error(f"Error getting critical alert summary: {e}", exc_info=True)
             return {
-                "critical_unack_alert_count": 0,
                 "recent_critical_types": [],
                 "error": str(e),
             }
@@ -292,24 +352,77 @@ class AnalyticsService:
     async def detect_traffic_anomalies(
         self, traffic_data_points: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        # Placeholder for anomaly detection
-        logger.info(f"Detecting anomalies in {len(traffic_data_points)} data points.")
-        return []
+        """
+        Simplified anomaly detection: identifies data points with low speed and high vehicle count.
+        A real anomaly detection would use more sophisticated statistical or ML models.
+        """
+        anomalies = []
+        speed_threshold = 10.0  # km/h
+        vehicle_count_threshold = 5
+
+        logger.info(f"Performing simplified anomaly detection on {len(traffic_data_points)} data points.")
+
+        for data_point in traffic_data_points:
+            speed = data_point.get("average_speed", float('inf'))
+            vehicle_count = data_point.get("vehicle_count", 0)
+            location_name = data_point.get("location_description", "Unknown Location")
+
+            if speed < speed_threshold and vehicle_count > vehicle_count_threshold:
+                anomalies.append({
+                    "type": "traffic_anomaly",
+                    "description": f"Low speed ({speed:.1f} km/h) with high vehicle count ({vehicle_count}) detected.",
+                    "location": location_name,
+                    "timestamp": data_point.get("timestamp", datetime.now(timezone.utc)).isoformat(),
+                })
+                # Create an incident report for the detected anomaly
+                severity = IncidentSeverityEnum.HIGH if speed < 5.0 and vehicle_count > 10 else IncidentSeverityEnum.MEDIUM # More specific severity
+                location_data = {
+                    "latitude": data_point.get("latitude"),
+                    "longitude": data_point.get("longitude"),
+                    "name": location_name # Use extracted location name
+                }
+                # Filter out None values from location_data
+                location_data = {k: v for k, v in location_data.items() if v is not None}
+                await self._create_and_save_incident(location=location_data, incident_type=IncidentTypeEnum.CONGESTION, severity=severity, description=anomalies[-1]["description"], source_feed_id=None, details=data_point)
+        return anomalies
 
     async def generate_trend_summary(
         self, region_id: str, start_date: datetime, end_date: datetime
     ) -> Dict[str, Any]:
-        # Placeholder for trend summary generation
+        """
+        Simplified trend summary generation: calculates average speed and total vehicle count
+        from data in the TrafficDataCache within the specified time range.
+        A real trend summary would involve more complex data aggregation and potentially DB queries.
+        """
         logger.info(
             f"Generating trend summary for {region_id} from {start_date} to {end_date}"
         )
-        return {"region_id": region_id, "average_speed": 50.0, "total_vehicles": 1000}
+
+        # Assuming TrafficDataCache has a method to get data within a time range,
+        # and that the region_id can be used as a filter if the cache supports it.
+        # For this simplified implementation, we'll just get all data in the time range
+        # and ignore region_id for now, assuming the cache is for the overall system.
+        historical_data = self._data_cache.get_data_in_range(start_date, end_date)
+
+        total_speed = 0
+        total_vehicles = 0
+        data_point_count = 0
+
+        for data_point in historical_data:
+            total_speed += data_point.get("average_speed", 0.0)
+            total_vehicles += data_point.get("vehicle_count", 0)
+            data_point_count += 1
+
+        average_speed = total_speed / data_point_count if data_point_count > 0 else 0.0
+
+        return {"region_id": region_id, "average_speed_kmh": round(average_speed, 1), "total_vehicles_sum": total_vehicles}
 
     async def broadcast_operational_alert(
         self, title: str, message_text: str, severity: str
     ):
-        # Placeholder for broadcasting operational alerts
         logger.info(f"Broadcasting operational alert: {title} - {message_text}")
+        # Simplified implementation broadcasting to a general operational alerts topic.
+        # A real implementation might target specific user roles or clients.
         notification = GeneralNotification(
             message_type="operational_alert",
             title=title,
@@ -325,21 +438,50 @@ class AnalyticsService:
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):
         # Placeholder for sending user-specific alerts
-        logger.info(
-            f"Sending user-specific alert to {user_id}: {notification_model.title}"
-        )
         # This would typically involve looking up the user's active WebSocket connections
         # and sending the message via connection_manager.send_personal_message_model
         # For now, just log.
+        logger.info(f"Intending to send user-specific alert to {user_id}: {notification_model.title}")
 
     def get_current_system_kpis_summary(self) -> Dict[str, Any]:
-        # Placeholder for KPI summary
+        """
+        Simplified system KPIs summary: aggregates data from the TrafficDataCache
+        to provide estimated overall congestion, speed, vehicle flow,
+        and active monitored locations.
+        A real system KPI summary would be more comprehensive and potentially involve
+        aggregations over longer periods or different data sources.
+        """
         logger.debug("Getting current system KPIs summary.")
+
+        # Get the latest summary data from the cache
+        latest_summaries = self._data_cache.get_all_location_summaries()
+
+        total_vehicles_sum = 0
+        total_speed_sum = 0
+        active_locations_count = len(latest_summaries)
+        congestion_scores_sum = 0
+
+        for summary in latest_summaries:
+            total_vehicles_sum += summary.get("vehicle_count", 0)
+            total_speed_sum += summary.get("average_speed", 0.0)
+            congestion_scores_sum += summary.get("congestion_score", 0.0)
+
+        average_speed_kmh = total_speed_sum / active_locations_count if active_locations_count > 0 else 0.0
+        average_congestion_score = congestion_scores_sum / active_locations_count if active_locations_count > 0 else 0.0
+
+        # Simple mapping of average congestion score to a level
+        if average_congestion_score > 0.7:
+            overall_congestion_level = "HIGH"
+        elif average_congestion_score > 0.3:
+            overall_congestion_level = "MEDIUM"
+        else:
+            overall_congestion_level = "LOW" if active_locations_count > 0 else "UNKNOWN"
+
         return {
-            "overall_congestion_level": "UNKNOWN",
-            "average_speed_kmh": 0.0,
-            "total_vehicle_flow_estimate": 0,
-            "active_monitored_locations": 0,
+            "overall_congestion_level": overall_congestion_level,
+            "average_speed_kmh": round(average_speed_kmh, 1),
+            "total_vehicle_flow_estimate": total_vehicles_sum, # Simple sum as estimate
+            "active_monitored_locations": active_locations_count,
             "system_stability_indicator": "NO_DATA",
         }
 

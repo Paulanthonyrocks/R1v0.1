@@ -144,3 +144,48 @@ class IncidentReport(BaseModel):
     # This would typically be handled in the business logic layer when an incident is updated,
     # rather than directly in the Pydantic model on instantiation of an existing record.
     # Pydantic v2 offers `model_validator(mode='before')` or specific field validators for more complex cases.
+
+
+class IncidentReportUpdate(BaseModel):
+    """Pydantic model for updating an existing IncidentReport."""
+
+    #incident_id: Optional[uuid.UUID] = Field(None, description="Unique identifier for the incident") # Incident ID is usually in the path, not the body
+    timestamp: Optional[datetime] = Field(
+        None,
+        description="Timestamp of when the incident was reported or detected (UTC)",
+    )
+    location: Optional[LocationModel] = None
+    type: Optional[IncidentTypeEnum] = Field(
+        None, example=IncidentTypeEnum.CONGESTION, description="Type of incident"
+    )
+    severity: Optional[IncidentSeverityEnum] = Field(
+        None, example=IncidentSeverityEnum.HIGH, description="Severity of the incident"
+    )
+    description: Optional[str] = Field(
+        None,
+        example="Heavy traffic backup due to stalled vehicle.",
+        description="Textual description of the incident",
+    )
+    source_feed_id: Optional[str] = Field(
+        None,
+        example="feed_traffic_cam_001",
+        description="Optional ID of the data feed that triggered or reported the incident",
+    )
+    related_vehicle_ids: Optional[List[str]] = Field(
+        None,
+        example=["vehicle_track_123", "plate_ABC123"],
+        description="Optional list of related vehicle identifiers",
+    )
+    status: Optional[IncidentStatusEnum] = Field(
+        None, description="Current status of the incident"
+    )
+    # last_updated should be updated by the application logic, not the client
+    # estimated_clearance_time: Optional[datetime] = Field(
+    #    None, description="Optional estimated time when the incident might be cleared (UTC)"
+    # )
+    image_url: Optional[str] = Field(
+        None, example="https://example.com/incident_image.jpg", description="Optional URL to an image related to the incident"
+    )
+
+class AllNodesCongestionResponse(BaseModel):
+ message: str = Field(..., description="Placeholder message for congestion response")

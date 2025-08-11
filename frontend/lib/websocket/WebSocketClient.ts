@@ -169,6 +169,7 @@ export class WebSocketClient implements IWebSocketClient {
         try {
             const clientId = getOrCreateClientId();
             const fullUrl = `${this.url}/${clientId}?token=${token}`;
+            console.log('WebSocket URL being used:', fullUrl);
             console.log('Attempting to connect to WebSocket:', fullUrl);
             this.ws = new WebSocket(fullUrl);
 
@@ -190,7 +191,6 @@ export class WebSocketClient implements IWebSocketClient {
             };
 
             this.ws.onclose = async (event: CloseEvent) => {
-                console.log(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'No reason'}, WasClean: ${event.wasClean}`);
                 this.isConnecting = false;
                 this.stopPingInterval();
                 
@@ -225,12 +225,14 @@ export class WebSocketClient implements IWebSocketClient {
             };
 
             this.ws.onerror = (error: Event) => {
-                const wsError = error as ErrorEvent;
-                console.error('WebSocket error:', wsError.message, wsError.type, wsError);
+                const wsError = error as any; // Cast to any to access potential non-standard properties
+                const errorMessage = wsError.message || 'Unknown WebSocket Error';
+                const errorType = wsError.type || 'unknown';
+                console.error('WebSocket error:', errorMessage, errorType, error);
                 this.isConnecting = false;
                 
                 // Emit error notification to listeners
-                this.notifyError('connection_error', wsError.message || 'Failed to connect to server');
+                this.notifyError('connection_error', errorMessage);
             };
 
             this.ws.onmessage = this.handleMessage.bind(this);

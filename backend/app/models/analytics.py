@@ -7,6 +7,11 @@ from pydantic import BaseModel
 
 
 
+class LocationModel(BaseModel):
+    latitude: float
+    longitude: float
+
+
 class PredictionLogModel(Base):
     __tablename__ = "prediction_logs"
 

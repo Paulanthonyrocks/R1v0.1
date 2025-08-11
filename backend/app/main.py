@@ -15,6 +15,7 @@ from app.exceptions import (
     BadRequest,
     Unauthorized,
     Forbidden,
+    ConnectionLimitExceeded, # Import the new exception
 )
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -414,19 +415,34 @@ async def catch_all(request: Request, full_path: str):
 
 
 # --- Define WebSocket Endpoint ---
-@app.websocket("/ws")  # Original endpoint definition
+@app.websocket("/ws")
 async def websocket_endpoint_legacy(websocket: WebSocket):
-    # This is the old endpoint, we might deprecate or remove it later.
-    # For now, let's keep it but log its usage.
+    """
+    LEGACY WebSocket Endpoint: /ws
+
+    This is an older WebSocket endpoint and is primarily kept for backward compatibility.
+    It does not include the client_id path parameter, making it less suitable for
+    managing multiple distinct client connections or topic-based subscriptions.
+    Authentication is not explicitly handled here (it expects a token in query params,
+    but the primary handler _handle_websocket_connection is not used by this endpoint directly).
+
+    Frontend clients should use the `/api/v1/ws/{client_id}` endpoint instead.
+    """
     logger.warning(
         "Legacy WebSocket endpoint /ws was accessed. Consider migrating to /ws/{client_id}"
     )
     await websocket.accept()
     await websocket.send_text(
-        "This WebSocket endpoint is deprecated. Please use /ws/{client_id}."
+ "This WebSocket endpoint is deprecated. Please use /api/v1/ws/{client_id}."
     )
     await websocket.close(code=1000)
 
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(
+ websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
+):
+    pass # This endpoint was a duplicate definition, the _handle_websocket_connection below will be the shared handler
 
 async def _handle_websocket_connection(websocket: WebSocket, client_id: str, token: str, endpoint_prefix: str = ""):
     """
@@ -464,26 +480,41 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, tok
         )
         return
 
-    await websocket.accept()
-    logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.")
+    # Attempt to accept the websocket and connect via the manager
+    try:
+        # This accept() is typically handled within manager.connect, but keeping it here
+        # for clarity might lead to double accepts or issues. Let's move accept INTO manager.connect
+        # OR ensure it's only called once. Given the manager handles connection state,
+        # calling accept inside connect is better. Removing it from here.
+        # await websocket.accept()
+        # logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.") # This log might be misleading if accept is in manager.connect
 
-    await manager.connect(websocket, client_id, user_data)
-    active_connection = manager.active_connections.get(client_id)
-    if not active_connection:
-        logger.error(
-            f"[{endpoint_prefix}WS {client_id}] Failed to establish ActiveWebSocketConnection post-connect. Closing."
-        )
-        try:
-            await websocket.close(code=1011, reason="Internal connection setup error")
-        except Exception:
-            pass
-        return
+        # The manager.connect method should handle the accept and adding to its active connections.
+        await manager.connect(websocket, client_id, user_data)
+        active_connection = manager.active_connections.get(client_id) # Retrieve the newly created connection
 
-    logger.info(f"[{endpoint_prefix}WS {client_id}] manager.connect finished.")
-    logger.info(f"Client {client_id} WebSocket connection established.")
+        if not active_connection:
+             # This case should theoretically not happen if manager.connect is successful but doesn't throw
+             logger.error(
+                 f"[{endpoint_prefix}WS {client_id}] Failed to retrieve ActiveWebSocketConnection from manager after connect. Closing."
+             )
+             await websocket.close(code=1011, reason="Internal connection setup error")
+             return
 
-    await active_connection.listen_for_messages()
-    logger.info(f"WebSocket connection for client {client_id} is ending.")
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Connection fully established and added to manager.")
+
+        await active_connection.listen_for_messages()
+        logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection message listener loop ended.")
+
+    except ConnectionLimitExceeded as e:
+        logger.warning(f"[{endpoint_prefix}WS {client_id}] Connection rejected: {e.detail}")
+        await websocket.close(code=429, reason=e.detail) # 429 Too Many Requests
+    except Exception as e:
+        logger.error(f"[{endpoint_prefix}WS {client_id}] Unexpected error during WebSocket connection setup: {e}", exc_info=True)
+        # Attempt to close the connection gracefully with an internal server error code
+        await websocket.close(code=1011, reason=f"Internal server error during connection: {str(e)[:100]}")
+    finally:
+         logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket handler execution finished.")
 
 
 @app.websocket("/ws/{client_id}")

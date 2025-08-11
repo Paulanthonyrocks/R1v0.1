@@ -1,17 +1,19 @@
-import aiohttp
 from typing import Dict, Any
 from datetime import datetime, timedelta
 import logging
 from fastapi import HTTPException
 
+from .external_api_client import BaseApiClient, ExternalAPIError
 
-class WeatherService:
+
+class WeatherService(BaseApiClient):
     """
     Service for fetching and caching weather data from a third-party API.
     """
 
-    def __init__(self, api_key: str, cache_ttl_minutes: int = 10):
+    def __init__(self, api_key: str, api_url: str, cache_ttl_minutes: int = 10, timeout: float = 10.0):
         self.api_key = api_key
+        self.api_url = api_url
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_expiry: Dict[str, datetime] = {}
@@ -26,34 +28,31 @@ class WeatherService:
         if cache_key in self._cache and self._cache_expiry[cache_key] > now:
             weather_data = self._cache[cache_key]
         else:
+            # Fetch new data using the base API client
             try:
-                # Fetch new data
-                async with aiohttp.ClientSession() as session:
-                    url = "https://api.openweathermap.org/data/2.5/weather"
-                    params = {
-                        "lat": lat,
-                        "lon": lon,
-                        "appid": self.api_key,
-                        "units": "metric",
-                    }
-                    async with session.get(url, params=params) as response:
-                        if response.status != 200:
-                            raise HTTPException(
-                                status_code=response.status,
-                                detail="Failed to fetch weather data",
-                            )
-                        weather_data = await response.json()
+                weather_data = await self._make_request(
+                    method="GET",
+                    url="data/2.5/weather",
+                    params={"lat": lat, "lon": lon, "appid": self.api_key, "units": "metric"},
+                )
 
-                        # Cache the data
-                        self._cache[cache_key] = weather_data
-                        self._cache_expiry[cache_key] = now + self.cache_ttl
+                # Cache the data
+                self._cache[cache_key] = weather_data
+                self._cache_expiry[cache_key] = now + self.cache_ttl
 
             except aiohttp.ClientError as e:
                 self.logger.error(f"Weather API request failed: {str(e)}")
                 raise HTTPException(
                     status_code=503, detail="Weather service temporarily unavailable"
+ )
+            except ExternalAPIError as e:
+                self.logger.error(f"Weather API request failed: {e}")
+                raise HTTPException(
+                    status_code=e.status_code if hasattr(e, 'status_code') else 500,
+                    detail=f"Weather service unavailable: {e.detail if hasattr(e, 'detail') else str(e)}",
                 )
-            except Exception as e:
+
+            except Exception as e: # Catch any other unexpected errors
                 self.logger.error(f"Unexpected error in weather service: {str(e)}")
                 raise HTTPException(
                     status_code=500,
@@ -107,3 +106,7 @@ class WeatherService:
         elif weather["precipitation_chance"] > 30 or weather["wind_speed"] > 30:
             return "Medium"
         return "Low"
+
+    async def close(self):
+        """Close the underlying HTTP client session."""
+        await self._client.aclose()

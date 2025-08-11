@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Query, Depends
 from typing import Dict, Any
 import logging
-from app.services.weather_service import WeatherService
+from app.services.weather_service import WeatherService # noqa F401
+from app.models.weather import CurrentWeatherResponse, WeatherImpactResponse
 from app.dependencies import get_weather_service_api, get_current_active_user
 from app.exceptions import OperationFailed
 
@@ -12,7 +13,6 @@ logger = logging.getLogger(__name__)
 @router.get(
     "/current",
     response_model=Dict[str, Any],
-    summary="Get current weather for a location",
     description="Get current weather conditions including temperature, wind speed, and precipitation",
 )
 async def get_current_weather(
@@ -33,7 +33,6 @@ async def get_current_weather(
 @router.get(
     "/impact",
     response_model=Dict[str, Any],
-    summary="Get weather impact assessment",
     description="Get weather impact assessment for route planning",
 )
 async def get_weather_impact(
