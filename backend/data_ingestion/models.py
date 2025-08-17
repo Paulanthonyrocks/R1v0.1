@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, validator, constr, confloat, conint
+from pydantic import BaseModel, Field, validator, constr, conint
 from typing import Dict, Union, Literal
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.models.traffic import LocationModel
 

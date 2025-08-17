@@ -7,48 +7,66 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 from sqlalchemy import select
+from kafka import KafkaConsumer
+from kafka.errors import KafkaError
 
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
     GeneralNotification,
     NodeCongestionUpdatePayload,
-    NodeCongestionUpdateData,)
+    NodeCongestionUpdateData,
+)
 from app.models.alerts import Alert, AlertSeverityEnum
-from app.models.alerts import AlertSeverityEnum
 from app.models.analytics import (
     LocationModel,
     PredictionLogModel,
-)  # Assuming these models exist
-from app.ml.data_cache import TrafficDataCache  # Assuming this class exists
+)
+from app.ml.data_cache import TrafficDataCache
 from app.ml.traffic_predictor import TrafficPredictor
-from app.websocket.connection_manager import (
-    ConnectionManager,
-)  # Assuming this class exists
+from app.websocket.connection_manager import ConnectionManager
 from app.services.traffic_signal_service import TrafficSignalService
-
 from app.models.traffic import IncidentReport, IncidentTypeEnum, IncidentSeverityEnum
+
 logger = logging.getLogger("app.services.analytics_service")
 
 
 class AnalyticsService:
     def __init__(
-      self, config: Dict[str, Any], connection_manager: ConnectionManager, database_manager, traffic_predictor=None, traffic_signal_service: Optional[TrafficSignalService] = None
+        self,
+        config: Dict[str, Any],
+        connection_manager: ConnectionManager,
+        database_manager,
+        traffic_predictor=None,
+        traffic_signal_service: Optional[TrafficSignalService] = None,
     ):
         self.config = config
         self._connection_manager = connection_manager
         self._db_manager = database_manager
         self._traffic_signal_service = traffic_signal_service
-        self._data_cache = TrafficDataCache()  # Initialize data cache
-        self._traffic_predictor = TrafficPredictor(config=config)  # Instantiate the actual TrafficPredictor
-        print("AnalyticsService: Before _prediction_log_table_initialized = False")
+        self._data_cache = TrafficDataCache()
+        self._traffic_predictor = TrafficPredictor(config=config)
         self._prediction_log_table_initialized = False
-        print("AnalyticsService: After _prediction_log_table_initialized = False")
 
         self._node_congestion_task: Optional[asyncio.Task] = None
+        self._kafka_consumer_task: Optional[asyncio.Task] = None
         self._node_congestion_broadcast_interval = self.config.get(
             "node_congestion_broadcast_interval", 5
-        )  # seconds
+        )
+        
+        self._kafka_consumer = None
+        if self.config.get("kafka", {}).get("enabled", False):
+            try:
+                self._kafka_consumer = KafkaConsumer(
+                    self.config["kafka"]["processed_topic"],
+                    bootstrap_servers=self.config["kafka"]["brokers"],
+                    group_id=self.config["kafka"]["group_id"],
+                    auto_offset_reset='earliest',
+                    value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+                )
+            except KafkaError as e:
+                logger.error(f"Failed to initialize Kafka consumer: {e}")
+
 
         logger.info("AnalyticsService initialized.")
 
@@ -131,7 +149,7 @@ class AnalyticsService:
 
             # If the incident is severe, suggest a signal adjustment
             if prediction_result.get("severity") in [IncidentSeverityEnum.HIGH, IncidentSeverityEnum.CRITICAL] and self._traffic_signal_service:
-                 logger.info(f"High likelihood prediction incident. Suggesting signal adjustment.")
+                 logger.info("High likelihood prediction incident. Suggesting signal adjustment.")
                  await self._traffic_signal_service.suggest_signal_adjustment(
                      incident_location=location, # Use the location dict directly
                      incident_severity=IncidentSeverityEnum[prediction_result.get("severity", "MEDIUM").upper()]) # Ensure severity is enum
@@ -213,8 +231,8 @@ class AnalyticsService:
         Saves an alert to the database.
         """
         logger.info(f"Saving alert: Severity={alert.severity}, Message='{alert.message}'")
-        await self._db_manager.save_alert(alert)
-        logger.info("Alert saved successfully.")
+        log_id = await self._db_manager.save_alert(alert)
+        logger.info(f"Alert saved successfully with log_id: {log_id}")
 
         return log_id
 
@@ -498,7 +516,12 @@ class AnalyticsService:
             self._node_congestion_task = asyncio.create_task(
                 self._broadcast_node_congestion_updates_loop()
             )
-            logger.info("AnalyticsService background tasks started.")
+            logger.info("Node congestion broadcast task started.")
+        if self._kafka_consumer and (self._kafka_consumer_task is None or self._kafka_consumer_task.done()):
+            self._kafka_consumer_task = asyncio.create_task(
+                self._consume_processed_traffic_data_loop()
+            )
+            logger.info("Kafka consumer task started.")
 
     async def stop_background_tasks(self):
         if self._node_congestion_task and not self._node_congestion_task.done():
@@ -506,8 +529,40 @@ class AnalyticsService:
             try:
                 await self._node_congestion_task
             except asyncio.CancelledError:
-                logger.info("AnalyticsService background tasks cancelled.")
+                logger.info("Node congestion broadcast task cancelled.")
             self._node_congestion_task = None
+        if self._kafka_consumer_task and not self._kafka_consumer_task.done():
+            self._kafka_consumer_task.cancel()
+            try:
+                await self._kafka_consumer_task
+            except asyncio.CancelledError:
+                logger.info("Kafka consumer task cancelled.")
+            self._kafka_consumer_task = None
+
+    async def _consume_processed_traffic_data_loop(self):
+        logger.info("Starting Kafka consumer loop for processed traffic data.")
+        try:
+            for message in self._kafka_consumer:
+                try:
+                    data = message.value
+                    latitude = data.get("latitude")
+                    longitude = data.get("longitude")
+                    timestamp_str = data.get("timestamp")
+                    if latitude is not None and longitude is not None and timestamp_str:
+                        timestamp = datetime.fromisoformat(timestamp_str)
+                        self._data_cache.add_data_point(latitude, longitude, timestamp, data)
+                    else:
+                        logger.warning(f"Skipping message due to missing data: {data}")
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to decode message: {message.value}")
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}", exc_info=True)
+        except asyncio.CancelledError:
+            logger.info("Kafka consumer loop cancelled.")
+        finally:
+            if self._kafka_consumer:
+                self._kafka_consumer.close()
+                logger.info("Kafka consumer closed.")
 
     async def _broadcast_node_congestion_updates_loop(self):
         while True:

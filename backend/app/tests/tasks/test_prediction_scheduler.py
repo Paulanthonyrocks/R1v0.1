@@ -560,7 +560,7 @@ class TestPredictionScheduler(unittest.IsolatedAsyncioTestCase):
             any("No priority locations set" in call.args[0] for call in self.scheduler.logger.info.call_args_list)
         )
         self.assertTrue(
-            any(f"Dynamically selected 1 locations based on accuracy weights:" in call.args[0] for call in self.scheduler.logger.info.call_args_list)
+            any("Dynamically selected 1 locations based on accuracy weights:" in call.args[0] for call in self.scheduler.logger.info.call_args_list)
         )
 
 

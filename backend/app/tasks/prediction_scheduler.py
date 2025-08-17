@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
 from app.models.traffic import LocationModel
-from unittest.mock import MagicMock # Import MagicMock for type checking
 from app.services.analytics_service import AnalyticsService
 from app.models.websocket import (
     WebSocketMessage,
@@ -26,6 +25,7 @@ class PredictionScheduler:
         self.prediction_interval = timedelta(
             minutes=self.config.get("prediction_interval_minutes", 15)
         )
+        logger.info(f"PredictionScheduler initialized. Enabled status from config: {self.config.get('enabled', True)}") # Added log
 
         self.is_running = False
         self.monitored_locations: List[LocationModel] = []  # Type hint
@@ -323,9 +323,13 @@ class PredictionScheduler:
 
     async def start(self):
         """Start the prediction scheduler"""
+        if not self.config.get("enabled", True):
+            logger.info("Prediction scheduler is disabled in config. Skipping internal startup.")
+            return
+
         if self.task is None:
             self.task = asyncio.create_task(self.run())
-            logger.info("Prediction scheduler started")
+            logger.info("Prediction scheduler started (task created).")
         else:
             logger.warning("Prediction scheduler already running")
 

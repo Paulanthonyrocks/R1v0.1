@@ -61,10 +61,10 @@ class BaseApiClient:
             return response
         except httpx.TimeoutException as e:
             logger.error(f"Request to {self.base_url}{url} timed out: {e}")
-            raise ExternalAPIError(f"Request timed out", details=str(e)) from e
+            raise ExternalAPIError("Request timed out", details=str(e)) from e
         except httpx.NetworkError as e:
             logger.error(f"Network error during request to {self.base_url}{url}: {e}")
-            raise ExternalAPIError(f"Network error", details=str(e)) from e
+            raise ExternalAPIError("Network error", details=str(e)) from e
         except httpx.HTTPStatusError as e:
             logger.error(
                 f"HTTP error during request to {self.base_url}{url}: {e.response.status_code} - {e.response.text}"
@@ -76,7 +76,7 @@ class BaseApiClient:
             ) from e
         except Exception as e:
             logger.error(f"An unexpected error occurred during request to {self.base_url}{url}: {e}", exc_info=True)
-            raise ExternalAPIError(f"An unexpected error occurred", details=str(e)) from e
+            raise ExternalAPIError("An unexpected error occurred", details=str(e)) from e
 
     async def get(
         self,

@@ -60,7 +60,15 @@ export class TokenManager {
 
     async refreshToken(): Promise<string | null> {
         if (this.currentUser) {
-            await this.updateToken(this.currentUser);
+            try {
+                const newToken = await this.currentUser.getIdToken(true);
+                this.currentToken = newToken;
+                this.tokenRefreshCallbacks.forEach(callback => callback(newToken));
+            } catch (error) {
+                console.error("Error refreshing token:", error);
+                this.stopMonitoring(); // Stop if refresh fails
+                return null;
+            }
         }
         return this.currentToken;
     }
@@ -95,6 +103,26 @@ export class TokenManager {
             this.currentUser = null;
             this.currentToken = null;
             console.log('Token monitoring stopped.');
+        }
+    }
+
+    async isTokenValid(): Promise<boolean> {
+        if (!this.currentUser || !this.currentToken) {
+            return false;
+        }
+        try {
+            const decodedToken = await this.currentUser.getIdTokenResult();
+            const expirationTime = new Date(decodedToken.expirationTime).getTime();
+            const now = Date.now();
+            const fiveMinutes = 5 * 60 * 1000;
+
+            if (expirationTime - now < fiveMinutes) {
+                return false;
+            }
+            return true;
+        } catch (error) {
+            console.error('Error checking token validity:', error);
+            return false;
         }
     }
 }

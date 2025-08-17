@@ -14,9 +14,9 @@ class VideoWSManager:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, stream_id: str):
-        """Accepts a new WebSocket connection and adds it to the pool."""
+        """Adds a new WebSocket connection to the pool."""
         try:
-            await websocket.accept()
+            # The connection is now accepted in the endpoint handler.
             if stream_id not in self.active_connections:
                 self.active_connections[stream_id] = set()
             self.active_connections[stream_id].add(websocket)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
 import { WebSocketClient, WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
+import { TokenManager } from '@/lib/auth/TokenManager';
 
 interface VehicleData {
     x1: number;
@@ -9,131 +10,246 @@ interface VehicleData {
     y2: number;
     id: string;
     speed: number;
-  }
+}
 
 interface KPIData {
-  // Define the expected structure of your KPIs here
-  vehicles: VehicleData[]; 
-  vehicle_count: number;
-  avg_speed: number;
-  [key: string]: unknown;
+    vehicles: VehicleData[]; 
+    vehicle_count: number;
+    avg_speed: number;
+    [key: string]: unknown;
 }
 
 interface RealtimeUpdates {
-  kpis: KPIData | null;
-  alerts: AlertData[];
-  nodeCongestionData: BackendCongestionNodeData[]; // Added for WebSocket node congestion updates
-  isConnected: boolean;
-  isReady: boolean;
-  error: string | null; // Added error property
-  sendMessage: (action: string, payload?: object) => boolean; // Added sendMessage
-  startWebSocket: () => void;
+    kpis: KPIData | null;
+    alerts: AlertData[];
+    nodeCongestionData: BackendCongestionNodeData[];
+    isConnected: boolean;
+    isReady: boolean;
+    error: string | null;
+    sendMessage: (action: string, payload?: object) => boolean;
+    startWebSocket: () => void;
+    reconnect: () => void;
 }
 
-export const useRealtimeUpdates = (token: string | null): RealtimeUpdates & { feeds: FeedStatusData[] } => {
-  const webSocketClientRef = useRef<WebSocketClient | null>(null);
-  const [kpis, setKpis] = useState<KPIData | null>(null);
-  const [alerts, setAlerts] = useState<AlertData[]>([]);
-  const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
-  const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]); // Added nodeCongestionData state
-  const [isConnected, setIsConnected] = useState(false);
-  const [isReady, setIsReady] = useState(false);
-  const [error, setError] = useState<string | null>(null); // Added error state
+export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[] } => {
+    const webSocketClientRef = useRef<WebSocketClient | null>(null);
+    const [kpis, setKpis] = useState<KPIData | null>(null);
+    const [alerts, setAlerts] = useState<AlertData[]>([]);
+    const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
+    const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
+    const [isConnected, setIsConnected] = useState(false);
+    const [isReady, setIsReady] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const initializationRef = useRef(false);
 
-  const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
-  const startWebSocket = useCallback(() => {
-    if (webSocketClientRef.current) {
-      return; // Prevent multiple connections
-    }
-
-    const wsUrl = new URL('/api/v1/ws', WS_BASE_URL).toString();
-    console.log('Constructed WebSocket URL:', wsUrl);
-    const client = new WebSocketClient(wsUrl);
-    webSocketClientRef.current = client;
-
-    client.onError((type, message) => {
-      console.error(`WebSocket Error (${type}):`, message);
-      setIsConnected(false);
-      setIsReady(false);
-      setError(message); // Set the error state
-    });
-
-    client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
-      const updatedFeed = data.feed_status_data;
-      setFeeds(prevFeeds => {
-        const feedIndex = prevFeeds.findIndex(f => f.id === updatedFeed.id);
-        if (feedIndex > -1) {
-          const newFeeds = [...prevFeeds];
-          newFeeds[feedIndex] = updatedFeed;
-          return newFeeds;
+    // Initialize WebSocket client
+    const initializeWebSocket = useCallback(() => {
+        if (webSocketClientRef.current || initializationRef.current) {
+            return; // Already initialized or in process
         }
-        return [...prevFeeds, updatedFeed];
-      });
-    });
+        
+        initializationRef.current = true;
+        
+        const wsUrl = new URL('/api/v1/ws', WS_BASE_URL).toString();
+        const client = new WebSocketClient(wsUrl);
 
-    client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
-      setFeeds(data.feeds);
-    });
+        // Setup error handling
+        client.onError((type, message) => {
+            console.error(`WebSocket Error (${type}):`, message);
+            setError(message);
+            
+            // Don't set isConnected/isReady to false here as the client
+            // will handle reconnection automatically
+            if (type === 'max_reconnect_attempts' || type === 'auth_error') {
+                setIsConnected(false);
+                setIsReady(false);
+            }
+        });
 
-    client.subscribe(WebSocketMessageType.GLOBAL_REALTIME_METRICS_UPDATE, (data: KPIData) => {
-      setKpis(data);
-    });
+        // Setup status change handling
+        client.onStatusChange((status, message) => {
+            console.log(`WebSocket status: ${status}`, message);
+            
+            const connected = status === 'connected';
+            setIsConnected(connected);
+            setIsReady(connected);
+            
+            if (connected) {
+                setError(null);
+            } else if (status === 'error') {
+                setError(message || 'Connection error');
+            }
+        });
 
-    client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
-      setAlerts(prevAlerts => [...prevAlerts, data.alert_data]);
-    });
+        // Subscribe to feed status updates
+        client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, 
+            (data: { feed_status_data: FeedStatusData }) => {
+                const updatedFeed = data.feed_status_data;
+                setFeeds(prevFeeds => {
+                    const feedIndex = prevFeeds.findIndex(f => f.id === updatedFeed.id);
+                    if (feedIndex > -1) {
+                        const newFeeds = [...prevFeeds];
+                        newFeeds[feedIndex] = updatedFeed;
+                        return newFeeds;
+                    }
+                    return [...prevFeeds, updatedFeed];
+                });
+            }
+        );
 
-    client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: BackendCongestionNodeData[] }) => {
-      setNodeCongestionData(data.nodes);
-    });
+        // Subscribe to initial feed statuses
+        client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, 
+            (data: { feeds: FeedStatusData[] }) => {
+                if (data?.feeds) {
+                    setFeeds(data.feeds);
+                }
+            }
+        );
 
-    // Add a general notification listener to track connection status
-    client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: { message_type: string }) => {
-      if (data.message_type === 'auth_success') {
-        setIsConnected(true);
-        setIsReady(true);
-      }
-    });
+        // Subscribe to global realtime metrics
+        client.subscribe(WebSocketMessageType.GLOBAL_REALTIME_METRICS_UPDATE, 
+            (data: KPIData) => {
+                setKpis(data);
+            }
+        );
 
-    // Connect the WebSocket client
-    const currentToken = token;
-    if (currentToken) {
-      client.connect(currentToken);
-    } else {
-      // No token available, not connecting WebSocketClient.
-    }
+        // Subscribe to new alerts
+        client.subscribe(WebSocketMessageType.NEW_ALERT, 
+            (data: { alert_data: AlertData }) => {
+                if (data?.alert_data) {
+                    setAlerts(prevAlerts => [...prevAlerts, data.alert_data]);
+                }
+            }
+        );
 
-  }, [token, WS_BASE_URL]);
+        // Subscribe to node congestion updates
+        client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, 
+            (data: { nodes: BackendCongestionNodeData[] }) => {
+                if (data?.nodes) {
+                    setNodeCongestionData(data.nodes);
+                }
+            }
+        );
 
-  useEffect(() => {
-    if (token) {
-      startWebSocket();
-    }
+        // Subscribe to general notifications
+        client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, 
+            (data: { message_type: string }) => {
+                if (data?.message_type === 'auth_success') {
+                    console.log('Authentication successful');
+                    setError(null);
+                }
+            }
+        );
 
-    return () => {
-      if (webSocketClientRef.current) {
-        webSocketClientRef.current.disconnect();
-        webSocketClientRef.current = null;
-      }
+        webSocketClientRef.current = client;
+        
+        return client;
+    }, [WS_BASE_URL]);
+
+    // Connect to WebSocket
+    const connectWebSocket = useCallback(async () => {
+        const client = webSocketClientRef.current;
+        if (!client) {
+            console.error('WebSocket client not initialized');
+            return;
+        }
+
+        try {
+            const currentToken = TokenManager.getInstance().getCurrentToken();
+            if (currentToken) {
+                await client.connect(currentToken);
+            } else {
+                console.warn('No authentication token available for WebSocket connection');
+                setError('No authentication token available');
+            }
+        } catch (error) {
+            console.error('Failed to connect WebSocket:', error);
+            setError(error instanceof Error ? error.message : 'Connection failed');
+        }
+    }, []);
+
+    // Initialize on mount
+    useEffect(() => {
+        if (!initializationRef.current) {
+            initializeWebSocket();
+        }
+    }, [initializeWebSocket]);
+
+    // Connect after initialization
+    useEffect(() => {
+        if (webSocketClientRef.current && !webSocketClientRef.current.isConnected()) {
+            connectWebSocket();
+        }
+    }, [connectWebSocket]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            if (webSocketClientRef.current) {
+                console.log('Cleaning up WebSocket connection');
+                webSocketClientRef.current.destroy();
+                webSocketClientRef.current = null;
+            }
+            initializationRef.current = false;
+        };
+    }, []);
+
+    // Send message function
+    const sendMessage = useCallback((action: string, payload?: object): boolean => {
+        const client = webSocketClientRef.current;
+        if (client && client.isConnected()) {
+            try {
+                client.send({ 
+                    type: action as WebSocketMessageType, 
+                    data: payload 
+                });
+                return true;
+            } catch (error) {
+                console.error('Failed to send message:', error);
+                return false;
+            }
+        }
+        
+        console.warn('WebSocket not connected. Message not sent:', { action, payload });
+        return false;
+    }, []);
+
+    // Manual reconnect function
+    const reconnect = useCallback(async () => {
+        const client = webSocketClientRef.current;
+        if (client) {
+            try {
+                const currentToken = TokenManager.getInstance().getCurrentToken();
+                if (currentToken) {
+                    await client.reconnectWithNewToken(currentToken);
+                } else {
+                    setError('No authentication token available for reconnection');
+                }
+            } catch (error) {
+                console.error('Manual reconnection failed:', error);
+                setError(error instanceof Error ? error.message : 'Reconnection failed');
+            }
+        }
+    }, []);
+
+    // Deprecated function for backward compatibility
+    const startWebSocket = useCallback(() => {
+        console.warn("startWebSocket is deprecated. Connection is managed automatically.");
+        reconnect();
+    }, [reconnect]);
+
+    return { 
+        kpis, 
+        alerts, 
+        nodeCongestionData, 
+        isConnected, 
+        isReady, 
+        error, 
+        startWebSocket, 
+        feeds, 
+        sendMessage,
+        reconnect
     };
-    return () => {
-      if (webSocketClientRef.current) {
-        webSocketClientRef.current.disconnect();
-        webSocketClientRef.current = null;
-      }
-    };
-  }, [token, startWebSocket]);
-
-  const sendMessage = useCallback((action: string, payload?: object): boolean => {
-    if (webSocketClientRef.current && isConnected) {
-      webSocketClientRef.current.send({ type: action as WebSocketMessageType, data: payload });
-      return true; // Message sent
-    }
-    console.warn('WebSocket not connected. Message not sent:', { action, payload });
-    return false; // Message not sent
-  }, [isConnected]);
-
-
-  return { kpis, alerts, nodeCongestionData, isConnected, isReady, error, startWebSocket, feeds, sendMessage };
 };

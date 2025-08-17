@@ -117,7 +117,7 @@ def _read_frame(feed_id: str, reader: Any, stop_event: Any, logger: logging.Logg
         stop_event.set()
         return None, None
 
-def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_frame_index: int, target_resolution: Tuple[int, int], logger: logging.Logger) -> Optional[np.ndarray]:
+def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_frame_index: int, target_resolution: Tuple[int, int], logger: logging.Logger, frame_queue: Any, max_queue_size: int, dynamic_skip_interval: int, base_frame_skip_interval: int, performance_config: Dict[str, Any]) -> Optional[np.ndarray]:
     if not isinstance(frame, np.ndarray) or frame.size == 0:
         logger.warning(f"[{feed_id}] Invalid frame provided for preprocessing at index {current_frame_index}. Type: {type(frame)}. Skipping.")
         return None
@@ -128,7 +128,7 @@ def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_fra
 
     # Dynamic frame skipping based on frame_queue fullness
     queue_fill_ratio = frame_queue.qsize() / max_queue_size if max_queue_size > 0 else 0
-    dynamic_skip_interval = _adjust_skip_interval(dynamic_skip_interval, base_frame_skip_interval, queue_fill_ratio)
+    dynamic_skip_interval = _adjust_skip_interval(dynamic_skip_interval, base_frame_skip_interval, queue_fill_ratio, performance_config)
 
     try:
         # Ensure frame is 3 channels (BGR) before resizing
@@ -151,12 +151,18 @@ def _preprocess_frame_for_detection(feed_id: str, frame: np.ndarray, current_fra
         logger.error(f"[{feed_id}] Generic error preparing/resizing frame {current_frame_index}: {e}. Shape: {frame.shape}. Skip.")
         return None
 
-def _adjust_skip_interval(current_interval: int, base_interval: int, queue_fill_ratio: float) -> int:
-    """Adjusts the frame skip interval based on queue fullness."""
-    if queue_fill_ratio > 0.8: # If queue is over 80% full
-        return min(current_interval + 1, 10) # Increase skip, with a max limit
+def _adjust_skip_interval(current_interval: int, base_interval: int, queue_fill_ratio: float, performance_config: Dict[str, Any]) -> int:
+    """Adjusts the frame skip interval based on queue fullness and performance config."""
+    min_skip = performance_config.get("min_global_skip_factor", 1)
+    max_skip = performance_config.get("max_global_skip_factor", 10)
+    increase_step = performance_config.get("skip_factor_increase_step", 1)
+    decrease_step = performance_config.get("skip_factor_decrease_step", 1)
+    queue_fullness_threshold = performance_config.get("queue_fullness_threshold_for_skip_increase", 0.8)
+
+    if queue_fill_ratio > queue_fullness_threshold: # If queue is over the threshold
+        return min(current_interval + increase_step, max_skip) # Increase skip
     elif queue_fill_ratio < 0.5 and current_interval > base_interval: # If queue is below 50% and we are skipping
-        return max(current_interval - 1, base_interval) # Decrease skip, down to base
+        return max(current_interval - decrease_step, min_skip) # Decrease skip
     else:
         return current_interval # No change
 
@@ -185,7 +191,7 @@ def _process_detection_and_tracking(feed_id: str, core_module: Any, processing_f
         core_error_occurred = True
     return tracked_vehicles_raw, core_error_occurred
 
-def _update_metrics_and_visualize(feed_id: str, processing_frame: np.ndarray, tracked_vehicles_raw: Dict, traffic_monitor: Any, current_frame_index: int, feed_config_info: Optional[Dict], vis_options: Set[str], config: Dict, core_module: Any, logger: logging.Logger) -> Optional[np.ndarray]:
+def _update_metrics_and_visualize(feed_id: str, processing_frame: np.ndarray, tracked_vehicles_raw: Dict, traffic_monitor: Any, current_frame_index: int, feed_config_info: Optional[Dict], vis_options: Set[str], config: Dict, core_module: Any, logger: logging.Logger) -> Tuple[Optional[np.ndarray], Dict]:
     traffic_monitor.update_vehicles(tracked_vehicles_raw)
     metrics = traffic_monitor.get_metrics()
     metrics["frame_index"] = current_frame_index
@@ -220,13 +226,19 @@ def _update_metrics_and_visualize(feed_id: str, processing_frame: np.ndarray, tr
     if combined_frame is None:
         logger.warning(f"[{feed_id}] Visualization returned None for frame {current_frame_index}. Using processing frame.")
         combined_frame = processing_frame
-    return combined_frame
+    return combined_frame, metrics
 
 def _handle_output_queue(feed_id: str, frame_queue: MPQueue, current_frame_index: int, combined_frame: np.ndarray, metrics: Dict, tracked_vehicles_raw: Dict, timings: Dict, logger: logging.Logger):
+    # Encode the frame as JPEG
+    is_success, buffer = cv2.imencode(".jpg", combined_frame)
+    if not is_success:
+        logger.warning(f"[{feed_id}] Failed to encode frame {current_frame_index} to JPEG.")
+        return
+
     output_data = (
         feed_id,
         current_frame_index,
-        combined_frame,
+        buffer.tobytes(),
         metrics,
         tracked_vehicles_raw,
         timings,
@@ -338,6 +350,11 @@ def process_video(
     )
     logger.info(f"Worker received config: {config}")
 
+    video_output_config = config.get("video_output", {})
+    vehicle_detection_config = config.get("vehicle_detection", {})
+    processing_enabled = video_output_config.get("processing_enabled", True) and vehicle_detection_config.get("enabled", True)
+
+
     reader = None
     core_module = None
     timer = FrameTimer()  # Local timer
@@ -374,6 +391,8 @@ def process_video(
             )
         # --- End Webcam Index Parsing ---
 
+        is_looped_feed = feed_config_info.is_looped_feed if feed_config_info and hasattr(feed_config_info, 'is_looped_feed') else False
+
         logger.info(f"Initializing FrameReader for {source_type}: {source_location}")
         # FrameReader.__init__ now raises RuntimeError if capture fails to open
         reader = FrameReader(
@@ -384,6 +403,7 @@ def process_video(
                 "max_queue_size", 1000
             ),  # Pass max_queue_size from config
             queue_put_timeout=config["video_input"].get("queue_put_timeout_ms", 1000) / 1000.0, # Convert ms to seconds
+            is_looped=is_looped_feed,
         )
         # Add a small delay for camera/reader thread to initialize
         time.sleep(config["interface"].get("camera_warmup_time", 0.5))
@@ -397,7 +417,6 @@ def process_video(
 
         logger.info(f"FrameReader successfully opened source for {feed_id}")
 
-        video_output_config = config.get("video_output", {})
         if video_output_config.get("enabled", False):
             output_dir = Path(video_output_config.get("output_directory", "./data/processed_videos"))
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -405,28 +424,32 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*video_output_config.get("codec", "mp4v"))
             
             fps = config.get("fps", 30)
-            resolution = tuple(config["vehicle_detection"]["frame_resolution"])
+            resolution = tuple(config["vehicle_detection"].get("frame_resolution", (640, 480)))
 
             video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, resolution)
             logger.info(f"Video writer initialized for {output_path} with resolution {resolution} and FPS {fps}")
         
-        target_resolution = tuple(config["vehicle_detection"]["frame_resolution"])
+        if processing_enabled:
+            target_resolution = tuple(config["vehicle_detection"].get("frame_resolution", (640, 480)))
 
-        if CoreModule is None:
-            raise ImportError("CoreModule could not be imported.")
-        logger.info(f"Initializing CoreModule for {feed_id}")
-        # Pass db_queue to CoreModule for data saving
-        core_module = CoreModule(
-            feed_id=feed_id,  # Pass feed_id for unique vehicle IDs
-            gemini_api_key=config["ocr_engine"].get("gemini_api_key"),
-            model_path=config["vehicle_detection"]["model_path"],
-            config=config,
-            fps=config.get("fps", 30),  # Pass FPS from config
-            db_queue=db_queue,
-        )
-        logger.info(f"CoreModule initialized for {feed_id}")
-        # TrafficMonitor is now also imported from utils
-        traffic_monitor = TrafficMonitor(config)
+            if CoreModule is None:
+                raise ImportError("CoreModule could not be imported.")
+            logger.info(f"Initializing CoreModule for {feed_id}")
+            # Pass db_queue to CoreModule for data saving
+            core_module = CoreModule(
+                feed_id=feed_id,  # Pass feed_id for unique vehicle IDs
+                gemini_api_key=config["ocr_engine"].get("gemini_api_key"),
+                model_path=config["vehicle_detection"].get("model_path"),
+                config=config,
+                fps=config.get("fps", 30),  # Pass FPS from config
+                db_queue=db_queue,
+            )
+            logger.info(f"CoreModule initialized for {feed_id}")
+            # TrafficMonitor is now also imported from utils
+            traffic_monitor = TrafficMonitor(config)
+        else:
+            core_module = None
+            traffic_monitor = None
 
         frame_count_processed = 0
         last_log_time = time.time()
@@ -460,6 +483,15 @@ def process_video(
 
                 logger.debug(f"[{feed_id}] Successfully read frame {current_frame_index}. Shape: {frame.shape}")
 
+                if not processing_enabled:
+                    # If processing is disabled, just put the raw frame on the queue
+                    _handle_output_queue(
+                        feed_id, frame_queue, current_frame_index, frame,
+                        {}, {}, timer.timings, logger
+                    )
+                    time.sleep(1 / config.get("fps", 30)) # Approximate frame rate
+                    continue
+
                 # Frame Skipping Logic (based on base_frame_skip_interval)
                 # The dynamic skipping adjusts the interval used here
                 if current_frame_index % dynamic_skip_interval != 0:
@@ -467,7 +499,8 @@ def process_video(
                     continue
 
                 # 2. Preprocess Frame
-                processing_frame = _preprocess_frame_for_detection(feed_id, frame, current_frame_index, target_resolution, logger)
+                performance_config = config.get("performance", {})
+                processing_frame = _preprocess_frame_for_detection(feed_id, frame, current_frame_index, target_resolution, logger, frame_queue, max_queue_size, dynamic_skip_interval, base_frame_skip_interval, performance_config)
                 if processing_frame is None:
                     logger.warning(f"[{feed_id}] Preprocessing returned None for frame {current_frame_index}. Skipping frame.")
                     continue
@@ -495,7 +528,7 @@ def process_video(
 
                 # 4. Update Metrics and Visualize
                 vis_start_time = time.time()
-                combined_frame = _update_metrics_and_visualize(
+                combined_frame, metrics = _update_metrics_and_visualize(
                     feed_id, processing_frame, tracked_vehicles_raw, traffic_monitor,
                     current_frame_index, feed_config_info, vis_options, config, core_module, logger
                 )
@@ -505,7 +538,7 @@ def process_video(
                 put_start_time = time.time()
                 _handle_output_queue(
                     feed_id, frame_queue, current_frame_index, combined_frame,
-                    traffic_monitor.get_metrics(), tracked_vehicles_raw, timer.timings, logger
+                    metrics, tracked_vehicles_raw, timer.timings, logger
                 )
                 timer.log_time("queue_put", time.time() - put_start_time)
 

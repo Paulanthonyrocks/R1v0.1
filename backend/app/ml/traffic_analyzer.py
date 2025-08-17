@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional, Union
 
 from pymongo.collection import Collection
 import pandas as pd
-import numpy as np
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -139,15 +138,13 @@ def identify_traffic_pattern(db_collection: Collection, sensor_id: str, time_ran
         return {"average_vehicle_count": None, "average_speed": None}
 
 
-def detect_simple_anomaly(current_data: Dict[str, Union[int, float]], history_data_df: pd.DataFrame, threshold: float) -> bool:
+def detect_simple_anomaly(current_data: Dict[str, Union[int, float]], historical_pattern_data: Dict[str, Any], threshold: float) -> bool:
     """
-    Compares the current data to recent historical rolling averages and returns True if an anomaly is detected.
+    Compares current data to a historical pattern and returns True if an anomaly is detected.
 
     Args:
         current_data: Dictionary with 'vehicle_count' and 'average_speed'.
-        history_data_df: pandas DataFrame with a datetime index and columns for 'vehicle_count',
-                         'average_speed', and their rolling averages (e.g., 'rolling_avg_vehicle_count_...',
-                         'rolling_avg_average_speed_...').
+        historical_pattern_data: Dictionary with 'average_vehicle_count' and 'average_speed'.
         threshold: The percentage deviation threshold for anomaly detection.
 
     Returns:

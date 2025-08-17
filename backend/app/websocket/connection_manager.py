@@ -12,8 +12,10 @@ from app.models.websocket import (
     WebSocketMessageTypeEnum,
     ErrorNotification,
     GeneralNotification,
+    RefreshFeedData,
 )  # Import new models
 from app.services.exceptions import FeedNotFoundError, FeedOperationError
+from app.exceptions import ConnectionLimitExceeded
 # from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
 
 from app.utils.service_getters import get_feed_manager  # Import the feed manager getter
@@ -34,8 +36,9 @@ class ActiveWebSocketConnection:
         self.manager = manager
         self.user_info: Optional[Dict[str, Any]] = user_info
         self.subscriptions: Set[str] = set()
-        self.last_ping: float = time.time()
-        self.ping_timeout: float = 30.0  # 30 seconds timeout
+        self.last_ping_sent: float = time.time() # Renamed to clarify it's last ping sent by server
+        self.last_pong_received: float = time.time() # New: Last time a PONG was received from client
+        self.ping_timeout: float = 90.0  # 90 seconds timeout
         self.token_refresh_time: Optional[float] = None
         self.token: Optional[str] = None
         self.token_expiry: Optional[float] = None  # Unix timestamp of token expiration
@@ -127,7 +130,7 @@ class ActiveWebSocketConnection:
                 return
             elif data.get("type") == "pong":  # Handle incoming PONG from client
                 logger.debug(f"Received PONG from client {self.client_id}")
-                self.last_ping = time.time()  # Update last ping time
+                self.last_pong_received = time.time()  # Update last PONG received time
                 return
 
             # All messages from the client should be in the format {type, data}
@@ -421,6 +424,13 @@ class ActiveWebSocketConnection:
                 f"Client {self.client_id} disconnected. Code: {e.code}, Reason: {e.reason}"
             )
             self.manager.disconnect(self.client_id)
+        except RuntimeError as e:
+            # This can happen if the connection is closed abruptly before the listener loop starts
+            logger.warning(
+                f"RuntimeError in WebSocket loop for client {self.client_id}: {e}. "
+                "This may indicate a client-side race condition or abrupt disconnection."
+            )
+            self.manager.disconnect(self.client_id)
         except Exception as e:
             logger.error(
                 f"Unexpected error in WebSocket loop for client {self.client_id}: {e}",
@@ -457,11 +467,6 @@ class ActiveWebSocketConnection:
 
 
 class ConnectionManager:
-    """Manages active WebSocket connections."""
-
-    from app.exceptions import ConnectionLimitExceeded # Import the new exception
-
-class ConnectionManager:
     """Manages active WebSocket connections.""" # Add max_connections to __init__
 
     def __init__(self, max_connections: int = 1000, token_refresh_interval: int = 300): # 5 minutes
@@ -477,8 +482,8 @@ class ConnectionManager:
             logger.warning(f"Connection limit ({self.max_connections}) exceeded. Rejecting new connection from {client_id}.")
             raise ConnectionLimitExceeded(detail="Maximum number of connections reached.")
 
-        await websocket.accept()
-        logger.debug(f"Client {client_id}: WebSocket connection accepted.")
+        # The websocket is now accepted in the endpoint handler before this method is called.
+        # logger.debug(f"Client {client_id}: WebSocket connection accepted.") # This log is now in the handler
         connection = ActiveWebSocketConnection(websocket, client_id, self, user_data)
         self.active_connections[client_id] = connection
         logger.debug(f"Client {client_id}: Added to active connections.")
@@ -595,8 +600,8 @@ class ConnectionManager:
                             data={"timestamp": datetime.utcnow().isoformat()},
                         )
                     )
-                    # Update last_ping for server-initiated pings as well
-                    connection.last_ping = time.time()
+                    # Update last_ping_sent for server-initiated pings
+                    connection.last_ping_sent = time.time()
                 except Exception as e:
                     logger.warning(f"Failed to send PING to client {client_id}: {e}")
                     clients_to_remove.append(client_id)
@@ -609,7 +614,8 @@ class ConnectionManager:
         # Check for clients that haven't responded to pings or need token refresh
         current_time = time.time()
         for client_id, connection in list(self.active_connections.items()):
-            if current_time - connection.last_ping > connection.ping_timeout:
+            # Use last_pong_received for timeout detection
+            if current_time - connection.last_pong_received > connection.ping_timeout:
                 logger.warning(
                     f"Client {client_id} timed out (no PONG response). Disconnecting."
                 )

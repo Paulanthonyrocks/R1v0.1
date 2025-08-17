@@ -1,4 +1,5 @@
 from __future__ import annotations
+import base64
 import asyncio
 import logging
 import time
@@ -138,8 +139,11 @@ class FeedManager:
 
         # Start the prediction scheduler
         if self._prediction_scheduler:
-            await self._prediction_scheduler.start()
-            self.logger.info("Prediction scheduler started by FeedManager.")
+            if self.config.get("prediction_scheduler", {}).get("enabled", True):
+                await self._prediction_scheduler.start()
+                self.logger.info("Prediction scheduler started by FeedManager.")
+            else:
+                self.logger.info("Prediction scheduler is disabled in config. Skipping startup by FeedManager.")
         else:
             self.logger.warning(
                 "PredictionScheduler not set in FeedManager. Cannot start it."
@@ -190,39 +194,42 @@ class FeedManager:
             sample_video_paths.append(singular_sample_path)
 
         for i, sample_path_str in enumerate(sample_video_paths):
-            resolved_path = Path(sample_path_str)
-            if resolved_path.exists():
-                feed_name = f"Sample Video {i+1}" if len(sample_video_paths) > 1 else "Sample Video"
-                feed_id = self._generate_feed_id(str(resolved_path), feed_name)
-                self.process_registry[feed_id] = {
-                    "process": None,
-                    "result_queue": None,
-                    "stop_event": None,
-                    "reduce_fps_event": None,
-                    "status": FeedOperationalStatusEnum.STOPPED,
-                    "source": str(resolved_path),
-                    "start_time": None,
-                    "error_message": None,
-                    "latest_metrics": None,
-                    "timer": None,
-                    "is_sample_feed": True,
-                    'is_looped_feed': True,
-                    "config_info": FeedConfigInfo(
-                        name=feed_name,
-                        source_type="video_file",
-                        source_identifier=str(resolved_path),
-                        latitude=34.0522,
-                        longitude=-118.2437, # Default coordinates
-                    ),
-                }
-                self._sample_feed_ids.append(feed_id)
-                logger.info(
-                    f"Initialized sample feed '{feed_id}' ({feed_name}) as {FeedOperationalStatusEnum.STOPPED}."
-                )
-            else:
-                logger.warning(
-                    f"Sample video path configured but not found: {resolved_path}"
-                )
+            resolved_path = Path(self.config.get("project_root_dir"), sample_path_str)
+            logger.info(f"Attempting to resolve path: {sample_path_str}")
+            logger.info(f"Resolved path: {resolved_path.absolute()}")
+            logger.info(f"Current working directory: {Path.cwd()}")
+            if not resolved_path.exists():
+                logger.warning(f"Sample video path configured but not found: {resolved_path}")
+                # Do not raise an exception here, just log a warning and skip this path
+                continue # Skip to the next sample path
+            # If it exists, proceed as normal (this block was incorrectly indented)
+            feed_name = f"Sample Video {i+1}" if len(sample_video_paths) > 1 else "Sample Video"
+            feed_id = self._generate_feed_id(str(resolved_path), feed_name)
+            self.process_registry[feed_id] = {
+                "process": None,
+                "result_queue": None,
+                "stop_event": None,
+                "reduce_fps_event": None,
+                "status": FeedOperationalStatusEnum.STOPPED,
+                "source": str(resolved_path),
+                "start_time": None,
+                "error_message": None,
+                "latest_metrics": None,
+                "timer": None,
+                "is_sample_feed": True,
+                'is_looped_feed': True,
+                "config_info": FeedConfigInfo(
+                    name=feed_name,
+                    source_type="video_file",
+                    source_identifier=str(resolved_path),
+                    latitude=34.0522,
+                    longitude=-118.2437, # Default coordinates
+                ),
+            }
+            self._sample_feed_ids.append(feed_id)
+            logger.info(
+                f"Initialized sample feed '{feed_id}' ({feed_name}) as {FeedOperationalStatusEnum.STOPPED}."
+            )
         if not self._sample_feed_ids:
             logger.info("No sample video paths configured or found.")
 
@@ -261,13 +268,13 @@ class FeedManager:
             f"Resource check passed: CPU={cpu:.1f}%, Memory={mem:.1f}% (Limit={limit}%)"
         )
 
-    async def _broadcast(self, message_type: str, data: Dict):
+    async def _broadcast(self, message_type: WebSocketMessageTypeEnum, data: Dict):
         """Helper to broadcast safely."""
         if self._connection_manager:
             # Assuming data is already a dictionary that can be directly used as payload
             # or wrapped into a WebSocketMessage model if needed.
             message = WebSocketMessage(
-                type=WebSocketMessageTypeEnum(message_type.upper()), data=data
+                type=message_type, data=data
             )
             await self._connection_manager.broadcast(message)
         else:
@@ -742,14 +749,16 @@ class FeedManager:
                                 if feed_id in self._feed_running_events:
                                     self._feed_running_events[feed_id].set()
 
-                    # Broadcast metrics and frame separately
+                    # Broadcast metrics and frame separately with corrected message types
                     await self._broadcast(
-                        WebSocketMessageTypeEnum.FEED_METRICS,
+                        WebSocketMessageTypeEnum.METRICS_UPDATE,
                         {"feed_id": feed_id, "metrics": metrics},
                     )
+                    # Base64 encode the frame for WebSocket transport
+                    frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
                     await self._broadcast(
                         WebSocketMessageTypeEnum.VIDEO_FRAME,
-                        {"feed_id": feed_id, "frame": frame_bytes},
+                        {"feed_id": feed_id, "frame": frame_b64},
                     )
 
                     if self._analytics_service:
@@ -788,6 +797,37 @@ class FeedManager:
                 )
                 break
 
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if entry and entry.get("process"):
+                process = entry["process"]
+                if not process.is_alive():
+                    exitcode = process.exitcode
+                    if exitcode == 0:
+                        logger.info(
+                            f"Process for feed '{feed_id}' exited cleanly (exitcode 0). Status set to STOPPED."
+                        )
+                        if entry["status"] != FeedOperationalStatusEnum.STOPPED:
+                            entry["status"] = FeedOperationalStatusEnum.STOPPED
+                            entry["error_message"] = None
+                            entry["process"] = None
+                            feed_ids_to_update.add(feed_id)
+                            kpi_update_needed_local = True
+                    else:
+                        logger.warning(
+                            f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error."
+                        )
+                        if entry["status"] != FeedOperationalStatusEnum.ERROR:
+                            entry["status"] = FeedOperationalStatusEnum.ERROR
+                            entry["error_message"] = (
+                                f"Process terminated unexpectedly (exitcode: {exitcode})."
+                            )
+                            entry["process"] = None
+                            feed_ids_to_update.add(feed_id)
+                            kpi_update_needed_local = True
+                            if not entry.get("is_sample_feed"):
+                                sample_feed_check_needed_local = True
+        return processed_items, kpi_update_needed_local, sample_feed_check_needed_local
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if entry and entry.get("process"):

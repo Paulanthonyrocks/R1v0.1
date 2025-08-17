@@ -78,13 +78,13 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
     }
     setError(null); // Clear error on successful validation
 
-    const userId = session?.user?.id; // Assuming session?.user?.id contains the user ID
+    const userId = session?.user?.email; // Assuming session?.user?.id contains the user ID
     // Prepare data for submission (omit empty optional fields)
     const submissionData = {
       message: formData.message.trim(),
       severity: formData.severity,
       ...(formData.description.trim() && { description: formData.description.trim() }),
-      ...(userId && { reported_by_user_id: userId }), // Include userId if available
+      ...(userId && { reported_by_user_email: userId }), // Include userId if available
       ...(formData.location.trim() && { location: formData.location.trim() }),
     };
 

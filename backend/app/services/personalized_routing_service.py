@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta  # Added timedelta for time-based filtering
-from sqlalchemy import Column, String, DateTime, JSON, Float, Integer, func, select
+from sqlalchemy import select
 from typing import Tuple
 from app.models.base import Base
 from sqlalchemy.exc import SQLAlchemyError  # For more specific exception handling
@@ -11,19 +11,11 @@ from pydantic import BaseModel  # For CommonTravelPattern
 from app.models.routing import UserRoutingProfile, RouteHistoryEntry
 from app.ml.preference_learner import UserPreferenceLearner
 from app.ml.route_optimizer import RouteOptimizer
+from app.models.route_history import RouteHistoryModel
+from app.models.proactive_suggestion_feedback_log import ProactiveSuggestionFeedbackLog
+from app.models.user_profile import UserProfileModel
 
 logger = logging.getLogger(__name__)
-
-
-
-
-from app.models.route_history import RouteHistoryModel
-
-
-from app.models.proactive_suggestion_feedback_log import ProactiveSuggestionFeedbackLog
-
-
-from app.models.user_profile import UserProfileModel
 
 
 # Pydantic model for common travel patterns

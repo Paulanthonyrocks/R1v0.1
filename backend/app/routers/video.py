@@ -1,13 +1,12 @@
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException, status
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 from app.utils.auth_utils import verify_firebase_token
 import logging
 from app.config import get_current_config
-from app.dependencies import get_current_active_user, get_token_from_query, get_feed_manager
+from app.dependencies import get_current_active_user, get_token_from_query
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
-from app.services.feed_manager import FeedManager # Import FeedManager
 from app.services.video_ws_manager import video_ws_manager
 from app.services.video_manager import VideoManager
 
@@ -41,8 +40,14 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         logger.info(f"Video file found at: {video_path.resolve()}")
 
     try:
+        config = get_current_config()
+        processed_video_dir = config.get("video_output", {}).get("output_directory")
+        if not processed_video_dir:
+            logger.error("Processed video output directory not configured.")
+            raise OperationFailed(detail="Processed video output directory not configured.")
+
         try:
-            video_manager = VideoManager.get_instance()
+            video_manager = VideoManager.get_instance(processed_video_dir)
         except Exception as e:
             logger.error(f"VideoManager error: {e}")
             raise OperationFailed(detail=f"VideoManager error: {e}")
@@ -94,8 +99,14 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         raise ResourceNotFound(detail="Sample video path not configured.")
     video_path = Path(video_path_str)
     try:
+        config = get_current_config()
+        processed_video_dir = config.get("video_output", {}).get("output_directory")
+        if not processed_video_dir:
+            logger.error("Processed video output directory not configured.")
+            raise OperationFailed(detail="Processed video output directory not configured.")
+
         try:
-            video_manager = VideoManager.get_instance()
+            video_manager = VideoManager.get_instance(processed_video_dir)
         except Exception as e:
             logger.error(f"VideoManager error: {e}")
             raise OperationFailed(detail=f"VideoManager error: {e}")
@@ -120,7 +131,7 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         raise OperationFailed(detail=f"Error getting video KPIs: {e}")
 
 
-@router.websocket("/video/ws/{stream_id}")
+@router.websocket("/video/ws/{stream_id:path}")
 async def video_ws_endpoint(
     websocket: WebSocket, stream_id: str, token: str = Depends(get_token_from_query)
 ):
@@ -132,12 +143,14 @@ async def video_ws_endpoint(
             return
         
         # Verify the Firebase token
-        user_data = await verify_firebase_token(token) # Assuming verify_firebase_token takes the token string
+        await verify_firebase_token(token) # Assuming verify_firebase_token takes the token string
 
     except HTTPException as e:
         logger.warning(f"WebSocket authentication failed: {e.detail}")
         await websocket.close(code=e.status_code, reason=e.detail)
         return
+
+    await websocket.accept()
     await video_ws_manager.connect(websocket, stream_id)
     
     # Keep the connection open for sending messages. Receiving is optional unless needed for control messages.

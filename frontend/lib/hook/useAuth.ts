@@ -1,67 +1,57 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { auth } from '../firebase'; // Adjust this path to your Firebase auth instance
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { WebSocketClient } from '../websocket/WebSocketClient';
 import { TokenManager } from '../auth/TokenManager'; // Import TokenManager
+import { UserRole } from '../auth/roles';
 
 const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const wsClientRef = useRef<WebSocketClient | null>(null);
+  const [userRole, setUserRole] = useState<UserRole>(UserRole.VIEWER);
   const [loading, setLoading] = useState(true);
   const tokenManager = TokenManager.getInstance(); // Get TokenManager instance
 
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
 
-    // Subscribe to token refresh events from TokenManager
-    const unsubscribeTokenRefresh = tokenManager.onTokenRefresh((newToken) => {
-      setToken(newToken);
-      if (wsClientRef.current) {
-        wsClientRef.current.reconnectWithNewToken(newToken);
-      }
-    });
-
+    // This listener handles user sign-in and sign-out
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setLoading(true);
       if (user) {
         setUser(user);
-        await tokenManager.updateToken(user); // Update TokenManager with the current user
-        setToken(tokenManager.getCurrentToken()); // Set the token state
-
-        // Disconnect existing client if any
-        if (wsClientRef.current) {
-          wsClientRef.current.disconnect();
+        const idTokenResult = await user.getIdTokenResult();
+        const role = idTokenResult.claims.role as UserRole | undefined;
+        if (role && Object.values(UserRole).includes(role)) {
+          setUserRole(role);
+        } else {
+          setUserRole(UserRole.VIEWER);
         }
-
-        // Initialize WebSocket client with token
-        const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
-        const client = new WebSocketClient(wsUrl);
-        wsClientRef.current = client;
-        // Removed direct client.connect call here. Connection will be managed by useRealtimeUpdates.
-
+        // The TokenManager will now handle getting the token and refreshing it.
+        await tokenManager.updateToken(user);
+        setToken(tokenManager.getCurrentToken());
       } else {
         setUser(null);
         setToken(null); // Clear token when user logs out
+        setUserRole(UserRole.VIEWER);
         await tokenManager.updateToken(null); // Clear token in TokenManager
-        if (wsClientRef.current) {
-          wsClientRef.current.disconnect();
-        }
-        wsClientRef.current = null;
       }
       setLoading(false);
+    });
+
+    // This listener handles token refreshes for an existing user
+    const unsubscribeTokenRefresh = tokenManager.onTokenRefresh((newToken) => {
+      setToken(newToken);
     });
 
     return () => {
       unsubscribe();
       unsubscribeTokenRefresh(); // Clean up token refresh subscription
-      if (wsClientRef.current) {
-        wsClientRef.current.disconnect();
-      }
     };
   }, [tokenManager]);
 
-  return { user, token, wsClient: wsClientRef.current, loading };
+  return { user, token, userRole, loading };
 };
 
 export default useAuth;

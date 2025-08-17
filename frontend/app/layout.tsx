@@ -1,16 +1,16 @@
 "use client";
 
-import { Inter } from "next/font/google";
+// import { Inter } from "next/font/google"; // Commented out due to Google Fonts download issues
 
 import { UserProvider } from "@/lib/auth/UserContext"; // Import UserProvider
 import "@/styles/globals.css";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "@/components/ui/toast";
 
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-sans",
-});
+// const inter = Inter({ // Commented out due to Google Fonts download issues
+//   subsets: ["latin"],
+//   variable: "--font-sans",
+// });
 
 export default function RootLayout({
   children,
@@ -25,7 +25,7 @@ export default function RootLayout({
         <body
           className={cn(
             "min-h-screen bg-lcd-bg text-lcd-text font-lcd flex flex-col",
-            inter.variable,
+            // inter.variable, // Commented out due to Google Fonts download issues
           )}
         >
           <ToastProvider>

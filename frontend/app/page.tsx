@@ -13,6 +13,7 @@ import {
   Clock,
   LayoutDashboard
 } from 'lucide-react';
+import { getAuth, signOut } from 'firebase/auth';
 import RetroModal from '@/components/ui/RetroModal';
 
 // Mock data for menu items
@@ -33,6 +34,18 @@ const NokiaHomeScreen = () => {
 
   const hoverSoundRef = useRef<HTMLAudioElement | null>(null);
   const confirmSoundRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleLogout = async () => {
+    const auth = getAuth();
+    try {
+        await signOut(auth);
+        // Redirect to login page or home page after logout
+        window.location.href = '/login'; // Or '/' depending on your app's flow
+    } catch (error) {
+        console.error("Error logging out:", error);
+        // Optionally, show an error message to the user
+    }
+  };
 
   useEffect(() => {
     const handleFirstInteraction = () => {
@@ -163,6 +176,7 @@ const NokiaHomeScreen = () => {
             <label>SCREEN FLICKER</label>
             <input type="checkbox" defaultChecked />
           </div>
+          <button onClick={handleLogout} className="w-full p-2 border-2 border-lcd-text text-lcd-text font-bold text-lg menu-item-hover-glow">LOGOUT</button>
         </div>
       </RetroModal>
     </div>

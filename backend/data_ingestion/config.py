@@ -6,6 +6,7 @@ KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "dummy_kafka:9092").split(
     ","
 )  # Changed to dummy for local testing
 KAFKA_RAW_TOPIC = os.getenv("KAFKA_RAW_TOPIC", "raw_traffic_data")
+PROCESSED_TRAFFIC_DATA_TOPIC = os.getenv("PROCESSED_TRAFFIC_DATA_TOPIC", "processed_traffic_data")
 KAFKA_GROUP_ID = os.getenv(
     "KAFKA_GROUP_ID", "traffic_processor_group"
 )  # Changed for clarity

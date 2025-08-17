@@ -3,12 +3,13 @@ import json
 import logging
 import signal
 import time
-from datetime import datetime, timezone, timedelta
-from kafka import KafkaConsumer
+from datetime import datetime, timezone
+from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure
 from pydantic import ValidationError
+from typing import Any
 
 # Import configurations and models
 import config
@@ -40,7 +41,7 @@ def send_to_dlq(
     error_type: str,
     error_message: str,
     original_message: Any,
-    kafka_producer,
+    kafka_producer: KafkaProducer,
     dlq_topic: str,
 ):
     """
@@ -495,7 +496,7 @@ def main():
 
                     try:
                         raw_data_model = RawTrafficDataInputModel.parse_obj(msg.value)
-                        processed_data_model = process_raw_data(raw_data_model)
+                        processed_data_model = process_raw_data(raw_data_model, kafka_dlq_producer)
                         store_processed_data_to_db(
                             processed_collection, processed_data_model
                         )
@@ -629,10 +630,12 @@ def main():
         if consumer:
             logger.info("Closing Kafka consumer...")
             consumer.close()
-            logger.info("Kafka consumer closed.\n")\n
-        if kafka_dlq_producer:\n
-            logger.info("Closing Kafka DLQ producer...")\n
-            kafka_dlq_producer.close()\n
+            logger.info("Kafka consumer closed.")
+
+        if kafka_dlq_producer:
+            logger.info("Closing Kafka DLQ producer...")
+            kafka_dlq_producer.close()
+
         # if kafka_dlq_producer: kafka_dlq_producer.close()
         if mongo_client:
             logger.info("Closing MongoDB connection...")

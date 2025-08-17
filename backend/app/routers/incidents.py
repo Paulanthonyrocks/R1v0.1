@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 from app.dependencies import get_feed_manager, get_current_active_user, get_db
 from app.services.feed_manager import FeedManager
-from app.models.traffic import IncidentReport, IncidentReportUpdate  # Import IncidentReport and update model
+from app.models.traffic import IncidentReport  # Import IncidentReport and update model
 from app.models.common import APIResponse
 from app.utils.database import DatabaseManager
 import logging

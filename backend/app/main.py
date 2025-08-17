@@ -271,10 +271,9 @@ async def startup_event():
             logger.info(
                 "Prediction scheduler initialized and injected into FeedManager."
             )
-            # Check config to see if prediction scheduler should be started
-            if loaded_config.get("prediction_scheduler", {}).get("enabled", True):
-                await fm.start_processing() # Start processing after initialization
-            else:
+            # Start processing after initialization
+            await fm.start_processing()
+            if not loaded_config.get("prediction_scheduler", {}).get("enabled", True):
                 logger.info("Prediction scheduler is disabled in config. Skipping startup.")
         else:
             logger.warning(
@@ -438,11 +437,7 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
     await websocket.close(code=1000)
 
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(
- websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
-):
-    pass # This endpoint was a duplicate definition, the _handle_websocket_connection below will be the shared handler
+
 
 async def _handle_websocket_connection(websocket: WebSocket, client_id: str, token: str, endpoint_prefix: str = ""):
     """
@@ -454,9 +449,11 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, tok
     and network appliances. For server-to-server WebSocket communication, using the Authorization header
     is the recommended approach.
     """
+    logger.info(f"[{endpoint_prefix}WS {client_id}] Starting websocket handling.")
     try:
         if not token:
             raise HTTPException(status_code=401, detail="Not authenticated")
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Verifying token.")
         user_data = await verify_firebase_token(token)
         logger.info(f"[{endpoint_prefix}WS {client_id}] Token verified. User data: {user_data}")
         logger.info(
@@ -482,15 +479,16 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, tok
 
     # Attempt to accept the websocket and connect via the manager
     try:
-        # This accept() is typically handled within manager.connect, but keeping it here
-        # for clarity might lead to double accepts or issues. Let's move accept INTO manager.connect
-        # OR ensure it's only called once. Given the manager handles connection state,
-        # calling accept inside connect is better. Removing it from here.
-        # await websocket.accept()
-        # logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.") # This log might be misleading if accept is in manager.connect
+        # The WebSocket connection is now accepted here, before being passed to the manager.
+        # This ensures the connection is in the correct state before any other operations.
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Accepting websocket.")
+        await websocket.accept()
+        logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.")
 
-        # The manager.connect method should handle the accept and adding to its active connections.
+        # The manager.connect method will now add the already-accepted connection.
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Connecting to manager.")
         await manager.connect(websocket, client_id, user_data)
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Connected to manager.")
         active_connection = manager.active_connections.get(client_id) # Retrieve the newly created connection
 
         if not active_connection:
@@ -503,6 +501,7 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, tok
 
         logger.info(f"[{endpoint_prefix}WS {client_id}] Connection fully established and added to manager.")
 
+        logger.info(f"[{endpoint_prefix}WS {client_id}] Starting message listener.")
         await active_connection.listen_for_messages()
         logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection message listener loop ended.")
 

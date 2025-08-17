@@ -213,8 +213,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     GLOBAL_REALTIME_METRICS_UPDATE = "global_realtime_metrics_update"
     NEW_ALERT = "new_alert"
     SIGNAL_UPDATE = "signal_update"
-    VIDEO_FRAME = "VIDEO_FRAME"
-    FEED_METRICS = "FEED_METRICS"  # Added for feed-specific metrics
+    VIDEO_FRAME = "video_frame"
+    FEED_METRICS = "feed_metrics"  # Added for feed-specific metrics
     FEED_STATUS_UPDATE = "feed_status_update"
     GENERAL_NOTIFICATION = "general_notification"
     ERROR_NOTIFICATION = "error_notification"

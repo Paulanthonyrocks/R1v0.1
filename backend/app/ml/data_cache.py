@@ -143,16 +143,14 @@ class TrafficDataCache:
                 continue
 
             summary = {
-                "id": location_key,  # Using the stringified lat,lon as a unique ID for the node
-                "name": f"Node at ({latitude:.4f}, {longitude:.4f})",  # Generic name
+                "id": location_key,
+                "name": f"Node at ({latitude:.4f}, {longitude:.4f})",
                 "latitude": latitude,
                 "longitude": longitude,
                 "timestamp": latest_point.get("timestamp"),
                 "vehicle_count": latest_point.get("vehicle_count"),
                 "average_speed": latest_point.get("average_speed"),
                 "congestion_score": latest_point.get("congestion_score"),
-                # Add any other relevant metrics from latest_point directly
-                **latest_point,  # Include all other fields from the latest data point
             }
             summaries.append(summary)
         logger.debug(f"Returning {len(summaries)} location summaries.")

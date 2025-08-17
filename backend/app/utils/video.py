@@ -66,6 +66,8 @@ class FrameReader:
         target_fps: Optional[int] = None,
         max_queue_size: int = 100,
         queue_put_timeout: float = 1.0, # New: Timeout for putting frames into the queue
+        is_looped: bool = False, # New: Flag to indicate if the video should loop
+        resize_dim: Optional[Tuple[int, int]] = None, # New: Dimension to resize frames to (width, height)
     ):
         self.source_name = str(source)
         self.cap = None
@@ -84,6 +86,7 @@ class FrameReader:
         )  # Current frame index being processed by the reader thread
         self.last_read_time = time.time()
         self.read_interval = 0  # Calculated based on target_fps
+        self.resize_dim = resize_dim # Store resize dimension
 
         if self.target_fps:
             self.read_interval = 1.0 / self.target_fps
@@ -135,7 +138,7 @@ class FrameReader:
             self._end_of_video_flag = value
 
     def _update_loop(self):
-        max_read_fails = 10 # Reduced to 10 tries
+        max_read_fails = 30 # Increased from 10 to 100 tries
         consecutive_fails = 0
         last_read_time = time.monotonic()
 
@@ -153,29 +156,23 @@ class FrameReader:
 
                 if ret:
                     consecutive_fails = 0  # Reset fail counter on successful read
-                    if self.frame_queue.full():
-                        # If the queue is full, wait a bit for the consumer to catch up
-                        # This prevents discarding frames too aggressively and allows for backpressure
-                        logger.warning(
-                            f"FrameReader queue for '{self.source_name}' is full. Waiting for space..."
-                        )
+
+                    # Resize frame if resize_dim is set
+                    if self.resize_dim:
+                        frame = cv2.resize(frame, self.resize_dim)
+                    
+                    # Non-blocking put with periodic check of stop_event
+                    put_successful = False
+                    while not self.stop_event.is_set() and not put_successful:
                         try:
-                            # Wait with a timeout to avoid blocking indefinitely
-                            self.frame_queue.put(
-                                (self.frame_index, frame), timeout=self.queue_put_timeout
-                            )
+                            self.frame_queue.put_nowait((self.frame_index, frame))
                             self.frame_index += 1
+                            put_successful = True
                         except queue.Full:
                             logger.warning(
-                                f"FrameReader queue for '{self.source_name}' still full after waiting. Discarding frame {self.frame_index}."
+                                f"FrameReader queue for '{self.source_name}' is full. Waiting briefly..."
                             )
-                            self.frame_index += 1
-                            # Discard the current frame if still full after waiting
-                            pass
-                    else:
-                        # Put a copy of the frame into the queue
-                        self.frame_queue.put((self.frame_index, frame))
-                        self.frame_index += 1
+                            time.sleep(0.01) # Wait a very short time and retry
 
                 else:  # ret is False
                     consecutive_fails += 1
@@ -230,6 +227,14 @@ class FrameReader:
     def stop(self):
         logger.info(f"FrameReader '{self.source_name}': Stop requested.")
         self.stop_event.set()
+
+        # Help the thread exit if it's blocked on a full queue
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                break
+
         if self.thread.is_alive():
             self.thread.join(timeout=2.0)  # Wait for thread to finish
             if self.thread.is_alive():

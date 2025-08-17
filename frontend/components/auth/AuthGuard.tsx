@@ -16,7 +16,6 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
   const router = useRouter();
 
   useEffect(() => {
-    console.log('AuthGuard: user, loading, userRole changed', { user, loading, userRole, requiredRole, pathname });
 
     if (loading) {
       // Still loading user data, do nothing yet

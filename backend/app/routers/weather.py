@@ -2,7 +2,6 @@ from fastapi import APIRouter, Query, Depends
 from typing import Dict, Any
 import logging
 from app.services.weather_service import WeatherService # noqa F401
-from app.models.weather import CurrentWeatherResponse, WeatherImpactResponse
 from app.dependencies import get_weather_service_api, get_current_active_user
 from app.exceptions import OperationFailed
 

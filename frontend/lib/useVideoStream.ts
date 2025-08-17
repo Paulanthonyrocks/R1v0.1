@@ -20,7 +20,12 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
 
   // Conditionally use the appropriate streaming hook
   const { frameData: wsFrameData, metrics: wsMetrics, isConnected: wsConnected, error: wsError, drawFrame: wsDrawFrame, frameRate } = useVideoSocket(streamId, token);
-  const { rawData: mpRawFrameData, error: mpError, isLoading: mpLoading, drawFrame: mpDrawFrame } = useMultipartStream(forceSample ? SAMPLE_VIDEO_URL : `/api/v1/stream/${streamId}`, token); // Pass the token, get rawData
+  
+  // Always call hooks at the top level
+  const { rawData: mpRawFrameData, error: mpError, isLoading: mpLoading, drawFrame: mpDrawFrame } = useMultipartStream(
+    (streamType === 'multipart' || forceSample) ? (forceSample ? SAMPLE_VIDEO_URL : `/api/v1/stream/${streamId}`) : null,
+    token
+  );
 
   useEffect(() => {
     if (forceSample) {
@@ -34,35 +39,44 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
     let currentError: string | null = null;
     let currentIsConnected = false;
 
-    // Select the correct frame data and draw function based on stream type
+    // Select the correct data source based on stream type
     if (streamType === 'websocket') {
       currentRawFrameData = wsFrameData;
       currentDrawFrame = wsDrawFrame;
       currentError = wsError;
+      currentIsConnected = wsConnected;
+    } else { // 'multipart'
+      currentRawFrameData = mpRawFrameData;
+      currentDrawFrame = mpDrawFrame;
+      currentError = mpError;
+      currentIsConnected = !mpLoading;
     }
 
-    // Determine connection status based on stream type
-    currentIsConnected = streamType === 'websocket' ? wsConnected : !mpLoading;
+    // Update state based on the selected source
     if (currentIsConnected) {
       setIsLive(true);
-    } else if (currentError && !currentIsConnected) { // Only set error if not connected and there's an error
-      setError('Failed to connect to video stream');
       setIsLoading(false);
+      setError(null);
+    } else {
+      setIsLive(false);
+      // Only set loading to true if we are not in an error state
+      if (currentError) {
+        setError('Failed to connect to video stream');
+        setIsLoading(false);
+      } else {
+        setIsLoading(true);
+      }
     }
 
     const canvas = canvasRef.current;
-    // Ensure we have a canvas, data to draw, and a drawing function
-    if (canvas && currentRawFrameData && currentDrawFrame) { // Added null check for currentDrawFrame
+    if (canvas && currentRawFrameData && currentDrawFrame) {
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Pass the raw data to the drawing function
         currentDrawFrame(ctx, currentRawFrameData);
-      }
-    } else if (canvas) {
-      // Optionally clear the canvas if data or draw function is missing but canvas exists
+      }    } else if (canvas) {
       const ctx = canvas.getContext('2d');
       if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
     }
   }, [streamId, forceSample, streamType, wsFrameData, wsDrawFrame, wsConnected, wsError, mpRawFrameData, mpDrawFrame, mpError, mpLoading]);

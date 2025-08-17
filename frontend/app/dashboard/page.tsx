@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
 import useAuth from '@/lib/hook/useAuth'; // Import the useAuth hook
+import { getToken } from '@/lib/auth/getToken'; // Import getToken
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
 import {
@@ -22,9 +23,12 @@ const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
-  // Use the realtime updates hook - This is now the primary source for KPIs
+  // Use the realtime updates hook - This is now the primary source for KPIs and feeds
   const { token } = useAuth();
-  const { /* kpis, */ alerts, isConnected, isReady, startWebSocket } = useRealtimeUpdates(token);
+  const { /* kpis, */ alerts, feeds, isConnected, isReady } = useRealtimeUpdates();
+
+  // Find the first sample feed to display. In a real app, you might have a more robust selection logic.
+  const sampleFeed = feeds.length > 0 ? feeds[0] : null;
 
   // State for REST API congestion index
   const [congestionIndex, setCongestionIndex] = useState<number | null>(null);
@@ -34,14 +38,8 @@ const DashboardPage: React.FC = () => {
   const [activeIncidents, setActiveIncidents] = useState<number | null>(null); // Placeholder, see note below
   const [totalFlow, setTotalFlow] = useState<number | null>(null);
 
-  useEffect(() => {
-    // Start WebSocket connection on component mount
-    console.log("DashboardPage: Attempting to start WebSocket connection.");
-    if (token) {
-      startWebSocket();
-    }
-    // No explicit cleanup needed here as the hook manages its own lifecycle
-  }, [startWebSocket, token]); // Dependency array includes startWebSocket and token
+  // The useRealtimeUpdates hook now manages its own connection lifecycle.
+  // The useEffect that previously called startWebSocket() has been removed.
 
   // Optional: Log connection status for debugging
   useEffect(() => {
@@ -83,11 +81,15 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     // Fetch congestion data from backend REST API
     const fetchKpisFromApi = async () => {
-      if (!token) return; // Don't fetch if token is not available
+      const currentToken = await getToken(); // Get the latest token
+      if (typeof currentToken !== 'string' || currentToken.length === 0) {
+        // Only fetch if token is a non-empty string
+        return;
+      }
       try {
         const res = await fetch('/api/v1/analytics/nodes/congestion', {
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${currentToken}`,
           },
         });
         if (!res.ok) throw new Error(`Failed to fetch congestion data: ${res.status}`);
@@ -139,13 +141,14 @@ const DashboardPage: React.FC = () => {
         setActiveIncidents(null);
       }
     };
-    fetchKpisFromApi();
+
+    fetchKpisFromApi(); // Call immediately
     const interval = setInterval(fetchKpisFromApi, 30000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, []); // No dependency on 'token' anymore, as it's fetched inside
 
   return (
-    <AuthGuard requiredRole={UserRole.PLANNER}>
+    <AuthGuard requiredRole={UserRole.VIEWER}>
       <div className="bg-lcd-text text-lcd-bg font-lcd flex flex-col min-h-screen w-full">
         {/* Dashboard Status Bar */}
         <header className="bg-lcd-bg text-lcd-text font-lcd flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
@@ -222,13 +225,13 @@ const DashboardPage: React.FC = () => {
           <div className="mb-4 matrix-card p-4">
             <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">SAMPLE VIDEO FEED</h2>
             <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card whitespace-nowrap">
-              <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
-                <SurveillanceFeed
-                  feed={{
-                    id: 'sample-feed', name: 'Sample Traffic Camera', status: 'running', source: '/api/v1/sample-video/stream', fps: 30
-                  }}
-                />
-              </div>
+              {sampleFeed ? (
+                <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
+                  <SurveillanceFeed feed={sampleFeed} />
+                </div>
+              ) : (
+                <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">LOADING SAMPLE FEED...</p>
+              )}
               {/* Add more <div> blocks here for additional feeds if needed */}
             </div>
           </div>

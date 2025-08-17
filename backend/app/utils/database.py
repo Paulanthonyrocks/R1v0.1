@@ -23,9 +23,9 @@ from pymongo.database import Database as MongoDatabase
 from pymongo.errors import (
     ConnectionFailure,
     ConfigurationError as MongoConfigurationError,)
-from app.models.processed_video import ProcessedVideo
 from app.models.alerts import Alert  # Import the Alert model
 import json  # Import json for serializing details
+import math
 
 
 # Attempt to import TrafficMonitor from where it's planned to be
@@ -227,7 +227,7 @@ class DatabaseManager:
                 timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
                 severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
                 feed_id TEXT, -- Allow NULL for system alerts
-                severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL')), feed_id TEXT NOT NULL,
+                
                 message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
         # ... and other table creation statements ...
         logger.debug("SQLite DB table creation check finished.")
@@ -340,8 +340,9 @@ class DatabaseManager:
                 alert.source_component,
                 tags_json,
             )
-            await asyncio.to_thread(self._execute_save_alert, sql, params)
-            logger.info("Alert saved successfully.")
+            log_id = await asyncio.to_thread(self._execute_save_alert, sql, params)
+            logger.info(f"Alert saved successfully with log_id: {log_id}")
+            return log_id
         except Exception as e:
             logger.error(f"Error saving alert to database: {e}", exc_info=True)
             raise DatabaseError(f"Failed to save alert: {e}") from e

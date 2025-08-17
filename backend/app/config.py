@@ -115,6 +115,15 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
                 f"Resolved database db_path to: {_config_instance['database']['db_path']}"
             )
 
+        # Resolve processed_video_dir for video_output
+        processed_video_dir_relative = _config_instance.get("video_output", {}).get("output_directory")
+        if processed_video_dir_relative:
+            processed_video_dir_absolute = (project_root / processed_video_dir_relative).resolve()
+            _config_instance["video_output"]["output_directory"] = str(processed_video_dir_absolute)
+            logger.info(
+                f"Resolved video_output output_directory to: {_config_instance['video_output']['output_directory']}"
+            )
+
         return _config_instance
 
  

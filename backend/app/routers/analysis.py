@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 from app.models import traffic # Import the traffic module
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -15,7 +15,6 @@ from app.models.analysis import (
  LocationPredictionRequest,
  PredictionResponse,
 )
-from app.models.analysis import AllNodesCongestionResponse # Correct import for AllNodesCongestionResponse
 from app.models.common import APIResponse
 from app.utils.database import DatabaseManager
 from app.ml import traffic_analyzer # Import the traffic_analyzer module

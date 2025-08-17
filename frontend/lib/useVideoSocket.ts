@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { WebSocketMessageType } from './websocket/WebSocketClient';
+import { WebSocketClient, WebSocketMessageType } from './websocket/WebSocketClient';
 import { SurveillanceFeedMessage } from './types';
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -9,7 +9,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsClientRef = useRef<WebSocketClient | null>(null); // Use wsClientRef for WebSocketClient
 
   const VIDEO_WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
@@ -44,49 +44,50 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   }, []);
 
   useEffect(() => {
-    if (!token || !streamId) return;
+    if (!token || !streamId) {
+      return; // Do not connect if essential info is missing.
+    }
 
-    const wsUrl = new URL(`/api/v1/video/ws/${streamId}`, VIDEO_WS_BASE_URL);
-    wsUrl.searchParams.set('token', token);
+    const wsUrl = new URL(`/api/v1/video/ws/${streamId}`, VIDEO_WS_BASE_URL).toString();
+    console.log('Constructed Video WebSocket URL:', wsUrl);
 
-    const ws = new WebSocket(wsUrl.toString());
-    wsRef.current = ws;
+    const client = new WebSocketClient(wsUrl);
+    wsClientRef.current = client;
 
-    ws.onopen = () => {
-      console.log(`Video WebSocket opened for stream: ${streamId}`);
-      setIsConnected(true);
-      setError(null);
-    };
+    // Subscribe to video frame and metrics updates
+    client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
+    client.subscribe(WebSocketMessageType.METRICS_UPDATE, handleMetrics);
 
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === WebSocketMessageType.VIDEO_FRAME) {
-          handleFrame(message.data);
-        } else if (message.type === WebSocketMessageType.METRICS_UPDATE) {
-          handleMetrics(message.data);
-        }
-      } catch (e) {
-        console.error('Error processing video WebSocket message:', e);
+    // Handle connection status changes
+    client.onStatusChange((status, message) => {
+      console.log(`Video WebSocket status for ${streamId}: ${status} - ${message || ''}`);
+      setIsConnected(status === 'connected');
+      if (status === 'error' || status === 'disconnected') {
+        setError(message || 'Video stream connection error.');
+      } else {
+        setError(null);
       }
-    };
+    });
 
-    ws.onerror = (event) => {
-      console.error('Video WebSocket error:', event);
-      setError('Video stream connection error.');
-    };
+    // Handle errors
+    client.onError((type, message) => {
+      console.error(`Video WebSocket Error (${type}) for ${streamId}:`, message);
+      setError(message);
+    });
 
-    ws.onclose = (event) => {
-      console.log(`Video WebSocket closed for stream: ${streamId}. Code: ${event.code}`);
-      setIsConnected(false);
-    };
+    // Connect the WebSocket
+    console.log(`useVideoSocket: Connecting to ${streamId}...`);
+    client.connect(token);
 
+    // Return a cleanup function that will run ONLY when the component unmounts.
+    // This is critical for preventing duplicate connections in StrictMode.
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      console.log(`useVideoSocket: Disconnecting from ${streamId}.`);
+      client.disconnect();
+      wsClientRef.current = null;
     };
-  }, [streamId, token, handleFrame, handleMetrics, VIDEO_WS_BASE_URL]);
+  // The dependency array ensures this effect re-runs only if the stream or user token changes.
+  }, [streamId, token]);
 
   return { frameData, metrics, isConnected, error, drawFrame, frameRate };
 };

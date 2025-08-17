@@ -25,9 +25,10 @@ class VideoProcessor:
         "lane_changing": (255, 0, 255),  # Magenta
         "unknown": (128, 128, 128),  # Gray
     }
-    def __init__(self, stream_id: str, feed_manager: FeedManager):
+    def __init__(self, stream_id: str, feed_manager: FeedManager, output_directory: str):
         self.stream_id = stream_id
         self.feed_manager = feed_manager
+        self.output_directory = output_directory
         self._is_recording: bool = False
         self._video_writer: Optional[cv2.VideoWriter] = None
         self._output_path: Optional[str] = None
@@ -200,9 +201,11 @@ class VideoManager:
         self.video_processors: Dict[str, VideoProcessor] = {}
 
     @classmethod
-    def get_instance(cls) -> "VideoManager":
+    def get_instance(cls, output_directory: Optional[str] = None) -> "VideoManager":
         if cls._instance is None:
             cls._instance = VideoManager()
+            if output_directory:
+                cls._instance.output_directory = output_directory
         return cls._instance
 
     def get_processor(
@@ -210,7 +213,9 @@ class VideoManager:
     ) -> VideoProcessor:
         """Get or create a video processor for the given stream_id."""
         if stream_id not in self.video_processors:
-            self.video_processors[stream_id] = VideoProcessor(stream_id, feed_manager)
+            if not hasattr(self, 'output_directory'):
+                raise RuntimeError("VideoManager not initialized with output_directory. Call get_instance with output_directory first.")
+            self.video_processors[stream_id] = VideoProcessor(stream_id, feed_manager, self.output_directory)
         return self.video_processors[stream_id]
 
     async def cleanup(self):

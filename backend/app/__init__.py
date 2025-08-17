@@ -36,4 +36,4 @@ api.include_router(
 )
 api.include_router(incidents.router, prefix="/incidents", tags=["incidents"])
 api.include_router(logs.router, prefix="/logs", tags=["logs"])
-api.include_router(video.router, prefix="/video", tags=["video"])
+

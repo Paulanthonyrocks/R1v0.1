@@ -138,7 +138,7 @@ async def initialize_services(
             ),
         )
         logger.info("WeatherService initialized successfully")
-    except Exception as e:
+    except Exception:
         raise  # Re-raise the exception to propagate the error
 
     if _analytics_service_instance:

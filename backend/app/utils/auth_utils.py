@@ -17,7 +17,7 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
             detail="Firebase authentication service not available.",
         )
     try:
-        decoded = auth.verify_id_token(token, check_revoked=True)
+        decoded = auth.verify_id_token(token, check_revoked=True, clock_skew_seconds=5)
         logger.info(f"Decoded token: {decoded}")
         return decoded
     except auth.RevokedIdTokenError:
@@ -35,10 +35,10 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.InvalidIdTokenError as e:
-        logger.error(f"Invalid ID token: {e}")
+        logger.error(f"Invalid ID token: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
+            detail=f"Invalid ID token: {e}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:

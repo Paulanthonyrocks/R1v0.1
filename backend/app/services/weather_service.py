@@ -2,6 +2,7 @@ from typing import Dict, Any
 from datetime import datetime, timedelta
 import logging
 from fastapi import HTTPException
+import aiohttp
 
 from .external_api_client import BaseApiClient, ExternalAPIError
 
