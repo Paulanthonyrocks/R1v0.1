@@ -38,7 +38,7 @@ class ActiveWebSocketConnection:
         self.subscriptions: Set[str] = set()
         self.last_ping_sent: float = time.time() # Renamed to clarify it's last ping sent by server
         self.last_pong_received: float = time.time() # New: Last time a PONG was received from client
-        self.ping_timeout: float = 90.0  # 90 seconds timeout
+        self.ping_timeout: float = 300.0  # 300 seconds timeout (5 minutes) - increased from 90s for dashboard stability
         self.token_refresh_time: Optional[float] = None
         self.token: Optional[str] = None
         self.token_expiry: Optional[float] = None  # Unix timestamp of token expiration
@@ -396,6 +396,52 @@ class ActiveWebSocketConnection:
                         data=ErrorNotification(
                             code="INVALID_REFRESH_REQUEST",
                             message="Invalid or missing feed_id for refresh.",
+                        ),
+                    )
+                )
+        elif message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
+            logger.info(f"Client {self.client_id} requested initial feed statuses.")
+            try:
+                feed_manager = get_feed_manager()
+                statuses = await feed_manager.get_all_statuses()
+                await self.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
+                        data={"feeds": [status.model_dump() for status in statuses]},
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Error getting initial feed statuses: {e}", exc_info=True)
+                await self.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                        data=ErrorNotification(
+                            code="INTERNAL_ERROR",
+                            message="Could not retrieve initial feed statuses.",
+                        ),
+                    )
+                )
+        elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
+            feed_id = message.data.get("feed_id") if isinstance(message.data, dict) else None
+            if feed_id:
+                self.subscriptions.add(feed_id)
+                logger.info(f"Client {self.client_id} subscribed to feed {feed_id}")
+                await self.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
+                        data=GeneralNotification(
+                            message_type="subscription_update",
+                            message=f"Subscribed to feed {feed_id}",
+                        ),
+                    )
+                )
+            else:
+                await self.send_json_model(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                        data=ErrorNotification(
+                            code="INVALID_SUBSCRIPTION_REQUEST",
+                            message="Invalid or missing feed_id for subscription.",
                         ),
                     )
                 )

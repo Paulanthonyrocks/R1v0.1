@@ -75,7 +75,9 @@ export enum WebSocketMessageType {
     AUTH_FAILURE = 'auth_failure',
     AUTHENTICATE = 'authenticate',
     INTERNAL_PING = '__internal_ping',
-    PING = 'ping'
+    PING = 'ping',
+    SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
+    GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses'
 }
 
 export interface WebSocketMessage<T = unknown> {

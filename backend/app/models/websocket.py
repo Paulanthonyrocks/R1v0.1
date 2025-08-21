@@ -239,6 +239,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     PING = "ping"
     TOKEN_REFRESH_REQUEST = "token_refresh_request" # Request for client to refresh token
     REFRESH_FEED = "refresh_feed" # Client requests a feed refresh
+    SUBSCRIBE_TO_FEED = "subscribe_to_feed"
+    GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
 
 
 class WebSocketMessage(BaseModel):

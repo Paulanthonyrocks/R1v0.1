@@ -53,6 +53,10 @@ class AnalyticsService:
         self._node_congestion_broadcast_interval = self.config.get(
             "node_congestion_broadcast_interval", 5
         )
+        self._data_cleanup_task: Optional[asyncio.Task] = None
+        self._data_cleanup_interval = self.config.get(
+            "data_cleanup_interval", 3600
+        ) # Default to 1 hour
         
         self._kafka_consumer = None
         if self.config.get("kafka", {}).get("enabled", False):
@@ -517,6 +521,11 @@ class AnalyticsService:
                 self._broadcast_node_congestion_updates_loop()
             )
             logger.info("Node congestion broadcast task started.")
+        if self._data_cleanup_task is None or self._data_cleanup_task.done():
+            self._data_cleanup_task = asyncio.create_task(
+                self._cleanup_data_cache_loop()
+            )
+            logger.info("Data cache cleanup task started.")
         if self._kafka_consumer and (self._kafka_consumer_task is None or self._kafka_consumer_task.done()):
             self._kafka_consumer_task = asyncio.create_task(
                 self._consume_processed_traffic_data_loop()
@@ -531,6 +540,13 @@ class AnalyticsService:
             except asyncio.CancelledError:
                 logger.info("Node congestion broadcast task cancelled.")
             self._node_congestion_task = None
+        if self._data_cleanup_task and not self._data_cleanup_task.done():
+            self._data_cleanup_task.cancel()
+            try:
+                await self._data_cleanup_task
+            except asyncio.CancelledError:
+                logger.info("Data cache cleanup task cancelled.")
+            self._data_cleanup_task = None
         if self._kafka_consumer_task and not self._kafka_consumer_task.done():
             self._kafka_consumer_task.cancel()
             try:
@@ -538,6 +554,17 @@ class AnalyticsService:
             except asyncio.CancelledError:
                 logger.info("Kafka consumer task cancelled.")
             self._kafka_consumer_task = None
+
+    async def _cleanup_data_cache_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(self._data_cleanup_interval)
+                self._data_cache.clean_all_locations()
+            except asyncio.CancelledError:
+                logger.info("Data cache cleanup loop cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Error in data cache cleanup loop: {e}", exc_info=True)
 
     async def _consume_processed_traffic_data_loop(self):
         logger.info("Starting Kafka consumer loop for processed traffic data.")

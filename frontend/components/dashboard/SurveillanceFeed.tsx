@@ -20,7 +20,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { token } = useAuth(); // Get the authentication token
 
 
-    const { sendMessage, isConnected } = useRealtimeUpdates(token); // Pass the token to the hook
+    const { sendMessage, isConnected } = useRealtimeUpdates(); // Pass the token to the hook
     
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);

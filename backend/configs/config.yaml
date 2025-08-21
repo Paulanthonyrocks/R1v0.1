@@ -301,8 +301,8 @@ video_input:
   max_queue_size: 1000
   queue_put_timeout_ms: 1000
 video_output:
-  enabled: false
-  processing_enabled: false
+  enabled: true
+  processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
   fps: 5
@@ -310,7 +310,7 @@ video_output:
   - 640
   - 480
 vehicle_detection:
-  enabled: false
+  enabled: true
   model_path: backend/models/yolov8n.pt
   frame_resolution:
   - 640
@@ -325,7 +325,7 @@ vehicle_detection:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 3
+  skip_frames: 5
 analytics_service:
   traffic_predictor:
     model_path: backend/models/traffic_predictor_model.h5

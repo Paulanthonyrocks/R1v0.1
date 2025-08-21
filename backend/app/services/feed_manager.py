@@ -282,6 +282,7 @@ class FeedManager:
 
     async def get_all_statuses(self) -> List[FeedStatusData]:
         """Retrieves the status of all feeds."""
+        logger.info("Getting all feed statuses.")
         statuses = []
         async with self._lock:
             for feed_id, entry in self.process_registry.items():
@@ -325,7 +326,8 @@ class FeedManager:
                         f"Error creating FeedStatusData for feed '{feed_id}': {e}",
                         exc_info=True,
                     )
-
+        logger.info(f"Found {len(statuses)} feed statuses.")
+        logger.debug(f"Prepared feed statuses: {statuses}")
         return statuses
 
     async def get_feed_status(self, feed_id: str) -> Optional[FeedStatusData]:

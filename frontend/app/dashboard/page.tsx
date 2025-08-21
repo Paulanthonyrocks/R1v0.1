@@ -25,10 +25,14 @@ const DashboardPage: React.FC = () => {
 
   // Use the realtime updates hook - This is now the primary source for KPIs and feeds
   const { token } = useAuth();
-  const { /* kpis, */ alerts, feeds, isConnected, isReady } = useRealtimeUpdates();
+  const { /* kpis, */ alerts, feeds, isConnected, isReady, error } = useRealtimeUpdates();
 
   // Find the first sample feed to display. In a real app, you might have a more robust selection logic.
   const sampleFeed = feeds.length > 0 ? feeds[0] : null;
+  console.log("Sample Feed:", sampleFeed);
+  console.log("WebSocket Status - Connected:", isConnected, "Ready:", isReady, "Error:", error);
+  console.log("Feeds Array Length:", feeds.length);
+  console.log("All Feeds:", feeds);
 
   // State for REST API congestion index
   const [congestionIndex, setCongestionIndex] = useState<number | null>(null);
@@ -224,13 +228,33 @@ const DashboardPage: React.FC = () => {
           {/* Sample Video Feed */}
           <div className="mb-4 matrix-card p-4">
             <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">SAMPLE VIDEO FEED</h2>
+            
+            {/* WebSocket Connection Status */}
+            <div className="mb-3 p-2 matrix-card">
+              <div className="flex items-center gap-2 text-sm">
+                <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <span className="font-lcd matrix-glow text-lcd-text">
+                  WebSocket: {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                  {isReady && ' (READY)'}
+                  {error && ` - ERROR: ${error}`}
+                </span>
+              </div>
+              <div className="text-xs text-lcd-text mt-1">
+                Feeds Available: {feeds.length} | Last Update: {new Date().toLocaleTimeString()}
+              </div>
+            </div>
+            
             <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card whitespace-nowrap">
               {sampleFeed ? (
                 <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
                   <SurveillanceFeed feed={sampleFeed} />
                 </div>
               ) : (
-                <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">LOADING SAMPLE FEED...</p>
+                <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">
+                  {!isConnected ? 'CONNECTING TO BACKEND...' : 
+                   !isReady ? 'ESTABLISHING CONNECTION...' : 
+                   feeds.length === 0 ? 'NO FEEDS AVAILABLE' : 'LOADING SAMPLE FEED...'}
+                </p>
               )}
               {/* Add more <div> blocks here for additional feeds if needed */}
             </div>

@@ -29,6 +29,7 @@ interface RealtimeUpdates {
     sendMessage: (action: string, payload?: object) => boolean;
     startWebSocket: () => void;
     reconnect: () => void;
+    subscribeToFeed: (feedId: string) => void;
 }
 
 export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[] } => {
@@ -41,6 +42,8 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const initializationRef = useRef(false);
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const connectionHealthCheckRef = useRef<NodeJS.Timeout | null>(null);
 
     const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
@@ -65,6 +68,19 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             if (type === 'max_reconnect_attempts' || type === 'auth_error') {
                 setIsConnected(false);
                 setIsReady(false);
+                // Schedule reconnection attempt
+                if (reconnectTimeoutRef.current) {
+                    clearTimeout(reconnectTimeoutRef.current);
+                }
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    console.log('Attempting to reconnect WebSocket...');
+                    if (webSocketClientRef.current) {
+                        webSocketClientRef.current.destroy();
+                        webSocketClientRef.current = null;
+                    }
+                    initializationRef.current = false;
+                    initializeWebSocket();
+                }, 5000);
             }
         });
 
@@ -78,8 +94,49 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             
             if (connected) {
                 setError(null);
+                // Clear any pending reconnection attempts
+                if (reconnectTimeoutRef.current) {
+                    clearTimeout(reconnectTimeoutRef.current);
+                    reconnectTimeoutRef.current = null;
+                }
+                // Start connection health monitoring
+                if (connectionHealthCheckRef.current) {
+                    clearInterval(connectionHealthCheckRef.current);
+                }
+                // Check connection health every 60 seconds
+                connectionHealthCheckRef.current = setInterval(() => {
+                    const wsClient = webSocketClientRef.current;
+                    if (wsClient && !wsClient.isConnected()) {
+                        console.warn('WebSocket client reports disconnected, scheduling reconnection');
+                        if (reconnectTimeoutRef.current) {
+                            clearTimeout(reconnectTimeoutRef.current);
+                        }
+                        reconnectTimeoutRef.current = setTimeout(() => {
+                            console.log('Attempting to reconnect WebSocket...');
+                            if (webSocketClientRef.current) {
+                                webSocketClientRef.current.destroy();
+                                webSocketClientRef.current = null;
+                            }
+                            initializationRef.current = false;
+                            initializeWebSocket();
+                        }, 5000);
+                    }
+                }, 60000);
             } else if (status === 'error') {
                 setError(message || 'Connection error');
+                // Schedule reconnection attempt
+                if (reconnectTimeoutRef.current) {
+                    clearTimeout(reconnectTimeoutRef.current);
+                }
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    console.log('Attempting to reconnect WebSocket...');
+                    if (webSocketClientRef.current) {
+                        webSocketClientRef.current.destroy();
+                        webSocketClientRef.current = null;
+                    }
+                    initializationRef.current = false;
+                    initializeWebSocket();
+                }, 5000);
             }
         });
 
@@ -143,6 +200,22 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             }
         );
 
+        // Subscribe to PING messages to respond with PONG
+        client.subscribe(WebSocketMessageType.PING, 
+            () => {
+                console.log('Received PING from server, sending PONG response');
+                // Send PONG response immediately
+                try {
+                    client.send({ 
+                        type: WebSocketMessageType.PONG, 
+                        data: { timestamp: new Date().toISOString() }
+                    });
+                } catch (error) {
+                    console.error('Failed to send PONG response:', error);
+                }
+            }
+        );
+
         webSocketClientRef.current = client;
         
         return client;
@@ -193,6 +266,16 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
                 webSocketClientRef.current = null;
             }
             initializationRef.current = false;
+            
+            // Clean up timeouts
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+            if (connectionHealthCheckRef.current) {
+                clearInterval(connectionHealthCheckRef.current);
+                connectionHealthCheckRef.current = null;
+            }
         };
     }, []);
 
@@ -240,6 +323,17 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         reconnect();
     }, [reconnect]);
 
+    const subscribeToFeed = useCallback((feedId: string) => {
+        sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feedId });
+    }, [sendMessage]);
+
+    useEffect(() => {
+        if (isConnected) {
+            console.log("WebSocket connected, requesting initial feed statuses.");
+            sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
+        }
+    }, [isConnected, sendMessage]);
+
     return { 
         kpis, 
         alerts, 
@@ -250,6 +344,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         startWebSocket, 
         feeds, 
         sendMessage,
-        reconnect
+        reconnect,
+        subscribeToFeed
     };
 };

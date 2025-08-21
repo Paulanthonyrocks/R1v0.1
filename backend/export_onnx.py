@@ -1,7 +1,6 @@
 
 import os
 from ultralytics import YOLO
-import onnxruntime as ort
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
 def main():

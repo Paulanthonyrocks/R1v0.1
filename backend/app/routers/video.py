@@ -1,3 +1,4 @@
+import base64
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
@@ -155,9 +156,43 @@ async def video_ws_endpoint(
     
     # Keep the connection open for sending messages. Receiving is optional unless needed for control messages.
     try:
-        # The loop for receiving messages can be here if needed, or the connection stays open for sending.
-        # Example: while True: await websocket.receive_text()
-        pass # Keep the connection alive for sending
+        # Get the VideoManager instance
+        config = get_current_config()
+        processed_video_dir = config.get("video_output", {}).get("output_directory")
+        if not processed_video_dir:
+            logger.error("Processed video output directory not configured for WebSocket.")
+            raise OperationFailed(detail="Processed video output directory not configured.")
+
+        video_manager = VideoManager.get_instance(processed_video_dir)
+        processor = video_manager.get_processor(stream_id) # Use stream_id as video_path
+
+        # Loop to send frames and metrics
+        for data in processor.get_frame_generator():
+            frame_bytes = data["frame"]
+            kpis = data["kpis"]
+
+            # Send video frame
+            await video_ws_manager.send_message(
+                stream_id,
+                {"type": "video_frame", "frame": base64.b64encode(frame_bytes).decode('utf-8')},
+            )
+
+            # Send metrics update
+            await video_ws_manager.send_message(
+                stream_id,
+                {"type": "metrics_update", "metrics": kpis},
+            )
+            await asyncio.sleep(0.03) # Simulate ~30 FPS, adjust as needed
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for stream_id: {stream_id}")
+        video_ws_manager.disconnect(websocket, stream_id)
+    except ResourceNotFound:
+        logger.warning(f"Video stream {stream_id} not found for WebSocket connection.")
+        await websocket.close(code=404, reason=f"Stream {stream_id} not found")
+    except Exception as e:
+        logger.error(f"Unexpected error in WebSocket connection for stream_id {stream_id}: {e}", exc_info=True)
+        video_ws_manager.disconnect(websocket, stream_id)
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for stream_id: {stream_id}")

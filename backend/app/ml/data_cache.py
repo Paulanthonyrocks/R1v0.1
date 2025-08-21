@@ -155,3 +155,10 @@ class TrafficDataCache:
             summaries.append(summary)
         logger.debug(f"Returning {len(summaries)} location summaries.")
         return summaries
+
+    def clean_all_locations(self):
+        """Iterate through all locations and clean old data."""
+        logger.info("Starting cleanup of old data for all locations.")
+        for location_key in list(self.location_data.keys()):
+            self._clean_old_data(location_key)
+        logger.info("Finished cleanup of old data for all locations.")
