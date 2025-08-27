@@ -255,10 +255,11 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
 
     // Connect after initialization
     useEffect(() => {
-        if (webSocketClientRef.current && !webSocketClientRef.current.isConnected()) {
+        const token = TokenManager.getInstance().getCurrentToken();
+        if (webSocketClientRef.current && !webSocketClientRef.current.isConnected() && token) {
             connectWebSocket();
         }
-    }, [connectWebSocket]);
+    }, [connectWebSocket, TokenManager.getInstance().getCurrentToken()]);
 
     // Cleanup on unmount
     useEffect(() => {
