@@ -49,7 +49,6 @@ from .config import initialize_config  # Import config init/getter
 from .database import initialize_database, close_database
 from .services import initialize_services, get_analytics_service, feed_manager_instance
 from app.dependencies.websocket_manager import get_connection_manager
-from app.dependencies.websocket_manager import get_connection_manager
 from app.websocket.connection_manager import ConnectionManager
 
 from app.tasks.prediction_scheduler import (
@@ -242,10 +241,17 @@ async def startup_event():
 
         await initialize_services(loaded_config, logger=logger, connection_manager=connection_manager)
         
-        fm = feed_manager_instance
-        print(f"DEBUG: fm in main.py before assignment: {feed_manager_instance}")
-        logger.info("FeedManager initialized via app.services.")
+        # Retrieve FeedManager and AnalyticsService instances after initialization
+        from app.services import get_feed_manager
+        fm = get_feed_manager()
         analytics_service = get_analytics_service()
+
+        if fm is None:
+            logger.error("FeedManager instance is None after initialization.")
+            raise RuntimeError("FeedManager not initialized.")
+
+        logger.info("FeedManager initialized via app.services.")
+        
         if analytics_service:
             logger.info("AnalyticsService initialized successfully.")
             await analytics_service.initialize_prediction_log_table()
@@ -260,18 +266,22 @@ async def startup_event():
 
     # 5. Initialize Prediction Scheduler (but don't start it yet)
     try:
-        analytics_service = get_analytics_service()
         if analytics_service:
             scheduler = PredictionScheduler(analytics_service, loaded_config)
             app.state.prediction_scheduler = scheduler
-            fm = feed_manager_instance
-            fm.set_prediction_scheduler(scheduler)
-            fm.set_analytics_service(analytics_service)
-            logger.info(
-                "Prediction scheduler initialized and injected into FeedManager."
-            )
-            # Start processing after initialization
-            await fm.start_processing()
+            
+            # Ensure fm is not None before setting scheduler and analytics service
+            if fm is None:
+                logger.error("FeedManager instance is None. Cannot set prediction scheduler or analytics service.")
+            else:
+                fm.set_prediction_scheduler(scheduler)
+                fm.set_analytics_service(analytics_service)
+                # Start processing after initialization
+                await fm.start_processing()
+                logger.info(
+                    "Prediction scheduler initialized and injected into FeedManager."
+                )
+            # Start processing after initialization, regardless of scheduler initialization
             if not loaded_config.get("prediction_scheduler", {}).get("enabled", True):
                 logger.info("Prediction scheduler is disabled in config. Skipping startup.")
         else:

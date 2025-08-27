@@ -1,7 +1,7 @@
 # app/services.py
 import logging
 from app.websocket.connection_manager import ConnectionManager
-from app.services.feed_manager import FeedManager as FMClass
+from app.services.feed_manager import FeedManager as FMClass, initialize_feed_manager
 
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -85,7 +85,7 @@ async def initialize_services(
             f"services.py: _analytics_service_instance created: {_analytics_service_instance}"
         )
         # Initialize FeedManager
-        feed_manager_instance = FMClass(config=config.get("feed_manager", {}))
+        feed_manager_instance = await initialize_feed_manager(config)
         feed_manager_instance.set_connection_manager(connection_manager)
         feed_manager_instance.set_analytics_service(_analytics_service_instance)
         logger.info("FeedManager initialized.")

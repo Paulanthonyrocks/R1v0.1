@@ -188,10 +188,15 @@ class FeedManager:
 
     def _initialize_available_feeds(self):
         sample_video_paths = self.config.get("video_input", {}).get("sample_videos", [])
-        # Also support the singular 'sample_video' for backward compatibility
         singular_sample_path = self.config.get("video_input", {}).get("sample_video")
-        if singular_sample_path and singular_sample_path not in sample_video_paths:
-            sample_video_paths.append(singular_sample_path)
+
+        # Ensure singular_sample_path is always considered if it exists
+        if singular_sample_path:
+            if isinstance(sample_video_paths, list):
+                if singular_sample_path not in sample_video_paths:
+                    sample_video_paths.append(singular_sample_path)
+            else: # If sample_videos was not a list, or not present, create a new list
+                sample_video_paths = [singular_sample_path]
 
         for i, sample_path_str in enumerate(sample_video_paths):
             resolved_path = Path(self.config.get("project_root_dir"), sample_path_str)
