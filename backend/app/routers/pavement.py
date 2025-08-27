@@ -1,8 +1,8 @@
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 import logging
-from ..ml.pavement_analysis.analyze_pavement import analyze_pavement_image
-from ..models.pavement import PavementAnalysisResponse
-from ..dependencies import get_current_active_user
+from app.ml.pavement_analysis.analyze_pavement import analyze_pavement_image
+from app.models.pavement import PavementAnalysisResponse
+from app.dependency_injection import get_current_active_user
 
 router = APIRouter(
     prefix="/api/pavement",

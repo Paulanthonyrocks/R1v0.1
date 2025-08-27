@@ -1,8 +1,8 @@
-project_root_dir: C:\Users\HP\Desktop\R1v0.1
+project_root_dir: /home/user/R1v0.1
 fps: 3
 speed_limit: 60
 firebase_admin:
-  service_account_key_path: configs/firebase/service-account-key.json
+  service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
 logging:
@@ -21,35 +21,35 @@ logging:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_main.log
+      filename: /home/user/R1v0.1/backend/logs/backend_main.log
       maxBytes: 10485760
       backupCount: 5
     workerFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_worker.log
+      filename: /home/user/R1v0.1/backend/logs/backend_worker.log
       maxBytes: 10485760
       backupCount: 5
     databaseFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_database.log
+      filename: /home/user/R1v0.1/backend/logs/backend_database.log
       maxBytes: 10485760
       backupCount: 5
     servicesFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_services.log
+      filename: /home/user/R1v0.1/backend/logs/backend_services.log
       maxBytes: 10485760
       backupCount: 5
     mlFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: C:/Users/HP/Desktop/R1v0.1/backend/logs/backend_ml.log
+      filename: /home/user/R1v0.1/backend/logs/backend_ml.log
       maxBytes: 10485760
       backupCount: 5
   loggers:
@@ -269,7 +269,7 @@ logging:
       level: INFO
       propagate: false
 database:
-  db_path: ./data/vehicle_data.db
+  db_path: backend/data/vehicle_data.db
   chunk_size: 100
   cache_size: 128
   schema:
@@ -427,7 +427,7 @@ incident_detection:
   density_threshold: 10
   congestion_speed_threshold: 20
 perspective_calibration:
-  matrix_path: ./configs/perspective_matrix.npy
+  matrix_path: backend/configs/perspective_matrix.npy
 performance:
   gpu_acceleration: false
   memory_limit_percent: 85
@@ -467,12 +467,12 @@ roi_processing:
     - 324
 pavement_analysis:
   camera_calibration:
-    calibration_file: ./calibration_params.npz
+    calibration_file: backend/calibration_params.npz
 ml_model:
-  model_path: ./models/pavement/pavement_model.pt
+  model_path: backend/models/pavement/pavement_model.pt
 storage:
-  image_output_dir: ./data/pavement_images
-  report_output_dir: ./data/pavement_reports
+  image_output_dir: backend/data/pavement_images
+  report_output_dir: backend/data/pavement_reports
 log_files:
   allowed_log_files:
     - backend_main.log
@@ -506,4 +506,4 @@ prediction_scheduler:
     name: Atlanta Centennial Park
 file_watcher:
   enabled: true
-  watch_directory: ./data/new_sample_videos
+  watch_directory: backend/data/new_sample_videos

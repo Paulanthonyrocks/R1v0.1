@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 import logging
 
 from app.models.traffic import LocationModel # Assuming LocationModel is still needed for the request model
-from app.dependencies import get_route_optimization_service, get_current_active_user
+from app.dependency_injection import get_route_optimization_service, get_current_active_user
 from app.services.route_optimization_service import RouteOptimizationService
 from app.models.routing import SupportedAreasResponse, RouteAnalyticsResponse # Import new response models
 

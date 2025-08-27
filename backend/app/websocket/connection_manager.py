@@ -65,14 +65,17 @@ class ActiveWebSocketConnection:
             RuntimeError,
             WebSocketDisconnect,
         ) as e:  # Catch specific exceptions for closed sockets
-            logger.warning(
+            # WebSocketDisconnect is often a normal part of the lifecycle
+            log_level = logger.debug if isinstance(e, WebSocketDisconnect) else logger.warning
+            log_level(
                 f"Attempted to send JSON model to {self.client_id} but socket was already closing or closed: {e}"
             )
         except Exception as e:  # Catch other potential errors
-            logger.error(f"Error sending JSON model to {self.client_id}: {e}")
+            logger.error(f"Error sending JSON model to {self.client_id}: {e}", exc_info=True)
 
     async def close(self, code: int = 1000, reason: Optional[str] = None):
         closed_by_this_call = False
+        exception_during_close = False
         try:
             if self.websocket.client_state == WebSocketState.CONNECTED:
                 await self.websocket.close(code=code, reason=reason)
@@ -84,14 +87,16 @@ class ActiveWebSocketConnection:
             logger.warning(
                 f"Exception during explicit close for {self.client_id}: {e}. State: {self.websocket.client_state}"
             )
-        finally:
-            # Always ensure the manager removes the connection, even if already closed or error during close
+            exception_during_close = True # Set the flag here
+
+        finally: # Always ensure the manager removes the connection, even if already closed or error during close
             self.manager.disconnect(self.client_id)
-            if closed_by_this_call:
+            if closed_by_this_call and not exception_during_close:
                 logger.info(
                     f"ActiveWebSocketConnection {self.client_id} gracefully closed and disconnected."
                 )
             else:
+                # This covers cases where close() wasn't called, or it failed before setting closed_by_this_call
                 logger.info(
                     f"ActiveWebSocketConnection {self.client_id} ensured disconnected by manager (was potentially already closed or error on close)."
                 )
@@ -119,15 +124,6 @@ class ActiveWebSocketConnection:
                 )
                 return
 
-            # Handle the message in the format the client sends
-            if data.get("type") == "ping":
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.PONG,
-                        data={"timestamp": datetime.utcnow().isoformat()},
-                    )
-                )
-                return
             elif data.get("type") == "pong":  # Handle incoming PONG from client
                 logger.debug(f"Received PONG from client {self.client_id}")
                 self.last_pong_received = time.time()  # Update last PONG received time
@@ -170,13 +166,13 @@ class ActiveWebSocketConnection:
                 f"Failed to decode JSON message from {self.client_id}: {e}. Raw data: {data_raw}"
             )
             await self.send_json_model(
-                WebSocketMessage(
+                WebSocketMessage( # Add exc_info=True (Modification for point 8)
                     type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                     data=ErrorNotification(
                         code="INVALID_JSON", message="Invalid JSON format."
                     ),
-                )
-            )
+                ), exc_info=True  # Add exc_info=True here
+            )  # Added exc_info=True
             return
         except Exception as e:
             logger.error(
@@ -274,14 +270,6 @@ class ActiveWebSocketConnection:
                     )
                 )
 
-        elif message.type == WebSocketMessageTypeEnum.PING:
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.PONG,
-                    data={"timestamp": datetime.utcnow().isoformat()},
-                )
-            )
-
         elif message.type == WebSocketMessageTypeEnum.ERROR_NOTIFICATION:
             logger.info(
                 f"Client {self.client_id} sent an ERROR_NOTIFICATION: {message.data}"
@@ -297,11 +285,12 @@ class ActiveWebSocketConnection:
                     if user_data:
                         self.token = new_token
                         # Assuming token_expiry can be derived from user_data or is handled by Firebase SDK
-                        # For now, we'll just update user_info and log success
                         self.user_info = user_data
-                        # Firebase ID tokens are typically valid for 1 hour (3600 seconds)
-                        # We can set token_expiry based on 'exp' claim if available, or a default
-                        self.token_expiry = time.time() + 3600 # Default to 1 hour from now
+
+                        # CORRECT WAY: Use the 'exp' claim from the decoded token (Unix timestamp)
+                        # user_data should be the decoded token dictionary
+                        self.token_expiry = user_data.get('exp', time.time() + 3600) # Fallback to 1 hour if 'exp' is missing
+
                         logger.info(f"Client {self.client_id} successfully re-authenticated.")
                         await self.send_json_model(
                             WebSocketMessage(
@@ -402,14 +391,23 @@ class ActiveWebSocketConnection:
         elif message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
             logger.info(f"Client {self.client_id} requested initial feed statuses.")
             try:
+                logger.debug("About to get all feed statuses from FeedManager")
                 feed_manager = get_feed_manager()
                 statuses = await feed_manager.get_all_statuses()
-                await self.send_json_model(
-                    WebSocketMessage(
+                logger.debug(f"Client {self.client_id}: Got initial feed statuses: {statuses}")
+
+                # Prepare the message to send
+                message_to_send = WebSocketMessage(
                         type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
                         data={"feeds": [status.model_dump() for status in statuses]},
                     )
-                )
+                logger.debug(f"Client {self.client_id}: Prepared INITIAL_FEED_STATUSES message: {message_to_send.model_dump_json()}")
+
+                # Send the message
+                await self.send_json_model(message_to_send)
+
+                logger.debug(f"Client {self.client_id}: Sent INITIAL_FEED_STATUSES message.")
+
             except Exception as e:
                 logger.error(f"Error getting initial feed statuses: {e}", exc_info=True)
                 await self.send_json_model(
@@ -464,10 +462,10 @@ class ActiveWebSocketConnection:
         try:
             while True:
                 data_raw = await self.websocket.receive_text()
-                await self.handle_incoming_message(data_raw)
+                await self.handle_incoming_message(data_raw) # Pass reason (Modification for point 3)
         except WebSocketDisconnect as e:
             logger.info(
-                f"Client {self.client_id} disconnected. Code: {e.code}, Reason: {e.reason}"
+                f"Client {self.client_id} disconnected. Code: {e.code}, Reason: {e.reason}" # This log will be replaced by the disconnect method's log
             )
             self.manager.disconnect(self.client_id)
         except RuntimeError as e:
@@ -513,15 +511,42 @@ class ActiveWebSocketConnection:
 
 
 class ConnectionManager:
-    """Manages active WebSocket connections.""" # Add max_connections to __init__
+    """Manages active WebSocket connections."""
 
-    def __init__(self, max_connections: int = 1000, token_refresh_interval: int = 300): # 5 minutes
-        self.active_connections: Dict[str, ActiveWebSocketConnection] = {}
-        self.ping_interval_seconds: int = 15  # Send ping every 15 seconds
+    def __init__(self):
+        self.active_connections: Optional[Dict[str, ActiveWebSocketConnection]] = None
+        self.ping_interval_seconds: Optional[int] = None
         self.ping_task: Optional[asyncio.Task] = None
-        self.max_connections = max_connections  # Set the maximum number of connections
-        self.token_refresh_interval = token_refresh_interval # Interval to check for token refresh
+        self.max_connections: Optional[int] = None
+        self.token_refresh_interval: Optional[int] = None
+        self._initialized = False
+
+    async def init(self, max_connections: int = 1000, token_refresh_interval: int = 300, ping_interval: int = 15):
+        if self._initialized:
+            logger.warning("ConnectionManager already initialized.")
+            return
+
+        self.active_connections = {}
+        self.ping_interval_seconds = ping_interval
+        self.max_connections = max_connections
+        self.token_refresh_interval = token_refresh_interval
+        self.ping_task = None
+        self._initialized = True
         logger.info(f"ConnectionManager initialized with max_connections={self.max_connections}, token_refresh_interval={self.token_refresh_interval}.")
+        await self.start_ping_task()
+
+    async def shutdown(self):
+        logger.info("Shutting down ConnectionManager.")
+        await self.disconnect_all()
+        if self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                pass  # Expected
+            self.ping_task = None
+        self._initialized = False
+        logger.info("ConnectionManager shut down complete.")
 
     async def connect(self, websocket: WebSocket, client_id: str, user_data: Dict[str, Any]):
         if len(self.active_connections) >= self.max_connections:
@@ -534,13 +559,16 @@ class ConnectionManager:
         self.active_connections[client_id] = connection
         logger.debug(f"Client {client_id}: Added to active connections.")
         logger.info(f"Client {client_id} connected. Total active connections: {len(self.active_connections)}.")
-        if not self.ping_task or self.ping_task.done():
+        if not self.ping_task or self.ping_task.done(): # Modification for point 6
             await self.start_ping_task()
 
-    def disconnect(self, client_id: str):
+    def disconnect(self, client_id: str, reason: str = "No reason specified"):
+        """Removes a client from the active connections."""
         if client_id in self.active_connections:
             del self.active_connections[client_id]
-            logger.info(f"Client {client_id} disconnected. Total active connections: {len(self.active_connections)}")
+            logger.info(
+                f"Client {client_id} disconnected. Reason: {reason}. Total active connections: {len(self.active_connections)}"
+            )
         if not self.active_connections and self.ping_task:
             self.ping_task.cancel()
             self.ping_task = None
@@ -559,19 +587,20 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Error closing websocket for {client_id} during shutdown: {e}")
                 finally:
-                    self.disconnect(client_id) # Ensure cleanup
+                    self.disconnect(client_id, reason="Server shutting down") # Ensure cleanup
 
         if self.ping_task:
             self.ping_task.cancel()
             try:
                 await self.ping_task
             except asyncio.CancelledError:
-                logger.info("ConnectionManager ping task stopped during disconnect_all.")
+                logger.info("ConnectionManager ping task stopped during disconnect_all.") # Ensure cleanup (Modification for point 3)
             self.ping_task = None
         logger.info("All WebSocket connections disconnected.")
 
     async def broadcast(self, message: WebSocketMessage, exclude_client_id: Optional[str] = None):
         """Broadcasts a message to all active connections, optionally excluding one."""
+        # Iterating over a list copy of keys is a potential scaling bottleneck for a very large number of connections.
         for client_id, connection in list(self.active_connections.items()):
             if client_id == exclude_client_id:
                 continue
@@ -579,16 +608,17 @@ class ConnectionManager:
                 await connection.send_json_model(message)
             except Exception as e:
                 logger.error(f"Error broadcasting message to {client_id}: {e}")
-                self.disconnect(client_id) # Disconnect problematic client
+                self.disconnect(client_id, reason="Error during broadcast") # Disconnect problematic client
 
     async def broadcast_to_topic(self, message: WebSocketMessage, topic: str):
         """Broadcasts a message to all clients subscribed to a specific topic."""
+        # Iterating over a list copy of keys is a potential scaling bottleneck for a very large number of connections.
         for client_id, connection in list(self.active_connections.items()):
             if topic in connection.subscriptions:
                 try:
                     await connection.send_json_model(message)
                 except Exception as e:
-                    logger.error(f"Error broadcasting message to subscribed client {client_id} for topic {topic}: {e}")
+                    logger.error(f"Error broadcasting message to subscribed client {client_id} for topic {topic}, will disconnect: {e}")
                     self.disconnect(client_id) # Disconnect problematic client
 
     async def send_to_client(self, client_id: str, message: WebSocketMessage):
@@ -598,7 +628,7 @@ class ConnectionManager:
             try:
                 await connection.send_json_model(message)
             except Exception as e:
-                logger.error(f"Error sending message to client {client_id}: {e}")
+                logger.error(f"Error sending message to client {client_id}, will disconnect: {e}")
                 self.disconnect(client_id)
         else:
             logger.warning(f"Attempted to send message to non-existent client: {client_id}")
@@ -651,12 +681,13 @@ class ConnectionManager:
                 except Exception as e:
                     logger.warning(f"Failed to send PING to client {client_id}: {e}")
                     clients_to_remove.append(client_id)
-            else:
-                logger.debug(
-                    f"Client {client_id} not connected, marking for removal during ping."
-                )
-                clients_to_remove.append(client_id)
 
+        # Use a set to avoid adding duplicate client_ids to clients_to_remove
+        clients_to_remove_set = set(clients_to_remove) # Add clients with ping send failures initially
+        reasons = {} # Dictionary to store reasons for disconnection
+        for client_id in clients_to_remove:
+            reasons[client_id] = "Ping send error"
+        clients_to_check_for_timeout = list(self.active_connections.keys()) # Check all active connections
         # Check for clients that haven't responded to pings or need token refresh
         current_time = time.time()
         for client_id, connection in list(self.active_connections.items()):
@@ -665,7 +696,8 @@ class ConnectionManager:
                 logger.warning(
                     f"Client {client_id} timed out (no PONG response). Disconnecting."
                 )
-                clients_to_remove.append(client_id)
+                clients_to_remove_set.add(client_id)
+                reasons[client_id] = "PONG timeout"
             # Check if token needs refreshing
             if connection.token_expiry and current_time >= (connection.token_expiry - self.token_refresh_interval):
                 logger.info(f"Client {client_id} token expiring soon. Requesting refresh.")
@@ -676,6 +708,6 @@ class ConnectionManager:
                     )
                 )
 
-        for client_id in clients_to_remove:
-            self.disconnect(client_id)
+        for client_id in clients_to_remove_set: # Iterate over the set of clients to remove
+            self.disconnect(client_id, reason=reasons.get(client_id, "Unknown ping related issue")) # Provide a default reason
 

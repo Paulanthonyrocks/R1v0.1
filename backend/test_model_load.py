@@ -5,7 +5,7 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-model_path = "backend/models/traffic_predictor_model.h5"
+model_path = "/home/user/R1v0.1/backend/models/traffic_predictor_model.h5"
 
 # Ensure the path is absolute for clarity, though relative might work from project root
 absolute_model_path = os.path.abspath(model_path)

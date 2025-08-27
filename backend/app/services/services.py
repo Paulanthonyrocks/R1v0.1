@@ -21,7 +21,7 @@ feed_manager_instance: Optional[FMClass] = (
     None  # Keep FeedManager instance global if needed outside initialize_services
 )
 
-connection_manager_instance = None
+
 _traffic_signal_service_instance: Optional[TrafficSignalService] = None
 _analytics_service_instance: Optional[AnalyticsService] = None
 _route_optimization_service_instance: Optional[RouteOptimizationService] = None
@@ -31,11 +31,10 @@ _event_service_instance: Optional[EventService] = None
 
 
 async def initialize_services(
-    config: Dict[str, Any], logger: logging.Logger
+    config: Dict[str, Any], logger: logging.Logger, connection_manager: ConnectionManager
 ):  # Accept logger as argument
     global \
         feed_manager_instance, \
-        connection_manager_instance, \
         _traffic_signal_service_instance, \
         _analytics_service_instance, \
         _route_optimization_service_instance, \
@@ -43,46 +42,7 @@ async def initialize_services(
         _weather_service_instance, \
         _event_service_instance
 
-    logger.info("Initializing application services...")
-    if connection_manager_instance is None:
-        logger.info("Attempting to initialize WebSocket ConnectionManager...")
-        try:
-            from app.websocket.connection_manager import ConnectionManager
-
-            connection_manager_instance = ConnectionManager()
-            logger.info("WebSocket ConnectionManager initialized via app.services.")
-        except Exception as e:
-            logger.error(f"Failed to initialize ConnectionManager in app.services: {e}")
-            connection_manager_instance = None  # Ensure it's None on failure
-            logger.info(
-                f"WebSocket ConnectionManager initialization: Failed. Reason: {e}"
-            )
-        else:
-            logger.info("WebSocket ConnectionManager initialization: Successful.")
-    logger.info(
-        f"ConnectionManager instance after initialization attempt: {connection_manager_instance}"
-    )
-
-    if feed_manager_instance is None:
-        try:
-            feed_manager_instance = FMClass(config=config)
-            # Inject connection manager if both initialized
-            if connection_manager_instance:
-                feed_manager_instance.set_connection_manager(
-                    connection_manager_instance
-                )
-            # Initialize shared multiprocessing values after app startup
-            feed_manager_instance.initialize_shared_values()
-            await feed_manager_instance.start_background_tasks() # New: Start background tasks
-            logger.info("FeedManager initialized via app.services.")
-        except Exception as e:
-            logger.error(
-                f"Failed to initialize FeedManager in app.services: {e}", exc_info=True
-            )
-            feed_manager_instance = None
-            logger.info(f"FeedManager initialization: Failed. Reason: {e}")
-        else:
-            logger.info("FeedManager initialization: Successful.")
+    
 
     # Get the database manager instance
     try:
@@ -95,7 +55,7 @@ async def initialize_services(
 
     _traffic_signal_service_instance = TrafficSignalService(
         config=config.get("traffic_signal_service", {}),
-        connection_manager=connection_manager_instance,
+        connection_manager=connection_manager,
     )
     # Pass db_manager to AnalyticsService
     try:
@@ -116,7 +76,7 @@ async def initialize_services(
 
         _analytics_service_instance = AnalyticsService(
             config=config.get("analytics_service", {}),
-            connection_manager=connection_manager_instance,
+            connection_manager=connection_manager,
             database_manager=db_manager,
             traffic_predictor=loaded_traffic_predictor, # Pass the loaded predictor
         )
@@ -124,9 +84,16 @@ async def initialize_services(
         print(
             f"services.py: _analytics_service_instance created: {_analytics_service_instance}"
         )
+        # Initialize FeedManager
+        feed_manager_instance = FMClass(config=config.get("feed_manager", {}))
+        feed_manager_instance.set_connection_manager(connection_manager)
+        feed_manager_instance.set_analytics_service(_analytics_service_instance)
+        logger.info("FeedManager initialized.")
+        print(f"DEBUG: feed_manager_instance in services.py: {feed_manager_instance}")
     except Exception as e:
         logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
         _analytics_service_instance = None
+        raise # Re-raise the exception to propagate the error
 
     # Initialize weather service
     try:
@@ -148,6 +115,7 @@ async def initialize_services(
             traffic_predictor=_analytics_service_instance._traffic_predictor,  # Pass the loaded predictor
         )
         logger.info("RouteOptimizationService initialized successfully.")
+        feed_manager_instance.set_analytics_service(_analytics_service_instance)
     else:
         logger.warning(
             "AnalyticsService not initialized, skipping RouteOptimizationService initialization."
@@ -184,10 +152,7 @@ async def initialize_services(
     logger.info("Application services initialized.")
 
 
-def get_connection_manager() -> "ConnectionManager":
-    if connection_manager_instance is None:
-        raise RuntimeError("WebSocket ConnectionManager not initialized.")
-    return connection_manager_instance
+
 
 
 def get_feed_manager() -> FMClass:
@@ -245,20 +210,11 @@ def get_event_service() -> EventService:
 async def shutdown_services():  # Make async for feed manager shutdown
     global \
         feed_manager_instance, \
-        connection_manager_instance, \
         _traffic_signal_service_instance, \
         _analytics_service_instance, \
         _route_optimization_service_instance
     logger.info("Shutting down application services...")
-    if connection_manager_instance:
-        try:
-            logger.info("Disconnecting all WebSocket connections...")
-            await connection_manager_instance.disconnect_all()
-            logger.info("Successfully disconnected all WebSocket connections.")
-        except Exception as e:
-            logger.error(f"Failed to disconnect all websockets: {e}")
-    else:
-        logger.info("WebSocket ConnectionManager not initialized, skipping disconnect.")
+    
 
     if feed_manager_instance:
         try:
@@ -321,16 +277,7 @@ async def health_check() -> Dict[str, Any]:
         "timestamp": datetime.utcnow().isoformat(),
         "services": {
             "feed_manager": {"status": fm_status, "healthy": fm_healthy},
-            "connection_manager": {
-                "status": "Initialized"
-                if connection_manager_instance
-                else "Not Initialized",
-                "active_connections": len(
-                    connection_manager_instance.active_connections
-                )
-                if connection_manager_instance
-                else 0,
-            },
+            
             "traffic_signal_service": {"status": tss_status},
             "analytics_service": {"status": as_status},
             # Add database health here

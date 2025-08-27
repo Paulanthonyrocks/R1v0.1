@@ -5,7 +5,7 @@ from app.models import traffic # Import the traffic module
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 import pandas as pd
 
-from app.dependencies import get_analytics_service, get_as, get_current_active_user, get_db
+from app.dependency_injection import get_analytics_service, get_as, get_current_active_user, get_db
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
 from app.models.analysis import (

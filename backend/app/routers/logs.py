@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 import re
 
-from app.dependencies import get_current_active_user
+from app.dependency_injection import get_current_active_user
 from app.config import get_current_config
 
 

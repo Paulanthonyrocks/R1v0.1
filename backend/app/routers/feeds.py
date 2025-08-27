@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from app.dependencies import (
+from app.dependency_injection import (
     get_feed_manager,
     get_current_active_user,
     get_current_active_user_optional,

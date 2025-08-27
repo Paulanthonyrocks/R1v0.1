@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials
 import uuid  # For generating unique client IDs for WebSockets
-from app.dependencies import (
+from app.dependency_injection import (
     verify_firebase_token,
     get_token_from_query,
 )  # Import verify_firebase_token and auth_scheme
@@ -47,10 +47,10 @@ from . import api
 # Initializers/Getters - Import config initializer now
 from .config import initialize_config  # Import config init/getter
 from .database import initialize_database, close_database
-from .services import initialize_services, get_connection_manager, get_analytics_service
-from app.utils.service_getters import (
-    get_feed_manager,
-)  # Import get_feed_manager from the new utility file
+from .services import initialize_services, get_analytics_service, feed_manager_instance
+from app.dependencies.websocket_manager import get_connection_manager
+from app.dependencies.websocket_manager import get_connection_manager
+from app.websocket.connection_manager import ConnectionManager
 
 from app.tasks.prediction_scheduler import (
     PredictionScheduler,
@@ -188,12 +188,8 @@ async def startup_event():
             backend_dir / service_account_path_str if service_account_path_str else None
         )
         if key_path and not key_path.exists():
-            logger.error(
-                f"Firebase service account key not found at: {key_path.resolve()}"
-            )
-            raise FileNotFoundError(
-                f"Firebase service account key not found at: {key_path.resolve()}"
-            )
+            # Fallback to project root if not found in backend directory
+            key_path = Path.cwd() / service_account_path_str
         if key_path:
             try:
                 cred = credentials.Certificate(str(key_path.resolve()))
@@ -234,17 +230,20 @@ async def startup_event():
     # 4. Initialize Services, including ConnectionManager
     try:
         logger.info("Initializing application services...")
-        await initialize_services(loaded_config, logger=logger)
-        app.state.connection_manager = get_connection_manager()
-        if app.state.connection_manager is None:
-            logger.critical(
-                "ConnectionManager is None after initialize_services. This indicates a problem with service initialization."
-            )
-            raise RuntimeError(
-                "WebSocket ConnectionManager failed to initialize: get_connection_manager returned None."
-            )
-        logger.info("WebSocket ConnectionManager initialized via app.services.")
-        fm = get_feed_manager()
+        # Initialize ConnectionManager
+        connection_manager = ConnectionManager()
+        await connection_manager.init(
+            max_connections=loaded_config.get("websocket", {}).get("max_connections", 1000),
+            token_refresh_interval=loaded_config.get("websocket", {}).get("token_refresh_interval", 300),
+            ping_interval=loaded_config.get("websocket", {}).get("ping_interval", 15),
+        )
+        app.state.connection_manager = connection_manager
+        logger.info("WebSocket ConnectionManager initialized and stored in app.state.")
+
+        await initialize_services(loaded_config, logger=logger, connection_manager=connection_manager)
+        
+        fm = feed_manager_instance
+        print(f"DEBUG: fm in main.py before assignment: {feed_manager_instance}")
         logger.info("FeedManager initialized via app.services.")
         analytics_service = get_analytics_service()
         if analytics_service:
@@ -265,7 +264,7 @@ async def startup_event():
         if analytics_service:
             scheduler = PredictionScheduler(analytics_service, loaded_config)
             app.state.prediction_scheduler = scheduler
-            fm = get_feed_manager()
+            fm = feed_manager_instance
             fm.set_prediction_scheduler(scheduler)
             fm.set_analytics_service(analytics_service)
             logger.info(
@@ -317,7 +316,13 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("--- Shutting down Route One Backend ---")
-    fm = get_feed_manager()
+    
+    # Shutdown ConnectionManager
+    if hasattr(app.state, "connection_manager") and app.state.connection_manager:
+        await app.state.connection_manager.shutdown()
+        logger.info("WebSocket ConnectionManager shut down.")
+
+    fm = feed_manager_instance
     await fm.shutdown()
     if app.state.file_watcher:
         app.state.file_watcher.stop()
@@ -439,105 +444,12 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
 
 
 
-async def _handle_websocket_connection(websocket: WebSocket, client_id: str, token: str, endpoint_prefix: str = ""):
-    """
-    Handles WebSocket connections, encapsulating common logic for authentication and message listening.
 
-    Note on Security:
-    Passing tokens in query parameters is common for browser-based WebSocket clients due to limitations
-    in the WebSocket API. However, be aware that this can expose the token in server logs, browser history,
-    and network appliances. For server-to-server WebSocket communication, using the Authorization header
-    is the recommended approach.
-    """
-    logger.info(f"[{endpoint_prefix}WS {client_id}] Starting websocket handling.")
-    try:
-        if not token:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Verifying token.")
-        user_data = await verify_firebase_token(token)
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Token verified. User data: {user_data}")
-        logger.info(
-            f"[{endpoint_prefix}WS {client_id}] Connection attempt by authenticated user: {user_data.get('email')}"
-        )
-    except HTTPException as e:
-        logger.warning(
-            f"[{endpoint_prefix}WS {client_id}] Authentication failed: {e.detail}"
-        )
-        await websocket.close(code=e.status_code, reason=e.detail)
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Authentication failed, closing connection.")
-        return
-
-    manager = websocket.app.state.connection_manager
-    if manager is None:
-        logger.error(
-            f"[{endpoint_prefix}WS {client_id}] Connection rejected: ConnectionManager not initialized in app.state."
-        )
-        await websocket.close(
-            code=1011, reason="ConnectionManager not initialized in app.state"
-        )
-        return
-
-    # Attempt to accept the websocket and connect via the manager
-    try:
-        # The WebSocket connection is now accepted here, before being passed to the manager.
-        # This ensures the connection is in the correct state before any other operations.
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Accepting websocket.")
-        await websocket.accept()
-        logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection accepted.")
-
-        # The manager.connect method will now add the already-accepted connection.
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Connecting to manager.")
-        await manager.connect(websocket, client_id, user_data)
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Connected to manager.")
-        active_connection = manager.active_connections.get(client_id) # Retrieve the newly created connection
-
-        if not active_connection:
-             # This case should theoretically not happen if manager.connect is successful but doesn't throw
-             logger.error(
-                 f"[{endpoint_prefix}WS {client_id}] Failed to retrieve ActiveWebSocketConnection from manager after connect. Closing."
-             )
-             await websocket.close(code=1011, reason="Internal connection setup error")
-             return
-
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Connection fully established and added to manager.")
-
-        logger.info(f"[{endpoint_prefix}WS {client_id}] Starting message listener.")
-        await active_connection.listen_for_messages()
-        logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket connection message listener loop ended.")
-
-    except ConnectionLimitExceeded as e:
-        logger.warning(f"[{endpoint_prefix}WS {client_id}] Connection rejected: {e.detail}")
-        await websocket.close(code=429, reason=e.detail) # 429 Too Many Requests
-    except Exception as e:
-        logger.error(f"[{endpoint_prefix}WS {client_id}] Unexpected error during WebSocket connection setup: {e}", exc_info=True)
-        # Attempt to close the connection gracefully with an internal server error code
-        await websocket.close(code=1011, reason=f"Internal server error during connection: {str(e)[:100]}")
-    finally:
-         logger.info(f"[{endpoint_prefix}WS {client_id}] WebSocket handler execution finished.")
-
-
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(
-    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
-):
-    """
-    Handles WebSocket connections for the /ws/{client_id} endpoint.
-    """
-    await _handle_websocket_connection(websocket, client_id, token, endpoint_prefix="")
-
-
-@app.websocket("/api/v1/ws/{client_id}")
-async def websocket_endpoint_v1(
-    websocket: WebSocket, client_id: str, token: str = Depends(get_token_from_query)
-):
-    """
-    Handles WebSocket connections for the /api/v1/ws/{client_id} endpoint.
-    """
-    await _handle_websocket_connection(websocket, client_id, token, endpoint_prefix="v1 ")
 
 
 ## Removed duplicate FastAPI app definition
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, log_level="debug")

@@ -159,7 +159,10 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         // Subscribe to initial feed statuses
         client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, 
             (data: { feeds: FeedStatusData[] }) => {
+                console.log('Received INITIAL_FEED_STATUSES data:', data);
                 if (data?.feeds) {
+                    console.log("Received INITIAL_FEED_STATUSES:", data.feeds);
+                    console.log("Updating feeds state with:", data.feeds);
                     setFeeds(data.feeds);
                 }
             }

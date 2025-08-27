@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 
-from app.dependencies import get_current_active_user, get_tss
+from app.dependency_injection import get_current_active_user, get_tss
 from app.services.traffic_signal_service import (
     TrafficSignalService,
     TrafficSignalControlError,

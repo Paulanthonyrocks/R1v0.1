@@ -5,7 +5,7 @@ from pathlib import Path
 from app.utils.auth_utils import verify_firebase_token
 import logging
 from app.config import get_current_config
-from app.dependencies import get_current_active_user, get_token_from_query
+from app.dependency_injection import get_current_active_user, get_token_from_query
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
 from app.services.video_ws_manager import video_ws_manager

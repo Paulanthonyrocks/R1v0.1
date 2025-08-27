@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict
-from app.dependencies import get_current_active_user
+from app.dependency_injection import get_current_active_user
 from app.models.common import APIResponse
 import logging
 

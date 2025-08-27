@@ -3,7 +3,7 @@
 from typing import Dict, Any
 from fastapi import APIRouter, Depends
 
-from app.dependencies import (
+from app.dependency_injection import (
     get_config,
     get_current_admin,
 )  # Added get_current_active_user

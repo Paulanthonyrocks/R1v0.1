@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.dependencies import get_current_active_user
+from app.dependency_injection import get_current_active_user
 
 router = APIRouter()
 

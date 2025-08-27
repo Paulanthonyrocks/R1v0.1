@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List, Dict, Any
 import logging
 from app.services.event_service import EventService
-from app.dependencies import get_event_service_api, get_current_active_user
+from app.dependency_injection import get_event_service_api, get_current_active_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

@@ -56,9 +56,7 @@ def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         # --- End Logging Reconfiguration ---
  
         # Resolve relative paths to absolute paths
-        project_root = Path(
-            __file__
-        ).parent.parent.parent  # Assumes config.py is in backend/app/
+        project_root = Path(_config_instance.get("project_root_dir", Path.cwd()))
 
         # Resolve sample_videos paths
         sample_video_paths = _config_instance.get("video_input", {}).get(

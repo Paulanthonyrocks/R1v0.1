@@ -40,7 +40,7 @@ class CoreModule:
         gemini_api_key: Optional[str] = None,
     ):
         self.feed_id = feed_id
-        self.model_path = model_path
+        self.model_path = Path(config["project_root_dir"]) / model_path
         self.config = config
         self.fps = fps
         self.db_queue = db_queue
@@ -199,8 +199,9 @@ class CoreModule:
             logger.error(f"Model file not found at {self.model_path}")
             raise FileNotFoundError(f"Model file not found at {self.model_path}")
 
-        is_onnx = self.model_path.endswith(".onnx")
-        is_quantized_onnx = self.model_path.endswith("_quant.onnx")
+        model_path_str = str(self.model_path)
+        is_onnx = model_path_str.endswith(".onnx")
+        is_quantized_onnx = model_path_str.endswith("_quant.onnx")
 
         try:
             if is_onnx or is_quantized_onnx:
@@ -219,7 +220,7 @@ class CoreModule:
                         )
 
                 start_time = time.time()
-                self.model = ort.InferenceSession(self.model_path, providers=providers)
+                self.model = ort.InferenceSession(model_path_str, providers=providers)
                 load_time = time.time() - start_time
                 device = self.model.get_providers()[
                     0
@@ -313,8 +314,9 @@ class CoreModule:
     ) -> List[Tuple]:
         try:
             processed_frame, roi_enabled, x1_crop, y1_crop = self._preprocess_frame(frame)
-
-            if self.model_path.endswith(('.onnx', '_quant.onnx')):
+            
+            # FIX: Convert Path object to string before calling .endswith()
+            if str(self.model_path).endswith(('.onnx', '_quant.onnx')):
                 detections = self._run_onnx_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
             else:
                 detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
@@ -1117,17 +1119,21 @@ class CoreModule:
             lane_boundaries = self.cached_lane_boundaries
         else:
             # Process the frame to detect lane lines dynamically
-            detected_lines = process_frame_for_lanes(frame, self.config)
-            if detected_lines:
-                # Get dynamic lane boundaries based on detected lines
-                self.cached_lane_boundaries = get_lane_boundaries_from_lines(
-                    frame.shape[1], detected_lines, self.config
-                )
-                self.last_lane_detection_frame = frame_index
-                lane_boundaries = self.cached_lane_boundaries
+            if process_frame_for_lanes:
+                detected_lines = process_frame_for_lanes(frame, self.config)
+                if detected_lines:
+                    # Get dynamic lane boundaries based on detected lines
+                    self.cached_lane_boundaries = get_lane_boundaries_from_lines(
+                        frame.shape[1], detected_lines, self.config
+                    )
+                    self.last_lane_detection_frame = frame_index
+                    lane_boundaries = self.cached_lane_boundaries
+                else:
+                    logger.debug("Dynamic lane boundaries could not be determined. Falling back to static.")
+                    lane_boundaries = None
             else:
-                logger.debug("Dynamic lane boundaries could not be determined. Falling back to static.")
                 lane_boundaries = None
+
 
         if lane_boundaries and len(lane_boundaries) > 1:
             x_center = (bbox[0] + bbox[2]) / 2
@@ -1257,23 +1263,27 @@ class CoreModule:
         )
         self.vehicle_data.clear()
         # Model cleanup (if possible)
-        if self.model_path.endswith(".onnx") and hasattr(self.model, "release"):
+        # FIX: Convert Path object to string before calling .endswith()
+        if str(self.model_path).endswith(".onnx") and hasattr(self.model, "release"):
             # ONNX Runtime sessions might have a release method or can be explicitly closed
             # Depending on ORT version, direct deletion might be enough, but explicit is better.
             try:
-                self.model.release()  # Some ORT versions might have this
-                logger.info(f"ONNX session for {self.feed_id} released.")
-            except AttributeError:
-                logger.debug(
-                    f"ONNX session for {self.feed_id} does not have a .release() method."
-                )
+                # Assuming 'release' is a method to be called, though this is not standard for onnxruntime
+                # A more common pattern is just to let the object be garbage collected.
+                # del self.model might be sufficient. This part is speculative on the ORT API.
+                logger.info(f"ONNX session for {self.feed_id} being cleaned up.")
             except Exception as e:
                 logger.warning(f"Error releasing ONNX session for {self.feed_id}: {e}")
         elif hasattr(self.model, "predictor") and self.model.predictor:
             del self.model.predictor
-        del self.model
+        
+        if hasattr(self, 'model'):
+            del self.model
+            self.model = None
+
         if self.preprocessor and hasattr(self.preprocessor, "gemini_model"):
             del self.preprocessor.gemini_model
+            self.preprocessor = None
 
         import gc
 
@@ -1328,9 +1338,13 @@ class CoreModule:
 # --- Example standalone usage ---
 if __name__ == "__main__":
     # Basic config for testing
+    # Create a dummy project root for the test
+    project_root = Path("./")
+    project_root.mkdir(exist_ok=True)
+    
     test_config = {
+        "project_root_dir": str(project_root),
         "vehicle_detection": {
-            "model_path": "../models/yolov8n.pt",  # Using .pt model as requested
             "vehicle_class_ids": [2, 3, 5, 7],
             "confidence_threshold": 0.4,
             "proximity_threshold": 60,
@@ -1339,20 +1353,28 @@ if __name__ == "__main__":
             "yolo_imgsz": 320,
             "frame_resolution": [640, 480],
         },
-        "lane_detection": {"num_lanes": 4},
+        "lane_detection": {"num_lanes": 4, "lane_detection_interval": 10},
         "performance": {"gpu_acceleration": False},  # Test CPU path
         "ocr_engine": {
+            "enabled": False,
             "gemini_api_key": os.environ.get("TEST_GEMINI_API_KEY", ""),
-            "roi_top_margin_factor": 0.4,  # Example: Add config params here for testing
+            "roi_top_margin_factor": 0.4,
             "roi_bottom_margin_factor": 0.1,
             "roi_left_margin_factor": 0.1,
             "roi_right_margin_factor": 0.1,
         },
+        "roi_processing": {"enabled": False},
+        "behavior_analysis": {
+            "stopped_speed_threshold_kmh": 5,
+            "speed_limit": 60,
+            "accel_threshold_mps2": 0.5,
+            "lane_change_buffer": 20,
+            "ewma_alpha": 0.2,
+        },
         "kalman_filter_params": {},  # Use defaults
         "pixels_per_meter": 40,
-        "speed_limit": 60,
     }
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     logger.info("Starting CoreModule standalone test...")
 
     # Dummy frame and queues
@@ -1368,12 +1390,14 @@ if __name__ == "__main__":
     )
     dummy_db_queue = MPQueue()
     dummy_feed_id = "TestFeed_01"  # Provide a feed ID for testing
+    # Use a model path that exists or can be downloaded by YOLO
+    model_path = "yolov8n.pt" 
 
     try:
         core_module = CoreModule(
             feed_id=dummy_feed_id,  # Pass feed_id
             gemini_api_key=test_config["ocr_engine"]["gemini_api_key"],
-            model_path=test_config["vehicle_detection"]["model_path"],
+            model_path=model_path,
             config=test_config,
             fps=30,
             db_queue=dummy_db_queue,
@@ -1384,24 +1408,25 @@ if __name__ == "__main__":
         for i in range(5):
             frame_index = i * 5  # Simulate skipping frames
             # Simulate some movement or change detections if needed
+            frame_copy = dummy_frame.copy()
             if i == 1:
                 cv2.rectangle(
-                    dummy_frame, (100, 100), (150, 150), (0, 255, 0), -1
+                    frame_copy, (100, 100), (150, 150), (0, 255, 0), -1
                 )  # Add a "vehicle"
             if i == 2:
                 cv2.rectangle(
-                    dummy_frame, (110, 110), (160, 160), (0, 255, 0), -1
+                    frame_copy, (110, 110), (160, 160), (0, 255, 0), -1
                 )  # Move it
             if i == 3:
                 cv2.rectangle(
-                    dummy_frame, (200, 200), (250, 250), (0, 0, 255), -1
+                    frame_copy, (200, 200), (250, 250), (0, 0, 255), -1
                 )  # Add another
 
             logger.info(f"--- Processing frame {frame_index} ---")
-            tracked = core_module.detect_and_track(dummy_frame, frame_index)
+            tracked = core_module.detect_and_track(frame_copy, frame_index)
             logger.info(f"Tracked vehicles: {len(tracked)}")
             for vid, data in tracked.items():
-                logger.debug(
+                logger.info(
                     f"  ID: {vid}, Lane: {data.get('lane')}, Speed: {data.get('speed')}, Behavior: {data.get('behavior')}, Pos: {data.get('bbox')}"
                 )
             time.sleep(0.1)
@@ -1409,10 +1434,12 @@ if __name__ == "__main__":
         core_module.cleanup()
         logger.info("CoreModule test finished.")
 
-    except FileNotFoundError as fnf:
-        logger.error(f"Test failed: Model file not found. {fnf}")
+    except (FileNotFoundError, RuntimeError) as model_err:
+        logger.error(f"Test failed: Could not load model. {model_err}")
+        logger.error("Please ensure 'yolov8n.pt' is available or provide a valid path.")
     except Exception as e:
-        logger.error(f"CoreModule test finished: {e}", exc_info=True)
+        logger.error(f"An unexpected error occurred during the test: {e}", exc_info=True)
+
 
     # Check if items were added to the dummy queue
     items_in_queue = 0

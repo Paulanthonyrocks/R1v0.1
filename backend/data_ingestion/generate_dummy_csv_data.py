@@ -54,4 +54,4 @@ def generate_dummy_csv_data(num_entries: int = 5000, filename: str = "traffic_da
     print(f"Generated {num_entries} dummy entries and saved to {filename}")
 
 if __name__ == "__main__":
-    generate_dummy_csv_data(num_entries=5000, filename="backend/data/traffic_data.csv")
+    generate_dummy_csv_data(num_entries=5000, filename="/home/user/R1v0.1/backend/data/traffic_data.csv")

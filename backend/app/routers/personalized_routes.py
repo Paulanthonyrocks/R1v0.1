@@ -9,7 +9,7 @@ from app.models.routing import (
     RouteHistoryEntry,
     UserRoutingProfile,
 )
-from app.dependencies import get_current_active_user, get_prs
+from app.dependency_injection import get_current_active_user, get_prs
 from app.services.personalized_routing_service import PersonalizedRoutingService
 
 router = APIRouter()
