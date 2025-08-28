@@ -45,13 +45,14 @@ class VideoWSManager:
                 f"Error during websocket disconnect for stream_id {stream_id}: {e}"
             )
 
-    async def broadcast_kpis(self, stream_id: str, kpis: Dict):
-        """Broadcasts KPIs to all connected clients for a given stream."""
+    async def broadcast(self, stream_id: str, message: Dict):
+        """Broadcasts a JSON message to all connected clients for a given stream."""
         if stream_id in self.active_connections:
-            message = {"type": "kpi_update", "data": kpis}
-            # Create a list of tasks to send messages concurrently
             tasks = [ws.send_json(message) for ws in self.active_connections[stream_id]]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"Error broadcasting message to websocket for stream_id {stream_id}: {result}", exc_info=False)
 
 
 # Singleton instance

@@ -99,9 +99,9 @@ class VideoProcessor:
         self._recording_start_time = None
         return True
 
-    async def get_frame_generator(self) -> Generator[bytes, None, None]:
+    async def get_frame_generator(self) -> Generator[Dict, None, None]:
         """
-        Generator that yields raw frames and broadcasts KPIs over WebSocket.
+        Generator that yields dictionaries of raw frames and KPIs.
         If recording is active, it also processes frames with overlays and saves them.
         """
         try:
@@ -114,9 +114,6 @@ class VideoProcessor:
                 ):
                     raw_frame_bytes = feed_entry["latest_frame_bytes"]
                     kpis = feed_entry["latest_metrics"]
-
-                    # Broadcast KPIs over WebSocket (for frontend display)
-                    await video_ws_manager.broadcast_kpis(self.stream_id, kpis)
 
                     if self._is_recording and self._video_writer:
                         # Decode raw frame bytes to numpy array for OpenCV processing
@@ -132,8 +129,6 @@ class VideoProcessor:
                                 frame = cv2.resize(frame, self._frame_size)
 
                             # Draw overlays (example: bounding boxes, vehicle IDs, speed)
-                            # This part needs actual implementation based on KPI structure
-                            # For now, a placeholder:
                             if "detections" in kpis:
                                 for det in kpis["detections"]:
                                     bbox = det["bbox"]  # Assuming [x1, y1, x2, y2]
@@ -142,17 +137,7 @@ class VideoProcessor:
                                     speed = det.get("speed", None)
                                     behavior = det.get("behavior", "unknown")
 
-                                    # Define colors based on behavior
-                                    color_map = {
-                                        "moving": (0, 255, 0),  # Green
-                                        "stopped": (0, 0, 255),  # Red
-                                        "speeding": (255, 0, 0),  # Blue
-                                        "accelerating": (255, 255, 0),  # Yellow
-                                        "decelerating": (0, 255, 255),  # Cyan
-                                        "lane_changing": (255, 0, 255),  # Magenta
-                                        "unknown": (128, 128, 128),  # Gray
-                                    }
-                                    color = color_map.get(behavior, (128, 128, 128)) # Default to gray
+                                    color = self.COLOR_MAP.get(behavior, (128, 128, 128)) # Default to gray
 
                                     x1, y1, x2, y2 = map(int, bbox)
                                     cv2.rectangle(
@@ -178,7 +163,7 @@ class VideoProcessor:
                                 f"Failed to decode raw frame for stream {self.stream_id} for recording."
                             )
 
-                    yield raw_frame_bytes  # Yield raw frame bytes for frontend
+                    yield {"frame": raw_frame_bytes, "kpis": kpis}
                 else:
                     logger.debug(
                         f"No new frame or metrics available for stream_id: {self.stream_id}. Waiting..."
