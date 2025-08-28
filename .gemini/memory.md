@@ -433,131 +433,6 @@ Addressed potential issues and refinements, including multiprocessing logging an
 
 - None at this time.
 
-## API Route Consolidation and Unused Global State Removal - (2025-07-22)
-
-**Summary:**
-
-Consolidated duplicate/overlapping API routes and removed unused global state to improve code clarity, maintainability, and prevent potential conflicts.
-
-**Key Activities:**
-
-- **Consolidated API Routes:**
-    - Moved `/v1/feeds` and `/v1/sample-feed-data` from `backend/app/api.py` to `backend/app/routers/feeds.py`.
-    - Created `backend/app/routers/traffic_data.py` and moved `/v1/traffic-data` (GET and POST) to it.
-    - Created `backend/app/routers/signals.py` and moved `/v1/signals` (GET and POST) to it.
-    - Created `backend/app/routers/auth/auth_test.py` and moved `/v1/test-auth` to it.
-    - Updated `backend/app/main.py` to reflect these new router imports and inclusions.
-    - The `backend/app/api.py` file is now empty and should be removed.
-- **Removed Unused Global State:**
-    - Removed `app.state.realtime_connections_count` and `app.state.realtime_connections_lock` from `backend/app/main.py` as they were unused.
-
-**Changes Made:**
-
-- **Files Created:**
-    - `backend/app/routers/traffic_data.py`
-    - `backend/app/routers/signals.py`
-    - `backend/app/routers/auth/auth_test.py`
-- **Files Modified:**
-    - `backend/app/routers/feeds.py`
-    - `backend/app/main.py`
-- **Files to be Removed:**
-    - `backend/app/api.py` (after manual confirmation/deletion)
-
-**Technical Decisions:**
-
-- Improved API design by ensuring each logical group of endpoints resides in its dedicated router file, preventing route conflicts and enhancing modularity.
-- Cleaned up the codebase by removing unused global state, reducing potential confusion and improving resource management.
-
-**Current Status:**
-
-- ✅ API routes consolidated and unused global state removed.
-- ⚠️ `backend/app/api.py` needs to be manually removed.
-
-**Next Steps:**
-
-- Manually remove `backend/app/api.py`.
-- Run backend tests to ensure no regressions were introduced by these changes.
-- Continue with other development tasks as per the overall project plan.
-
-**Open Questions/Challenges:**
-
-- None at this time.
-
-## Architectural Considerations & Best Practices - (2025-07-22)
-
-**Summary:**
-
-Addressed architectural considerations and best practices, focusing on improving code readability and preventing sensitive error detail leakage.
-
-**Key Activities:**
-
-- **Long Startup Function:**
-    - Refactored the `startup_event` function in `backend/app/main.py` into smaller, well-named internal functions (`_initialize_config`, `_initialize_firebase_admin_sdk`, `_initialize_database`, `_initialize_app_services`, `_initialize_prediction_scheduler`, `_start_feed_manager_processing`) to improve readability and maintainability.
-- **Error Detail Leakage:**
-    - Modified the `unhandled_exception_handler` in `backend/app/main.py` to prevent sensitive error details from being exposed to the client in a production environment. It now returns a generic error message along with a `trace_id` for server-side debugging.
-
-**Changes Made:**
-
-- **Files Modified:**
-    - `backend/app/main.py`
-
-**Technical Decisions:**
-
-- Improved code organization and readability by breaking down a monolithic startup function into modular components.
-- Enhanced security by preventing the leakage of internal exception details to clients, while still providing a mechanism for debugging via `trace_id`.
-
-**Current Status:**
-
-- ✅ Architectural considerations and best practices addressed.
-
-**Next Steps:**
-
-- Run backend tests to ensure no regressions were introduced by these changes.
-- Continue with other development tasks as per the overall project plan.
-
-**Open Questions/Challenges:**
-
-- None at this time.
-
-## Potential Issues and Refinements - (2025-07-22)
-
-**Summary:**
-
-Addressed potential issues and refinements, including multiprocessing logging and hardcoded values.
-
-**Key Activities:**
-
-- **Process-Specific Logging Configuration:**
-    - Removed the global `logging.shutdown()` call from `backend/app/core/processing_worker.py` to prevent interference with other processes' logging.
-- **Hardcoded Values in CoreModule:**
-    - Moved the `vehicle_type_map` from `backend/app/core/core_module.py` to `backend/configs/config.yaml`.
-    - Updated `backend/app/core/core_module.py` to load `vehicle_type_map` from the configuration.
-
-**Changes Made:**
-
-- **Files Modified:**
-    - `backend/app/core/processing_worker.py`
-    - `backend/app/core/core_module.py`
-    - `backend/configs/config.yaml`
-
-**Technical Decisions:**
-
-- Improved robustness of multiprocessing logging by removing a potentially problematic global shutdown call.
-- Enhanced flexibility and maintainability by externalizing hardcoded values into the configuration file.
-
-**Current Status:**
-
-- ✅ Potential issues and refinements addressed.
-
-**Next Steps:**
-
-- Run backend tests to ensure no regressions were introduced by these changes.
-- Continue with other development tasks as per the overall project plan.
-
-**Open Questions/Challenges:**
-
-- None at this time.
-
 ## Bug Fix: WebSocket Rapid Connect/Disconnect (Code 1006) - (2025-08-11)
 
 **Summary:**
@@ -637,6 +512,37 @@ Conducted an extensive debugging and refactoring effort to resolve critical stab
 **Next Steps:**
 
 - The system is now stable. Continue with other development tasks as per the project plan.
+
+**Open Questions/Challenges:**
+
+- None at this time.
+
+## Frontend WebSocket URL Fix - (2025-08-27)
+
+**Summary:**
+
+Corrected the WebSocket URL path in the frontend to match the backend's expected endpoint for video streams.
+
+**Key Activities:**
+
+- Modified `frontend/lib/hook/useRealtimeUpdates.ts` to change the WebSocket URL path from `/api/v1/ws` to `/api/v1/video/ws`.
+
+**Changes Made:**
+
+- **Files Modified:** `frontend/lib/hook/useRealtimeUpdates.ts`
+
+**Technical Decisions:**
+
+- Ensured the frontend connects to the correct WebSocket endpoint for video streams, resolving connection failures.
+
+**Current Status:**
+
+- ✅ WebSocket URL path corrected in frontend.
+
+**Next Steps:**
+
+- Verify the WebSocket connection in the frontend.
+- Address the 404 error for `/api/v1/analytics/nodes/congestion`.
 
 **Open Questions/Challenges:**
 

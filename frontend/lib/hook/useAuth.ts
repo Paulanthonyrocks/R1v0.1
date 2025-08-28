@@ -19,6 +19,7 @@ const useAuth = () => {
 
     // This listener handles user sign-in and sign-out
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log('[useAuth] onAuthStateChanged fired. User:', user ? user.uid : 'null');
       if (user) {
         setUser(user);
         const idTokenResult = await user.getIdTokenResult();
@@ -33,6 +34,7 @@ const useAuth = () => {
         setToken(tokenManager.getCurrentToken());
       } else {
         setUser(null);
+        console.log('[useAuth] User logged out.');
         setToken(null); // Clear token when user logs out
         setUserRole(UserRole.VIEWER);
         await tokenManager.updateToken(null); // Clear token in TokenManager
@@ -42,6 +44,7 @@ const useAuth = () => {
 
     // This listener handles token refreshes for an existing user
     const unsubscribeTokenRefresh = tokenManager.onTokenRefresh((newToken) => {
+      console.log('[useAuth] onTokenRefresh fired. New token available.');
       setToken(newToken);
     });
 

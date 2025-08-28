@@ -6,8 +6,6 @@ import logging.config
 from pathlib import Path
 
 
-
-
 from fastapi import FastAPI, HTTPException, WebSocket, Request
 from app.exceptions import (
     ResourceNotFound,
@@ -41,6 +39,9 @@ from app.routers import (
     incidents,
     personalized_routes,
     traffic_data,
+    weather,
+    events,
+    route_history,
 )
 from . import api
 
@@ -65,9 +66,6 @@ app = FastAPI(
     version="1.0.0",
     description="API for managing traffic analysis feeds, data, and real-time updates.",
 )
-
-
-
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
@@ -345,9 +343,6 @@ async def shutdown_event():
     logger.info("--- Backend shutdown complete ---")
 
 
-# Global scheduler instance
-
-
 # --- CORS Middleware ---
 origins = [
     "http://localhost",
@@ -370,7 +365,6 @@ app.state.realtime_connections_lock = asyncio.Lock()
 
 
 # --- Include API Routers ---
-# Now the imports within routers -> dependencies -> config should work without circular refs
 try:
     app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
     app.include_router(
@@ -383,14 +377,9 @@ try:
     app.include_router(
         personalized_routes.router, prefix="/api/v1/routes", tags=["personalized-routing"]
     )
-    app.include_router(api, prefix="/api/v1", tags=["API"])
-    # Register weather and events routers
-    from app.routers import weather, events
-
+    app.include_router(api.router, prefix="/api/v1", tags=["API"])
     app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
     app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
-    from app.routers import route_history
-
     app.include_router(
         route_history.router, prefix="/api/v1/route-history", tags=["RouteHistory"]
     )
@@ -450,14 +439,6 @@ async def websocket_endpoint_legacy(websocket: WebSocket):
  "This WebSocket endpoint is deprecated. Please use /api/v1/ws/{client_id}."
     )
     await websocket.close(code=1000)
-
-
-
-
-
-
-
-## Removed duplicate FastAPI app definition
 
 if __name__ == "__main__":
     import uvicorn

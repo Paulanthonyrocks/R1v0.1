@@ -55,7 +55,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         
         initializationRef.current = true;
         
-        const wsUrl = new URL('/api/v1/ws', WS_BASE_URL).toString();
+        const wsUrl = new URL('/api/v1/video/ws', WS_BASE_URL).toString();
         const client = new WebSocketClient(wsUrl);
 
         // Setup error handling

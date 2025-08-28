@@ -91,7 +91,8 @@ const DashboardPage: React.FC = () => {
         return;
       }
       try {
-        const res = await fetch('/api/v1/analytics/nodes/congestion', {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+        const res = await fetch(`${apiUrl}/api/v1/analytics/nodes/congestion`, {
           headers: {
             'Authorization': `Bearer ${currentToken}`,
           },

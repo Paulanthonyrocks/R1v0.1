@@ -1,5 +1,5 @@
 project_root_dir: /home/user/R1v0.1
-fps: 30
+fps: 3
 speed_limit: 60
 firebase_admin:
   service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
@@ -305,7 +305,7 @@ video_output:
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
-  fps: 5
+  fps: 3
   frame_resolution:
   - 640
   - 480

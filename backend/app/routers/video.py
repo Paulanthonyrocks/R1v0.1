@@ -41,14 +41,8 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         logger.info(f"Video file found at: {video_path.resolve()}")
 
     try:
-        config = get_current_config()
-        processed_video_dir = config.get("video_output", {}).get("output_directory")
-        if not processed_video_dir:
-            logger.error("Processed video output directory not configured.")
-            raise OperationFailed(detail="Processed video output directory not configured.")
-
         try:
-            video_manager = VideoManager.get_instance(processed_video_dir)
+            video_manager = VideoManager.get_instance()
         except Exception as e:
             logger.error(f"VideoManager error: {e}")
             raise OperationFailed(detail=f"VideoManager error: {e}")
@@ -100,14 +94,8 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         raise ResourceNotFound(detail="Sample video path not configured.")
     video_path = Path(video_path_str)
     try:
-        config = get_current_config()
-        processed_video_dir = config.get("video_output", {}).get("output_directory")
-        if not processed_video_dir:
-            logger.error("Processed video output directory not configured.")
-            raise OperationFailed(detail="Processed video output directory not configured.")
-
         try:
-            video_manager = VideoManager.get_instance(processed_video_dir)
+            video_manager = VideoManager.get_instance()
         except Exception as e:
             logger.error(f"VideoManager error: {e}")
             raise OperationFailed(detail=f"VideoManager error: {e}")
@@ -157,13 +145,7 @@ async def video_ws_endpoint(
     # Keep the connection open for sending messages. Receiving is optional unless needed for control messages.
     try:
         # Get the VideoManager instance
-        config = get_current_config()
-        processed_video_dir = config.get("video_output", {}).get("output_directory")
-        if not processed_video_dir:
-            logger.error("Processed video output directory not configured for WebSocket.")
-            raise OperationFailed(detail="Processed video output directory not configured.")
-
-        video_manager = VideoManager.get_instance(processed_video_dir)
+        video_manager = VideoManager.get_instance()
         processor = video_manager.get_processor(stream_id) # Use stream_id as video_path
 
         # Loop to send frames and metrics

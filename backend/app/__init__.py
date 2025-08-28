@@ -2,7 +2,9 @@ from fastapi import APIRouter
 
 from .routers import (
     alerts,
+    analysis,
     auth,
+    config as config_router,
     events,
     feeds,
     incidents,
@@ -12,6 +14,7 @@ from .routers import (
     route_history,
     routes,
     token,
+    traffic_data,
     video,
     weather,
 )
@@ -36,4 +39,8 @@ api.include_router(
 )
 api.include_router(incidents.router, prefix="/incidents", tags=["incidents"])
 api.include_router(logs.router, prefix="/logs", tags=["logs"])
+api.include_router(analysis.router, prefix="/analytics", tags=["Analytics"])
+api.include_router(config_router.router, prefix="/config", tags=["Configuration"])
+api.include_router(video.router, prefix="/video", tags=["Video"])
+api.include_router(traffic_data.router, prefix="/traffic-data", tags=["TrafficData"])
 
