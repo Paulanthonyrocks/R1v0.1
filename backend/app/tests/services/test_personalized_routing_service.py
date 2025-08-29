@@ -42,6 +42,8 @@ class TestPersonalizedRoutingService(unittest.IsolatedAsyncioTestCase):
         class AsyncContextManagerMock:
             def __init__(self, session_mock):
                 self.session_mock = session_mock
+                # Mock the execute method to return a mock result object
+                self.session_mock.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
 
             async def __aenter__(self):
                 return self.session_mock
@@ -79,97 +81,17 @@ class TestPersonalizedRoutingService(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         pass  # No specific cleanup needed for this mock-based setup
 
-    async def test_get_most_frequent_destination_success(self):
-        user_id = "user1"
-        sample_location_1 = {"latitude": 34.0, "longitude": -118.0, "name": "Work"}
-        sample_location_2 = {"latitude": 30.0, "longitude": 40.0, "name": "Home"}
+    
 
-        async with self.mock_db_manager.get_session() as session:
-            await self._add_route_history_entry(
-                session, user_id=user_id, end_location=sample_location_1
-            )
-            await self._add_route_history_entry(
-                session, user_id=user_id, end_location=sample_location_1
-            )
-            await self._add_route_history_entry(
-                session, user_id=user_id, end_location=sample_location_2
-            )
+    
 
-        result = await self.service._get_most_frequent_destination(user_id, limit=3)
-        self.assertEqual(result, sample_location_1)
+    
 
-    async def test_get_most_frequent_destination_single_entry(self):
-        user_id = "user_single"
-        sample_location_1 = {"latitude": 10.0, "longitude": 20.0}
-        async with self.mock_db_manager.get_session() as session:
-            await self._add_route_history_entry(
-                session, user_id=user_id, end_location=sample_location_1
-            )
+    
 
-        result = await self.service._get_most_frequent_destination(user_id, limit=1)
-        self.assertEqual(result, sample_location_1)
+    
 
-    async def test_get_most_frequent_destination_no_history(self):
-        user_id = "user_no_history"
-        result = await self.service._get_most_frequent_destination(user_id)
-        self.assertIsNone(result)
-
-    async def test_get_most_frequent_destination_no_single_frequent(self):
-        user_id = "user_no_frequent"
-        async with self.mock_db_manager.get_session() as session:
-            await self._add_route_history_entry(
-                session,
-                user_id=user_id,
-                end_location={"latitude": 10.0, "longitude": 20.0},
-            )
-            await self._add_route_history_entry(
-                session,
-                user_id=user_id,
-                end_location={"latitude": 30.0, "longitude": 40.0},
-            )
-
-        result = await self.service._get_most_frequent_destination(user_id)
-        self.assertIsNone(result)
-
-    @patch("app.services.personalized_routing_service.logger")
-    async def test_proactively_suggest_route_suggestion_generated(self, mock_logger):
-        user_id = "user_proactive_test"
-        common_destination = {"latitude": 12.34, "longitude": 56.78}
-
-        # Mock _get_most_frequent_destination to return our sample destination
-        with patch.object(
-            self.service,
-            "_get_most_frequent_destination",
-            return_value=common_destination,
-        ) as mock_get_freq_dest:
-            suggestion = await self.service.proactively_suggest_route(user_id)
-
-            mock_get_freq_dest.assert_called_once_with(user_id)
-            self.assertIsNotNone(suggestion)
-            self.assertIn(str(common_destination["latitude"]), suggestion)
-            self.assertIn(str(common_destination["longitude"]), suggestion)
-            self.assertIn("Proactive suggestion:", suggestion)
-
-            # Check logger call
-            mock_logger.info.assert_any_call(
-                f"Proactive suggestion for user {user_id}: {suggestion}"
-            )
-
-    @patch("app.services.personalized_routing_service.logger")
-    async def test_proactively_suggest_route_no_common_destination(self, mock_logger):
-        user_id = "user_proactive_none"
-
-        # Mock _get_most_frequent_destination to return None
-        with patch.object(
-            self.service, "_get_most_frequent_destination", return_value=None
-        ) as mock_get_freq_dest:
-            suggestion = await self.service.proactively_suggest_route(user_id)
-
-            mock_get_freq_dest.assert_called_once_with(user_id)
-            self.assertIsNone(suggestion)
-            mock_logger.info.assert_any_call(
-                f"No common destination found for user {user_id} to make a proactive suggestion."
-            )
+    
 
 
 # Wrapper for async tests
@@ -220,9 +142,9 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
         # Mock the DatabaseManager to use our test engine and session factory
         self.mock_db_manager = MagicMock(spec=DatabaseManager)
         self.mock_db_manager.async_engine = self.engine
-        self.mock_db_manager.get_session = AsyncMock(
+        self.mock_db_manager.get_session = MagicMock(
             side_effect=self._get_test_session
-        )  # Use a side_effect to return a real session
+        )
 
         # Ensure tables are created in the in-memory database
         async with self.engine.begin() as conn:
@@ -262,26 +184,6 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.drop_all)
         await self.engine.dispose()
 
-    async def _add_suggestion_log_entry(
-        self, session, **kwargs
-    ):  # session is SQLAlchemy Session
-        entry_data = {
-            "id": str(uuid.uuid4()),
-            "suggestion_id": str(uuid.uuid4()),  # Default, can be overridden by kwargs
-            "user_id": USER_ID_DB_TEST_1,
-            "timestamp": datetime.utcnow(),
-            "suggestion_details": {
-                "type": "test_suggestion",
-                "destination_name": "Test Dest",
-            },
-            "interaction_status": "suggested",
-            **kwargs,
-        }
-        entry = ProactiveSuggestionFeedbackLog(**entry_data)
-        session.add(entry)
-        await session.commit()  # Use await for async session commit
-        return entry
-
     async def _add_route_history_entry(
         self, session, **kwargs
     ):  # session is SQLAlchemy Session
@@ -303,6 +205,28 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
         session.add(entry)
         await session.commit()
         return entry
+
+    async def _add_suggestion_log_entry(
+        self, session, **kwargs
+    ):  # session is SQLAlchemy Session
+        entry_data = {
+            "id": str(uuid.uuid4()),
+            "suggestion_id": str(uuid.uuid4()),  # Default, can be overridden by kwargs
+            "user_id": USER_ID_DB_TEST_1,
+            "timestamp": datetime.utcnow(),
+            "suggestion_details": {
+                "type": "test_suggestion",
+                "destination_name": "Test Dest",
+            },
+            "interaction_status": "suggested",
+            **kwargs,
+        }
+        entry = ProactiveSuggestionFeedbackLog(**entry_data)
+        session.add(entry)
+        await session.commit()  # Use await for async session commit
+        return entry
+
+    
 
     # 1. Test ProactiveSuggestionFeedbackLog model interaction
     async def test_proactive_suggestion_feedback_log_model(self):
@@ -516,6 +440,98 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(
                 log_entry_after_failed_update.user_rating
             )  # Still no rating
+
+    async def test_get_most_frequent_destination_success(self):
+        user_id = "user1"
+        sample_location_1 = {"latitude": 34.0, "longitude": -118.0, "name": "Work"}
+        sample_location_2 = {"latitude": 30.0, "longitude": 40.0, "name": "Home"}
+
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(
+                session, user_id=user_id, end_location=sample_location_1
+            )
+            await self._add_route_history_entry(
+                session, user_id=user_id, end_location=sample_location_1
+            )
+            await self._add_route_history_entry(
+                session, user_id=user_id, end_location=sample_location_2
+            )
+
+        result = await self.service._get_most_frequent_destination(user_id, limit=3)
+        self.assertEqual(result, sample_location_1)
+
+    async def test_get_most_frequent_destination_single_entry(self):
+        user_id = "user_single"
+        sample_location_1 = {"latitude": 10.0, "longitude": 20.0}
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(
+                session, user_id=user_id, end_location=sample_location_1
+            )
+
+        result = await self.service._get_most_frequent_destination(user_id, limit=1)
+        self.assertEqual(result, sample_location_1)
+
+    async def test_get_most_frequent_destination_no_history(self):
+        user_id = "user_no_history"
+        result = await self.service._get_most_frequent_destination(user_id)
+        self.assertIsNone(result)
+
+    async def test_get_most_frequent_destination_no_single_frequent(self):
+        user_id = "user_no_frequent"
+        async with self.mock_db_manager.get_session() as session:
+            await self._add_route_history_entry(
+                session,
+                user_id=user_id,
+                end_location={"latitude": 10.0, "longitude": 20.0},
+            )
+            await self._add_route_history_entry(
+                session,
+                user_id=user_id,
+                end_location={"latitude": 30.0, "longitude": 40.0},
+            )
+
+        result = await self.service._get_most_frequent_destination(user_id)
+        self.assertIsNone(result)
+
+    @patch("app.services.personalized_routing_service.logger")
+    async def test_proactively_suggest_route_suggestion_generated(self, mock_logger):
+        user_id = "user_proactive_test"
+        common_destination = {"latitude": 12.34, "longitude": 56.78}
+
+        # Mock _get_most_frequent_destination to return our sample destination
+        with patch.object(
+            self.service,
+            "_get_most_frequent_destination",
+            return_value=common_destination,
+        ) as mock_get_freq_dest:
+            suggestion = await self.service.proactively_suggest_route(user_id)
+
+            mock_get_freq_dest.assert_called_once_with(user_id)
+            self.assertIsNotNone(suggestion)
+            self.assertIn(str(common_destination["latitude"]), suggestion)
+            self.assertIn(str(common_destination["longitude"]), suggestion)
+            self.assertIn("Proactive suggestion:", suggestion)
+
+            # Check logger call
+            mock_logger.info.assert_any_call(
+                f"Proactive suggestion for user {user_id}: {suggestion}"
+            )
+
+    @patch("app.services.personalized_routing_service.logger")
+    async def test_proactively_suggest_route_no_common_destination(self, mock_logger):
+        user_id = "user_proactive_none"
+
+        # Mock _get_most_frequent_destination to return None
+        with patch.object(
+            self.service, "_get_most_frequent_destination", return_value=None
+        ) as mock_get_freq_dest:
+            suggestion = await self.service.proactively_suggest_route(user_id)
+
+            mock_get_freq_dest.assert_called_once_with(user_id)
+            self.assertIsNone(suggestion)
+            mock_logger.info.assert_any_call(
+                f"No common destination found for user {user_id} to make a proactive suggestion."
+            )
 
     # 6. Test record_route_history updates suggestion log
     async def test_record_route_history_updates_suggestion_log(self):

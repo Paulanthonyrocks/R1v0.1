@@ -1,7 +1,7 @@
 import pytest
 from fastapi import WebSocket
 from unittest.mock import MagicMock
-from app.dependencies import get_token_from_query
+from app.dependency_injection import get_token_from_query
 
 
 @pytest.mark.asyncio

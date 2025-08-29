@@ -460,31 +460,27 @@ def process_video(
 
         max_queue_size = config["video_input"].get("max_queue_size", 1000)
 
-        # Main processing loop would go here
         logger.info(f"[{feed_id}] Starting main processing loop...")
-        
-        # Inner try block for the main processing loop
         try:
             while not stop_event.is_set():
                 loop_start_time = time.time()
 
-                # 1. Read Frame
                 read_start_time = time.time()
                 current_frame_index, frame = _read_frame(feed_id, reader, stop_event, logger)
                 timer.log_time("read", time.time() - read_start_time)
 
                 if frame is None:
+                    logger.debug(f"[{feed_id}] _read_frame returned None for frame {current_frame_index}. Stop event set: {stop_event.is_set()}. Waiting...")
                     if stop_event.is_set():
                         logger.info(f"[{feed_id}] Stop event set, exiting loop after read attempt.")
                         break
-                    logger.debug(f"[{feed_id}] _read_frame returned None, waiting...")
                     time.sleep(0.01)  # Small sleep to prevent busy-waiting
                     continue
 
                 logger.debug(f"[{feed_id}] Successfully read frame {current_frame_index}. Shape: {frame.shape}")
 
                 if not processing_enabled:
-                    # If processing is disabled, just put the raw frame on the queue
+                    logger.debug(f"[{feed_id}] Processing disabled. Sending raw frame {current_frame_index}.")
                     _handle_output_queue(
                         feed_id, frame_queue, current_frame_index, frame,
                         {}, {}, timer.timings, logger
@@ -492,13 +488,10 @@ def process_video(
                     time.sleep(1 / config.get("fps", 30)) # Approximate frame rate
                     continue
 
-                # Frame Skipping Logic (based on base_frame_skip_interval)
-                # The dynamic skipping adjusts the interval used here
                 if current_frame_index % dynamic_skip_interval != 0:
                     logger.debug(f"[{feed_id}] Skipping frame {current_frame_index} based on dynamic interval {dynamic_skip_interval}")
                     continue
 
-                # 2. Preprocess Frame
                 performance_config = config.get("performance", {})
                 processing_frame = _preprocess_frame_for_detection(feed_id, frame, current_frame_index, target_resolution, logger, frame_queue, max_queue_size, dynamic_skip_interval, base_frame_skip_interval, performance_config)
                 if processing_frame is None:
@@ -506,7 +499,6 @@ def process_video(
                     continue
                 logger.debug(f"[{feed_id}] Successfully preprocessed frame {current_frame_index}. Shape: {processing_frame.shape}")
 
-                # 3. Detect and Track
                 detect_start_time = time.time()
                 logger.debug(f"[{feed_id}] Calling detect_and_track for frame {current_frame_index}...")
                 tracked_vehicles_raw, core_error_occurred = _process_detection_and_tracking(
@@ -526,7 +518,6 @@ def process_video(
                     consecutive_core_errors = 0
                 logger.debug(f"[{feed_id}] detect_and_track completed for frame {current_frame_index}. Found {len(tracked_vehicles_raw)} vehicles.")
 
-                # 4. Update Metrics and Visualize
                 vis_start_time = time.time()
                 combined_frame, metrics = _update_metrics_and_visualize(
                     feed_id, processing_frame, tracked_vehicles_raw, traffic_monitor,
@@ -534,7 +525,6 @@ def process_video(
                 )
                 timer.log_time("visualize", time.time() - vis_start_time)
 
-                # 5. Handle Output Queue
                 put_start_time = time.time()
                 _handle_output_queue(
                     feed_id, frame_queue, current_frame_index, combined_frame,
@@ -543,7 +533,6 @@ def process_video(
                 timer.log_time("queue_put", time.time() - put_start_time)
 
                 if video_writer and combined_frame is not None:
-                    # Ensure the frame is 3-channel BGR before writing
                     if len(combined_frame.shape) == 3 and combined_frame.shape[2] == 4:
                         combined_frame_bgr = cv2.cvtColor(combined_frame, cv2.COLOR_BGRA2BGR)
                     else:
@@ -553,30 +542,24 @@ def process_video(
                 frame_count_processed += 1
                 timer.log_time("loop_total", time.time() - loop_start_time)
 
-                # 6. Log Periodic Stats
                 last_log_time = _log_periodic_stats(
                     feed_id, timer, frame_queue, current_frame_index,
                     dynamic_skip_interval, consecutive_core_errors, last_log_time, logger
                 )
 
-                # 7. Explicit Garbage Collection
                 if frame_count_processed % 100 == 0:
                     gc.collect()
                     logger.debug(f"[{feed_id}] Explicit garbage collection run at frame {current_frame_index}")
 
-            # End of the processing loop (exit while loop)
+            logger.info(f"[{feed_id}] Exiting main processing loop.")
 
-        # Exception handling specifically for the processing loop (inner try)
         except KeyboardInterrupt:
             logger.warning(f"[{feed_id}] KeyboardInterrupt received. Stopping worker.")
             stop_event.set()
         except RuntimeError:
-            # Catch runtime errors (like FrameReader init failure)
-            # Error message is already logged where the exception is raised
             if not stop_event.is_set():
-                stop_event.set() # Ensure stop is signaled
+                stop_event.set()
         except ImportError as e:
-            # Catch import errors during setup (CoreModule)
             error_msg = f"[{feed_id}] FATAL Import Error: {e}. Worker cannot run."
             logger.critical(error_msg, exc_info=True)
             if error_queue:
@@ -584,9 +567,8 @@ def process_video(
             if not stop_event.is_set():
                 stop_event.set()
         except Exception as e:
-            # Catch any other unexpected exception during the main loop
             error_msg = f"[{feed_id}] FATAL Unhandled Error in process loop: {e}"
-            logger.critical(error_msg, exc_info=True) # Log as critical
+            logger.critical(error_msg, exc_info=True)
             if error_queue:
                 error_queue.put(error_msg)
             if not stop_event.is_set():

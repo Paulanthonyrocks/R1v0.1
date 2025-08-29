@@ -43,7 +43,7 @@ from app.routers import (
     events,
     route_history,
 )
-from . import api
+from app.routers import routes
 
 # Initializers/Getters - Import config initializer now
 from .config import initialize_config  # Import config init/getter
@@ -330,8 +330,10 @@ async def shutdown_event():
         await app.state.connection_manager.shutdown()
         logger.info("WebSocket ConnectionManager shut down.")
 
-    fm = feed_manager_instance
-    await fm.shutdown()
+    from app.services import get_feed_manager
+    fm = get_feed_manager()
+    if fm:
+        await fm.shutdown()
     if app.state.file_watcher:
         app.state.file_watcher.stop()
     logging.getLogger("app.utils.database").info("DatabaseManager close called.")
@@ -377,7 +379,7 @@ try:
     app.include_router(
         personalized_routes.router, prefix="/api/v1/routes", tags=["personalized-routing"]
     )
-    app.include_router(api.router, prefix="/api/v1", tags=["API"])
+    app.include_router(routes.router, prefix="/api/v1", tags=["API"])
     app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
     app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
     app.include_router(

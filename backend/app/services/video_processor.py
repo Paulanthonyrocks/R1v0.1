@@ -169,7 +169,7 @@ class VideoProcessor:
                         f"No new frame or metrics available for stream_id: {self.stream_id}. Waiting..."
                     )
 
-                await asyncio.sleep(0.01)
+                # await asyncio.sleep(0.01)
 
         except Exception as e:
             logger.error(

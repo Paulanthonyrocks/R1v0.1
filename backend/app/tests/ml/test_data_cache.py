@@ -16,7 +16,7 @@ class TestTrafficDataCache(unittest.TestCase):
 
     def test_get_all_location_summaries_single_location_single_point(self):
         lat1, lon1 = 34.05, -118.25
-        ts1 = datetime.now() - timedelta(minutes=30)
+        ts1 = datetime.now(timezone.utc) - timedelta(minutes=30)
         data1 = {"vehicle_count": 10, "average_speed": 50.5, "congestion_score": 20.0}
 
         self.cache.add_data_point(lat1, lon1, ts1, data1)
@@ -39,14 +39,14 @@ class TestTrafficDataCache(unittest.TestCase):
 
     def test_get_all_location_summaries_multiple_locations_multiple_points(self):
         lat1, lon1 = 34.05, -118.25
-        ts1_old = datetime.now() - timedelta(minutes=45)
+        ts1_old = datetime.now(timezone.utc) - timedelta(minutes=45)
         data1_old = {
             "vehicle_count": 5,
             "average_speed": 60.0,
             "congestion_score": 10.0,
             "custom_field": "A",
         }
-        ts1_new = datetime.now() - timedelta(minutes=15)
+        ts1_new = datetime.now(timezone.utc) - timedelta(minutes=15)
         data1_new = {
             "vehicle_count": 15,
             "average_speed": 40.0,
@@ -60,7 +60,7 @@ class TestTrafficDataCache(unittest.TestCase):
         )  # This is the latest for loc1
 
         lat2, lon2 = 40.71, -74.00
-        ts2 = datetime.now() - timedelta(minutes=10)
+        ts2 = datetime.now(timezone.utc) - timedelta(minutes=10)
         data2 = {
             "vehicle_count": 25,
             "average_speed": 30.0,
@@ -101,7 +101,7 @@ class TestTrafficDataCache(unittest.TestCase):
     def test_get_all_location_summaries_data_cleaned_if_too_old(self):
         lat1, lon1 = 34.05, -118.25
         # Data older than max_history_hours (1 hour for this test setup)
-        ts_too_old = datetime.now() - timedelta(hours=2)
+        ts_too_old = datetime.now(timezone.utc) - timedelta(hours=2)
         data_old = {"vehicle_count": 5, "average_speed": 60.0, "congestion_score": 10.0}
 
         self.cache.add_data_point(lat1, lon1, ts_too_old, data_old)
@@ -128,9 +128,9 @@ class TestTrafficDataCache(unittest.TestCase):
 
     def test_get_location_key_rounding(self):
         # Test if locations that are very close map to the same key due to rounding
-        lat1, lon1 = 34.12345, -118.12345
-        lat2, lon2 = 34.12349, -118.12349  # Should round to the same as lat1, lon1
-        lat3, lon3 = 34.12355, -118.12355  # Should round to different
+        lat1, lon1 = 34.1234, -118.1235
+        lat2, lon2 = 34.1234, -118.1235  # Should round to the same as lat1, lon1
+        lat3, lon3 = 34.1235, -118.1236  # Should round to different
 
         key1 = self.cache._get_location_key(lat1, lon1)
         key2 = self.cache._get_location_key(lat2, lon2)

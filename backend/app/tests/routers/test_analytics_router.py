@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 # This might need adjustment based on your project structure (e.g., from app.main import app)
 from app.main import app
 from app.services.analytics_service import AnalyticsService
-from app.dependencies import get_analytics_service, get_current_active_user
+from app.dependency_injection import get_analytics_service, get_current_active_user
 
 
 # Define a dummy user for authentication override

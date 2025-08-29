@@ -207,6 +207,11 @@ class RefreshFeedData(BaseModel):
     feed_id: str = Field(..., description="ID of the feed to refresh.")
 
 
+class VideoFrameData(BaseModel):
+    feed_id: str = Field(..., description="ID of the feed the frame belongs to.")
+    frame: str = Field(..., description="Base64 encoded video frame.")
+
+
 # --- WebSocket Message Wrapper ---
 class WebSocketMessageTypeEnum(str, enum.Enum):
     METRICS_UPDATE = "metrics_update"
@@ -267,6 +272,7 @@ class WebSocketMessage(BaseModel):
             SubscribeData,
             UnsubscribeData,
             RefreshFeedData,
+            VideoFrameData, # New: Add VideoFrameData to the Union
         ]
     ] = None
     client_id: Optional[str] = Field(

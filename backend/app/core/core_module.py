@@ -40,6 +40,7 @@ class CoreModule:
         gemini_api_key: Optional[str] = None,
     ):
         self.feed_id = feed_id
+        self.video_path = Path(config["project_root_dir"]) / feed_id # Store absolute path to video
         self.model_path = Path(config["project_root_dir"]) / model_path
         self.config = config
         self.fps = fps
@@ -1257,6 +1258,22 @@ class CoreModule:
     def _get_vehicle_type(self, class_id: int) -> str:
         return self.vehicle_type_map.get(class_id, "unknown")
 
+    def _serialize_track_data(self, track: Dict) -> Dict:
+        serializable_track = track.copy()
+        if "kalman_filter" in serializable_track and serializable_track["kalman_filter"] is not None:
+            kf = serializable_track["kalman_filter"]
+            serializable_track["kalman_filter"] = {
+                "x": kf.x.tolist(),  # State vector
+                "P": kf.P.tolist(),  # Covariance matrix
+                # Add other relevant KF attributes if needed, e.g., "Q", "R"
+            }
+        # Convert deque objects to lists for serialization
+        if "lane_history" in serializable_track:
+            serializable_track["lane_history"] = list(serializable_track["lane_history"])
+        if "speed_history" in serializable_track:
+            serializable_track["speed_history"] = list(serializable_track["speed_history"])
+        return serializable_track
+
     def cleanup(self):
         logger.info(
             f"CoreModule cleanup initiated for {self.feed_id}. Active tracks: {len(self.vehicle_data)}"
@@ -1300,7 +1317,15 @@ class CoreModule:
         logger.info(f"CoreModule cleanup finished for {self.feed_id}.")
 
     def get_frame_generator(self):
-        video_capture = cv2.VideoCapture(self.feed_id)
+        # Check if video_capture is already open
+        if hasattr(self, '_video_capture') and self._video_capture.isOpened():
+            video_capture = self._video_capture
+            video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0) # Reset to beginning if already open
+            logger.info(f"Reusing existing video capture for {self.feed_id}")
+        else:
+            video_capture = cv2.VideoCapture(str(self.video_path))
+            self._video_capture = video_capture # Store it for reuse
+
         if not video_capture.isOpened():
             logger.error(f"Error opening video file: {self.feed_id}")
             return
@@ -1321,13 +1346,17 @@ class CoreModule:
             
             frame_bytes = buffer.tobytes()
 
+            # Prepare KPIs for yielding
+            kpis_to_yield = {
+                "tracked_vehicles": len(tracked_vehicles),
+                "vehicles": [self._serialize_track_data(v) for v in tracked_vehicles.values()]
+            }
+            logger.debug(f"Yielding KPIs: {kpis_to_yield}") # Added debug log
+
             # Yield the data
             yield {
                 "frame": frame_bytes,
-                "kpis": {
-                    "tracked_vehicles": len(tracked_vehicles),
-                    "vehicles": [v for v in tracked_vehicles.values()]
-                }
+                "kpis": kpis_to_yield
             }
 
             frame_index += 1

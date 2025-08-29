@@ -449,22 +449,10 @@ roi_processing:
   enabled: true
   crop_rect:
   - 0
-  - 525
-  - 1920
-  - 1080
-  polygon_points:
-  - - 0
-    - 480
-  - - 640
-    - 480
-  - - 640
-    - 324
-  - - 480
-    - 233
-  - - 160
-    - 233
-  - - 0
-    - 324
+  - 233
+  - 640
+  - 480
+  polygon_points: null
 pavement_analysis:
   camera_calibration:
     calibration_file: backend/calibration_params.npz

@@ -105,7 +105,6 @@ def test_processed_video_storage_enabled(mock_fourcc, mock_video_writer, mock_qu
         vis_options=set(),
         reduce_frame_rate_event=reduce_fps_e,
         global_fps=global_fps_v,
-        global_skip_factor=global_skip_factor_v,
         db_queue=db_q,
         error_queue=error_q,
         feed_config_info={"latitude": 0.0, "longitude": 0.0} # Dummy config info
@@ -157,7 +156,6 @@ def test_processed_video_storage_disabled(mock_fourcc, mock_video_writer, mock_q
         vis_options=set(),
         reduce_frame_rate_event=reduce_fps_e,
         global_fps=global_fps_v,
-        global_skip_factor=global_skip_factor_v,
         db_queue=db_q,
         error_queue=error_q,
         feed_config_info={"latitude": 0.0, "longitude": 0.0} # Dummy config info

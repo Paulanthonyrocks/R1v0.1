@@ -10,7 +10,7 @@ import uuid  # For generating unique IDs
 from sqlalchemy.orm import (
     sessionmaker as sqlalchemy_sessionmaker,
 )  # Alias to avoid conflict
-from app.services.analytics_service import PredictionLogBase, PredictionLogModel
+from app.models.analytics import PredictionLogBase, PredictionLogModel
 from app.models.websocket import (
     UserSpecificConditionAlert,
 )  # Updated for testing send_user_specific_alert

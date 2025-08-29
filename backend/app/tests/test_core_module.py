@@ -42,6 +42,7 @@ class TestCoreModule(unittest.IsolatedAsyncioTestCase):
                 "lane_change_buffer": 20,
                 "ewma_alpha": 0.2,
             },
+            "project_root_dir": "/home/user/R1v0.1/",
         }
         self.dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
         self.dummy_db_queue = MagicMock()

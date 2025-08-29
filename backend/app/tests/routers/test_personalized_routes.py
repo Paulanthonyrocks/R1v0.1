@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from app.main import app  # FastAPI app instance
 from app.services.personalized_routing_service import PersonalizedRoutingService
-from app.dependencies import get_personalized_routing_service, get_current_active_user
+from app.dependency_injection import get_personalized_routing_service, get_current_active_user
 # Import the request model if needed for constructing payloads explicitly,
 # or for response model validation if you add such tests.
 # from app.routers.personalized_routes import SuggestionFeedbackRequest
@@ -40,7 +40,7 @@ def client_fixture(mock_personalized_routing_service_fixture: MagicMock):
 
 
 # API Path
-FEEDBACK_ENDPOINT_URL = "/api/routes/suggestions/feedback"
+FEEDBACK_ENDPOINT_URL = "/api/v1/routes/suggestions/feedback"
 
 
 def test_record_suggestion_feedback_success(

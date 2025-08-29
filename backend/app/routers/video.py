@@ -7,7 +7,7 @@ from pathlib import Path
 from app.utils.auth_utils import verify_firebase_token
 import logging
 from app.config import get_current_config
-from app.dependency_injection import get_current_active_user, get_token_from_query
+from app.dependency_injection import get_current_active_user, get_token_from_query, get_feed_manager
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
 from app.services.video_ws_manager import video_ws_manager
@@ -52,14 +52,14 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
             raise OperationFailed(detail=f"VideoManager error: {e}")
         try:
             feed_manager = get_feed_manager()
-            processor = video_manager.get_processor(str(video_path), feed_manager)
+            processor = video_manager.get_processor(str(video_path))
         except Exception as e:
             logger.error(f"Processor error: {e}")
             raise OperationFailed(detail=f"Processor error: {e}")
 
         async def generate_frames():
             try:
-                async for data in processor.get_frame_generator():
+                for data in await asyncio.to_thread(processor.get_frame_generator):
                     frame_bytes = data["frame"]
                     # Yield only image frames for performance and compatibility
                     yield (
@@ -106,7 +106,7 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
             raise OperationFailed(detail=f"VideoManager error: {e}")
         try:
             feed_manager = get_feed_manager()
-            processor = video_manager.get_processor(str(video_path), feed_manager)
+            processor = video_manager.get_processor(str(video_path))
         except Exception as e:
             logger.error(f"Processor error: {e}")
             raise OperationFailed(detail=f"Processor error: {e}")
@@ -148,18 +148,35 @@ async def video_ws_endpoint(
         try:
             video_manager = VideoManager.get_instance()
             config = get_current_config()
-            feed_manager = get_feed_manager()
-            processor = video_manager.get_processor(stream_id, feed_manager)
-            async for data in processor.get_frame_generator():
+            
+            # Try to get a list of sample videos first
+            sample_videos_list = config.get("video_input", {}).get("sample_videos", [])
+            
+            video_path_str = None
+            if sample_videos_list:
+                # If a list exists, use the first one for now
+                video_path_str = sample_videos_list[0]
+            else:
+                # Fallback to the singular sample_video if the list doesn't exist
+                video_path_str = config.get("video_input", {}).get("sample_video")
+
+            if not video_path_str:
+                logger.error("Sample video path not configured for WebSocket stream.")
+                # Close the WebSocket connection with an error
+                await websocket.close(code=4000, reason="Video source not configured")
+                return
+
+            processor = video_manager.get_processor(video_path_str)
+            for data in await asyncio.to_thread(processor.get_frame_generator):
                 frame_bytes = data["frame"]
                 kpis = data["kpis"]
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {"type": "video_frame", "frame": base64.b64encode(frame_bytes).decode('utf-8')},
+                    {{"type": "video_frame", "data": {{"frame": base64.b64encode(frame_bytes).decode('utf-8')}}}},
                 )
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {"type": "metrics_update", "metrics": kpis},
+                    {{"type": "metrics_update", "data": {{"metrics": kpis}}}},
                 )
                 await asyncio.sleep(0.03)
         except WebSocketDisconnect:
@@ -186,7 +203,7 @@ async def video_ws_endpoint(
                 ]
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {"type": "initial_feed_statuses", "feeds": feeds},
+                    {{"type": "initial_feed_statuses", "data": {{"feeds": feeds}}}},
                 )
     except WebSocketDisconnect:
         logger.info(f"WebSocket receive loop disconnected for stream_id: {stream_id}")

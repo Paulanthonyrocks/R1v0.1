@@ -763,6 +763,7 @@ class FeedManager:
                     )
                     # Base64 encode the frame for WebSocket transport
                     frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
+                    logger.info(f"Broadcasting VIDEO_FRAME for feed {feed_id}. Frame size: {len(frame_b64)} bytes.")
                     await self._broadcast(
                         WebSocketMessageTypeEnum.VIDEO_FRAME,
                         {"feed_id": feed_id, "frame": frame_b64},

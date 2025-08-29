@@ -4,8 +4,8 @@ from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
 from app.main import app  # Assuming main app instance is here
-from app.dependencies import get_db, get_current_active_user
-from app.services import get_connection_manager
+from app.dependency_injection import get_db, get_current_active_user
+
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
 from app.models.websocket import (
@@ -39,9 +39,7 @@ class TestAlertsRouter(unittest.TestCase):
         app.dependency_overrides[get_current_active_user] = (
             override_get_current_active_user
         )
-        app.dependency_overrides[get_connection_manager] = (
-            override_get_connection_manager
-        )
+        app.state.connection_manager = mock_connection_manager
 
         self.client = TestClient(app)
 
@@ -96,7 +94,7 @@ class TestAlertsRouter(unittest.TestCase):
             "severity": "WARNING",
             "feed_id": "feed123",
             "message": "Test alert acknowledged",
-            "details": "{}",
+            "details": {},
             "acknowledged": True,
         }
         mock_db_manager.get_alert_by_id = AsyncMock(
