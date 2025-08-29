@@ -35,6 +35,7 @@ from app.models.websocket import (
     FeedStatusUpdate,
     NewAlertNotification,
     GlobalRealtimeMetrics,
+    VideoFrameData,
 )  # New imports
 
 # Import core worker and utilities (adjust path as needed)
@@ -766,7 +767,7 @@ class FeedManager:
                     logger.info(f"Broadcasting VIDEO_FRAME for feed {feed_id}. Frame size: {len(frame_b64)} bytes.")
                     await self._broadcast(
                         WebSocketMessageTypeEnum.VIDEO_FRAME,
-                        {"feed_id": feed_id, "frame": frame_b64},
+                        VideoFrameData(feed_id=feed_id, frame=frame_b64),
                     )
 
                     if self._analytics_service:

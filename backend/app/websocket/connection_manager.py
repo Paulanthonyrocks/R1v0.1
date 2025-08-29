@@ -399,7 +399,7 @@ class ActiveWebSocketConnection:
                 # Prepare the message to send
                 message_to_send = WebSocketMessage(
                         type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
-                        data={"feeds": [status.model_dump() for status in statuses]},
+                        data=InitialFeedStatusesData(feeds=statuses),
                     )
                 logger.debug(f"Client {self.client_id}: Prepared INITIAL_FEED_STATUSES message: {message_to_send.model_dump_json()}")
 

@@ -212,6 +212,10 @@ class VideoFrameData(BaseModel):
     frame: str = Field(..., description="Base64 encoded video frame.")
 
 
+class InitialFeedStatusesData(BaseModel):
+    feeds: List[FeedStatusData]
+
+
 # --- WebSocket Message Wrapper ---
 class WebSocketMessageTypeEnum(str, enum.Enum):
     METRICS_UPDATE = "metrics_update"
@@ -273,6 +277,7 @@ class WebSocketMessage(BaseModel):
             UnsubscribeData,
             RefreshFeedData,
             VideoFrameData, # New: Add VideoFrameData to the Union
+            InitialFeedStatusesData,
         ]
     ] = None
     client_id: Optional[str] = Field(

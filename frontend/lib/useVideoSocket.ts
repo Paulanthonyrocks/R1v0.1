@@ -35,9 +35,31 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     img.onload = () => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
+
+      if (metrics && metrics.vehicles) {
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.font = '12px Arial';
+        ctx.fillStyle = 'white';
+
+        metrics.vehicles.forEach(v => {
+          // Draw bounding box
+          ctx.strokeRect(v.x1, v.y1, v.x2 - v.x1, v.y2 - v.y1);
+          
+          // Draw text background
+          const text = `ID: ${v.id} | Speed: ${v.speed.toFixed(1)} km/h`;
+          const textWidth = ctx.measureText(text).width;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillRect(v.x1, v.y1 - 18, textWidth + 8, 18);
+
+          // Draw text
+          ctx.fillStyle = 'white';
+          ctx.fillText(text, v.x1 + 4, v.y1 - 5);
+        });
+      }
     };
     img.src = URL.createObjectURL(blob);
-  }, []);
+  }, [metrics]);
 
   const handleMetrics = useCallback((data: SurveillanceFeedMessage) => {
     setMetrics(data);

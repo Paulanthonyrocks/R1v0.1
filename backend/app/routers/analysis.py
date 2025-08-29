@@ -179,7 +179,7 @@ async def get_all_nodes_congestion_data(
     current_user: dict = Depends(
         get_current_active_user
     ),
-    analytics_service: "AnalyticsService" = Depends(
+    analytics_service: AnalyticsService = Depends(
         get_analytics_service
     ),
 ) -> APIResponse[AllNodesCongestionResponse]:

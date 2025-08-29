@@ -172,11 +172,11 @@ async def video_ws_endpoint(
                 kpis = data["kpis"]
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {{"type": "video_frame", "data": {{"frame": base64.b64encode(frame_bytes).decode('utf-8')}}}},
+                    {"type": "video_frame", "data": {"frame": base64.b64encode(frame_bytes).decode('utf-8')}},
                 )
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {{"type": "metrics_update", "data": {{"metrics": kpis}}}},
+                    {"type": "metrics_update", "data": {"metrics": kpis}},
                 )
                 await asyncio.sleep(0.03)
         except WebSocketDisconnect:
@@ -203,7 +203,7 @@ async def video_ws_endpoint(
                 ]
                 await video_ws_manager.broadcast(
                     stream_id,
-                    {{"type": "initial_feed_statuses", "data": {{"feeds": feeds}}}},
+                    {"type": "initial_feed_statuses", "data": {"feeds": feeds}},
                 )
     except WebSocketDisconnect:
         logger.info(f"WebSocket receive loop disconnected for stream_id: {stream_id}")

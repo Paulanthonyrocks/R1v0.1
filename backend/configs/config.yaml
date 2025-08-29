@@ -295,7 +295,8 @@ feed_manager:
   error_check_interval: 5.0
 queue_log_interval: 120.0
 video_input:
-  sample_video: backend/data/sample_traffic.mp4
+  sample_videos:
+  - backend/data/sample_traffic.mp4
   webcam_index: 0
   webcam_buffer_size: 20
   max_queue_size: 1000
@@ -325,7 +326,7 @@ vehicle_detection:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 5
+  skip_frames: 10
 analytics_service:
   traffic_predictor:
     model_path: backend/models/traffic_predictor_model.h5
@@ -367,7 +368,7 @@ kalman_filter_params:
   kf_sigma_ay: 0.5
 lane_detection:
   dynamic_lane_detection_enabled: false
-  num_lanes: 4 # Fallback if dynamic detection fails or is disabled
+  num_lanes: 8 # Fallback if dynamic detection fails or is disabled
   lane_width: 120 # Fallback if dynamic detection fails or is disabled
   lane_change_buffer: 10
   gaussian_blur_kernel_size: 5
