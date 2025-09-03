@@ -83,7 +83,7 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
             drawFrame(ctx, frame);
 
             // Drawing logic for overlays (bounding boxes, vehicle details)
-            if (showOverlays && kpis && kpis.vehicles) {
+            if (showOverlays && kpis && kpis.kpis && kpis.kpis.vehicles) {
               console.log("Drawing overlays. Bounding Boxes:", showBoundingBoxes, "Vehicle Details:", showVehicleDetails);
               const scaleX = canvas.clientWidth / canvas.width;
               const scaleY = canvas.clientHeight / canvas.height;
@@ -91,16 +91,19 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
               ctx.font = '10px monospace';
               ctx.fillStyle = '#00FF00'; // Green color for text
 
-              kpis.vehicles.forEach((vehicle: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
+              // Fixed: Use the correct structure for vehicle data
+              kpis.kpis.vehicles.forEach((detection: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
+                const { x1, y1, x2, y2 } = detection;
+                
                 if (showBoundingBoxes) {
                   ctx.strokeStyle = '#FF0000'; // Red color for boxes
                   ctx.lineWidth = 2;
-                  ctx.strokeRect(vehicle.x1 * scaleX, vehicle.y1 * scaleY, (vehicle.x2 - vehicle.x1) * scaleX, (vehicle.y2 - vehicle.y1) * scaleY);
+                  ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
                 }
 
                 if (showVehicleDetails) {
-                  ctx.fillText(`ID: ${vehicle.id}`, vehicle.x1 * scaleX, vehicle.y1 * scaleY - 10);
-                  ctx.fillText(`SPD: ${vehicle.speed} KM/H`, vehicle.x1 * scaleX, vehicle.y1 * scaleY - 25);
+                  ctx.fillText(`ID: ${detection.id}`, x1 * scaleX, y1 * scaleY - 10);
+                  ctx.fillText(`SPD: ${detection.speed} KM/H`, x1 * scaleX, y1 * scaleY - 25);
                 }
               });
             }
@@ -136,6 +139,5 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
 
   return { videoUrl: null, isLoading, error, isLive, canvasRef, frameRate, kpis };
 };
-
 
 export default useVideoStream;

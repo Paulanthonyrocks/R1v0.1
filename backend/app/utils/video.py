@@ -180,11 +180,26 @@ class FrameReader:
                         f"FrameReader '{self.source_name}': cv2.read() returned False (Fail {consecutive_fails}/{max_read_fails})."
                     )
                     if consecutive_fails >= max_read_fails:
-                        logger.error(
-                            f"FrameReader '{self.source_name}': Max read fails reached. Assuming end of video or hardware issue."
-                        )
-                        self.end_of_video = True
-                        break
+                        if self.is_looped:
+                            logger.info(f"FrameReader '{self.source_name}': End of video reached, but looping is enabled. Attempting to restart video.")
+                            self.cap.release() # Release the current capture
+                            self._initialize_capture(self.source_name) # Re-initialize capture
+                            if self.cap.isOpened():
+                                self.frame_index = -1 # Reset frame index for new loop
+                                consecutive_fails = 0 # Reset fail counter
+                                self.end_of_video = False # Reset end of video flag
+                                logger.info(f"FrameReader '{self.source_name}': Video restarted successfully.")
+                                continue # Continue the loop to read the first frame of the new loop
+                            else:
+                                logger.error(f"FrameReader '{self.source_name}': Failed to restart video for looping. Stopping.")
+                                self.end_of_video = True
+                                break
+                        else:
+                            logger.error(
+                                f"FrameReader '{self.source_name}': Max read fails reached. Assuming end of video or hardware issue."
+                            )
+                            self.end_of_video = True
+                            break
                     time.sleep(0.1)  # Wait a bit before retrying
             except Exception as e:
                 logger.error(

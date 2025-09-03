@@ -188,7 +188,9 @@ export interface RealtimeDataActions {
 export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { startWebSocket: () => void; sendMessage: (action: string, payload?: object) => boolean; };
 
 export interface SurveillanceFeedMessage {
-  vehicles?: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }[];
+  kpis?: {
+    vehicles?: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }[];
+  };
   vehicle_count?: number;
   avg_speed?: number;
 }
