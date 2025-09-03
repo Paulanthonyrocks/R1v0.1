@@ -147,10 +147,10 @@ class TrafficDataCache:
                 "name": f"Node at ({latitude:.4f}, {longitude:.4f})",
                 "latitude": latitude,
                 "longitude": longitude,
-                "timestamp": latest_point.get("timestamp"),
-                "vehicle_count": latest_point.get("vehicle_count"),
-                "average_speed": latest_point.get("average_speed"),
-                "congestion_score": latest_point.get("congestion_score"),
+                "timestamp": latest_point.get("timestamp", datetime.now(timezone.utc)),
+                "vehicle_count": latest_point.get("vehicle_count", 0),
+                "average_speed": latest_point.get("average_speed", 0.0),
+                "congestion_score": latest_point.get("congestion_score", 0.0),
             }
             summaries.append(summary)
         logger.debug(f"Returning {len(summaries)} location summaries.")

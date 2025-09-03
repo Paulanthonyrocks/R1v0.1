@@ -11,6 +11,7 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
     """Verify Firebase ID token and return decoded token data."""
     logger.info(f"Verifying Firebase token: {token[:40]}... (truncated)")
     if firebase_admin._DEFAULT_APP_NAME not in firebase_admin._apps:
+        logger.error("Firebase authentication service not available. No default app initialized.")
         logger.error("Firebase authentication service not available.")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -19,6 +20,7 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
     try:
         decoded = auth.verify_id_token(token, check_revoked=True, clock_skew_seconds=5)
         logger.info(f"Decoded token: {decoded}")
+        logger.info(f"Full token (truncated): {token[:100]}...")
         return decoded
     except auth.RevokedIdTokenError:
         logger.error("Token has been revoked.")
@@ -35,7 +37,7 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
     except auth.InvalidIdTokenError as e:
-        logger.error(f"Invalid ID token: {e}", exc_info=True)
+        logger.error(f"Invalid ID token: {e}. Full error details: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid ID token: {e}",

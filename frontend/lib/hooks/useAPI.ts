@@ -6,7 +6,7 @@ export function useAPI() {
     const { token } = useUser();
     
     const api = useMemo(() => APIClient.getInstance({
-        baseURL: process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+        baseURL: '/'
     }), []);
 
     useEffect(() => {

@@ -1,4 +1,4 @@
-import { renderHook, act } from '@testing-library/react-hooks';
+import { renderHook, act } from '@testing-library/react';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { AlertData, BackendCongestionNodeData } from '@/lib/types';
 

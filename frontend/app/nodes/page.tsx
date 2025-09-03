@@ -4,14 +4,14 @@ import React, { useState, useEffect } from 'react';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
-import useAuth from '@/lib/hook/useAuth'; // Import useAuth
+
 import NodeCard from '@/components/nodes/NodeCard';
 import { AlertTriangle, Signal, Clock, BatteryFull } from 'lucide-react';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const NodesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
-  const { token } = useAuth();
+  
 
   const {
     nodeCongestionData,
@@ -19,7 +19,7 @@ const NodesPage: React.FC = () => {
     isReady,
     error: wsError,
     startWebSocket
-  } = useRealtimeUpdates(token);
+  } = useRealtimeUpdates();
 
   useEffect(() => {
     if (!isConnected) {

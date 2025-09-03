@@ -194,7 +194,7 @@ async def video_ws_endpoint(
                 sample_videos = config.get("video_input", {}).get("sample_videos", [])
                 feeds = [
                     {
-                        "id": video_path,
+                        "id": f"/stream/sample-feed",
                         "name": f"Feed {i+1}",
                         "status": "online",
                         "last_updated": datetime.datetime.now().isoformat()

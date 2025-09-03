@@ -9,21 +9,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  webpack: (config) => {
-    config.module.rules.push({
-      test: /\.(glb|gltf)$/,
-      use: [
-        {
-          loader: 'file-loader',
-          options: {
-            outputPath: 'static/assets/',
-            publicPath: '_next/static/assets/',
-          },
-        },
-      ],
-    });
-    return config;
-  },
+  
   allowedDevOrigins: ['https://3000-firebase-r1v01-1754863305396.cluster-cbeiita7rbe7iuwhvjs5zww2i4.cloudworkstations.dev'],
   /* other config options here */
 };

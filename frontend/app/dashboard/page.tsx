@@ -9,7 +9,7 @@ import { Signal, BatteryFull } from 'lucide-react'; // Import Signal and Battery
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 import { UserRole } from "@/lib/auth/roles"; // Import UserRole
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
-import useAuth from '@/lib/hook/useAuth'; // Import the useAuth hook
+
 import { getToken } from '@/lib/auth/getToken'; // Import getToken
 import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
@@ -24,7 +24,7 @@ const DashboardPage: React.FC = () => {
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
 
   // Use the realtime updates hook - This is now the primary source for KPIs and feeds
-  const { token } = useAuth();
+  
   const { /* kpis, */ alerts, feeds, isConnected, isReady, error } = useRealtimeUpdates();
 
   // Find the first sample feed to display. In a real app, you might have a more robust selection logic.
@@ -91,8 +91,7 @@ const DashboardPage: React.FC = () => {
         return;
       }
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-        const res = await fetch(`${apiUrl}/api/v1/analytics/nodes/congestion`, {
+        const res = await fetch('/api/v1/analytics/nodes/congestion', {
           headers: {
             'Authorization': `Bearer ${currentToken}`,
           },

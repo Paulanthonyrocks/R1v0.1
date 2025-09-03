@@ -31,7 +31,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array) => {
     const img = new Image();
-    const blob = new Blob([frame], { type: 'image/jpeg' });
+    const blob = new Blob([frame.slice().buffer], { type: 'image/jpeg' });
     img.onload = () => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
@@ -70,7 +70,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       return; // Do not connect if essential info is missing.
     }
 
-    const wsUrl = new URL(`/api/v1/video/ws/${streamId}`, VIDEO_WS_BASE_URL).toString();
+    const wsUrl = new URL(`/video/ws/${streamId}`, VIDEO_WS_BASE_URL).toString();
     console.log('Constructed Video WebSocket URL:', wsUrl);
 
     const client = new WebSocketClient(wsUrl);
@@ -109,7 +109,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       wsClientRef.current = null;
     };
   // The dependency array ensures this effect re-runs only if the stream or user token changes.
-  }, [streamId, token]);
+  }, [streamId, token, VIDEO_WS_BASE_URL, handleFrame, handleMetrics]);
 
   return { frameData, metrics, isConnected, error, drawFrame, frameRate };
 };

@@ -238,24 +238,10 @@ export class WebSocketClient implements IWebSocketClient {
             token = this.currentToken || this.tokenManager.getCurrentToken();
         }
 
-        // Validate token
         if (!token) {
-            const isTokenValid = await this.tokenManager.isTokenValid();
-            if (!isTokenValid) {
-                console.log('Token is not valid, refreshing...');
-                try {
-                    token = await this.tokenManager.refreshToken();
-                } catch (error) {
-                    console.error('Failed to refresh token:', error);
-                    this.setState(ConnectionState.ERROR, 'Authentication failed');
-                    throw new Error('No valid authentication token available');
-                }
-            }
-        }
-
-        if (!token) {
-            this.setState(ConnectionState.ERROR, 'No authentication token available');
-            throw new Error('No authentication token available');
+            console.warn('No authentication token available for WebSocket connection.');
+            this.notifyError('auth_error', 'No authentication token available.');
+            return;
         }
 
         this.currentToken = token;

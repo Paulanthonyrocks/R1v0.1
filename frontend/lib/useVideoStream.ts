@@ -1,31 +1,54 @@
-import { useState, useEffect, useRef } from 'react';
-import useVideoSocket from './useVideoSocket';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import useMultipartStream from './useMultipartStream';
-
 import useAuth from '@/lib/hook/useAuth';
+import { SurveillanceFeedMessage } from '@/lib/types';
+
 const SAMPLE_VIDEO_URL = '/sample-video.mp4';
 
 interface UseVideoStreamOptions {
   streamId: string;
   forceSample?: boolean;
-  streamType?: 'websocket' | 'multipart'; // New prop to specify stream type
+  streamType?: 'websocket' | 'multipart';
+  frameData?: string | null;
+  kpis?: SurveillanceFeedMessage;
+  showOverlays?: boolean;
+  showBoundingBoxes?: boolean;
+  showVehicleDetails?: boolean;
 }
 
-const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket' }: UseVideoStreamOptions) => {
+interface UseVideoStreamReturn {
+  videoUrl: string | null;
+  isLoading: boolean;
+  error: string | null;
+  isLive: boolean;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  frameRate: number;
+  kpis: SurveillanceFeedMessage | null | undefined;
+}
+
+const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket', frameData, kpis, showOverlays, showBoundingBoxes, showVehicleDetails }: UseVideoStreamOptions): UseVideoStreamReturn => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
-  const { token } = useAuth(); // Get token from useAuth
+  const { token } = useAuth();
+  const lastFrameTimeRef = useRef<number>(0);
+  const [frameRate, setFrameRate] = useState<number>(0);
 
-  // Conditionally use the appropriate streaming hook
-  const { frameData: wsFrameData, metrics: wsMetrics, isConnected: wsConnected, error: wsError, drawFrame: wsDrawFrame, frameRate } = useVideoSocket(streamId, token);
-  
-  // Always call hooks at the top level
   const { rawData: mpRawFrameData, error: mpError, isLoading: mpLoading, drawFrame: mpDrawFrame } = useMultipartStream(
     (streamType === 'multipart' || forceSample) ? (forceSample ? SAMPLE_VIDEO_URL : `/api/v1/stream/${streamId}`) : null,
     token
   );
+
+  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array) => {
+    const img = new Image();
+    const blob = new Blob([frame.slice().buffer], { type: 'image/jpeg' });
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(blob);
+  }, []);
 
   useEffect(() => {
     if (forceSample) {
@@ -34,53 +57,85 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
       return;
     }
 
-    let currentRawFrameData: Uint8Array | null = null;
-    let currentDrawFrame: ((ctx: CanvasRenderingContext2D, frame: Uint8Array) => void) | null = null;
-    let currentError: string | null = null;
-    let currentIsConnected = false;
-
-    // Select the correct data source based on stream type
     if (streamType === 'websocket') {
-      currentRawFrameData = wsFrameData;
-      currentDrawFrame = wsDrawFrame;
-      currentError = wsError;
-      currentIsConnected = wsConnected;
-    } else { // 'multipart'
-      currentRawFrameData = mpRawFrameData;
-      currentDrawFrame = mpDrawFrame;
-      currentError = mpError;
-      currentIsConnected = !mpLoading;
-    }
-
-    // Update state based on the selected source
-    if (currentIsConnected) {
-      setIsLive(true);
-      setIsLoading(false);
-      setError(null);
-    } else {
-      setIsLive(false);
-      // Only set loading to true if we are not in an error state
-      if (currentError) {
-        setError('Failed to connect to video stream');
+      if (frameData) {
+        setIsLive(true);
         setIsLoading(false);
+        setError(null);
+
+        const now = performance.now();
+        if (lastFrameTimeRef.current !== 0) {
+          const frameTime = now - lastFrameTimeRef.current;
+          setFrameRate(1000 / frameTime);
+        }
+        lastFrameTimeRef.current = now;
+
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const byteCharacters = atob(frameData);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const frame = new Uint8Array(byteNumbers);
+            drawFrame(ctx, frame);
+
+            // Drawing logic for overlays (bounding boxes, vehicle details)
+            if (showOverlays && kpis && kpis.vehicles) {
+              console.log("Drawing overlays. Bounding Boxes:", showBoundingBoxes, "Vehicle Details:", showVehicleDetails);
+              const scaleX = canvas.clientWidth / canvas.width;
+              const scaleY = canvas.clientHeight / canvas.height;
+
+              ctx.font = '10px monospace';
+              ctx.fillStyle = '#00FF00'; // Green color for text
+
+              kpis.vehicles.forEach((vehicle: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
+                if (showBoundingBoxes) {
+                  ctx.strokeStyle = '#FF0000'; // Red color for boxes
+                  ctx.lineWidth = 2;
+                  ctx.strokeRect(vehicle.x1 * scaleX, vehicle.y1 * scaleY, (vehicle.x2 - vehicle.x1) * scaleX, (vehicle.y2 - vehicle.y1) * scaleY);
+                }
+
+                if (showVehicleDetails) {
+                  ctx.fillText(`ID: ${vehicle.id}`, vehicle.x1 * scaleX, vehicle.y1 * scaleY - 10);
+                  ctx.fillText(`SPD: ${vehicle.speed} KM/H`, vehicle.x1 * scaleX, vehicle.y1 * scaleY - 25);
+                }
+              });
+            }
+          }
+        }
       } else {
+        console.log("useVideoStream: frameData is null/undefined. Setting isLoading=true, isLive=false.");
+        setIsLive(false);
         setIsLoading(true);
       }
-    }
-
-    const canvas = canvasRef.current;
-    if (canvas && currentRawFrameData && currentDrawFrame) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        currentDrawFrame(ctx, currentRawFrameData);
-      }    } else if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } else { // multipart
+      if (!mpLoading && mpRawFrameData) {
+        setIsLive(true);
+        setIsLoading(false);
+        setError(null);
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            mpDrawFrame(ctx, mpRawFrameData);
+          }
+        }
+      } else if (mpError) {
+        setError('Failed to connect to video stream');
+        setIsLoading(false);
+        setIsLive(false);
+      } else {
+        setIsLoading(true);
+        setIsLive(false);
       }
     }
-  }, [streamId, forceSample, streamType, wsFrameData, wsDrawFrame, wsConnected, wsError, mpRawFrameData, mpDrawFrame, mpError, mpLoading]);
-  return { videoUrl: null, isLoading, error, isLive, kpis: wsMetrics, canvasRef, frameRate };
+  }, [streamId, forceSample, streamType, frameData, mpRawFrameData, mpLoading, mpError, drawFrame, mpDrawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, kpis]);
+
+  return { videoUrl: null, isLoading, error, isLive, canvasRef, frameRate, kpis };
 };
+
 
 export default useVideoStream;

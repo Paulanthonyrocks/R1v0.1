@@ -419,6 +419,15 @@ class ActiveWebSocketConnection:
                         ),
                     )
                 )
+        elif message.type == WebSocketMessageTypeEnum.PING:
+            logger.debug(f"Received PING from {self.client_id}, sending PONG.")
+            await self.send_json_model(
+                WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.PONG,
+                    data={"timestamp": datetime.utcnow().isoformat()}
+                )
+            )
+
         elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
             feed_id = message.data.get("feed_id") if isinstance(message.data, dict) else None
             if feed_id:

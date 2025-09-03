@@ -5,7 +5,7 @@ import Link from 'next/link'; // Import Link
 import AuthGuard from '@/components/auth/AuthGuard';
 import { UserRole } from '@/lib/auth/roles';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
-import useAuth from '@/lib/hook/useAuth'; // Import useAuth
+
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 import { FeedStatusData } from '@/lib/types';
 import LoadingMessage from '@/components/ui/LoadingMessage';
@@ -13,8 +13,8 @@ import { Signal, Clock, BatteryFull } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
 
 const SurveillancePage = () => {
-  const { token } = useAuth();
-  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates(token);
+  
+  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates();
 
   useEffect(() => {
     // Start WebSocket connection on component mount

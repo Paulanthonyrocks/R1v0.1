@@ -350,6 +350,7 @@ origins = [
     "http://localhost",
     "http://localhost:3000",  # Frontend port
     "https://*.ngrok-free.app", # Allow ngrok origins
+    "https://*.loca.lt",
 ]
 app.add_middleware(
     CORSMiddleware,

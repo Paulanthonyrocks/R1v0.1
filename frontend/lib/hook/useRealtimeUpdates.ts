@@ -272,7 +272,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         if (webSocketClientRef.current && !webSocketClientRef.current.isConnected() && token) {
             connectWebSocket();
         }
-    }, [connectWebSocket, TokenManager.getInstance().getCurrentToken()]);
+    }, [connectWebSocket]);
 
     // Cleanup on unmount
     useEffect(() => {

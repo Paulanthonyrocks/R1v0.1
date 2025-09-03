@@ -6,27 +6,34 @@ import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoStream from '@/lib/useVideoStream';
-import useAuth from '@/lib/hook/useAuth'; // Import the useAuth hook
+
 import StreamOverlayControls from './StreamOverlayControls'; // Import the new component
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { id, name: feedName, source, status } = feed;
-    const { isLoading, error, isLive, kpis, canvasRef, frameRate: fps } = useVideoStream({
-        streamId: id,
-        streamType: 'websocket',
-    });
-    const component_name = feedName ?? `Feed ${id}`;
-    const component_node = `Source: ${source ?? 'N/A'}`;
-    const { token } = useAuth(); // Get the authentication token
-
-
-    const { sendMessage, isConnected } = useRealtimeUpdates(); // Pass the token to the hook
-    
+    const { videoFrame, sendMessage, isConnected, kpis } = useRealtimeUpdates();
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); // New state for panel visibility
+
+    const { isLoading, error, isLive, canvasRef, frameRate: fps } = useVideoStream({
+        streamId: id,
+        streamType: 'websocket',
+        frameData: videoFrame,
+        kpis: kpis || undefined,
+        showOverlays,
+        showBoundingBoxes,
+        showVehicleDetails,
+    });
+    const component_name = feedName ?? `Feed ${id}`;
+    const component_node = `Source: ${source ?? 'N/A'}`;
+    
+
+    
+    
+    
 
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
@@ -34,34 +41,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         }
     }, [status]);
 
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        const context = canvas.getContext('2d');
-        if (!context) return;
-
-        // Clear canvas before drawing new boxes
-        context.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (showOverlays && kpis && kpis.vehicles) {
-            context.font = '10px monospace';
-            context.fillStyle = '#00FF00'; // Green color for text
-
-            kpis.vehicles.forEach((vehicle: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
-                if (showBoundingBoxes) {
-                    context.strokeStyle = '#FF0000'; // Red color for boxes
-                    context.lineWidth = 2;
-                    context.strokeRect(vehicle.x1, vehicle.y1, vehicle.x2 - vehicle.x1, vehicle.y2 - vehicle.y1);
-                }
-
-                if (showVehicleDetails) {
-                    context.fillText(`ID: ${vehicle.id}`, vehicle.x1, vehicle.y1 - 10);
-                    context.fillText(`SPD: ${vehicle.speed} KM/H`, vehicle.x1, vehicle.y1 - 25);
-                }
-            });
-        }
-    }, [kpis, showOverlays, showBoundingBoxes, showVehicleDetails, canvasRef]);
+    
 
     const toggleFeed = () => {
         if (isToggling || !isConnected) {
@@ -149,6 +129,30 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <RotateCw className="h-4 w-4" />
                     </button>)
                 }
+                {/* New: Overlay Controls Button */}
+                {!isToggling && !isLoading && !error && (
+                    <button
+                        className="absolute top-1.5 right-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
+                        onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
+                        title="Overlay Controls"
+                    >
+                        <Settings className="h-4 w-4" />
+                    </button>
+                )}
+
+                {/* New: Overlay Controls Panel */}
+                {showControlsPanel && (
+                    <div className="absolute top-10 right-1.5 z-30">
+                        <StreamOverlayControls
+                            showOverlays={showOverlays}
+                            setShowOverlays={setShowOverlays}
+                            showBoundingBoxes={showBoundingBoxes}
+                            setShowBoundingBoxes={setShowBoundingBoxes}
+                            showVehicleDetails={showVehicleDetails}
+                            setShowVehicleDetails={setShowVehicleDetails}
+                        />
+                    </div>
+                )}
                 {/* New: Overlay Controls Button */}
                 {!isToggling && !isLoading && !error && (
                     <button

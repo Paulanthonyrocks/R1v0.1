@@ -1,19 +1,16 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import useSWR from 'swr';
 import { Chart } from "react-google-charts";
 import MatrixCard from '../../components/MatrixCard';
 import { Signal, Clock, BatteryFull, Activity, Zap, AlertTriangle, Users } from 'lucide-react'; // Import missing icons
 import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
-import axios from 'axios'; // Import axios
-
-const fetcher = (url: string) => axios.get(url).then(res => res.data);
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 
 const MAX_HISTORY = 20;
 
 const StreamPage: React.FC = () => {
-  const { data: metrics } = useSWR('/v1/analytics/realtime', fetcher, { refreshInterval: 5000 });
+  const { kpis: metrics, feeds } = useRealtimeUpdates();
   const [history, setHistory] = useState<{ timestamp: string, congestion: number, speed: number }[]>([]);
 
   useEffect(() => {
@@ -22,8 +19,8 @@ const StreamPage: React.FC = () => {
         const now = new Date().toLocaleTimeString();
         const newEntry = {
           timestamp: now,
-          congestion: typeof metrics.congestion_index === 'number' ? metrics.congestion_index : 0,
-          speed: typeof metrics.average_speed_kmh === 'number' ? metrics.average_speed_kmh : 0,
+          congestion: typeof metrics.vehicle_count === 'number' ? metrics.vehicle_count : 0, // Using vehicle_count as placeholder for congestion
+          speed: typeof metrics.avg_speed === 'number' ? metrics.avg_speed : 0, // Using avg_speed for average_speed_kmh
         };
         const updated = [...prev, newEntry];
         return updated.length > MAX_HISTORY ? updated.slice(-MAX_HISTORY) : updated;
@@ -79,15 +76,15 @@ const StreamPage: React.FC = () => {
 
           {/* Metric Cards */}
           <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-            <StatCard title="Congestion Index" value={metrics?.congestion_index ?? '--'} unit="%" icon={Activity} change="N/A" changeText="N/A" />
-            <StatCard title="Average Speed" value={metrics?.average_speed_kmh ?? '--'} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
-            <StatCard title="Active Incidents" value={metrics?.active_incidents_count ?? '--'} icon={AlertTriangle} change="N/A" changeText="N/A" />
-            <StatCard title="Feeds" value={metrics?.feed_statuses ? metrics.feed_statuses.running : '--'} unit="/ running" icon={Users} change="N/A" changeText="N/A">
+            <StatCard title="Vehicles Detected" value={String(metrics?.vehicle_count ?? '--')} unit="" icon={Activity} change="N/A" changeText="N/A" />
+            <StatCard title="Average Speed" value={String(metrics?.avg_speed ?? '--')} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
+            <StatCard title="Active Incidents" value={String(metrics?.active_incidents_count ?? '--')} icon={AlertTriangle} change="N/A" changeText="N/A" />
+            <StatCard title="Feeds" value={String(feeds ? feeds.filter(f => f.status === 'running').length : '--')} unit="/ running" icon={Users} change="N/A" changeText="N/A">
               <div className="text-xs text-lcd-text mt-1 tracking-normal"> {/* Changed color, added tracking */}
-                {metrics?.feed_statuses && (
+                {feeds && (
                   <>
-                    <span className="mr-2">Stopped: <span>{metrics.feed_statuses.stopped}</span></span> {/* Removed specific color */}
-                    <span>Error: <span>{metrics.feed_statuses.error}</span></span> {/* Removed specific color */}
+                    <span className="mr-2">Stopped: <span>{feeds.filter(f => f.status === 'stopped').length}</span></span> {/* Removed specific color */}
+                    <span>Error: <span>{feeds.filter(f => f.status === 'error').length}</span></span> {/* Removed specific color */}
                   </>
                 )}
               </div>

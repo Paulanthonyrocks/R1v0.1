@@ -4,8 +4,8 @@ export class TokenManager {
     private static instance: TokenManager;
     private currentToken: string | null = null;
     private tokenRefreshCallbacks: ((token: string) => void)[] = [];
-    private currentUser: User | null = null; // Store the current user
-    private refreshIntervalId: NodeJS.Timeout | null = null; // Store interval ID
+    private currentUser: User | null = null;
+    private refreshTimeoutId: NodeJS.Timeout | null = null;
 
     private constructor() {}
 
@@ -17,30 +17,21 @@ export class TokenManager {
     }
 
     async updateToken(user: User | null): Promise<void> {
-        this.currentUser = user; // Update the current user
+        this.currentUser = user;
 
-        // Clear any existing interval
-        if (this.refreshIntervalId) {
-            clearInterval(this.refreshIntervalId);
-            this.refreshIntervalId = null;
+        if (this.refreshTimeoutId) {
+            clearTimeout(this.refreshTimeoutId);
+            this.refreshTimeoutId = null;
         }
 
         if (user) {
             try {
-                this.currentToken = await user.getIdToken(true);
+                this.currentToken = await user.getIdToken();
                 this.tokenRefreshCallbacks.forEach(callback => callback(this.currentToken!));
-
-                // Start new interval for token expiry check
-                this.refreshIntervalId = setInterval(async () => {
-                    if (this.currentUser) { // Ensure user still exists
-                        await this.checkTokenExpiry();
-                    } else {
-                        // If user logs out, stop the interval
-                        this.stopMonitoring();
-                    }
-                }, 5 * 60 * 1000); // Check every 5 minutes
+                this.scheduleTokenRefresh();
             } catch (error) {
-                console.error('Error refreshing token:', error);
+                console.error('Error getting initial token:', error);
+                this.currentToken = null;
             }
         } else {
             this.currentToken = null;
@@ -61,68 +52,62 @@ export class TokenManager {
     async refreshToken(): Promise<string | null> {
         if (this.currentUser) {
             try {
+                console.log("Attempting to refresh token...");
                 const newToken = await this.currentUser.getIdToken(true);
                 this.currentToken = newToken;
+                console.log("Token refreshed successfully.");
                 this.tokenRefreshCallbacks.forEach(callback => callback(newToken));
+                this.scheduleTokenRefresh();
+                return newToken;
             } catch (error) {
                 console.error("Error refreshing token:", error);
-                this.stopMonitoring(); // Stop if refresh fails
+                this.stopMonitoring();
                 return null;
             }
         }
         return this.currentToken;
     }
 
-    async checkTokenExpiry(): Promise<void> {
+    private scheduleTokenRefresh() {
+        if (this.refreshTimeoutId) {
+            clearTimeout(this.refreshTimeoutId);
+        }
+
         if (!this.currentUser) {
-            this.stopMonitoring();
             return;
         }
-        try {
-            const decodedToken = await this.currentUser.getIdTokenResult();
-            const expirationTime = new Date(decodedToken.expirationTime).getTime();
-            const now = Date.now();
-            const fiveMinutes = 5 * 60 * 1000;
 
-            if (expirationTime - now < fiveMinutes) {
-                console.log('Token expiring soon, refreshing...');
-                await this.refreshToken();
-            }
-        } catch (error) {
-            console.error('Error checking token expiry:', error);
-            // If there's an error checking expiry, it might mean the token is invalid
-            // or user is no longer active. Stop monitoring.
-            this.stopMonitoring();
-        }
+        this.currentUser.getIdTokenResult()
+            .then(idTokenResult => {
+                const expirationTime = new Date(idTokenResult.expirationTime).getTime();
+                const now = Date.now();
+                const refreshBuffer = 5 * 60 * 1000; // 5 minutes
+                const refreshDelay = expirationTime - now - refreshBuffer;
+
+                if (refreshDelay > 0) {
+                    console.log(`Token refresh scheduled in ${Math.round(refreshDelay / 1000 / 60)} minutes.`);
+                    this.refreshTimeoutId = setTimeout(async () => {
+                        console.log('Proactively refreshing token as scheduled...');
+                        await this.refreshToken();
+                    }, refreshDelay);
+                } else {
+                    console.log('Token is close to expiry or expired, refreshing now...');
+                    this.refreshToken();
+                }
+            })
+            .catch(error => {
+                console.error('Error scheduling token refresh:', error);
+                this.stopMonitoring();
+            });
     }
 
     stopMonitoring(): void {
-        if (this.refreshIntervalId) {
-            clearInterval(this.refreshIntervalId);
-            this.refreshIntervalId = null;
-            this.currentUser = null;
-            this.currentToken = null;
-            console.log('Token monitoring stopped.');
+        if (this.refreshTimeoutId) {
+            clearTimeout(this.refreshTimeoutId);
+            this.refreshTimeoutId = null;
         }
-    }
-
-    async isTokenValid(): Promise<boolean> {
-        if (!this.currentUser || !this.currentToken) {
-            return false;
-        }
-        try {
-            const decodedToken = await this.currentUser.getIdTokenResult();
-            const expirationTime = new Date(decodedToken.expirationTime).getTime();
-            const now = Date.now();
-            const fiveMinutes = 5 * 60 * 1000;
-
-            if (expirationTime - now < fiveMinutes) {
-                return false;
-            }
-            return true;
-        } catch (error) {
-            console.error('Error checking token validity:', error);
-            return false;
-        }
+        this.currentUser = null;
+        this.currentToken = null;
+        console.log('Token monitoring stopped.');
     }
 }

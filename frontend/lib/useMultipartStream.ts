@@ -18,7 +18,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
   const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array) => {
     const img = new Image();
-    const blob = new Blob([frame], { type: 'image/jpeg' });
+    const blob = new Blob([frame.slice().buffer], { type: 'image/jpeg' });
     img.onload = () => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src); // Clean up the object URL
@@ -34,11 +34,8 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
       return;
     }
 
-    let fetchUrl = url;
-    if (url.startsWith('/')) {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'https://firebase-r1v01-1754696973098.cluster-fbfjltn375c6wqxlhoehbz44sk.cloudworkstations.dev:8000';
-      fetchUrl = new URL(url, apiBase).toString();
-    }
+    const fetchUrl = url;
+    
 
     setIsLoading(true);
     setError(null);
