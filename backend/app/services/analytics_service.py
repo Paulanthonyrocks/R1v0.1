@@ -513,6 +513,45 @@ class AnalyticsService:
         # For now, return mock data or data from db_manager if it has a direct method
         data = self._data_cache.get_all_location_summaries()
         logger.info(f"Retrieved {len(data)} node congestion summaries from cache.")
+        
+        # If no data in cache, return mock data for demonstration
+        if not data:
+            logger.info("No data in cache, returning mock data for demonstration.")
+            from datetime import datetime, timezone
+            mock_data = [
+                {
+                    "id": "34.0522,-118.2437",
+                    "name": "Downtown LA Intersection",
+                    "latitude": 34.0522,
+                    "longitude": -118.2437,
+                    "timestamp": datetime.now(timezone.utc),
+                    "vehicle_count": 45,
+                    "average_speed": 35.2,
+                    "congestion_score": 65.5,
+                },
+                {
+                    "id": "34.0736,-118.4004",
+                    "name": "Santa Monica Boulevard",
+                    "latitude": 34.0736,
+                    "longitude": -118.4004,
+                    "timestamp": datetime.now(timezone.utc),
+                    "vehicle_count": 78,
+                    "average_speed": 28.7,
+                    "congestion_score": 72.3,
+                },
+                {
+                    "id": "34.0195,-118.4912",
+                    "name": "Venice Beach Area",
+                    "latitude": 34.0195,
+                    "longitude": -118.4912,
+                    "timestamp": datetime.now(timezone.utc),
+                    "vehicle_count": 32,
+                    "average_speed": 42.1,
+                    "congestion_score": 48.9,
+                }
+            ]
+            return mock_data
+        
         return data
 
     async def start_background_tasks(self):

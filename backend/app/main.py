@@ -253,6 +253,9 @@ async def startup_event():
         if analytics_service:
             logger.info("AnalyticsService initialized successfully.")
             await analytics_service.initialize_prediction_log_table()
+            # Start analytics service background tasks
+            await analytics_service.start_background_tasks()
+            logger.info("AnalyticsService background tasks started.")
         else:
             logger.warning(
                 "AnalyticsService not available during startup; cannot initialize prediction log table."
@@ -330,10 +333,16 @@ async def shutdown_event():
         await app.state.connection_manager.shutdown()
         logger.info("WebSocket ConnectionManager shut down.")
 
-    from app.services import get_feed_manager
+    from app.services import get_feed_manager, get_analytics_service
     fm = get_feed_manager()
     if fm:
         await fm.shutdown()
+    
+    # Shutdown AnalyticsService background tasks
+    analytics_service = get_analytics_service()
+    if analytics_service:
+        await analytics_service.stop_background_tasks()
+        logger.info("AnalyticsService background tasks stopped.")
     if app.state.file_watcher:
         app.state.file_watcher.stop()
     logging.getLogger("app.utils.database").info("DatabaseManager close called.")
