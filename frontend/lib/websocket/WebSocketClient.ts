@@ -255,6 +255,7 @@ export class WebSocketClient implements IWebSocketClient {
                 console.log('Attempting to connect to WebSocket:', fullUrl);
                 
                 this.ws = new WebSocket(fullUrl);
+                this.ws.binaryType = 'arraybuffer';
 
                 const connectionTimeout = setTimeout(() => {
                     if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
@@ -406,41 +407,56 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private handleMessage(event: MessageEvent): void {
-        try {
-            const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
-            
-            // Handle ping/pong messages
-            if (message.type === WebSocketMessageType.PONG) {
-                this.lastPongTime = Date.now();
-                return;
-            } else if (message.type === WebSocketMessageType.PING) {
-                // Respond to server's ping with a pong
-                this.send({
-                    type: WebSocketMessageType.PONG,
-                    data: { timestamp: Date.now() }
-                });
-                return;
-            }
+        if (typeof event.data === 'string') {
+            try {
+                const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
+                
+                // Handle ping/pong messages
+                if (message.type === WebSocketMessageType.PONG) {
+                    this.lastPongTime = Date.now();
+                    return;
+                } else if (message.type === WebSocketMessageType.PING) {
+                    // Respond to server's ping with a pong
+                    this.send({
+                        type: WebSocketMessageType.PONG,
+                        data: { timestamp: Date.now() }
+                    });
+                    return;
+                }
 
-            // Validate message structure
-            if (!Object.values(WebSocketMessageType).includes(message.type as WebSocketMessageType)) {
-                console.error('Invalid message type received:', message.type);
-                return;
-            }
+                // Validate message structure
+                if (!Object.values(WebSocketMessageType).includes(message.type as WebSocketMessageType)) {
+                    console.error('Invalid message type received:', message.type);
+                    return;
+                }
 
-            // Handle message with registered listeners
-            const type = message.type as WebSocketMessageType;
+                // Handle message with registered listeners
+                const type = message.type as WebSocketMessageType;
+                if (this.listeners.has(type)) {
+                    this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
+                        try {
+                            listener(message.data);
+                        } catch (error) {
+                            console.error(`Error in listener for message type ${type}:`, error);
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error handling WebSocket message:', error);
+            }
+        } else if (event.data instanceof ArrayBuffer) {
+            // Assuming binary data is a video frame
+            const type = WebSocketMessageType.VIDEO_FRAME;
             if (this.listeners.has(type)) {
                 this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
                     try {
-                        listener(message.data);
+                        // The listener for VIDEO_FRAME will now receive an ArrayBuffer
+                        listener(event.data);
                     } catch (error) {
                         console.error(`Error in listener for message type ${type}:`, error);
                     }
                 });
             }
-        } catch (error) {
-            console.error('Error handling WebSocket message:', error);
         }
     }
 

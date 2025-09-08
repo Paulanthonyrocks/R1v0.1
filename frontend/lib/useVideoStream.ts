@@ -9,7 +9,7 @@ interface UseVideoStreamOptions {
   streamId: string;
   forceSample?: boolean;
   streamType?: 'websocket' | 'multipart';
-  frameData?: string | null;
+  frameData?: ArrayBuffer | null;
   kpis?: SurveillanceFeedMessage;
   showOverlays?: boolean;
   showBoundingBoxes?: boolean;
@@ -74,12 +74,7 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
         if (canvas) {
           const ctx = canvas.getContext('2d');
           if (ctx) {
-            const byteCharacters = atob(frameData);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const frame = new Uint8Array(byteNumbers);
+            const frame = new Uint8Array(frameData);
             drawFrame(ctx, frame);
 
             // Drawing logic for overlays (bounding boxes, vehicle details)

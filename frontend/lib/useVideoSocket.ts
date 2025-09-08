@@ -13,13 +13,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   const VIDEO_WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
-  const handleFrame = useCallback((data: { frame: string }) => {
-    const byteCharacters = atob(data.frame);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    setFrameData(new Uint8Array(byteNumbers));
+  const handleFrame = useCallback((data: ArrayBuffer) => {
+    setFrameData(new Uint8Array(data));
 
     const now = performance.now();
     if (lastFrameTimeRef.current !== 0) {
@@ -36,13 +31,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
 
-      if (metrics && metrics.vehicles) {
+      if (metrics && metrics.kpis && metrics.kpis.vehicles) {
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         ctx.font = '12px Arial';
         ctx.fillStyle = 'white';
 
-        metrics.vehicles.forEach(v => {
+        metrics.kpis.vehicles.forEach(v => {
           // Draw bounding box
           ctx.strokeRect(v.x1, v.y1, v.x2 - v.x1, v.y2 - v.y1);
           

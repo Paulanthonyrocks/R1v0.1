@@ -23,7 +23,7 @@ interface RealtimeUpdates {
     kpis: KPIData | null;
     alerts: AlertData[];
     nodeCongestionData: BackendCongestionNodeData[];
-    videoFrame: string | null; // New: Base64 encoded video frame
+    videoFrame: ArrayBuffer | null; // New: Base64 encoded video frame
     isConnected: boolean;
     isReady: boolean;
     error: string | null;
@@ -39,7 +39,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
-    const [videoFrame, setVideoFrame] = useState<string | null>(null); // New state for video frame
+    const [videoFrame, setVideoFrame] = useState<ArrayBuffer | null>(null); // New state for video frame
     const [isConnected, setIsConnected] = useState(false);
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -179,9 +179,9 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
 
         // Subscribe to video frames
         client.subscribe(WebSocketMessageType.VIDEO_FRAME, 
-            (data: { feed_id?: string; frame?: string }) => { // Make properties optional for safer access
-                if (data && data.frame) {
-                    setVideoFrame(data.frame);
+            (data: ArrayBuffer) => { // data is now ArrayBuffer
+                if (data) {
+                    setVideoFrame(data);
                 } else {
                     console.warn('Received VIDEO_FRAME message with missing or invalid frame data:', data);
                 }

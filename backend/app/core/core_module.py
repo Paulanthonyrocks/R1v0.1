@@ -1160,8 +1160,6 @@ class CoreModule:
                 to_delete.append(vid)
             elif time_since_last_seen > track_timeout:
                 track["status"] = "lost" # Mark as lost
-            else:
-                track["status"] = "active" # Ensure active if seen recently
 
         for vid in to_delete:
             del self.vehicle_data[vid]
@@ -1340,7 +1338,7 @@ class CoreModule:
             tracked_vehicles = self.detect_and_track(frame, frame_index)
 
             # Encode the frame
-            ret, buffer = cv2.imencode('.jpg', frame)
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if not ret:
                 continue
             

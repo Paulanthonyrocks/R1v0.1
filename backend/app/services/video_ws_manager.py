@@ -54,6 +54,15 @@ class VideoWSManager:
                 if isinstance(result, Exception):
                     logger.error(f"Error broadcasting message to websocket for stream_id {stream_id}: {result}", exc_info=False)
 
+    async def broadcast_bytes(self, stream_id: str, payload: bytes):
+        """Broadcasts a binary message to all connected clients for a given stream."""
+        if stream_id in self.active_connections:
+            tasks = [ws.send_bytes(payload) for ws in self.active_connections[stream_id]]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"Error broadcasting bytes to websocket for stream_id {stream_id}: {result}", exc_info=False)
+
 
 # Singleton instance
 video_ws_manager = VideoWSManager()

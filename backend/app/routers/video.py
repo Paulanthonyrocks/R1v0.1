@@ -167,18 +167,38 @@ async def video_ws_endpoint(
                 return
 
             processor = video_manager.get_processor(video_path_str)
-            for data in await asyncio.to_thread(processor.get_frame_generator):
-                frame_bytes = data["frame"]
-                kpis = data["kpis"]
-                await video_ws_manager.broadcast(
-                    stream_id,
-                    {"type": "video_frame", "data": {"frame": base64.b64encode(frame_bytes).decode('utf-8')}},
-                )
-                await video_ws_manager.broadcast(
-                    stream_id,
-                    {"type": "metrics_update", "data": {"metrics": kpis}},
-                )
-                await asyncio.sleep(0.03)
+            frame_generator = processor.get_frame_generator()
+
+            while True:
+                try:
+                    # Run the blocking generator in a separate thread
+                    data = await asyncio.to_thread(lambda: next(frame_generator))
+                    frame_bytes = data["frame"]
+                    kpis = data["kpis"]
+
+                    # Broadcast the frame and KPIs
+                    await video_ws_manager.broadcast_bytes(stream_id, frame_bytes)
+                    await video_ws_manager.broadcast(
+                        stream_id,
+                        {"type": "metrics_update", "data": kpis},
+                    )
+                    
+                    # Control the frame rate
+                    await asyncio.sleep(1 / processor.fps if processor.fps > 0 else 0.03)
+
+                except StopIteration:
+                    logger.info(f"Video stream ended for {stream_id}. Restarting...")
+                    # Re-initialize the generator to loop the video
+                    frame_generator = processor.get_frame_generator()
+                    await asyncio.sleep(1) # Wait a second before restarting
+
+                except WebSocketDisconnect:
+                    logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
+                    break # Exit the loop if the client disconnects
+                
+                except Exception as e:
+                    logger.error(f"Error in send_video_data for {stream_id}: {e}", exc_info=True)
+                    break # Exit on other errors
         except WebSocketDisconnect:
             logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
         except Exception as e:

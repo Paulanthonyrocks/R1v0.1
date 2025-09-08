@@ -74,6 +74,7 @@ class FrameReader:
         self.buffer_size = buffer_size
         self.target_fps = target_fps
         self.queue_put_timeout = queue_put_timeout
+        self.is_looped = is_looped
         self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(
             maxsize=max_queue_size
         )
