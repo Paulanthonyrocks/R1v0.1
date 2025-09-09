@@ -80,8 +80,9 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
             // Drawing logic for overlays (bounding boxes, vehicle details)
             if (showOverlays && kpis && kpis.kpis && kpis.kpis.vehicles) {
               console.log("Drawing overlays. Bounding Boxes:", showBoundingBoxes, "Vehicle Details:", showVehicleDetails);
-              const scaleX = canvas.clientWidth / canvas.width;
-              const scaleY = canvas.clientHeight / canvas.height;
+              // Draw in canvas coordinate space; the frame was drawn to canvas size already
+              const scaleX = 1;
+              const scaleY = 1;
 
               ctx.font = '10px monospace';
               ctx.fillStyle = '#00FF00'; // Green color for text

@@ -209,6 +209,14 @@ async def video_ws_endpoint(
     try:
         while True:
             data = await websocket.receive_json()
+            # Respond to client PINGs to keep the connection alive
+            if data.get("type") in ("ping", "PING"):
+                await websocket.send_json({
+                    "type": "pong",
+                    "data": {"timestamp": datetime.datetime.utcnow().isoformat()}
+                })
+                continue
+
             if data.get("type") == "get_initial_feed_statuses":
                 config = get_current_config()
                 sample_videos = config.get("video_input", {}).get("sample_videos", [])
