@@ -38,3 +38,4 @@ ngrok.tgz
 ngrok
 memory.md
 backend/__pycache__/__init__.cpython-311.pyc
+backend/logs

@@ -41,7 +41,7 @@ from app.models.websocket import (
 # Import core worker and utilities (adjust path as needed)
 from app.core.processing_worker import process_video
 from app.utils.monitoring import check_system_resources
-from app.utils.video import FrameTimer  # FrameTimer moved to video.py
+from app.core.processing_worker import FrameTimer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
 from app.tasks.prediction_scheduler import PredictionScheduler

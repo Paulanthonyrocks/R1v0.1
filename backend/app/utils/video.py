@@ -1,179 +1,129 @@
 import cv2
-import numpy as np  # np is used by FrameTimer.get_avg
+import threading
+import time
+from queue import Queue, Full, Empty
 import logging
-import queue  # queue is used by FrameReader
-import threading  # threading is used by FrameTimer and FrameReader
-import time  # time is used by FrameReader
-from typing import Dict, List, Optional, Tuple  # Typing hints used by both classes
-from collections import deque  # deque is used by FrameTimer
+from typing import Optional, Union, Any, Dict
 
 logger = logging.getLogger(__name__)
 
-
-# --- Timers ---
-class FrameTimer:
-    """Simple class to track timings of different stages in a processing loop."""
-
-    def __init__(self, maxlen: int = 100):
-        self.timings: Dict[str, deque] = {
-            "read": deque(maxlen=maxlen),
-            "detect_track": deque(maxlen=maxlen),
-            "ocr": deque(maxlen=maxlen),
-            "monitor": deque(maxlen=maxlen),
-            "visualize": deque(maxlen=maxlen),
-            "db_save": deque(maxlen=maxlen),
-            "queue_put": deque(maxlen=maxlen),
-            "loop_total": deque(maxlen=maxlen),
-        }
-        self._lock = threading.Lock()
-
-    def log_time(self, stage: str, duration: float):
-        with self._lock:
-            if stage in self.timings:
-                self.timings[stage].append(duration)
-            else:
-                logger.warning(f"FrameTimer: Unknown stage '{stage}'")
-
-    def get_avg(self, stage: str) -> float:
-        with self._lock:
-            # Ensure numpy is available if np.mean is used.
-            # If numpy is not a desired dependency here, use statistics.mean or manual calculation.
-            return (
-                np.mean(self.timings[stage])
-                if stage in self.timings and self.timings[stage]
-                else 0.0
-            )
-
-    def get_fps(self, stage: str = "loop_total") -> float:
-        avg_time = self.get_avg(stage)
-        return 1.0 / avg_time if avg_time > 0 else 0.0
-
-    def update_from_dict(self, timings_dict: Dict[str, List[float]]):
-        with self._lock:
-            for stage, times in timings_dict.items():
-                if stage in self.timings and isinstance(
-                    times, (list, deque)
-                ):  # check type to be list or deque
-                    self.timings[stage].extend(times)
-
-
-# --- FrameReader ---
 class FrameReader:
+    """
+    A class to read frames from a video source (file or webcam) in a separate thread.
+    This helps to prevent blocking the main thread while waiting for a new frame.
+    It also includes a configurable buffer to store a certain number of the latest frames.
+    """
+
     def __init__(
         self,
-        source,
+        source: Union[str, int],
         buffer_size: int = 1,
         target_fps: Optional[int] = None,
-        max_queue_size: int = 100,
-        queue_put_timeout: float = 1.0, # New: Timeout for putting frames into the queue
-        is_looped: bool = False, # New: Flag to indicate if the video should loop
-        resize_dim: Optional[Tuple[int, int]] = None, # New: Dimension to resize frames to (width, height)
+        max_queue_size: int = 128,
+        queue_put_timeout_ms: int = 1000,
+        is_looped: bool = False,
     ):
+        """
+        Initializes the FrameReader.
+
+        Args:
+            source (Union[str, int]): The source of the video. Can be a file path (str) or a camera index (int).
+            buffer_size (int): The number of recent frames to keep in the buffer.
+            target_fps (Optional[int]): If provided, the reader will attempt to respect this FPS by introducing delays.
+                                       If None, it reads as fast as possible.
+            max_queue_size (int): The maximum number of frames to store in the internal queue before blocking.
+            queue_put_timeout_ms (int): The maximum time in milliseconds to wait for a free slot in the queue.
+            is_looped (bool): If True, the video file will restart from the beginning when it ends.
+        """
         self.source_name = str(source)
-        self.cap = None
-        self.buffer_size = buffer_size
-        self.target_fps = target_fps
-        self.queue_put_timeout = queue_put_timeout
-        self.is_looped = is_looped
-        self.frame_queue: queue.Queue[Tuple[int, np.ndarray]] = queue.Queue(
-            maxsize=max_queue_size
-        )
-        self.state_lock = threading.Lock()  # Lock for accessing shared state
-        self._end_of_video_flag = False  # Internal state, controlled by property
-        self.thread = None
-        self.stop_event = threading.Event()
-        self.frame_index = (
-            -1
-        )  # Current frame index being processed by the reader thread
-        self.last_read_time = time.time()
-        self.read_interval = 0  # Calculated based on target_fps
-        self.resize_dim = resize_dim # Store resize dimension
-
-        if self.target_fps:
-            self.read_interval = 1.0 / self.target_fps
-
+        self.is_file = isinstance(source, str)
         self._initialize_capture(source)
 
-        if self.cap and self.cap.isOpened():
-            self.thread = threading.Thread(
-                target=self._update_loop,
-                daemon=True,
-                name=f"FrameReader-{self.source_name}",
-            )
-            self.thread.start()
-        else:
-            logger.error(
-                f"FrameReader: Failed to open video source: {source} (from original source: {self.source_name})"
-            )
-            raise RuntimeError(f"FrameReader: Failed to open video source: {source}")
-
-    def _initialize_capture(self, source):
-        """Initializes the OpenCV video capture object."""
-        if isinstance(source, (int, str)):
-            self.cap = cv2.VideoCapture(source)
-        else:
-            raise ValueError(f"Unsupported source type for FrameReader: {type(source)}")
-
         if not self.cap.isOpened():
-            logger.error(
-                f"FrameReader: Failed to open video source: {source} (from original source: {self.source_name})"
-            )
-            raise RuntimeError(f"FrameReader: Failed to open video source: {source}")
+            logger.error(f"FrameReader '{self.source_name}': Failed to open video source.")
+            raise RuntimeError(f"Failed to open video source: {self.source_name}")
+
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)) if self.is_file else -1
+
+        self.target_fps = target_fps
+        self.delay = 1 / self.target_fps if self.target_fps else 0
+
+        self.is_looped = is_looped
+        self.end_of_video = False
+
+        self.frames_queue = Queue(maxsize=max_queue_size)
+        self.queue_put_timeout = queue_put_timeout_ms / 1000.0  # Convert to seconds
+
+        self.thread = threading.Thread(target=self._read_frames_continuously, daemon=True)
+        self.stop_event = threading.Event()
+
+        self.frame_index = -1
+        self.frames_read_count = 0
+        self.frames_processed_count = 0
+
         logger.info(
-            f"FrameReader: Successfully opened video source: {source} (from original source: {self.source_name})"
+            f"FrameReader '{self.source_name}' initialized. "
+            f"FPS: {self.fps}, Resolution: {self.frame_width}x{self.frame_height}, "
+            f"Target FPS: {self.target_fps}, Looping: {self.is_looped}"
         )
 
-    @property
-    def isOpened(self) -> bool:
-        """Returns True if the video capture is opened, False otherwise."""
-        return self.cap.isOpened() if self.cap else False
+    def _initialize_capture(self, source: Union[str, int]) -> None:
+        """Helper method to initialize the video capture."""
+        self.cap = cv2.VideoCapture(source)
+        if self.is_file and self.cap.isOpened():
+            logger.info(f"FrameReader '{self.source_name}': Video file opened successfully.")
+        elif not self.is_file and self.cap.isOpened():
+            logger.info(f"FrameReader '{self.source_name}': Camera opened successfully.")
 
-    @property
-    def end_of_video(self) -> bool:
-        with self.state_lock:
-            return self._end_of_video_flag
+    def start(self) -> "FrameReader":
+        """Starts the frame reading thread."""
+        if not self.thread.is_alive():
+            self.thread.start()
+            logger.info(f"FrameReader '{self.source_name}': Frame reading thread started.")
+        return self
 
-    @end_of_video.setter
-    def end_of_video(self, value: bool):
-        with self.state_lock:
-            self._end_of_video_flag = value
-
-    def _update_loop(self):
-        max_read_fails = 30 # Increased from 10 to 100 tries
+    def _read_frames_continuously(self) -> None:
+        """
+        The main loop for the reading thread. Reads frames from the source
+        and puts them into the queue.
+        """
         consecutive_fails = 0
-        last_read_time = time.monotonic()
+        max_read_fails = 5  # Max consecutive read failures before deciding to stop/restart
 
         while not self.stop_event.is_set():
+            if self.end_of_video and not self.is_looped:
+                logger.info(f"FrameReader '{self.source_name}': End of video and not looping. Stopping thread.")
+                break
+
+            start_time = time.time()
+
             try:
-                if self.target_fps:  # Simple sleep to approximate target FPS
-                    wait_time = (1.0 / self.target_fps) - (
-                        time.monotonic() - last_read_time
-                    )
-                    if wait_time > 0:
-                        time.sleep(wait_time)
-
                 ret, frame = self.cap.read()
-                last_read_time = time.monotonic()
-
                 if ret:
-                    consecutive_fails = 0  # Reset fail counter on successful read
-
-                    # Resize frame if resize_dim is set
-                    if self.resize_dim:
-                        frame = cv2.resize(frame, self.resize_dim)
+                    consecutive_fails = 0  # Reset on successful read
+                    self.frame_index += 1
+                    self.frames_read_count += 1
                     
-                    # Non-blocking put with periodic check of stop_event
-                    put_successful = False
-                    while not self.stop_event.is_set() and not put_successful:
-                        try:
-                            self.frame_queue.put_nowait((self.frame_index, frame))
-                            self.frame_index += 1
-                            put_successful = True
-                        except queue.Full:
-                            logger.warning(
-                                f"FrameReader queue for '{self.source_name}' is full. Waiting briefly..."
-                            )
-                            time.sleep(0.01) # Wait a very short time and retry
+                    # Create a dictionary to hold frame and metadata
+                    frame_data = {
+                        "frame": frame,
+                        "frame_index": self.frame_index,
+                        "timestamp": time.time(),
+                        "source_name": self.source_name,
+                    }
+
+                    try:
+                        # Put the frame data dictionary into the queue
+                        self.frames_queue.put(frame_data, timeout=self.queue_put_timeout)
+                    except Full:
+                        logger.warning(
+                            f"FrameReader '{self.source_name}': Frame queue is full. Dropping frame {self.frame_index}."
+                        )
+                        # Optional: Implement a strategy for handling a full queue,
+                        # e.g., clearing the queue and adding the new frame.
 
                 else:  # ret is False
                     consecutive_fails += 1
@@ -189,79 +139,72 @@ class FrameReader:
                                 self.frame_index = -1 # Reset frame index for new loop
                                 consecutive_fails = 0 # Reset fail counter
                                 self.end_of_video = False # Reset end of video flag
-                                logger.info(f"FrameReader '{self.source_name}': Video restarted successfully.")
-                                continue # Continue the loop to read the first frame of the new loop
+                                logger.info(f"FrameReader '{self.source_name}': Video restarted for looping.")
                             else:
-                                logger.error(f"FrameReader '{self.source_name}': Failed to restart video for looping. Stopping.")
-                                self.end_of_video = True
-                                break
+                                logger.error(f"FrameReader '{self.source_name}': Failed to reopen video for looping. Stopping thread.")
+                                self.end_of_video = True # Set to true to exit loop
                         else:
-                            logger.error(
-                                f"FrameReader '{self.source_name}': Max read fails reached. Assuming end of video or hardware issue."
-                            )
-                            self.end_of_video = True
-                            break
-                    time.sleep(0.1)  # Wait a bit before retrying
+                            logger.info(f"FrameReader '{self.source_name}': End of video source. Stopping thread.")
+                            self.end_of_video = True # Signal end of video
+                
+                # FPS regulation
+                if self.delay > 0:
+                    elapsed_time = time.time() - start_time
+                    sleep_time = self.delay - elapsed_time
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+
             except Exception as e:
-                logger.error(
-                    f"FrameReader thread error in '{self.source_name}': {e}",
-                    exc_info=True,
-                )
-                self.end_of_video = True  # Signal error/end
+                logger.error(f"FrameReader '{self.source_name}': An unexpected error occurred in reading loop: {e}", exc_info=True)
                 break
-
-        logger.info(f"FrameReader thread stopping for '{self.source_name}'.")
-        self.end_of_video = True  # Ensure flag is set on exit
-        if self.cap and self.cap.isOpened():
+        
+        logger.info(f"FrameReader '{self.source_name}': Exiting reading loop.")
+        # Final release of resources
+        if self.cap.isOpened():
             self.cap.release()
-            logger.info(f"Video capture released for '{self.source_name}'.")
 
-        # Clear the queue
-        while not self.frame_queue.empty():
-            try:
-                self.frame_queue.get_nowait()
-            except queue.Empty:
-                break
+    def get_frame(self) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the oldest frame from the queue.
 
-    def read(self) -> Optional[Tuple[int, np.ndarray]]:
+        Returns:
+            Optional[Dict[str, Any]]: A dictionary containing the frame and its metadata,
+                                      or None if the queue is empty.
+        """
         try:
-            return self.frame_queue.get(timeout=0.5)  # Wait up to 0.5s for a frame
-        except queue.Empty:
-            # Check if the thread is still alive and it's not the end of video
-            if self.end_of_video and (
-                not self.thread.is_alive() or self.frame_queue.empty()
-            ):
-                logger.debug(
-                    f"FrameReader '{self.source_name}': Read call, queue empty and EOV / thread stopped."
-                )
-                return None  # End of video or reader stopped
-            logger.debug(
-                f"FrameReader '{self.source_name}': Read call, queue temporarily empty."
-            )
-            return None  # Queue is empty but reader might still be running
+            frame_data = self.frames_queue.get_nowait()
+            self.frames_processed_count += 1
+            return frame_data
+        except Empty:
+            return None
 
-    def stop(self):
-        logger.info(f"FrameReader '{self.source_name}': Stop requested.")
+    def stop(self) -> None:
+        """Signals the reading thread to stop."""
+        logger.info(f"FrameReader '{self.source_name}': Stop signal received.")
         self.stop_event.set()
-
-        # Help the thread exit if it's blocked on a full queue
-        while not self.frame_queue.empty():
-            try:
-                self.frame_queue.get_nowait()
-            except queue.Empty:
-                break
-
+        # Wait for the thread to finish
+        self.thread.join(timeout=5)
         if self.thread.is_alive():
-            self.thread.join(timeout=2.0)  # Wait for thread to finish
-            if self.thread.is_alive():
-                logger.warning(
-                    f"FrameReader thread '{self.source_name}' did not exit cleanly after 2s."
-                )
-
-        # Ensure capture is released if not already by the thread
-        if self.cap and self.cap.isOpened():
+            logger.warning(f"FrameReader '{self.source_name}': Thread did not terminate in time.")
+        
+        # Release the capture device
+        if self.cap.isOpened():
             self.cap.release()
-            logger.info(
-                f"Video capture explicitly released by stop() for '{self.source_name}'."
-            )
-        logger.info(f"FrameReader '{self.source_name}': Stopped.")
+            logger.info(f"FrameReader '{self.source_name}': Video capture released.")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Returns statistics about the frame reader's performance.
+        """
+        return {
+            "source": self.source_name,
+            "fps_source": self.fps,
+            "target_fps": self.target_fps,
+            "resolution": f"{self.frame_width}x{self.frame_height}",
+            "frames_in_queue": self.frames_queue.qsize(),
+            "frames_read": self.frames_read_count,
+            "frames_processed": self.frames_processed_count,
+            "is_running": self.thread.is_alive(),
+            "is_looped": self.is_looped,
+            "end_of_video": self.end_of_video,
+        }

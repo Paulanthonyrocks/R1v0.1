@@ -20,7 +20,7 @@ from .database import DatabaseError, DatabaseManager
 from .image_processing import LicensePlatePreprocessor
 
 # Import from .video module
-from .video import FrameReader, FrameTimer
+from .video import FrameReader
 
 # Import from .visualization module
 from .visualization import (
@@ -55,7 +55,6 @@ __all__ = [
     "LicensePlatePreprocessor",
     # From video.py
     "FrameReader",
-    "FrameTimer",
     # From visualization.py
     "visualize_data",
     "create_lane_overlay",

@@ -62,48 +62,51 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   useEffect(() => {
     if (!token || !streamId) {
-      return; // Do not connect if essential info is missing.
+      return;
     }
 
+    let reconnectTimer: NodeJS.Timeout;
     const wsUrl = new URL(`/video/ws/${streamId}`, VIDEO_WS_BASE_URL).toString();
-    console.log('Constructed Video WebSocket URL:', wsUrl);
 
-    const client = new WebSocketClient(wsUrl);
-    wsClientRef.current = client;
+    const connect = () => {
+      console.log(`useVideoSocket: Connecting to ${streamId}...`);
+      const client = new WebSocketClient(wsUrl);
+      wsClientRef.current = client;
 
-    // Subscribe to video frame and metrics updates
-    client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
-    client.subscribe(WebSocketMessageType.METRICS_UPDATE, handleMetrics);
+      client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
+      client.subscribe(WebSocketMessageType.METRICS_UPDATE, handleMetrics);
 
-    // Handle connection status changes
-    client.onStatusChange((status, message) => {
-      console.log(`Video WebSocket status for ${streamId}: ${status} - ${message || ''}`);
-      setIsConnected(status === 'connected');
-      if (status === 'error' || status === 'disconnected') {
-        setError(message || 'Video stream connection error.');
-      } else {
-        setError(null);
-      }
-    });
+      client.onStatusChange((status, message) => {
+        console.log(`Video WebSocket status for ${streamId}: ${status} - ${message || ''}`);
+        setIsConnected(status === 'connected');
+        if (status === 'connected') {
+          setError(null);
+        } else if (status === 'error' || status === 'disconnected') {
+          setError(message || 'Video stream connection error.');
+          // Clear any existing timer and set a new one to reconnect
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 5000); // Reconnect after 5 seconds
+        }
+      });
 
-    // Handle errors
-    client.onError((type, message) => {
-      console.error(`Video WebSocket Error (${type}) for ${streamId}:`, message);
-      setError(message);
-    });
+      client.onError((type, message) => {
+        console.error(`Video WebSocket Error (${type}) for ${streamId}:`, message);
+        setError(message);
+      });
 
-    // Connect the WebSocket
-    console.log(`useVideoSocket: Connecting to ${streamId}...`);
-    client.connect(token);
+      client.connect(token);
+    };
 
-    // Return a cleanup function that will run ONLY when the component unmounts.
-    // This is critical for preventing duplicate connections in StrictMode.
+    connect();
+
     return () => {
       console.log(`useVideoSocket: Disconnecting from ${streamId}.`);
-      client.disconnect();
-      wsClientRef.current = null;
+      clearTimeout(reconnectTimer);
+      if (wsClientRef.current) {
+        wsClientRef.current.disconnect();
+        wsClientRef.current = null;
+      }
     };
-  // The dependency array ensures this effect re-runs only if the stream or user token changes.
   }, [streamId, token, VIDEO_WS_BASE_URL, handleFrame, handleMetrics]);
 
   return { frameData, metrics, isConnected, error, drawFrame, frameRate };
