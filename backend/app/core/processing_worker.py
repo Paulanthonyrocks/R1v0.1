@@ -31,56 +31,6 @@ except ImportError as e:
         f"Error importing from utils.py in processing_worker: {e}. Ensure utils.py is in the Python path."
     )
 
-    # Define dummy classes/functions if import fails
-    class FrameTimer:
-        def __init__(self, *args, **kwargs):
-            self.timings = {}
-
-        def log_time(self, *args, **kwargs):
-            pass
-
-        def get_avg(self, *args, **kwargs):
-            return 0
-
-        def get_fps(self, *args, **kwargs):
-            return 0
-
-        def update_from_dict(self, *args, **kwargs):
-            pass
-
-    class TrafficMonitor:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def update_vehicles(self, *args, **kwargs):
-            pass
-
-        def get_metrics(self, *args, **kwargs):
-            return {}
-
-    def visualize_data(*args, **kwargs):
-        return args[0]  # Return original frame
-
-    class FrameReader:
-        def __init__(self, *args, **kwargs):
-            self.cap = None
-            self.end_of_video = True
-
-        def read(self):
-            return None, None
-
-        def stop(self):
-            pass
-
-        def isOpened(self):
-            return False  # Simulate failure if import failed
-
-    class ConfigError(Exception):
-        pass
-
-    # Fallback log path if config doesn't provide one
-    LOG_PATH = "./logs/worker.log"
-
 
 try:
     from ..core.core_module import CoreModule
@@ -95,6 +45,7 @@ except ImportError as e:
 def _read_frame(feed_id: str, reader: Any, stop_event: Any, logger: logging.Logger) -> Tuple[Optional[int], Optional[np.ndarray]]:
     try:
         result = reader.read()
+        logger.debug(f"[{feed_id}] _read_frame got result: {result}")
         if result is None or not isinstance(result, tuple) or len(result) != 2:
             if reader.end_of_video:
                 logger.info(f"[{feed_id}] End of video/stream detected by reader, or reader stopped. Exiting worker loop.")
@@ -402,7 +353,7 @@ def process_video(
             max_queue_size=config["video_input"].get(
                 "max_queue_size", 1000
             ),  # Pass max_queue_size from config
-            queue_put_timeout=config["video_input"].get("queue_put_timeout_ms", 1000) / 1000.0, # Convert ms to seconds
+            queue_put_timeout_ms=config["video_input"].get("queue_put_timeout_ms", 1000),
             is_looped=is_looped_feed,
         )
         # Add a small delay for camera/reader thread to initialize
@@ -605,9 +556,9 @@ def process_video(
             logger.info(f"[{feed_id}] FrameReader was not initialized, skipping stop.")
 
         # Cleanup CoreModule safely
-        if core_module:
+        if core_.module:
             try:
-                logger.info(f"[{feed_id}] Cleaning up CoreModule...")
+                logger.info(f"[{feed_d}] Cleaning up CoreModule...")
                 core_module.cleanup()
                 logger.info(f"[{feed_id}] CoreModule cleaned up.")
             except Exception as core_clean_err:

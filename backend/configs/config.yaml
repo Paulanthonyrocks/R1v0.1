@@ -1,5 +1,5 @@
 project_root_dir: /home/user/R1v0.1
-fps: 3
+fps: 5
 speed_limit: 60
 firebase_admin:
   service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
@@ -306,7 +306,7 @@ video_output:
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
-  fps: 3
+  fps: 5
   frame_resolution:
   - 640
   - 480
@@ -326,8 +326,11 @@ vehicle_detection:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 10
+  skip_frames: 20
 analytics_service:
+  node_congestion_broadcast:
+    enabled: false
+    interval: 300
   traffic_predictor:
     model_path: backend/models/traffic_predictor_model.h5
   traffic_prediction:
@@ -345,7 +348,7 @@ analytics_service:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 3
+  skip_frames: 30
   vehicle_type_map:
     2: car
     3: motorcycle

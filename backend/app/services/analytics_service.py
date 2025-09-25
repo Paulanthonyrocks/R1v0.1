@@ -50,8 +50,8 @@ class AnalyticsService:
 
         self._node_congestion_task: Optional[asyncio.Task] = None
         self._kafka_consumer_task: Optional[asyncio.Task] = None
-        self._node_congestion_broadcast_interval = self.config.get(
-            "node_congestion_broadcast_interval", 5
+        self._node_congestion_broadcast_interval = self.config.get("node_congestion_broadcast", {}).get(
+            "interval", 5
         )
         self._data_cleanup_task: Optional[asyncio.Task] = None
         self._data_cleanup_interval = self.config.get(
@@ -555,11 +555,12 @@ class AnalyticsService:
         return data
 
     async def start_background_tasks(self):
-        if self._node_congestion_task is None or self._node_congestion_task.done():
-            self._node_congestion_task = asyncio.create_task(
-                self._broadcast_node_congestion_updates_loop()
-            )
-            logger.info("Node congestion broadcast task started.")
+        if self.config.get("node_congestion_broadcast", {}).get("enabled", True):
+            if self._node_congestion_task is None or self._node_congestion_task.done():
+                self._node_congestion_task = asyncio.create_task(
+                    self._broadcast_node_congestion_updates_loop()
+                )
+                logger.info("Node congestion broadcast task started.")
         if self._data_cleanup_task is None or self._data_cleanup_task.done():
             self._data_cleanup_task = asyncio.create_task(
                 self._cleanup_data_cache_loop()
