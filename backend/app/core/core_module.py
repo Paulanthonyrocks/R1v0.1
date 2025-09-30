@@ -1300,6 +1300,16 @@ class CoreModule:
             del self.preprocessor.gemini_model
             self.preprocessor = None
 
+        # Shutdown ThreadPoolExecutor
+        if self.ocr_executor:
+            self.ocr_executor.shutdown(wait=True)
+            logger.info(f"OCR ThreadPoolExecutor shut down for {self.feed_id}.")
+
+        # Release video capture if it's still open
+        if hasattr(self, '_video_capture') and self._video_capture.isOpened():
+            self._video_capture.release()
+            logger.info(f"Video capture released for {self.feed_id}.")
+
         import gc
 
         gc.collect()
@@ -1313,53 +1323,6 @@ class CoreModule:
         except Exception as e:
             logger.warning(f"Error during CUDA cache clear on cleanup: {e}")
         logger.info(f"CoreModule cleanup finished for {self.feed_id}.")
-
-    def get_frame_generator(self):
-        # Check if video_capture is already open
-        if hasattr(self, '_video_capture') and self._video_capture.isOpened():
-            video_capture = self._video_capture
-            video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0) # Reset to beginning if already open
-            logger.info(f"Reusing existing video capture for {self.feed_id}")
-        else:
-            video_capture = cv2.VideoCapture(str(self.video_path))
-            self._video_capture = video_capture # Store it for reuse
-
-        if not video_capture.isOpened():
-            logger.error(f"Error opening video file: {self.feed_id}")
-            return
-
-        frame_index = 0
-        while True:
-            ret, frame = video_capture.read()
-            if not ret:
-                break
-
-            # Process the frame
-            tracked_vehicles = self.detect_and_track(frame, frame_index)
-
-            # Encode the frame
-            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            if not ret:
-                continue
-            
-            frame_bytes = buffer.tobytes()
-
-            # Prepare KPIs for yielding
-            kpis_to_yield = {
-                "tracked_vehicles": len(tracked_vehicles),
-                "vehicles": [self._serialize_track_data(v) for v in tracked_vehicles.values()]
-            }
-            logger.debug(f"Yielding KPIs: {kpis_to_yield}") # Added debug log
-
-            # Yield the data
-            yield {
-                "frame": frame_bytes,
-                "kpis": kpis_to_yield
-            }
-
-            frame_index += 1
-
-        video_capture.release()
 
 
 # --- Example standalone usage ---

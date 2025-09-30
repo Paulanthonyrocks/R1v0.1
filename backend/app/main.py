@@ -321,7 +321,55 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Failed to start file system watcher: {e}", exc_info=True)
 
+    # 7. Process and store sample video
+    try:
+        logger.info("Scheduling sample video processing task.")
+        asyncio.create_task(process_sample_video_on_startup())
+    except Exception as e:
+        logger.error(f"Failed to schedule sample video processing task: {e}", exc_info=True)
+
     logger.info("Application startup complete.")
+
+
+async def process_sample_video_on_startup():
+    """
+    Processes the sample video file after startup.
+    """
+    logger.info("Post-startup task 'process_sample_video_on_startup' initiated. Waiting for services to be fully available...")
+    await asyncio.sleep(15)
+    logger.info("Post-startup task resumed. Attempting to process sample video.")
+    
+    try:
+        from app.services import get_feed_manager
+        fm = get_feed_manager()
+        if fm is None:
+            logger.error("FeedManager instance is None in post-startup task. Cannot process sample video.")
+            return
+
+        video_path = "/home/user/R1v0.1/backend/data/sample_traffic.mp4"
+        logger.info(f"Target sample video path for post-startup processing: {video_path}")
+        
+        all_feeds = await fm.get_all_statuses()
+        logger.info(f"Found {len(all_feeds)} existing feeds. Checking for duplicates before starting processing.")
+        for feed in all_feeds:
+            if feed.source == video_path:
+                logger.warning(f"A feed for the source '{video_path}' already exists with status '{feed.status}'. Skipping post-startup processing task.")
+                return
+        logger.info("No duplicate feed found. Proceeding to start a new feed for the sample video.")
+
+        logger.info(f"Calling add_and_start_feed for sample video: {video_path}")
+        
+        result = await fm.add_and_start_feed(
+            source=video_path,
+            latitude=34.0522,
+            longitude=-118.2437,
+            name_hint="Sample Video Startup Processing",
+            is_looped=False 
+        )
+        logger.info(f"Successfully initiated processing for {video_path}. Result from FeedManager: {result}")
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during the sample video processing startup task: {e}", exc_info=True)
 
 
 @app.on_event("shutdown")

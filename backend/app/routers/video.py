@@ -11,9 +11,11 @@ from app.dependency_injection import get_current_active_user, get_token_from_que
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
 from app.services.video_ws_manager import video_ws_manager
-from app.services.video_manager import VideoManager
+from app.services.video_manager import VideoManager, process_video_feed
 from app.services.feed_manager import FeedManager
 from app.database import get_database_manager
+from app.utils.video import FrameReader
+import cv2
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,31 +47,13 @@ async def stream_video(current_user: dict = Depends(get_current_active_user)):
         logger.info(f"Video file found at: {video_path.resolve()}")
 
     try:
-        try:
-            video_manager = VideoManager.get_instance()
-        except Exception as e:
-            logger.error(f"VideoManager error: {e}")
-            raise OperationFailed(detail=f"VideoManager error: {e}")
-        try:
-            feed_manager = get_feed_manager()
-            processor = video_manager.get_processor(str(video_path))
-        except Exception as e:
-            logger.error(f"Processor error: {e}")
-            raise OperationFailed(detail=f"Processor error: {e}")
-
         async def generate_frames():
-            try:
-                for data in await asyncio.to_thread(processor.get_frame_generator):
-                    frame_bytes = data["frame"]
-                    # Yield only image frames for performance and compatibility
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-                    )
-            except Exception as e:
-                logger.error(f"Streaming interrupted: {e}")
-                # Optionally yield an error frame or just break
-                return
+            async for data in process_video_feed(str(video_path)):
+                frame_bytes = data["frame"]
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+                )
 
         return StreamingResponse(
             generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame"
@@ -99,26 +83,13 @@ async def get_video_kpis(current_user: dict = Depends(get_current_active_user)):
         raise ResourceNotFound(detail="Sample video path not configured.")
     video_path = Path(video_path_str)
     try:
-        try:
-            video_manager = VideoManager.get_instance()
-        except Exception as e:
-            logger.error(f"VideoManager error: {e}")
-            raise OperationFailed(detail=f"VideoManager error: {e}")
-        try:
-            feed_manager = get_feed_manager()
-            processor = video_manager.get_processor(str(video_path))
-        except Exception as e:
-            logger.error(f"Processor error: {e}")
-            raise OperationFailed(detail=f"Processor error: {e}")
-        # Get one frame of KPIs
-        try:
-            data = await anext(processor.get_frame_generator())
-        except Exception as e:
-            logger.error(f"Frame generator error: {e}")
-            raise OperationFailed(detail=f"Frame generator error: {e}")
-        return APIResponse.success(
-            data=data["kpis"], message="Successfully retrieved video KPIs."
-        )
+        async for data in process_video_feed(str(video_path)):
+            return APIResponse.success(
+                data=data["kpis"], message="Successfully retrieved video KPIs."
+            )
+        
+        raise OperationFailed(detail="Failed to process video frame")
+
     except FileNotFoundError:
         raise ResourceNotFound(detail="Sample video file not found")
     except Exception as e:
@@ -146,59 +117,44 @@ async def video_ws_endpoint(
 
     async def send_video_data():
         try:
-            video_manager = VideoManager.get_instance()
             config = get_current_config()
             
-            # Try to get a list of sample videos first
             sample_videos_list = config.get("video_input", {}).get("sample_videos", [])
             
             video_path_str = None
             if sample_videos_list:
-                # If a list exists, use the first one for now
                 video_path_str = sample_videos_list[0]
             else:
-                # Fallback to the singular sample_video if the list doesn't exist
                 video_path_str = config.get("video_input", {}).get("sample_video")
 
             if not video_path_str:
                 logger.error("Sample video path not configured for WebSocket stream.")
-                # Close the WebSocket connection with an error
                 await websocket.close(code=4000, reason="Video source not configured")
                 return
 
-            processor = video_manager.get_processor(video_path_str)
-            frame_generator = processor.get_frame_generator()
+            video_manager = VideoManager.get_instance()
+            processor, _ = video_manager.get_video_pipeline(video_path_str)
 
-            while True:
+            async for data in process_video_feed(video_path_str):
                 try:
-                    # Run the blocking generator in a separate thread
-                    data = await asyncio.to_thread(lambda: next(frame_generator))
                     frame_bytes = data["frame"]
                     kpis = data["kpis"]
 
-                    # Broadcast the frame and KPIs
                     await video_ws_manager.broadcast_bytes(stream_id, frame_bytes)
                     await video_ws_manager.broadcast(
                         stream_id,
                         {"type": "metrics_update", "data": kpis},
                     )
                     
-                    # Control the frame rate
                     await asyncio.sleep(1 / processor.fps if processor.fps > 0 else 0.03)
-
-                except StopIteration:
-                    logger.info(f"Video stream ended for {stream_id}. Restarting...")
-                    # Re-initialize the generator to loop the video
-                    frame_generator = processor.get_frame_generator()
-                    await asyncio.sleep(1) # Wait a second before restarting
 
                 except WebSocketDisconnect:
                     logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
-                    break # Exit the loop if the client disconnects
+                    break
                 
                 except Exception as e:
                     logger.error(f"Error in send_video_data for {stream_id}: {e}", exc_info=True)
-                    break # Exit on other errors
+                    break
         except WebSocketDisconnect:
             logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
         except Exception as e:
@@ -209,7 +165,6 @@ async def video_ws_endpoint(
     try:
         while True:
             data = await websocket.receive_json()
-            # Respond to client PINGs to keep the connection alive
             if data.get("type") in ("ping", "PING"):
                 await websocket.send_json({
                     "type": "pong",

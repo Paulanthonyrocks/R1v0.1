@@ -320,8 +320,13 @@ def visualize_data(
             cv2.LINE_AA,
         )  # White text
 
+        if vis_frame.shape[2] == 4:
+            vis_frame = cv2.cvtColor(vis_frame, cv2.COLOR_BGRA2BGR)
+
         return vis_frame
 
     except Exception as e:
         logger.error(f"[{feed_id}] Visualization error: {e}", exc_info=True)
-        return frame  # Return original frame on error to prevent crash
+        if frame is not None and frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        return frame  # Return original frame on error

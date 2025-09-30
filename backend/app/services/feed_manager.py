@@ -45,6 +45,7 @@ from app.utils.video import FrameTimer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
 from app.tasks.prediction_scheduler import PredictionScheduler
+from app.services.video_writer import VideoWriter
 
 
 class FeedStatus(Enum):
@@ -77,6 +78,7 @@ class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.process_registry: Dict[str, Dict[str, Any]] = {}
+        self.video_writers: Dict[str, VideoWriter] = {}
         self._lock = (
             asyncio.Lock()
         )  # Use asyncio lock for async methods managing the registry
@@ -188,56 +190,9 @@ class FeedManager:
         logger.info("WebSocket ConnectionManager set in FeedManager.")
 
     def _initialize_available_feeds(self):
-        sample_video_paths = self.config.get("video_input", {}).get("sample_videos", [])
-        singular_sample_path = self.config.get("video_input", {}).get("sample_video")
-
-        # Ensure singular_sample_path is always considered if it exists
-        if singular_sample_path:
-            if isinstance(sample_video_paths, list):
-                if singular_sample_path not in sample_video_paths:
-                    sample_video_paths.append(singular_sample_path)
-            else: # If sample_videos was not a list, or not present, create a new list
-                sample_video_paths = [singular_sample_path]
-
-        for i, sample_path_str in enumerate(sample_video_paths):
-            resolved_path = Path(self.config.get("project_root_dir"), sample_path_str)
-            logger.info(f"Attempting to resolve path: {sample_path_str}")
-            logger.info(f"Resolved path: {resolved_path.absolute()}")
-            logger.info(f"Current working directory: {Path.cwd()}")
-            if not resolved_path.exists():
-                logger.warning(f"Sample video path configured but not found: {resolved_path}")
-                # Do not raise an exception here, just log a warning and skip this path
-                continue # Skip to the next sample path
-            # If it exists, proceed as normal (this block was incorrectly indented)
-            feed_name = f"Sample Video {i+1}" if len(sample_video_paths) > 1 else "Sample Video"
-            feed_id = self._generate_feed_id(str(resolved_path), feed_name)
-            self.process_registry[feed_id] = {
-                "process": None,
-                "result_queue": None,
-                "stop_event": None,
-                "reduce_fps_event": None,
-                "status": FeedOperationalStatusEnum.STOPPED,
-                "source": str(resolved_path),
-                "start_time": None,
-                "error_message": None,
-                "latest_metrics": None,
-                "timer": None,
-                "is_sample_feed": True,
-                'is_looped_feed': True,
-                "config_info": FeedConfigInfo(
-                    name=feed_name,
-                    source_type="video_file",
-                    source_identifier=str(resolved_path),
-                    latitude=34.0522,
-                    longitude=-118.2437, # Default coordinates
-                ),
-            }
-            self._sample_feed_ids.append(feed_id)
-            logger.info(
-                f"Initialized sample feed '{feed_id}' ({feed_name}) as {FeedOperationalStatusEnum.STOPPED}."
-            )
-        if not self._sample_feed_ids:
-            logger.info("No sample video paths configured or found.")
+        # This method is intentionally left empty to prevent automatic initialization of sample feeds.
+        # Sample feeds are now handled by a post-startup task in main.py.
+        logger.info("Automatic sample feed initialization is disabled.")
 
     def _generate_feed_id(self, source: str, name_hint: Optional[str] = None) -> str:
         """Generates a unique Feed ID."""
@@ -727,7 +682,7 @@ class FeedManager:
                         if entry:
                             if "timer" not in entry or not entry["timer"]:
                                 entry["timer"] = FrameTimer()
-                            entry["timer"].update_from_dict(timings)
+                            # entry["timer"].update_from_dict(timings)
                             # Ensure timestamp in metrics is timezone-aware (UTC)
                             if "timestamp" in metrics and isinstance(
                                 metrics["timestamp"], (int, float)
@@ -925,17 +880,15 @@ class FeedManager:
 
             # Initial config for the feed
             feed_config = FeedConfigInfo(
-                source=source,
-                name_hint=name_hint,
-                is_sample=False,  # Manually added feeds are not sample feeds by default
-                is_looped=is_looped,
+                name=name_hint or Path(source).name,
+                source_type="video_file" if Path(source).suffix else "webcam",
+                source_identifier=source,
                 latitude=latitude
                 if latitude is not None
                 else 0.0,  # Default to 0.0 if not provided
                 longitude=longitude
                 if longitude is not None
                 else 0.0,  # Default to 0.0 if not provided
-                # other config params like resolution_preference, inference_mode can be added here
             )
 
             self.process_registry[feed_id] = {
@@ -943,7 +896,7 @@ class FeedManager:
                 "result_queue": None,
                 "stop_event": None,
                 "reduce_fps_event": None,
-                "status": FeedOperationalStatusEnum.STARTING,  # Initial status
+                "status": FeedOperationalStatusEnum.STOPPED,  # Initial status
                 "source": source,
                 "start_time": None,
                 "error_message": None,
@@ -1013,6 +966,9 @@ class FeedManager:
             entry["result_queue"] = MPQueue(
                 maxsize=self.config.get("video_input", {}).get("max_queue_size", 500)
             )
+            entry["video_writer_queue"] = MPQueue(
+                maxsize=self.config.get("video_input", {}).get("max_queue_size", 500)
+            )
             entry["stop_event"] = Event()
             entry["reduce_fps_event"] = Event()
             entry["status"] = FeedOperationalStatusEnum.STARTING
@@ -1036,12 +992,28 @@ class FeedManager:
                 if entry["result_queue"]:
                     entry["result_queue"].close()
                 entry["result_queue"] = None
+                if entry["video_writer_queue"]:
+                    entry["video_writer_queue"].close()
+                entry["video_writer_queue"] = None
                 entry["stop_event"] = None
                 # Don't remove from registry
                 await self._broadcast_feed_update(feed_id)  # Broadcast error status
                 raise FeedOperationError(
                     f"Failed to launch worker for restarting '{feed_id}'."
                 ) from e
+
+            video_output_config = self.config.get("video_output", {})
+            if video_output_config.get("enabled", False):
+                video_writer = VideoWriter(
+                    feed_id=feed_id,
+                    output_dir=video_output_config.get("output_directory"),
+                    fps=video_output_config.get("fps"),
+                    resolution=tuple(video_output_config.get("frame_resolution")),
+                    frame_queue=entry["video_writer_queue"],
+                    codec=video_output_config.get("codec", "mp4v"),
+                )
+                self.video_writers[feed_id] = video_writer
+                video_writer.start()
 
         # Broadcast updates and check sample feed outside the lock
         await self._broadcast_feed_update(feed_id)  # Broadcast 'starting' status
@@ -1051,6 +1023,10 @@ class FeedManager:
 
     async def stop_feed(self, feed_id: str):
         """Stops a specific feed if it is running."""
+        if feed_id in self.video_writers:
+            self.video_writers[feed_id].stop()
+            del self.video_writers[feed_id]
+
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
@@ -1161,6 +1137,7 @@ class FeedManager:
             return  # Should not happen if called correctly
 
         result_queue = entry["result_queue"]
+        video_writer_queue = entry.get("video_writer_queue")
         stop_event = entry["stop_event"]
         reduce_event = entry["reduce_fps_event"]
         vis_options = self.config.get(
@@ -1189,6 +1166,7 @@ class FeedManager:
             None,  # Pass None for db_queue, DB handled centrally if needed or via results
             error_queue,
             entry.get("config_info"),  # Pass the feed's specific config_info
+            video_writer_queue,
         )
 
         process = Process(
@@ -1342,62 +1320,64 @@ class FeedManager:
 
     async def _cleanup_process(self, feed_id: str):
         """Stops, joins, and cleans up resources for a specific feed_id. Assumes lock is held."""
-        # This method needs to be async if joining the process might block event loop
-        # But process.join() itself is blocking. Running in executor?
-        needs_sample_check = False  # Flag to check sample feed after releasing lock
-        try:
-            entry = self.process_registry.get(feed_id)
-            if not entry:
-                logger.warning(f"Cleanup requested for non-existent feed_id: {feed_id}")
-                return
+        entry = self.process_registry.get(feed_id)
+        if not entry:
+            logger.warning(f"Cleanup requested for non-existent feed_id: {feed_id}")
+            return
 
-            # Separate declaration and assignment for type checking
-            process: Optional[Process] = entry.get("process")
-            stop_event = entry.get("stop_event")
-            result_queue = entry.get("result_queue")
-            status = entry.get("status")
-            is_sample = entry.get("is_sample_feed", False)
+        process: Optional[Process] = entry.get("process")
+        stop_event = entry.get("stop_event")
+        result_queue = entry.get("result_queue")
+        video_writer_queue = entry.get("video_writer_queue")
+        status = entry.get("status")
+        is_sample = entry.get("is_sample_feed", False)
 
-            logger.debug(
-                f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})"
-            )
+        logger.debug(
+            f"Starting cleanup for {feed_id} (Process: {process.pid if process else 'None'}, Status: {status})"
+        )
 
-            self._signal_stop_event(feed_id, stop_event)
-            await self._join_process(feed_id, process)
+        # 1. Signal Stop Event
+        self._signal_stop_event(feed_id, stop_event)
 
-            # Close Process Handle (if supported and process exists)
-            self._close_queue(feed_id, result_queue)
+        # 2. Stop and cleanup VideoWriter
+        if feed_id in self.video_writers:
+            try:
+                self.video_writers[feed_id].stop()
+                del self.video_writers[feed_id]
+                logger.info(f"Video writer for feed {feed_id} stopped and removed.")
+            except Exception as e:
+                logger.error(f"Error stopping video writer for {feed_id}: {e}", exc_info=True)
 
-            # Update Registry Status (Only if not already stopped - avoid overwriting error state if cleanup failed)
-            if entry["status"] != "stopped":
-                await self._update_registry_status(entry, feed_id)
 
-            # Clear the running event for this feed
-            if feed_id in self._feed_running_events:
-                self._feed_running_events[feed_id].clear()
+        # 3. Join Process
+        await self._join_process(feed_id, process)
 
-            # Check if a real feed was cleaned up (even from error state)
-            # Need to trigger sample feed check if the last real feed is now stopped
-            if status in ["running", "starting", "error"] and not is_sample:
-                needs_sample_check = True  # Set flag to check after lock release
+        # 4. Close and drain queues
+        self._close_queue(feed_id, result_queue)
+        self._close_queue(feed_id, video_writer_queue, "video_writer_queue")
 
-        except Exception as e:
-            logger.error(
-                f"Unexpected error during cleanup for feed {feed_id}: {e}",
-                exc_info=True,
-            )
-            # Ensure status is error if cleanup fails badly
-            entry = self.process_registry.get(feed_id)
-            if entry and entry["status"] != "error":
-                entry["status"] = "error"
-                entry["error_message"] = f"Cleanup failed: {e}"
-                # Attempt to broadcast this error state
-                loop = asyncio.get_running_loop()
-                loop.call_soon(
-                    asyncio.create_task, self._broadcast_feed_update(feed_id)
-                )
 
-        # Perform sample check outside the lock if needed
+        # 5. Update Registry Status
+        entry["status"] = FeedOperationalStatusEnum.STOPPED
+        entry["error_message"] = None
+        entry["process"] = None
+        entry["stop_event"] = None
+        entry["result_queue"] = None
+        entry["video_writer_queue"] = None
+        entry["timer"] = None # Clear timer to reset FPS stats on restart
+
+        if feed_id in self._feed_running_events:
+            self._feed_running_events[feed_id].clear()
+
+        logger.info(f"Cleanup for feed '{feed_id}' completed. Status set to STOPPED.")
+
+        # 6. Trigger sample feed check if a real feed was stopped
+        needs_sample_check = (
+            status in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING, FeedOperationalStatusEnum.ERROR]
+            and not is_sample
+        )
+
+        # This must be done after the lock is released.
         if needs_sample_check:
             loop = asyncio.get_running_loop()
             loop.call_soon(asyncio.create_task, self._check_and_manage_sample_feed())
