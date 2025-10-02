@@ -7,6 +7,7 @@ firebase_admin:
   service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
+  storage_bucket: r1v0-1.appspot.com
 logging:
   version: 1
   disable_existing_loggers: false
@@ -312,6 +313,9 @@ video_output:
   frame_resolution:
   - 640
   - 480
+  stream_resolution:
+  - 640
+  - 480
 vehicle_detection:
   enabled: true
   model_path: backend/models/yolov8n.pt
@@ -328,7 +332,7 @@ vehicle_detection:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 25
+  skip_frames: 5
 analytics_service:
   node_congestion_broadcast:
     enabled: false

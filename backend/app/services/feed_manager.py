@@ -879,17 +879,14 @@ class FeedManager:
             logger.info(f"Adding new feed: {feed_id} for source: {source}")
 
             # Initial config for the feed
-            feed_config = FeedConfigInfo(
-                name=name_hint or Path(source).name,
-                source_type="video_file" if Path(source).suffix else "webcam",
-                source_identifier=source,
-                latitude=latitude
-                if latitude is not None
-                else 0.0,  # Default to 0.0 if not provided
-                longitude=longitude
-                if longitude is not None
-                else 0.0,  # Default to 0.0 if not provided
-            )
+            feed_config_data = {
+                "name": name_hint or Path(source).name,
+                "source_type": "video_file" if Path(source).suffix else "webcam",
+                "source_identifier": source,
+                "latitude": latitude,
+                "longitude": longitude,
+            }
+            feed_config = FeedConfigInfo(**feed_config_data)
 
             self.process_registry[feed_id] = {
                 "process": None,
@@ -1008,7 +1005,6 @@ class FeedManager:
                     feed_id=feed_id,
                     output_dir=video_output_config.get("output_directory"),
                     fps=video_output_config.get("fps"),
-                    resolution=tuple(video_output_config.get("frame_resolution")),
                     frame_queue=entry["video_writer_queue"],
                     codec=video_output_config.get("codec", "mp4v"),
                 )
@@ -1167,6 +1163,7 @@ class FeedManager:
             error_queue,
             entry.get("config_info"),  # Pass the feed's specific config_info
             video_writer_queue,
+            entry.get("is_looped_feed", False),
         )
 
         process = Process(
@@ -1354,7 +1351,7 @@ class FeedManager:
 
         # 4. Close and drain queues
         self._close_queue(feed_id, result_queue)
-        self._close_queue(feed_id, video_writer_queue, "video_writer_queue")
+        self._close_queue(feed_id, video_writer_queue)
 
 
         # 5. Update Registry Status

@@ -13,9 +13,9 @@ from app.utils.video import FrameReader
 logger = logging.getLogger(__name__)
 
 
-async def process_video_feed(video_path: str) -> AsyncGenerator[Dict[str, Any], None]:
+async def process_video_feed(video_path: str, is_looped: bool = True) -> AsyncGenerator[Dict[str, Any], None]:
     video_manager = VideoManager.get_instance()
-    processor, frame_reader = video_manager.get_video_pipeline(video_path)
+    processor, frame_reader = video_manager.get_video_pipeline(video_path, is_looped=is_looped)
 
     if not frame_reader or not frame_reader.isOpened:
         logger.error(f"Failed to get a valid FrameReader for {video_path}")
@@ -25,6 +25,8 @@ async def process_video_feed(video_path: str) -> AsyncGenerator[Dict[str, Any], 
         while True:
             frame_data = await asyncio.to_thread(frame_reader.get_frame)
             if frame_data is None:
+                if not is_looped:
+                    break
                 await asyncio.sleep(0.01)
                 continue
 
@@ -75,7 +77,7 @@ class VideoManager:
     def get_instance(cls) -> 'VideoManager':
         return cls()
 
-    def get_video_pipeline(self, video_path: str) -> Tuple[Any, Optional[FrameReader]]:
+    def get_video_pipeline(self, video_path: str, is_looped: bool = True) -> Tuple[Any, Optional[FrameReader]]:
         logger.info(f"Getting video pipeline for video_path: {video_path}")
         with self._lock:
             processor = self.processors.get(video_path)
@@ -100,7 +102,7 @@ class VideoManager:
             if reader is None or not reader.isOpened:
                 config = get_current_config()
                 target_fps = config.get("video_processing", {}).get("target_fps", 10)
-                reader = FrameReader(video_path, is_looped=True, target_fps=target_fps)
+                reader = FrameReader(video_path, is_looped=is_looped, target_fps=target_fps)
                 if not reader.start():
                     logger.error(f"Failed to start FrameReader for {video_path}")
                     self.readers[video_path] = None

@@ -35,11 +35,11 @@ class VideoProcessor:
         self._output_path: Optional[str] = None
         self._recording_start_time: Optional[float] = None
         self._frame_rate: float = 10.0
-        self._frame_size: tuple = (1280, 720)
+        self._frame_size: Optional[tuple] = None
         logger.info(f"VideoProcessor initialized for stream_id: {self.stream_id}")
 
     async def start_recording(
-        self, output_filename: str, frame_rate: float, frame_size: tuple
+        self, output_filename: str, frame_rate: float
     ):
         if self._is_recording:
             logger.warning(f"Recording already in progress for stream {self.stream_id}")
@@ -49,17 +49,6 @@ class VideoProcessor:
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
 
         self._frame_rate = frame_rate
-        self._frame_size = frame_size
-
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self._video_writer = cv2.VideoWriter(
-            self._output_path, fourcc, self._frame_rate, self._frame_size
-        )
-
-        if not self._video_writer.isOpened():
-            logger.error(f"Could not open video writer for {self._output_path}")
-            self._video_writer = None
-            return False
 
         self._is_recording = True
         self._recording_start_time = time.time()
@@ -69,13 +58,14 @@ class VideoProcessor:
         return True
 
     async def stop_recording(self):
-        if not self._is_recording or not self._video_writer:
+        if not self._is_recording:
             logger.warning(f"No active recording to stop for stream {self.stream_id}")
             return False
 
-        self._video_writer.release()
-        self._video_writer = None
-        logger.info(f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}")
+        if self._video_writer:
+            self._video_writer.release()
+            self._video_writer = None
+            logger.info(f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}")
 
         if self._output_path and self._recording_start_time:
             db_manager = get_database_manager()
@@ -112,13 +102,22 @@ class VideoProcessor:
                 raw_frame_bytes = feed_entry["latest_frame_bytes"]
                 kpis = feed_entry["latest_metrics"]
 
-                if self._is_recording and self._video_writer:
+                if self._is_recording:
                     np_arr = np.frombuffer(raw_frame_bytes, np.uint8)
                     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
                     if frame is not None:
-                        if frame.shape[1] != self._frame_size[0] or frame.shape[0] != self._frame_size[1]:
-                            frame = cv2.resize(frame, self._frame_size)
+                        if self._video_writer is None:
+                            self._frame_size = (frame.shape[1], frame.shape[0])
+                            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                            self._video_writer = cv2.VideoWriter(
+                                self._output_path, fourcc, self._frame_rate, self._frame_size
+                            )
+                            if not self._video_writer.isOpened():
+                                logger.error(f"Could not open video writer for {self._output_path}")
+                                self._video_writer = None
+                                self._is_recording = False
+                                continue
                         
                         self._draw_overlays(frame, kpis)
                         self._video_writer.write(frame)

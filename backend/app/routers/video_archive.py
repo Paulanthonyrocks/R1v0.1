@@ -14,8 +14,6 @@ class StartRecordingRequest(BaseModel):
     stream_id: str
     output_filename: str
     frame_rate: float = 10.0
-    frame_width: int = 1280
-    frame_height: int = 720
 
 
 class ProcessedVideoResponse(BaseModel):
@@ -40,7 +38,6 @@ async def start_video_recording(
     success = await processor.start_recording(
         request.output_filename,
         request.frame_rate,
-        (request.frame_width, request.frame_height),
     )
     if success:
         return {

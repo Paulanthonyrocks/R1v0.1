@@ -362,8 +362,21 @@ class CoreModule:
 
     def _run_onnx_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         img_size = self.yolo_imgsz
-        input_img = cv2.resize(processed_frame, (img_size, img_size))
-        input_img = input_img.astype(np.float32) / 255.0
+        
+        # Resize and pad image while preserving aspect ratio
+        h, w, _ = processed_frame.shape
+        scale = min(img_size / h, img_size / w)
+        new_h, new_w = int(h * scale), int(w * scale)
+        resized_img = cv2.resize(processed_frame, (new_w, new_h))
+        
+        top_pad = (img_size - new_h) // 2
+        bottom_pad = img_size - new_h - top_pad
+        left_pad = (img_size - new_w) // 2
+        right_pad = img_size - new_w - left_pad
+        
+        padded_img = cv2.copyMakeBorder(resized_img, top_pad, bottom_pad, left_pad, right_pad, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+
+        input_img = padded_img.astype(np.float32) / 255.0
         input_img = np.transpose(input_img, (2, 0, 1))
         input_tensor = np.expand_dims(input_img, axis=0)
 
@@ -371,7 +384,7 @@ class CoreModule:
         output_name = self.model.get_outputs()[0].name
         outputs = self.model.run([output_name], {input_name: input_tensor})[0]
 
-        return self._postprocess_onnx_output(outputs, confidence_threshold, processed_frame.shape, img_size, roi_enabled, x1_crop, y1_crop)
+        return self._postprocess_onnx_output(outputs, confidence_threshold, (new_h, new_w), img_size, roi_enabled, x1_crop, y1_crop, (top_pad, left_pad))
 
     def _run_pytorch_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         results = self.model.predict(
@@ -384,7 +397,7 @@ class CoreModule:
         )
         return self._postprocess_pytorch_output(results, confidence_threshold, roi_enabled, x1_crop, y1_crop)
 
-    def _postprocess_onnx_output(self, outputs: np.ndarray, confidence_threshold: float, frame_shape: Tuple[int, int], img_size: int, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+    def _postprocess_onnx_output(self, outputs: np.ndarray, confidence_threshold: float, original_shape: Tuple[int, int], resized_shape: Tuple[int, int], padding: Tuple[int, int], roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         detections = []
         output = outputs[0].T
         scores = np.max(output[:, 4:], axis=1)
@@ -393,13 +406,15 @@ class CoreModule:
         class_ids = np.argmax(output[:, 4:], axis=1)
         boxes = output[:, :4]
 
-        scale_x = frame_shape[1] / img_size
-        scale_y = frame_shape[0] / img_size
+        # Adjust for padding and scaling
+        scale_w = original_shape[1] / resized_shape[0]
+        scale_h = original_shape[0] / resized_shape[1]
+        pad_x, pad_y = padding
 
-        x1 = (boxes[:, 0] - boxes[:, 2] / 2) * scale_x
-        y1 = (boxes[:, 1] - boxes[:, 3] / 2) * scale_y
-        x2 = (boxes[:, 0] + boxes[:, 2] / 2) * scale_x
-        y2 = (boxes[:, 1] + boxes[:, 3] / 2) * scale_y
+        x1 = (boxes[:, 0] - boxes[:, 2] / 2 - pad_x) * scale_w
+        y1 = (boxes[:, 1] - boxes[:, 3] / 2 - pad_y) * scale_h
+        x2 = (boxes[:, 0] + boxes[:, 2] / 2 - pad_x) * scale_w
+        y2 = (boxes[:, 1] + boxes[:, 3] / 2 - pad_y) * scale_h
 
         if roi_enabled and not self.roi_polygon_points:
             x1 += x1_crop

@@ -50,7 +50,7 @@ def process_video(
     track_timeout: int, vis_options: Set[str], reduce_frame_rate_event: Any, 
     global_fps: Any, db_queue: Optional["MPQueue"] = None, 
     error_queue: Optional["MPQueue"] = None, feed_config_info: Optional[Dict] = None,
-    video_writer_queue: Optional["MPQueue"] = None
+    video_writer_queue: Optional["MPQueue"] = None, is_looped: bool = False
 ) -> None:
     pid = os.getpid()
     reader = None
@@ -64,7 +64,6 @@ def process_video(
             formatter = logging.Formatter("%(asctime)s - %(process)d - %(levelname)s - %(message)s")
             sh = logging.StreamHandler()
             sh.setFormatter(formatter)
-            logger.addHandler(sh)
             try:
                 log_path = Path(log_cfg.get("log_path", "./logs/worker.log"))
                 log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +80,6 @@ def process_video(
             try: source = int(video_path.split(":")[1])
             except (IndexError, ValueError): source = 0
         
-        is_looped = feed_config_info.is_looped_feed if feed_config_info and hasattr(feed_config_info, 'is_looped_feed') else False
         target_fps = config.get("video_processing", {}).get("target_fps", 10)
         reader = FrameReader(
             source, 
@@ -120,16 +118,22 @@ def process_video(
 
             if core_module and traffic_monitor:
                 if frame_index % skip_interval == 0:
-                    proc_frame = cv2.resize(frame, tuple(config["vehicle_detection"].get("frame_resolution", (640, 480))))
-                    tracked_vehicles = core_module.detect_and_track(proc_frame, frame_index, confidence_threshold, proximity_threshold, track_timeout)
+                    # Perform detection on the original frame
+                    tracked_vehicles = core_module.detect_and_track(frame, frame_index, confidence_threshold, proximity_threshold, track_timeout)
                     traffic_monitor.update_vehicles(tracked_vehicles)
                     metrics = traffic_monitor.get_metrics()
-                    vis_frame = visualize_data(proc_frame, tracked_vehicles, metrics, vis_options, config, feed_id)
+
+                    # Visualize data on the original frame
+                    vis_frame = visualize_data(frame.copy(), tracked_vehicles, metrics, vis_options, config, feed_id)
+
+                    # Write full-resolution frame with visualizations to video_writer_queue
                     if video_writer_queue:
-                        video_output_resolution = tuple(config.get("video_output", {}).get("frame_resolution", (640, 480)))
-                        resized_vis_frame = cv2.resize(vis_frame, video_output_resolution)
-                        video_writer_queue.put(resized_vis_frame)
-                    _, buffer = cv2.imencode(".jpg", vis_frame)
+                        video_writer_queue.put(vis_frame)
+
+                    # For streaming, resize the visualized frame to a smaller resolution
+                    stream_frame_resolution = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+                    stream_frame = cv2.resize(vis_frame, stream_frame_resolution)
+                    _, buffer = cv2.imencode(".jpg", stream_frame)
                     frame_queue.put((feed_id, frame_index, buffer.tobytes(), metrics, tracked_vehicles, {}))
             else:
                  _, buffer = cv2.imencode(".jpg", frame)

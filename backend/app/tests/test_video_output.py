@@ -49,11 +49,13 @@ def mock_queues():
     reduce_fps_e = Event()
     global_fps_v = Value('i', 30)
     global_skip_factor_v = Value('f', 1.0)
-    yield frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v
+    video_writer_q = Queue()
+    yield frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v, video_writer_q
     frame_q.close()
     alerts_q.close()
     db_q.close()
     error_q.close()
+    video_writer_q.close()
 
 @pytest.fixture
 def mock_config():
@@ -78,64 +80,74 @@ def mock_config():
             "enabled": True,
             "output_directory": "./test_processed_videos",
             "codec": "mp4v",
-            "fps": 10
+            "fps": 10,
+            "stream_resolution": [640, 480]
         }
     }
 
-@patch('cv2.VideoWriter')
-@patch('cv2.VideoWriter_fourcc', return_value=cv2.VideoWriter_fourcc(*'mp4v'))
-def test_processed_video_storage_enabled(mock_fourcc, mock_video_writer, mock_queues, mock_config):
-    frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v = mock_queues
+@patch('app.core.processing_worker.CoreModule')
+@patch('app.core.processing_worker.FrameReader')
+def test_processed_video_storage_enabled(mock_frame_reader, mock_core_module, mock_queues, mock_config):
+    frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v, video_writer_q = mock_queues
     
     feed_id = "test_feed_video_output"
     video_path = "dummy_video.mp4"
 
-    # Run the process_video function in a separate thread or process if it's blocking
-    # For unit testing, we'll let it run directly and rely on the mocked FrameReader to stop
-    process_video(
-        video_path=video_path,
-        frame_queue=frame_q,
-        stop_event=stop_e,
-        alerts_queue=alerts_q,
-        config=mock_config,
-        feed_id=feed_id,
-        confidence_threshold=mock_config["vehicle_detection"]["confidence_threshold"],
-        proximity_threshold=mock_config["vehicle_detection"]["proximity_threshold"],
-        track_timeout=mock_config["vehicle_detection"]["track_timeout"],
-        vis_options=set(),
-        reduce_frame_rate_event=reduce_fps_e,
-        global_fps=global_fps_v,
-        db_queue=db_q,
-        error_queue=error_q,
-        feed_config_info={"latitude": 0.0, "longitude": 0.0} # Dummy config info
-    )
+    mock_frame_reader.return_value.read.side_effect = [(1, np.zeros((1080, 1920, 3), dtype=np.uint8)), (2, np.zeros((1080, 1920, 3), dtype=np.uint8)), None]
 
-    # Assert that VideoWriter was initialized
-    output_dir = Path(mock_config["video_output"]["output_directory"])
-    expected_output_path = str(output_dir / f"{feed_id}.mp4")
-    
-    mock_video_writer.assert_called_once_with(
-        expected_output_path,
-        mock_fourcc.return_value,
-        mock_config["video_output"]["fps"],
-        tuple(mock_config["vehicle_detection"]["frame_resolution"])
-    )
+    with patch('app.services.video_writer.cv2.VideoWriter') as mock_video_writer:
+        process_video(
+            video_path=video_path,
+            frame_queue=frame_q,
+            stop_event=stop_e,
+            alerts_queue=alerts_q,
+            config=mock_config,
+            feed_id=feed_id,
+            confidence_threshold=mock_config["vehicle_detection"]["confidence_threshold"],
+            proximity_threshold=mock_config["vehicle_detection"]["proximity_threshold"],
+            track_timeout=mock_config["vehicle_detection"]["track_timeout"],
+            vis_options=set(),
+            reduce_frame_rate_event=reduce_fps_e,
+            global_fps=global_fps_v,
+            db_queue=db_q,
+            error_queue=error_q,
+            feed_config_info={"latitude": 0.0, "longitude": 0.0}, # Dummy config info
+            video_writer_queue=video_writer_q
+        )
 
-    # Assert that write was called for each frame
-    mock_video_writer_instance = mock_video_writer.return_value
-    assert mock_video_writer_instance.write.call_count == 2 # Because we simulated 2 frames
+        # Assert that VideoWriter was initialized with the resolution of the first frame
+        output_dir = Path(mock_config["video_output"]["output_directory"])
+        expected_output_path = str(output_dir / f"{feed_id}.mp4")
+        
+        # The first frame is 1920x1080, so the VideoWriter should be initialized with this resolution
+        expected_resolution = (1920, 1080)
 
-    # Assert that release was called
-    mock_video_writer_instance.release.assert_called_once()
+        # Wait for the video writer to be initialized
+        import time
+        time.sleep(1)
 
-    # Clean up the created directory
-    if output_dir.exists():
-        os.rmdir(output_dir)
+        mock_video_writer.assert_called_once_with(
+            expected_output_path,
+            cv2.VideoWriter_fourcc(*'mp4v'),
+            mock_config["video_output"]["fps"],
+            expected_resolution
+        )
+
+        # Assert that write was called for each frame
+        mock_video_writer_instance = mock_video_writer.return_value
+        assert mock_video_writer_instance.write.call_count == 2 # Because we simulated 2 frames
+
+        # Assert that release was called
+        mock_video_writer_instance.release.assert_called_once()
+
+        # Clean up the created directory
+        if output_dir.exists():
+            os.rmdir(output_dir)
 
 @patch('cv2.VideoWriter')
 @patch('cv2.VideoWriter_fourcc')
 def test_processed_video_storage_disabled(mock_fourcc, mock_video_writer, mock_queues, mock_config):
-    frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v = mock_queues
+    frame_q, stop_e, alerts_q, db_q, error_q, reduce_fps_e, global_fps_v, global_skip_factor_v, video_writer_q = mock_queues
     
     # Disable video output in config
     mock_config["video_output"]["enabled"] = False
@@ -158,7 +170,8 @@ def test_processed_video_storage_disabled(mock_fourcc, mock_video_writer, mock_q
         global_fps=global_fps_v,
         db_queue=db_q,
         error_queue=error_q,
-        feed_config_info={"latitude": 0.0, "longitude": 0.0} # Dummy config info
+        feed_config_info={"latitude": 0.0, "longitude": 0.0}, # Dummy config info
+        video_writer_queue=video_writer_q
     )
 
     # Assert that VideoWriter was NOT initialized

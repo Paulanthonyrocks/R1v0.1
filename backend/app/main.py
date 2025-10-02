@@ -176,6 +176,8 @@ async def startup_event():
         service_account_path_str = firebase_config.get(
             "service_account_key_path", "configs/firebase/service-account-key.json"
         )
+        storage_bucket = firebase_config.get("storage_bucket")
+
         if not service_account_path_str:
             logger.warning(
                 "Firebase service account path not configured. Authentication will be disabled."
@@ -190,7 +192,9 @@ async def startup_event():
         if key_path:
             try:
                 cred = credentials.Certificate(str(key_path.resolve()))
-                firebase_admin.initialize_app(cred)
+                firebase_admin.initialize_app(
+                    cred, {"storageBucket": storage_bucket}
+                )
                 logger.info(
                     f"Firebase Admin SDK initialized successfully using key: {key_path.resolve()}"
                 )
