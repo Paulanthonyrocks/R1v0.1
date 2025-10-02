@@ -456,7 +456,7 @@ vis_options_default:
 interface:
   camera_warmup_time: 0.5
 roi_processing:
-  enabled: true
+  enabled: false
   crop_rect:
   - 0
   - 233
