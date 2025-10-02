@@ -33,6 +33,7 @@ class VideoProcessor:
         self._is_recording: bool = False
         self._video_writer: Optional[cv2.VideoWriter] = None
         self._output_path: Optional[str] = None
+        self._tmp_output_path: Optional[str] = None
         self._recording_start_time: Optional[float] = None
         self._frame_rate: float = 10.0
         self._frame_size: Optional[tuple] = None
@@ -46,7 +47,14 @@ class VideoProcessor:
             return False
 
         self._output_path = os.path.join(self.output_directory, output_filename)
+        self._tmp_output_path = self._output_path + ".tmp"
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
+        # Remove stale tmp file or existing output to avoid appending to corrupted file
+        try:
+            if os.path.exists(self._tmp_output_path):
+                os.remove(self._tmp_output_path)
+        except Exception as e:
+            logger.warning(f"[{self.stream_id}] Unable to remove stale tmp file {self._tmp_output_path}: {e}")
 
         self._frame_rate = frame_rate
 
@@ -66,6 +74,13 @@ class VideoProcessor:
             self._video_writer.release()
             self._video_writer = None
             logger.info(f"Stopped recording for stream {self.stream_id}. Video saved to {self._output_path}")
+        # Atomically move tmp to final path after release
+        try:
+            if self._tmp_output_path and os.path.exists(self._tmp_output_path):
+                os.replace(self._tmp_output_path, self._output_path)
+                logger.info(f"[{self.stream_id}] Finalized recorded video atomically: {self._output_path}")
+        except Exception as e:
+            logger.error(f"[{self.stream_id}] Failed to finalize video file {self._tmp_output_path} -> {self._output_path}: {e}", exc_info=True)
 
         if self._output_path and self._recording_start_time:
             db_manager = get_database_manager()
@@ -107,11 +122,20 @@ class VideoProcessor:
                     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
                     if frame is not None:
+                        # Normalize frame format
+                        if frame.dtype != np.uint8:
+                            frame = frame.astype(np.uint8)
+                        if len(frame.shape) == 2:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                        elif frame.shape[2] == 4:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
                         if self._video_writer is None:
                             self._frame_size = (frame.shape[1], frame.shape[0])
                             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                            # Write to tmp first
                             self._video_writer = cv2.VideoWriter(
-                                self._output_path, fourcc, self._frame_rate, self._frame_size
+                                self._tmp_output_path, fourcc, self._frame_rate, self._frame_size
                             )
                             if not self._video_writer.isOpened():
                                 logger.error(f"Could not open video writer for {self._output_path}")
@@ -120,6 +144,14 @@ class VideoProcessor:
                                 continue
                         
                         self._draw_overlays(frame, kpis)
+                        # Ensure size consistency
+                        if (frame.shape[1], frame.shape[0]) != self._frame_size:
+                            try:
+                                frame = cv2.resize(frame, self._frame_size)
+                            except Exception as e:
+                                logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size}: {e}")
+                                await asyncio.sleep(0.001)
+                                continue
                         self._video_writer.write(frame)
                     else:
                         logger.warning(f"Failed to decode frame for recording on stream {self.stream_id}.")
