@@ -47,7 +47,9 @@ class VideoProcessor:
             return False
 
         self._output_path = os.path.join(self.output_directory, output_filename)
-        self._tmp_output_path = self._output_path + ".tmp"
+        # Keep .mp4 extension for temp file so OpenCV/FFmpeg chooses the right muxer
+        base, ext = os.path.splitext(self._output_path)
+        self._tmp_output_path = f"{base}.tmp{ext}"
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
         # Remove stale tmp file or existing output to avoid appending to corrupted file
         try:

@@ -16,7 +16,9 @@ class VideoWriter:
     def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'avc1'):
         self.feed_id = feed_id
         self.output_path = os.path.join(output_dir, f"{feed_id}.mp4")
-        self._tmp_output_path = self.output_path + ".tmp"
+        # Keep .mp4 extension in temp file so OpenCV/FFmpeg picks the correct container
+        base, ext = os.path.splitext(self.output_path)
+        self._tmp_output_path = f"{base}.tmp{ext}"
         self.fps = fps
         self.resolution = None
         self.frame_queue = frame_queue
