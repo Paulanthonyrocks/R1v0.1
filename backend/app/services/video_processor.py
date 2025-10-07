@@ -134,7 +134,7 @@ class VideoProcessor:
 
                         if self._video_writer is None:
                             self._frame_size = (frame.shape[1], frame.shape[0])
-                            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                            fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Changed from mp4v to avc1
                             # Write to tmp first
                             self._video_writer = cv2.VideoWriter(
                                 self._tmp_output_path, fourcc, self._frame_rate, self._frame_size
@@ -151,7 +151,7 @@ class VideoProcessor:
                             try:
                                 frame = cv2.resize(frame, self._frame_size)
                             except Exception as e:
-                                logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size}: {e}")
+                                logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size}, skipping frame: {e}")
                                 await asyncio.sleep(0.001)
                                 continue
                         self._video_writer.write(frame)
