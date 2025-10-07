@@ -134,13 +134,25 @@ class VideoProcessor:
 
                         if self._video_writer is None:
                             self._frame_size = (frame.shape[1], frame.shape[0])
-                            fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Changed from mp4v to avc1
-                            # Write to tmp first
-                            self._video_writer = cv2.VideoWriter(
-                                self._tmp_output_path, fourcc, self._frame_rate, self._frame_size
-                            )
-                            if not self._video_writer.isOpened():
-                                logger.error(f"Could not open video writer for {self._output_path}")
+                            # Try commonly available codecs; prefer mp4v for broad compatibility on Windows
+                            codec_candidates = ["mp4v", "avc1", "H264", "XVID"]
+                            opened = False
+                            for c in codec_candidates:
+                                fourcc = cv2.VideoWriter_fourcc(*c)
+                                vw = cv2.VideoWriter(self._tmp_output_path, fourcc, self._frame_rate, self._frame_size)
+                                if vw.isOpened():
+                                    self._video_writer = vw
+                                    logger.info(f"[{self.stream_id}] Opened VideoWriter with codec '{c}', fps={self._frame_rate}, res={self._frame_size} -> {self._tmp_output_path}")
+                                    opened = True
+                                    break
+                                else:
+                                    try:
+                                        vw.release()
+                                    except Exception:
+                                        pass
+                                    logger.warning(f"[{self.stream_id}] Failed to open VideoWriter with codec '{c}'. Trying next.")
+                            if not opened:
+                                logger.error(f"[{self.stream_id}] Could not open any VideoWriter codec from {codec_candidates}. Disabling recording.")
                                 self._video_writer = None
                                 self._is_recording = False
                                 continue

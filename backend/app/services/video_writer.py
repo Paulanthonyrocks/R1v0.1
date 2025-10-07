@@ -13,7 +13,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 class VideoWriter:
-    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'avc1'):
+    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'mp4v'):
         self.feed_id = feed_id
         self.output_path = os.path.join(output_dir, f"{feed_id}.mp4")
         # Keep .mp4 extension in temp file so OpenCV/FFmpeg picks the correct container
@@ -23,16 +23,15 @@ class VideoWriter:
         self.resolution = None
         self.frame_queue = frame_queue
         
-        # Try codecs in order of preference
-        codecs_to_try = [codec, 'avc1', 'H264', 'XVID', 'mp4v']
+        # Prepare codec preference list (mp4v first for widest compatibility on Windows)
+        # Note: cv2.VideoWriter_fourcc never raises; actual check is writer.isOpened()
+        self._codec_candidates = []
+        seen = set()
+        for c in [codec, 'mp4v', 'avc1', 'H264', 'XVID']:
+            if c and c not in seen:
+                self._codec_candidates.append(c)
+                seen.add(c)
         self.fourcc = None
-        for c in codecs_to_try:
-            try:
-                self.fourcc = cv2.VideoWriter_fourcc(*c)
-                logger.info(f"[{self.feed_id}] Using codec: {c}")
-                break
-            except:
-                continue
         
         self.writer = None
         self.stop_event = Event()
@@ -93,13 +92,26 @@ class VideoWriter:
 
                 if self.writer is None:
                     self.resolution = (frame.shape[1], frame.shape[0])
-                    # Write to temporary file first to avoid exposing partial/corrupt files
-                    self.writer = cv2.VideoWriter(self._tmp_output_path, self.fourcc, self.fps, self.resolution)
-                    if not self.writer.isOpened():
-                        logger.error(f"[{self.feed_id}] Failed to open VideoWriter. Video will not be saved.")
-                        self.writer = None
+                    # Attempt codecs in order until a writer opens successfully
+                    opened = False
+                    for c in self._codec_candidates:
+                        fourcc = cv2.VideoWriter_fourcc(*c)
+                        writer = cv2.VideoWriter(self._tmp_output_path, fourcc, self.fps, self.resolution)
+                        if writer.isOpened():
+                            self.writer = writer
+                            self.fourcc = fourcc
+                            logger.info(f"[{self.feed_id}] Opened VideoWriter with codec '{c}', fps={self.fps}, res={self.resolution} -> {self._tmp_output_path}")
+                            opened = True
+                            break
+                        else:
+                            try:
+                                writer.release()
+                            except Exception:
+                                pass
+                            logger.warning(f"[{self.feed_id}] Failed to open VideoWriter with codec '{c}'. Trying next.")
+                    if not opened:
+                        logger.error(f"[{self.feed_id}] Could not open any VideoWriter codec from {self._codec_candidates}. Aborting write loop.")
                         break
-                    logger.info(f"[{self.feed_id}] VideoWriter successfully opened with resolution {self.resolution}.")
                 
                 if self.writer and self.writer.isOpened():
                     # Ensure subsequent frames match initial resolution
