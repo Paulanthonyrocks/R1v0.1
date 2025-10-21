@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2, RotateCw, Settings } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Maximize, Minimize } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
@@ -17,6 +17,8 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); // New state for panel visibility
+    const [isFullScreen, setIsFullScreen] = useState<boolean>(false); // New state for fullscreen
+    const cardRef = useRef<HTMLDivElement>(null); // Ref for the card element
 
     const { isLoading, error, isLive, canvasRef, frameRate: fps } = useVideoStream({
         streamId: id,
@@ -26,13 +28,10 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         showOverlays,
         showBoundingBoxes,
         showVehicleDetails,
+        isFullScreen, // Pass isFullScreen to useVideoStream
     });
     const component_name = feedName ?? `Feed ${id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
-    
-
-    
-    
     
 
     useEffect(() => {
@@ -41,7 +40,33 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
         }
     }, [status]);
 
-    
+    // Handle fullscreen change
+    useEffect(() => {
+        const handleFullScreenChange = () => {
+            if (document.fullscreenElement === cardRef.current) {
+                setIsFullScreen(true);
+            } else {
+                setIsFullScreen(false);
+            }
+        };
+
+        document.addEventListener('fullscreenchange', handleFullScreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullScreenChange);
+        };
+    }, []);
+
+    const toggleFullScreen = () => {
+        if (cardRef.current) {
+            if (!document.fullscreenElement) {
+                cardRef.current.requestFullscreen().catch(err => {
+                    console.error("Error attempting to enable fullscreen:", err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+    };
 
     const toggleFeed = () => {
         if (isToggling || !isConnected) {
@@ -66,11 +91,13 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
 
     return (
         <Card
+            ref={cardRef} // Attach ref to the Card
             className={cn(
                 "matrix-glow-card overflow-hidden group",
                 "cursor-pointer",
                 "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
-                "font-lcd matrix-glow"
+                "font-lcd matrix-glow",
+                isFullScreen ? "fixed inset-0 w-screen h-screen z-50 rounded-none" : "" // Fullscreen styles
             )}
             onClick={isToggling ? undefined : toggleFeed}
             tabIndex={0}
@@ -117,7 +144,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                 {kpis && isLive && !isToggling && !isLoading && !error && (
                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow">
                         <span>VEH: {kpis.vehicle_count ?? '--'}</span>
-                        <span>AVG SPEED: {kpis.avg_speed ?? '--'} KM/H</span>
+                        <span>AVG SPEED: {kpis.avg_speed ? kpis.avg_speed.toFixed(1) : '--'} KM/H</span>
                     </div>
                 )}
                 {!isToggling && !isLoading && (
@@ -129,6 +156,16 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <RotateCw className="h-4 w-4" />
                     </button>)
                 }
+                {/* Fullscreen Button */}
+                {!isToggling && !isLoading && !error && (
+                    <button
+                        className="absolute bottom-1.5 left-10 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
+                        onClick={(e) => { e.stopPropagation(); toggleFullScreen(); }}
+                        title={isFullScreen ? "Exit Fullscreen" : "Fullscreen"}
+                    >
+                        {isFullScreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+                    </button>
+                )}
                 {/* New: Overlay Controls Button */}
                 {!isToggling && !isLoading && !error && (
                     <button
@@ -153,30 +190,7 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         />
                     </div>
                 )}
-                {/* New: Overlay Controls Button */}
-                {!isToggling && !isLoading && !error && (
-                    <button
-                        className="absolute top-1.5 right-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
-                        onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
-                        title="Overlay Controls"
-                    >
-                        <Settings className="h-4 w-4" />
-                    </button>
-                )}
 
-                {/* New: Overlay Controls Panel */}
-                {showControlsPanel && (
-                    <div className="absolute top-10 right-1.5 z-30">
-                        <StreamOverlayControls
-                            showOverlays={showOverlays}
-                            setShowOverlays={setShowOverlays}
-                            showBoundingBoxes={showBoundingBoxes}
-                            setShowBoundingBoxes={setShowBoundingBoxes}
-                            showVehicleDetails={showVehicleDetails}
-                            setShowVehicleDetails={setShowVehicleDetails}
-                        />
-                    </div>
-                )}
             </div>
             <CardContent className="p-2 rounded-none">
                 <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>

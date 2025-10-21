@@ -171,7 +171,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         );
 
         // Subscribe to global realtime metrics
-        client.subscribe(WebSocketMessageType.GLOBAL_REALTIME_METRICS_UPDATE, 
+        client.subscribe(WebSocketMessageType.KPI_UPDATE, 
             (data: KPIData) => {
                 setKpis(data);
             }

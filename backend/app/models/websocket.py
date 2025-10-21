@@ -219,7 +219,7 @@ class InitialFeedStatusesData(BaseModel):
 # --- WebSocket Message Wrapper ---
 class WebSocketMessageTypeEnum(str, enum.Enum):
     METRICS_UPDATE = "metrics_update"
-    GLOBAL_REALTIME_METRICS_UPDATE = "global_realtime_metrics_update"
+    KPI_UPDATE = "kpi_update"
     NEW_ALERT = "new_alert"
     SIGNAL_UPDATE = "signal_update"
     VIDEO_FRAME = "video_frame"

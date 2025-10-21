@@ -95,7 +95,7 @@ class VideoProcessor:
                 end_time=end_time,
                 duration=duration,
             )
-            await db_manager.save_processed_video_metadata(processed_video_entry)
+            await db_.save_processed_video_metadata(processed_video_entry)
             logger.info(f"Saved processed video metadata for {self.stream_id}")
 
         self._is_recording = False
@@ -134,23 +134,26 @@ class VideoProcessor:
 
                         if self._video_writer is None:
                             self._frame_size = (frame.shape[1], frame.shape[0])
-                            # Try commonly available codecs; prefer mp4v for broad compatibility on Windows
-                            codec_candidates = ["mp4v", "avc1", "H264", "XVID"]
+                            # Try commonly available codecs; prioritize mp4v for broad compatibility
+                            # Adding DIVX as another alternative.
+                            codec_candidates = ["mp4v", "H264", "avc1", "XVID", "DIVX"]
                             opened = False
                             for c in codec_candidates:
-                                fourcc = cv2.VideoWriter_fourcc(*c)
-                                vw = cv2.VideoWriter(self._tmp_output_path, fourcc, self._frame_rate, self._frame_size)
-                                if vw.isOpened():
-                                    self._video_writer = vw
-                                    logger.info(f"[{self.stream_id}] Opened VideoWriter with codec '{c}', fps={self._frame_rate}, res={self._frame_size} -> {self._tmp_output_path}")
-                                    opened = True
-                                    break
-                                else:
-                                    try:
-                                        vw.release()
-                                    except Exception:
-                                        pass
-                                    logger.warning(f"[{self.stream_id}] Failed to open VideoWriter with codec '{c}'. Trying next.")
+                                try:
+                                    fourcc = cv2.VideoWriter_fourcc(*c)
+                                    vw = cv2.VideoWriter(self._tmp_output_path, fourcc, self._frame_rate, self._frame_size)
+                                    if vw.isOpened():
+                                        self._video_writer = vw
+                                        logger.info(f"[{self.stream_id}] Successfully opened VideoWriter with codec '{c}', fps={self._frame_rate}, res={self._frame_size} -> {self._tmp_output_path}")
+                                        opened = True
+                                        break
+                                    else:
+                                        logger.warning(f"[{self.stream_id}] Failed to open VideoWriter with codec '{c}'. isOpened() returned False. Trying next.")
+                                        try: vw.release() # Release if not opened to free resources
+                                        except Exception: pass
+                                except Exception as e_codec:
+                                    logger.warning(f"[{self.stream_id}] Exception while trying codec '{c}': {e_codec}. Trying next.")
+
                             if not opened:
                                 logger.error(f"[{self.stream_id}] Could not open any VideoWriter codec from {codec_candidates}. Disabling recording.")
                                 self._video_writer = None
@@ -166,12 +169,23 @@ class VideoProcessor:
                                 logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size}, skipping frame: {e}")
                                 await asyncio.sleep(0.001)
                                 continue
-                        self._video_writer.write(frame)
+                        
+                        try:
+                            self._video_writer.write(frame)
+                        except Exception as e_write:
+                            logger.error(f"[{self.stream_id}] Error writing frame to video file: {e_write}", exc_info=True)
+                            # Consider stopping recording if write fails consistently
+
                     else:
                         logger.warning(f"Failed to decode frame for recording on stream {self.stream_id}.")
 
                 yield {"frame": raw_frame_bytes, "kpis": kpis}
-                await asyncio.sleep(0.01) # Yield control to the event loop
+                
+                # Adjust sleep based on recording status and frame rate
+                if self._is_recording and self._frame_rate > 0:
+                    await asyncio.sleep(1.0 / self._frame_rate)
+                else:
+                    await asyncio.sleep(0.01) # Yield control to the event loop
 
             except asyncio.CancelledError:
                 logger.info(f"Frame generator for stream {self.stream_id} cancelled.")
@@ -211,6 +225,7 @@ class VideoManager:
 
     def __init__(self):
         self.video_processors: Dict[str, VideoProcessor] = {}
+        self.background_tasks: Dict[str, asyncio.Task] = {}
 
     @classmethod
     def get_instance(cls, output_directory: Optional[str] = None) -> "VideoManager":
@@ -230,10 +245,21 @@ class VideoManager:
             )
         return self.video_processors[stream_id]
 
+    def start_background_task(self, stream_id: str, task: asyncio.Task):
+        self.background_tasks[stream_id] = task
+
+    def cancel_background_task(self, stream_id: str):
+        if stream_id in self.background_tasks:
+            self.background_tasks[stream_id].cancel()
+            del self.background_tasks[stream_id]
+
     async def cleanup(self):
         """Stops all active recordings and cleans up processors."""
+        for task in self.background_tasks.values():
+            task.cancel()
         for processor in self.video_processors.values():
             if processor._is_recording:
                 await processor.stop_recording()
         self.video_processors.clear()
-        logger.info("All video processors cleaned up.")
+        self.background_tasks.clear()
+        logger.info("All video processors and background tasks cleaned up.")

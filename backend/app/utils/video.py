@@ -25,14 +25,13 @@ class FrameReader:
         self.cap_lock = threading.Lock()
         self._initialize_and_get_properties()
 
-        self.target_fps = target_fps
+        self.target_fps = target_fps if target_fps else self.fps # Use actual FPS if target_fps not provided
         self.delay = 1 / self.target_fps if self.target_fps else 0
         self.is_looped = is_looped
         self.end_of_video = False
 
         self.frames_queue = Queue(maxsize=max_queue_size)
-        self.queue_put_timeout = queue_put_timeout_ms / 1000.0
-
+        
         self.thread = threading.Thread(target=self._read_frames_continuously, daemon=True)
         self.stop_event = threading.Event()
         self.started_event = threading.Event()
@@ -101,10 +100,20 @@ class FrameReader:
                 self.frame_index += 1
                 self.frames_read_count += 1
                 frame_data = {"frame": frame, "frame_index": self.frame_index, "timestamp": time.time(), "source_name": self.source_name}
+
+                if self.frames_queue.full():
+                    try:
+                        # Discard the oldest frame
+                        self.frames_queue.get_nowait()
+                    except Empty:
+                        pass  # Should not happen
+
                 try:
-                    self.frames_queue.put(frame_data, timeout=self.queue_put_timeout)
+                    self.frames_queue.put_nowait(frame_data)
                 except Full:
-                    logger.warning(f"FrameReader '{self.source_name}': Queue full. Dropping frame {self.frame_index}.")
+                    # This should not happen if we just made space, but as a fallback
+                    logger.warning(f"FrameReader '{self.source_name}': Dropping frame {self.frame_index} due to full queue.")
+                    pass
             else:
                 consecutive_fails += 1
                 if consecutive_fails >= max_read_fails:
@@ -115,11 +124,10 @@ class FrameReader:
                     else:
                         self.end_of_video = True
             
-            if self.delay > 0:
-                elapsed_time = time.time() - start_time
-                sleep_time = self.delay - elapsed_time
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+            elapsed_time = time.time() - start_time
+            sleep_time = self.delay - elapsed_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         if self.cap:
             self.cap.release()

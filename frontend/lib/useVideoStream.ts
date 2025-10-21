@@ -14,6 +14,7 @@ interface UseVideoStreamOptions {
   showOverlays?: boolean;
   showBoundingBoxes?: boolean;
   showVehicleDetails?: boolean;
+  isFullScreen?: boolean; // Add isFullScreen prop
 }
 
 interface UseVideoStreamReturn {
@@ -26,7 +27,17 @@ interface UseVideoStreamReturn {
   kpis: SurveillanceFeedMessage | null | undefined;
 }
 
-const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket', frameData, kpis, showOverlays, showBoundingBoxes, showVehicleDetails }: UseVideoStreamOptions): UseVideoStreamReturn => {
+const useVideoStream = ({
+  streamId,
+  forceSample = false,
+  streamType = 'websocket',
+  frameData,
+  kpis,
+  showOverlays,
+  showBoundingBoxes,
+  showVehicleDetails,
+  isFullScreen, // Destructure isFullScreen
+}: UseVideoStreamOptions): UseVideoStreamReturn => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +55,13 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
     const img = new Image();
     const blob = new Blob([frame.slice().buffer], { type: 'image/jpeg' });
     img.onload = () => {
+      // Ensure the canvas dimensions match the current display size
+      if (ctx.canvas.offsetWidth !== ctx.canvas.width) {
+        ctx.canvas.width = ctx.canvas.offsetWidth;
+      }
+      if (ctx.canvas.offsetHeight !== ctx.canvas.height) {
+        ctx.canvas.height = ctx.canvas.offsetHeight;
+      }
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
     };
@@ -74,32 +92,48 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
         if (canvas) {
           const ctx = canvas.getContext('2d');
           if (ctx) {
+            // Update canvas dimensions dynamically for fullscreen or normal view
+            if (isFullScreen) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            } else {
+                // Reset to default or container size. Assuming a default ratio or relying on CSS
+                // For simplicity, we can let CSS handle the initial sizing and then adjust for fullscreen.
+                // For non-fullscreen, ensure it takes up its allocated space based on CSS.
+                // A more robust solution might involve a ResizeObserver or parent dimensions.
+                canvas.width = canvas.offsetWidth; // Use current rendered width
+                canvas.height = canvas.offsetHeight; // Use current rendered height
+            }
+            
             const frame = new Uint8Array(frameData);
             drawFrame(ctx, frame);
 
             // Drawing logic for overlays (bounding boxes, vehicle details)
             if (showOverlays && kpis && kpis.kpis && kpis.kpis.vehicles) {
               console.log("Drawing overlays. Bounding Boxes:", showBoundingBoxes, "Vehicle Details:", showVehicleDetails);
-              // Draw in canvas coordinate space; the frame was drawn to canvas size already
-              const scaleX = 1;
-              const scaleY = 1;
+              
+              // Calculate scaling factors based on actual canvas dimensions
+              const originalFrameWidth = 640; // Assuming video frames are 640x480 as in canvas setup
+              const originalFrameHeight = 480;
 
-              ctx.font = '10px monospace';
+              const scaleX = canvas.width / originalFrameWidth;
+              const scaleY = canvas.height / originalFrameHeight;
+
+              ctx.font = `${10 * scaleX}px monospace`; // Scale font size with canvas
               ctx.fillStyle = '#00FF00'; // Green color for text
+              ctx.strokeStyle = '#FF0000'; // Red color for boxes
+              ctx.lineWidth = 2 * scaleX; // Scale line width
 
-              // Fixed: Use the correct structure for vehicle data
               kpis.kpis.vehicles.forEach((detection: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }) => {
                 const { x1, y1, x2, y2 } = detection;
                 
                 if (showBoundingBoxes) {
-                  ctx.strokeStyle = '#FF0000'; // Red color for boxes
-                  ctx.lineWidth = 2;
                   ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
                 }
 
                 if (showVehicleDetails) {
-                  ctx.fillText(`ID: ${detection.id}`, x1 * scaleX, y1 * scaleY - 10);
-                  ctx.fillText(`SPD: ${detection.speed} KM/H`, x1 * scaleX, y1 * scaleY - 25);
+                  ctx.fillText(`ID: ${detection.id}`, x1 * scaleX, y1 * scaleY - (10 * scaleY));
+                  ctx.fillText(`SPD: ${detection.speed.toFixed(1)} KM/H`, x1 * scaleX, y1 * scaleY - (25 * scaleY));
                 }
               });
             }
@@ -119,6 +153,14 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
         if (canvas) {
           const ctx = canvas.getContext('2d');
           if (ctx) {
+             // Update canvas dimensions dynamically for fullscreen or normal view
+            if (isFullScreen) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            } else {
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+            }
             mpDrawFrame(ctx, mpRawFrameData);
           }
         }
@@ -131,7 +173,7 @@ const useVideoStream = ({ streamId, forceSample = false, streamType = 'websocket
         setIsLive(false);
       }
     }
-  }, [streamId, forceSample, streamType, frameData, mpRawFrameData, mpLoading, mpError, drawFrame, mpDrawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, kpis]);
+  }, [streamId, forceSample, streamType, frameData, mpRawFrameData, mpLoading, mpError, drawFrame, mpDrawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, kpis, isFullScreen]); // Add isFullScreen to dependencies
 
   return { videoUrl: null, isLoading, error, isLive, canvasRef, frameRate, kpis };
 };

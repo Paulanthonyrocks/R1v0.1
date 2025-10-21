@@ -77,7 +77,7 @@ const StreamPage: React.FC = () => {
           {/* Metric Cards */}
           <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <StatCard title="Vehicles Detected" value={String(metrics?.vehicle_count ?? '--')} unit="" icon={Activity} change="N/A" changeText="N/A" />
-            <StatCard title="Average Speed" value={String(metrics?.avg_speed ?? '--')} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
+            <StatCard title="Average Speed" value={metrics?.avg_speed ? metrics.avg_speed.toFixed(2) : '--'} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
             <StatCard title="Active Incidents" value={String(metrics?.active_incidents_count ?? '--')} icon={AlertTriangle} change="N/A" changeText="N/A" />
             <StatCard title="Feeds" value={String(feeds ? feeds.filter(f => f.status === 'running').length : '--')} unit="/ running" icon={Users} change="N/A" changeText="N/A">
               <div className="text-xs text-lcd-text mt-1 tracking-normal"> {/* Changed color, added tracking */}

@@ -1,4 +1,3 @@
-
 import cv2
 import os
 from pathlib import Path
@@ -13,21 +12,20 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 class VideoWriter:
-    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'mp4v'):
+    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'XVID'): # Changed default codec to XVID
         self.feed_id = feed_id
-        self.output_path = os.path.join(output_dir, f"{feed_id}.mp4")
-        # Keep .mp4 extension in temp file so OpenCV/FFmpeg picks the correct container
+        # Changed output extension to .avi for wider compatibility as a diagnostic step
+        self.output_path = os.path.join(output_dir, f"{feed_id}.avi") 
         base, ext = os.path.splitext(self.output_path)
         self._tmp_output_path = f"{base}.tmp{ext}"
         self.fps = fps
         self.resolution = None
         self.frame_queue = frame_queue
         
-        # Prepare codec preference list (mp4v first for widest compatibility on Windows)
-        # Note: cv2.VideoWriter_fourcc never raises; actual check is writer.isOpened()
+        # Prepare codec preference list with XVID prioritized for .avi
         self._codec_candidates = []
         seen = set()
-        for c in [codec, 'mp4v', 'avc1', 'H264', 'XVID']:
+        for c in [codec, 'XVID', 'MJPG', 'mp4v', 'avc1', 'H264']:
             if c and c not in seen:
                 self._codec_candidates.append(c)
                 seen.add(c)
@@ -44,6 +42,7 @@ class VideoWriter:
                 os.remove(self._tmp_output_path)
         except Exception as e:
             logger.warning(f"[{self.feed_id}] Unable to remove stale tmp file {self._tmp_output_path}: {e}")
+        self._first_frame_saved = False # Flag to save only the first frame
 
     def start(self):
         self.thread.start()
@@ -73,13 +72,19 @@ class VideoWriter:
         frames_written = 0
         while not self.stop_event.is_set():
             try:
-                frame = self.frame_queue.get(timeout=1)
-                if frame is None:
+                frame_data = self.frame_queue.get(timeout=1)
+                if frame_data is None:
                     break
                 
-                # Verify frame is valid
-                if not isinstance(frame, np.ndarray):
-                    logger.error(f"[{self.feed_id}] Invalid frame type: {type(frame)}")
+                frame = None
+                if isinstance(frame_data, np.ndarray):
+                    frame = frame_data
+                elif isinstance(frame_data, bytes):
+                    np_arr = np.frombuffer(frame_data, np.uint8)
+                    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                
+                if frame is None:
+                    logger.error(f"[{self.feed_id}] Invalid frame data received. Type: {type(frame_data)}")
                     continue
 
                 # Normalize frame: ensure uint8 and 3 channels BGR
@@ -90,12 +95,23 @@ class VideoWriter:
                 elif frame.shape[2] == 4:
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
+                # Save the first frame as an image for debugging
+                if not self._first_frame_saved:
+                    try:
+                        first_frame_path = os.path.join(os.path.dirname(self.output_path), f"{self.feed_id}_first_frame.jpg")
+                        cv2.imwrite(first_frame_path, frame)
+                        logger.info(f"[{self.feed_id}] Saved first frame to {first_frame_path}")
+                        self._first_frame_saved = True
+                    except Exception as e_save:
+                        logger.error(f"[{self.feed_id}] Error saving first frame: {e_save}", exc_info=True)
+
                 if self.writer is None:
                     self.resolution = (frame.shape[1], frame.shape[0])
                     # Attempt codecs in order until a writer opens successfully
                     opened = False
                     for c in self._codec_candidates:
                         fourcc = cv2.VideoWriter_fourcc(*c)
+                        # Explicitly try .avi extension for this diagnostic run
                         writer = cv2.VideoWriter(self._tmp_output_path, fourcc, self.fps, self.resolution)
                         if writer.isOpened():
                             self.writer = writer

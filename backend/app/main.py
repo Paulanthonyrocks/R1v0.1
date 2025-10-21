@@ -328,7 +328,12 @@ async def startup_event():
     # 7. Process and store sample video
     try:
         logger.info("Scheduling sample video processing task.")
-        asyncio.create_task(process_sample_video_on_startup())
+        from app.services.video_processor import VideoManager
+        output_directory = loaded_config.get("video_output", {}).get("output_directory")
+        video_manager = VideoManager.get_instance(output_directory=output_directory)
+        task = asyncio.create_task(process_sample_video_on_startup())
+        video_manager.start_background_task("sample-feed", task)
+
     except Exception as e:
         logger.error(f"Failed to schedule sample video processing task: {e}", exc_info=True)
 

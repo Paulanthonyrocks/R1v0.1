@@ -4,73 +4,64 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { APIResponse, AllNodesCongestionResponse } from '@/lib/types/api';
-import AuthGuard from "@/components/auth/AuthGuard"; // Import AuthGuard
-import { Signal, BatteryFull } from 'lucide-react'; // Import Signal and BatteryFull icons
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"; // Import DropdownMenu components
-import { UserRole } from "@/lib/auth/roles"; // Import UserRole
-import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates'; // Import the hook
+import AuthGuard from "@/components/auth/AuthGuard";
+import { Signal, BatteryFull } from 'lucide-react';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { UserRole } from "@/lib/auth/roles";
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 
-import { getToken } from '@/lib/auth/getToken'; // Import getToken
-import AnomalyItem from '@/components/dashboard/AnomalyItem'; // Import AnomalyItem
-import StatCard from '@/components/dashboard/StatCard'; // Import StatCard
+import { getToken } from '@/lib/auth/getToken';
+import AnomalyItem from '@/components/dashboard/AnomalyItem';
+import StatCard from '@/components/dashboard/StatCard';
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
-} from 'lucide-react'; // Import Lucide icons & new status icons
-import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed'; // Import SurveillanceFeed
+} from 'lucide-react';
+import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
   // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
-  const [debugMessages, setDebugMessages] = useState<string[]>([]);
+  // const [debugMessages, setDebugMessages] = useState<string[]>([]); // REMOVED
 
-  // Use the realtime updates hook - This is now the primary source for KPIs and feeds
-  
-  const { /* kpis, */ alerts, feeds, isConnected, isReady, error } = useRealtimeUpdates();
+  // Use the realtime updates hook
+  const { kpis, alerts, feeds, isConnected, isReady, error } = useRealtimeUpdates();
 
-  // Find the first sample feed to display. In a real app, you might have a more robust selection logic.
+  // Find the first sample feed to display
   const sampleFeed = feeds.length > 0 ? feeds[0] : null;
-  console.log("Sample Feed:", sampleFeed);
-  console.log("WebSocket Status - Connected:", isConnected, "Ready:", isReady, "Error:", error);
-  console.log("Feeds Array Length:", feeds.length);
-  console.log("All Feeds:", feeds);
 
-  // State for REST API congestion index
-  const [congestionIndex, setCongestionIndex] = useState<number | null>(null);
+  // Optional: Log connection status for debugging - REMOVED
+  // useEffect(() => {
+  //   setDebugMessages(prev => [...prev, `WebSocket Connected: ${isConnected}, Ready: ${isReady}`]);
+  // }, [isConnected, isReady]);
 
-  // State for REST API KPIs
-  const [averageSpeed, setAverageSpeed] = useState<number | null>(null);
-  const [activeIncidents, setActiveIncidents] = useState<number | null>(null); // Placeholder, see note below
-  const [totalFlow, setTotalFlow] = useState<number | null>(null);
-
-  // The useRealtimeUpdates hook now manages its own connection lifecycle.
-  // The useEffect that previously called startWebSocket() has been removed.
-
-  // Optional: Log connection status for debugging
-  useEffect(() => {
-    setDebugMessages(prev => [...prev, `WebSocket Connected: ${isConnected}, Ready: ${isReady}`]);
-  }, [isConnected, isReady]);
+  // Optional: Log KPIs for debugging - REMOVED
+  // useEffect(() => {
+  //   if (kpis) {
+  //     console.log("Real-time KPIs received:", kpis);
+  //     setDebugMessages(prev => [...prev, `KPIs updated: ${JSON.stringify(kpis)}`]);
+  //   }
+  // }, [kpis]);
 
   // Helper functions to determine status icons
   const getCongestionStatusIcon = (val: number | undefined) => {
-    if (val === undefined || val === null) return undefined; // Or a placeholder like HelpCircle
-    if (val > 70) return TrendingDown; // High congestion is "bad"
-    if (val > 40) return TrendingUp;   // Medium congestion is "warning" or "trending worse"
-    return CheckCircle2; // Low congestion is "good"
+    if (val === undefined || val === null) return undefined;
+    if (val > 70) return TrendingDown;
+    if (val > 40) return TrendingUp;
+    return CheckCircle2;
   };
 
   const getSpeedStatusIcon = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
-    if (val < 20) return TrendingDown; // Low speed is "bad"
-    if (val < 40) return TrendingUp;   // Medium speed is "warning"
-    return CheckCircle2; // Good speed
+    if (val < 20) return TrendingDown;
+    if (val < 40) return TrendingUp;
+    return CheckCircle2;
   };
 
   const getIncidentStatusIcon = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
-    if (val > 0) return AlertTriangle; // Active incidents
-    return ShieldCheck; // No incidents
+    if (val > 0) return AlertTriangle;
+    return ShieldCheck;
   };
-  // Total flow doesn't have a qualitative status here, so no specific icon based on value ranges.
 
   // Type guard for location object
   function isLatLng(obj: unknown): obj is { latitude: number; longitude: number } {
@@ -82,74 +73,13 @@ const DashboardPage: React.FC = () => {
     );
   }
 
-  useEffect(() => {
-    // Fetch congestion data from backend REST API
-    const fetchKpisFromApi = async () => {
-      const currentToken = await getToken(); // Get the latest token
-      if (typeof currentToken !== 'string' || currentToken.length === 0) {
-        // Only fetch if token is a non-empty string
-        return;
-      }
-      try {
-        const res = await fetch('/api/v1/analytics/nodes/congestion', {
-          headers: {
-            'Authorization': `Bearer ${currentToken}`,
-          },
-        });
-        if (!res.ok) throw new Error(`Failed to fetch congestion data: ${res.status}`);
-        const response = await res.json() as APIResponse<AllNodesCongestionResponse>;
-        if (response.status === 'success' && response.data.nodes.length > 0) {
-          const { nodes } = response.data;
-          // Congestion Index
-          const scores = nodes
-            .map((n: BackendCongestionNodeData) => typeof n.congestion_score === 'number' ? n.congestion_score : null)
-            .filter((v: number | null) => v !== null);
-          if (scores.length > 0) {
-            const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
-            setCongestionIndex(Number(avg.toFixed(1)));
-          } else {
-            setCongestionIndex(null);
-          }
-          // Average Speed
-          const speeds = nodes
-            .map((n: BackendCongestionNodeData) => typeof n.average_speed === 'number' ? n.average_speed : null)
-            .filter((v: number | null) => v !== null);
-          if (speeds.length > 0) {
-            const avgSpeed = speeds.reduce((a: number, b: number) => a + b, 0) / speeds.length;
-            setAverageSpeed(Number(avgSpeed.toFixed(1)));
-          } else {
-            setAverageSpeed(null);
-          }
-          // Total Flow (sum of vehicle_count)
-          const vehicleCounts = nodes
-            .map((n: BackendCongestionNodeData) => typeof n.vehicle_count === 'number' ? n.vehicle_count : null)
-            .filter((v: number | null) => v !== null);
-          if (vehicleCounts.length > 0) {
-            const total = vehicleCounts.reduce((a: number, b: number) => a + b, 0);
-            setTotalFlow(total);
-          } else {
-            setTotalFlow(null);
-          }
-          // Active Incidents: Not available in this endpoint, so keep using kpis or set to null
-          setActiveIncidents(null); // Or use another endpoint if available
-        } else {
-          setCongestionIndex(null);
-          setAverageSpeed(null);
-          setTotalFlow(null);
-          setActiveIncidents(null);
-        }
-      } catch {
-        setCongestionIndex(null);
-        setAverageSpeed(null);
-        setTotalFlow(null);
-        setActiveIncidents(null);
-      }
-    };
-
-    fetchKpisFromApi(); // Call immediately
-    const interval = setInterval(fetchKpisFromApi, 30000);
-    return () => clearInterval(interval);
-  }, []); // No dependency on 'token' anymore, as it's fetched inside
+  // KPIs are now from WebSocket, so the REST API fetching logic is removed.
+  // State variables for individual KPIs are also removed.
+  // We will use the 'kpis' object directly in the rendering logic.
+  const congestionIndex = null;
+  const activeIncidents = null;
+  const averageSpeed = kpis?.avg_speed;
+  const totalFlow = kpis?.vehicle_count;
 
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
@@ -194,7 +124,7 @@ const DashboardPage: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6 matrix-card">
             <StatCard
               title="Congestion Index"
-              value={`${congestionIndex !== null ? congestionIndex : '--'}%`}
+              value={`${congestionIndex ?? '--'}%`}
               icon={Activity}
               statusIcon={getCongestionStatusIcon(typeof congestionIndex === 'number' ? congestionIndex : undefined)}
               change="N/A"
@@ -202,7 +132,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Average Speed"
-              value={`${averageSpeed !== null ? averageSpeed : '--'} km/h`}
+              value={`${averageSpeed ? averageSpeed.toFixed(2) : '--'} km/h`}
               icon={Zap}
               statusIcon={getSpeedStatusIcon(typeof averageSpeed === 'number' ? averageSpeed : undefined)}
               change="N/A"
@@ -210,7 +140,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Active Incidents"
-              value={`${activeIncidents !== null ? activeIncidents : '--'}`}
+              value={`${activeIncidents ?? '--'}`}
               icon={AlertTriangle}
               statusIcon={getIncidentStatusIcon(typeof activeIncidents === 'number' ? activeIncidents : undefined)}
               change="N/A"
@@ -218,7 +148,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Total Flow"
-              value={`${totalFlow !== null ? totalFlow : '--'} vehicles/hr`}
+              value={`${totalFlow ?? '--'} vehicles/hr`}
               icon={Users}
               change="N/A"
               changeText="Change data not available"
@@ -256,7 +186,6 @@ const DashboardPage: React.FC = () => {
                    feeds.length === 0 ? 'NO FEEDS AVAILABLE' : 'LOADING SAMPLE FEED...'}
                 </p>
               )}
-              {/* Add more <div> blocks here for additional feeds if needed */}
             </div>
           </div>
 
@@ -283,17 +212,6 @@ const DashboardPage: React.FC = () => {
                 ))}
               </div>
             )}
-          </div>
-
-          {/* WebSocket debug/messages (optional, using debugMessages now) */}
-          <div className="matrix-card p-4">
-            <h2 className="text-xl font-semibold mb-2 tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">WEBSOCKET CONNECTION STATUS (DEBUG)</h2>
-            <div className="max-h-60 overflow-y-auto text-sm font-lcd">
-                {debugMessages.slice(-10).map((msg, index) => (
-                    <p key={index} className="mb-1 break-all tracking-normal font-lcd matrix-glow text-lcd-text group-hover:text-lcd-bg">{msg}</p>
-                ))}
-                {debugMessages.length === 0 && <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">MONITORING CONNECTION...</p>}
-            </div>
           </div>
         </main>
       </div>

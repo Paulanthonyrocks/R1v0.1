@@ -111,6 +111,9 @@ class FeedManager:
         self._last_queue_log_time = 0.0
         self._queue_log_interval = self.config.get("queue_log_interval", 15.0) # Log queue size every 15 seconds
 
+        # New: For metrics aggregation
+        self._metrics_averaging_window = self.config.get("metrics_averaging_window_seconds", 10) # seconds
+
         # Load available feeds from config if needed (or assume they are added dynamically)
         self._initialize_available_feeds()
 
@@ -424,7 +427,7 @@ class FeedManager:
 
         ws_payload = NewAlertNotification(alert_data=alert_model)
         message = WebSocketMessage(
-            type=WebSocketMessageTypeEnum.NEW_ALERT_NOTIFICATION, data=ws_payload
+            type=WebSocketMessageTypeEnum.NEW_ALERT, data=ws_payload
         )
 
         # Broadcast to a general alerts topic, and potentially a feed-specific alert topic
@@ -479,14 +482,37 @@ class FeedManager:
 
                 if current_status_enum == FeedOperationalStatusEnum.RUNNING:
                     running_feeds += 1
-                    metrics = entry.get("latest_metrics")
-                    if metrics:
-                        if isinstance(metrics.get("avg_speed"), (int, float)):
-                            all_speeds.append(float(metrics["avg_speed"]))
-                        # Accumulate total_flow from 'vehicle_count' in latest_metrics
-                        # This assumes 'vehicle_count' represents the flow for the interval for that feed
-                        if isinstance(metrics.get("vehicle_count"), (int, float)):
-                            total_flow_accumulator += int(metrics["vehicle_count"])
+                    history = entry.get("metrics_history", [])
+                    if history:
+                        speeds_in_history = [
+                            m.get("avg_speed")
+                            for _, m in history
+                            if m and isinstance(m.get("avg_speed"), (int, float))
+                        ]
+                        counts_in_history = [
+                            m.get("vehicle_count")
+                            for _, m in history
+                            if m and isinstance(m.get("vehicle_count"), (int, float))
+                        ]
+
+                        if speeds_in_history:
+                            all_speeds.append(float(np.mean(speeds_in_history)))
+
+                        if counts_in_history:
+                            avg_vehicle_count_for_feed = int(
+                                np.mean(counts_in_history)
+                            )
+                            total_flow_accumulator += avg_vehicle_count_for_feed
+                    else:
+                        # Fallback to latest_metrics if history is empty
+                        metrics = entry.get("latest_metrics")
+                        if metrics:
+                            if isinstance(metrics.get("avg_speed"), (int, float)):
+                                all_speeds.append(float(metrics["avg_speed"]))
+                            if isinstance(metrics.get("vehicle_count"), (int, float)):
+                                total_flow_accumulator += int(
+                                    metrics["vehicle_count"]
+                                )
                 elif current_status_enum == FeedOperationalStatusEnum.ERROR:
                     error_feeds += 1
                 elif current_status_enum == FeedOperationalStatusEnum.STOPPED:
@@ -523,7 +549,7 @@ class FeedManager:
             )
 
         message = WebSocketMessage(
-            type=WebSocketMessageTypeEnum.GLOBAL_REALTIME_METRICS_UPDATE,
+            type=WebSocketMessageTypeEnum.KPI_UPDATE,
             data=metrics_payload,
         )
         await self._connection_manager.broadcast_to_topic(
@@ -692,7 +718,36 @@ class FeedManager:
                                 )
                             elif "timestamp" not in metrics:
                                 metrics["timestamp"] = datetime.now(timezone.utc)
+                            
+                            # Store raw metrics for other potential uses
                             entry["latest_metrics"] = metrics
+
+                            # Add raw metrics to history and prune
+                            current_time = time.time()
+                            if "metrics_history" not in entry:
+                                entry["metrics_history"] = []
+                            
+                            # Append a copy of metrics for safe modification later
+                            entry["metrics_history"].append((current_time, metrics.copy()))
+                            
+                            cutoff_time = current_time - self._metrics_averaging_window
+                            entry["metrics_history"] = [
+                                (t, m) for t, m in entry["metrics_history"] if t >= cutoff_time
+                            ]
+
+                            # Calculate smoothed metrics from history for broadcast
+                            history = entry.get("metrics_history", [])
+                            if history:
+                                speeds_in_history = [m.get("avg_speed") for _, m in history if m and isinstance(m.get("avg_speed"), (int, float))]
+                                counts_in_history = [m.get("vehicle_count") for _, m in history if m and isinstance(m.get("vehicle_count"), (int, float))]
+
+                                if speeds_in_history:
+                                    metrics["avg_speed"] = round(np.mean(speeds_in_history), 2)
+                                
+                                if counts_in_history:
+                                    # For vehicle count, we want the average count over the window.
+                                    metrics["vehicle_count"] = round(np.mean(counts_in_history), 2)
+
                             entry["latest_frame_bytes"] = (
                                 frame_bytes  # Store the frame bytes
                             )
@@ -718,12 +773,12 @@ class FeedManager:
                         {"feed_id": feed_id, "metrics": metrics},
                     )
                     # Base64 encode the frame for WebSocket transport
-                    frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
-                    logger.info(f"Broadcasting VIDEO_FRAME for feed {feed_id}. Frame size: {len(frame_b64)} bytes.")
-                    await self._broadcast(
-                        WebSocketMessageTypeEnum.VIDEO_FRAME,
-                        VideoFrameData(feed_id=feed_id, frame=frame_b64),
-                    )
+                    # frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
+                    # logger.info(f"Broadcasting VIDEO_FRAME for feed {feed_id}. Frame size: {len(frame_b64)} bytes.")
+                    # await self._broadcast(
+                    #     WebSocketMessageTypeEnum.VIDEO_FRAME,
+                    #     VideoFrameData(feed_id=feed_id, frame=frame_b64),
+                    # )
 
                     if self._analytics_service:
                         try:
@@ -898,6 +953,7 @@ class FeedManager:
                 "start_time": None,
                 "error_message": None,
                 "latest_metrics": None,
+                "metrics_history": [],
                 "timer": FrameTimer(),
                 "is_sample_feed": False,
                 "is_looped_feed": is_looped,
@@ -972,6 +1028,7 @@ class FeedManager:
             entry["start_time"] = time.time()
             entry["error_message"] = None
             entry["latest_metrics"] = None
+            entry["metrics_history"] = []
             entry["timer"] = FrameTimer()
 
             try:
@@ -1523,6 +1580,7 @@ class FeedManager:
                 "start_time": None,
                 "error_message": None,
                 "latest_metrics": None,
+                "metrics_history": [],
                 "timer": None,
                 "is_sample_feed": True,
                 'is_looped_feed': True,

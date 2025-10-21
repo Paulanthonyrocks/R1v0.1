@@ -58,10 +58,11 @@ export interface ErrorNotification {
 // Enum for valid message types expected by the server
 export enum WebSocketMessageType {
     METRICS_UPDATE = 'metrics_update',
-    GLOBAL_REALTIME_METRICS_UPDATE = 'global_realtime_metrics_update',
+    KPI_UPDATE = 'kpi_update',
     NEW_ALERT = 'new_alert',
     SIGNAL_UPDATE = 'signal_update',
     VIDEO_FRAME = 'video_frame',
+    VIDEO_UPDATE = 'video_update',
     FEED_STATUS_UPDATE = 'feed_status_update',
     GENERAL_NOTIFICATION = 'general_notification',
     ERROR_NOTIFICATION = 'error_notification',
@@ -409,54 +410,63 @@ export class WebSocketClient implements IWebSocketClient {
     private handleMessage(event: MessageEvent): void {
         if (typeof event.data === 'string') {
             try {
-                const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
-                
+                const message = JSON.parse(event.data) as WebSocketMessage<any>;
+
                 // Handle ping/pong messages
                 if (message.type === WebSocketMessageType.PONG) {
                     this.lastPongTime = Date.now();
                     return;
                 } else if (message.type === WebSocketMessageType.PING) {
-                    // Respond to server's ping with a pong
-                    this.send({
-                        type: WebSocketMessageType.PONG,
-                        data: { timestamp: Date.now() }
-                    });
+                    this.send({ type: WebSocketMessageType.PONG, data: { timestamp: Date.now() } });
                     return;
                 }
 
-                // Validate message structure
                 if (!Object.values(WebSocketMessageType).includes(message.type as WebSocketMessageType)) {
                     console.error('Invalid message type received:', message.type);
                     return;
                 }
 
-                // Handle message with registered listeners
-                const type = message.type as WebSocketMessageType;
-                if (this.listeners.has(type)) {
-                    this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
-                        try {
-                            listener(message.data);
-                        } catch (error) {
-                            console.error(`Error in listener for message type ${type}:`, error);
+                // Special handling for video updates
+                if (message.type === WebSocketMessageType.VIDEO_UPDATE && message.data) {
+                    const { frame, kpis } = message.data;
+
+                    if (frame && typeof frame === 'string') {
+                        // Decode base64 frame
+                        const byteString = atob(frame);
+                        const byteNumbers = new Array(byteString.length);
+                        for (let i = 0; i < byteString.length; i++) {
+                            byteNumbers[i] = byteString.charCodeAt(i);
                         }
-                    });
+                        const byteArray = new Uint8Array(byteNumbers);
+                        
+                        // Notify video frame listeners
+                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, byteArray.buffer as ArrayBuffer);
+                    }
+
+                    // Notify KPI listeners
+                    if (kpis) {
+                        this.notifyListeners(WebSocketMessageType.KPI_UPDATE, kpis);
+                    }
+                    return;
                 }
+
+                this.notifyListeners(message.type, message.data);
+
             } catch (error) {
                 console.error('Error handling WebSocket message:', error);
             }
-        } else if (event.data instanceof ArrayBuffer) {
-            // Assuming binary data is a video frame
-            const type = WebSocketMessageType.VIDEO_FRAME;
-            if (this.listeners.has(type)) {
-                this.listeners.get(type)?.forEach((listener: MessageListener<unknown>) => {
-                    try {
-                        // The listener for VIDEO_FRAME will now receive an ArrayBuffer
-                        listener(event.data);
-                    } catch (error) {
-                        console.error(`Error in listener for message type ${type}:`, error);
-                    }
-                });
-            }
+        }
+    }
+
+    private notifyListeners<T>(type: WebSocketMessageType, data: T): void {
+        if (this.listeners.has(type)) {
+            this.listeners.get(type)?.forEach((listener: MessageListener<T>) => {
+                try {
+                    listener(data);
+                } catch (error) {
+                    console.error(`Error in listener for message type ${type}:`, error);
+                }
+            });
         }
     }
 
@@ -475,32 +485,25 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public send(message: WebSocketMessage): void {
-        // Transform internal ping to proper ping for the server
         if (message.type === WebSocketMessageType.INTERNAL_PING) {
             const pingMessage: WebSocketMessage = {
                 type: WebSocketMessageType.PING,
                 data: {},
                 timestamp: message.timestamp ?? Date.now()
             };
-            
             if (this.isConnected()) {
                 this.ws!.send(JSON.stringify(pingMessage));
             }
             return;
         }
 
-        // Ensure message has a timestamp
-        const messageToSend: WebSocketMessage = {
-            ...message,
-            timestamp: message.timestamp ?? Date.now()
-        };
+        const messageToSend: WebSocketMessage = { ...message, timestamp: message.timestamp ?? Date.now() };
 
         if (this.isConnected()) {
             this.ws!.send(JSON.stringify(messageToSend));
         } else {
-            // Queue message if not connected
             if (this.messageQueue.length >= this.maxMessageQueueSize) {
-                this.messageQueue.shift(); // Remove the oldest message
+                this.messageQueue.shift();
                 console.warn('WebSocket message queue full. Dropping oldest message.');
             }
             this.messageQueue.push(messageToSend);
@@ -523,26 +526,18 @@ export class WebSocketClient implements IWebSocketClient {
     public destroy(): void {
         console.log('Destroying WebSocket client...');
         this.disconnect();
-        
-        // Clear all listeners to prevent memory leaks
         this.listeners.clear();
         this.errorListeners.clear();
         this.statusListeners.clear();
-        
-        // Unsubscribe from TokenManager refresh events
         if (this.unsubscribeTokenRefresh) {
             this.unsubscribeTokenRefresh();
             this.unsubscribeTokenRefresh = null;
         }
-        
-        // Clear message queue
         this.messageQueue.length = 0;
     }
 
     public isConnected(): boolean {
-        return this.ws !== null && 
-               this.ws.readyState === WebSocket.OPEN && 
-               this.connectionState === ConnectionState.CONNECTED;
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.connectionState === ConnectionState.CONNECTED;
     }
 
     public getConnectionState(): ConnectionState {
@@ -563,7 +558,6 @@ export class WebSocketClient implements IWebSocketClient {
             }
         });
 
-        // Display user-friendly message using errorNotifier
         let userMessage = message;
         if (type === 'auth_error') {
             userMessage = 'Authentication failed. Please log in again.';
