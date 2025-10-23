@@ -17,30 +17,28 @@ import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react';
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
-import { BackendCongestionNodeData } from '@/lib/types';
+import { BackendCongestionNodeData, FeedStatusData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
-  // State to hold WebSocket messages (optional, for display/debugging) - can be removed or adapted
-  // const [debugMessages, setDebugMessages] = useState<string[]>([]); // REMOVED
-
-  // Use the realtime updates hook
   const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed } = useRealtimeUpdates();
+
+  // Log feeds from the hook for debugging
+  console.log("DashboardPage - feeds from useRealtimeUpdates:", feeds);
 
   // Find the first sample feed to display
   const sampleFeed = feeds.length > 0 ? feeds[0] : null;
 
-  // Optional: Log connection status for debugging - REMOVED
-  // useEffect(() => {
-  //   setDebugMessages(prev => [...prev, `WebSocket Connected: ${isConnected}, Ready: ${isReady}`]);
-  // }, [isConnected, isReady]);
+  // Log sampleFeed for debugging
+  console.log("DashboardPage - sampleFeed:", sampleFeed);
 
-  // Optional: Log KPIs for debugging - REMOVED
-  // useEffect(() => {
-  //   if (kpis) {
-  //     console.log("Real-time KPIs received:", kpis);
-  //     setDebugMessages(prev => [...prev, `KPIs updated: ${JSON.stringify(kpis)}`]);
-  //   }
-  // }, [kpis]);
+  // Effect to log when feeds actually update in DashboardPage and subscribe
+  useEffect(() => {
+    console.log("DashboardPage useEffect - feeds updated:", feeds);
+    if (feeds.length > 0 && isConnected && isReady) {
+      console.log("DashboardPage: Feeds available, subscribing to first feed:", feeds[0].feed_id);
+      subscribeToFeed(feeds[0].feed_id);
+    }
+  }, [feeds, isConnected, isReady, subscribeToFeed]);
 
   // Helper functions to determine status icons
   const getCongestionStatusIcon = (val: number | undefined) => {
@@ -73,9 +71,6 @@ const DashboardPage: React.FC = () => {
     );
   }
 
-  // KPIs are now from WebSocket, so the REST API fetching logic is removed.
-  // State variables for individual KPIs are also removed.
-  // We will use the 'kpis' object directly in the rendering logic.
   const congestionIndex = null;
   const activeIncidents = null;
   const averageSpeed = kpis?.avg_speed;
@@ -167,6 +162,7 @@ const DashboardPage: React.FC = () => {
                   WebSocket: {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
                   {isReady && ' (READY)'}
                   {error && ` - ERROR: ${error}`}
+                
                 </span>
               </div>
               <div className="text-xs text-lcd-text mt-1">
@@ -175,7 +171,7 @@ const DashboardPage: React.FC = () => {
             </div>
             
             <div className="w-full overflow-x-auto flex gap-4 p-2 matrix-card whitespace-nowrap">
-              {sampleFeed ? (
+              {isReady && sampleFeed ? (
                 <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
                   <SurveillanceFeed feed={sampleFeed} />
                 </div>
