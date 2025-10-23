@@ -23,7 +23,7 @@ interface RealtimeUpdates {
     kpis: KPIData | null;
     alerts: AlertData[];
     nodeCongestionData: BackendCongestionNodeData[];
-    videoFrame: ArrayBuffer | null; // New: Base64 encoded video frame
+    videoFrames: { [key: string]: ArrayBuffer }; // Changed to videoFrames
     isConnected: boolean;
     isReady: boolean;
     error: string | null;
@@ -39,7 +39,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
-    const [videoFrame, setVideoFrame] = useState<ArrayBuffer | null>(null); // New state for video frame
+    const [videoFrames, setVideoFrames] = useState<{ [key: string]: ArrayBuffer }>({}); // Changed to videoFrames
     const [isConnected, setIsConnected] = useState(false);
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -65,12 +65,9 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             console.error(`WebSocket Error (${type}):`, message);
             setError(message);
             
-            // Don't set isConnected/isReady to false here as the client
-            // will handle reconnection automatically
             if (type === 'max_reconnect_attempts' || type === 'auth_error') {
                 setIsConnected(false);
                 setIsReady(false);
-                // Schedule reconnection attempt
                 if (reconnectTimeoutRef.current) {
                     clearTimeout(reconnectTimeoutRef.current);
                 }
@@ -96,16 +93,13 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             
             if (connected) {
                 setError(null);
-                // Clear any pending reconnection attempts
                 if (reconnectTimeoutRef.current) {
                     clearTimeout(reconnectTimeoutRef.current);
                     reconnectTimeoutRef.current = null;
                 }
-                // Start connection health monitoring
                 if (connectionHealthCheckRef.current) {
                     clearInterval(connectionHealthCheckRef.current);
                 }
-                // Check connection health every 60 seconds
                 connectionHealthCheckRef.current = setInterval(() => {
                     const wsClient = webSocketClientRef.current;
                     if (wsClient && !wsClient.isConnected()) {
@@ -126,7 +120,6 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
                 }, 60000);
             } else if (status === 'error') {
                 setError(message || 'Connection error');
-                // Schedule reconnection attempt
                 if (reconnectTimeoutRef.current) {
                     clearTimeout(reconnectTimeoutRef.current);
                 }
@@ -161,11 +154,11 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         // Subscribe to initial feed statuses
         client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, 
             (data: { feeds: FeedStatusData[] }) => {
-                console.log('Received INITIAL_FEED_STATUSES data:', data);
                 if (data?.feeds) {
-                    console.log("Received INITIAL_FEED_STATUSES:", data.feeds);
-                    console.log("Updating feeds state with:", data.feeds);
                     setFeeds(data.feeds);
+                    if (data.feeds.length > 0) {
+                        sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feedId: data.feeds[0].id });
+                    }
                 }
             }
         );
@@ -179,9 +172,9 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
 
         // Subscribe to video frames
         client.subscribe(WebSocketMessageType.VIDEO_FRAME, 
-            (data: ArrayBuffer) => { // data is now ArrayBuffer
-                if (data) {
-                    setVideoFrame(data);
+            (data: { feed_id: string, frame: ArrayBuffer }) => { // Updated type
+                if (data && data.feed_id && data.frame) {
+                    setVideoFrames(prev => ({ ...prev, [data.feed_id]: data.frame }));
                 } else {
                     console.warn('Received VIDEO_FRAME message with missing or invalid frame data:', data);
                 }
@@ -220,7 +213,6 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         client.subscribe(WebSocketMessageType.PING, 
             () => {
                 console.log('Received PING from server, sending PONG response');
-                // Send PONG response immediately
                 try {
                     client.send({ 
                         type: WebSocketMessageType.PONG, 
@@ -284,7 +276,6 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             }
             initializationRef.current = false;
             
-            // Clean up timeouts
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
                 reconnectTimeoutRef.current = null;
@@ -363,6 +354,6 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         sendMessage,
         reconnect,
         subscribeToFeed,
-        videoFrame // New: Return videoFrame
+        videoFrames // Changed to videoFrames
     };
 };

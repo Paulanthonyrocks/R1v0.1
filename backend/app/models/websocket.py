@@ -210,6 +210,8 @@ class RefreshFeedData(BaseModel):
 class VideoFrameData(BaseModel):
     feed_id: str = Field(..., description="ID of the feed the frame belongs to.")
     frame: str = Field(..., description="Base64 encoded video frame.")
+    frame_index: int
+    timestamp: str
 
 
 class InitialFeedStatusesData(BaseModel):

@@ -24,7 +24,7 @@ const DashboardPage: React.FC = () => {
   // const [debugMessages, setDebugMessages] = useState<string[]>([]); // REMOVED
 
   // Use the realtime updates hook
-  const { kpis, alerts, feeds, isConnected, isReady, error } = useRealtimeUpdates();
+  const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed } = useRealtimeUpdates();
 
   // Find the first sample feed to display
   const sampleFeed = feeds.length > 0 ? feeds[0] : null;

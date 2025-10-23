@@ -95,7 +95,7 @@ class VideoProcessor:
                 end_time=end_time,
                 duration=duration,
             )
-            await db_.save_processed_video_metadata(processed_video_entry)
+            await db_manager.save_processed_video_metadata(processed_video_entry)
             logger.info(f"Saved processed video metadata for {self.stream_id}")
 
         self._is_recording = False

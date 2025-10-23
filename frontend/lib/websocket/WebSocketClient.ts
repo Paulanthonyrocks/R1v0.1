@@ -428,7 +428,7 @@ export class WebSocketClient implements IWebSocketClient {
 
                 // Special handling for video updates
                 if (message.type === WebSocketMessageType.VIDEO_UPDATE && message.data) {
-                    const { frame, kpis } = message.data;
+                    const { frame, kpis, feed_id } = message.data; // Added feed_id
 
                     if (frame && typeof frame === 'string') {
                         // Decode base64 frame
@@ -440,12 +440,12 @@ export class WebSocketClient implements IWebSocketClient {
                         const byteArray = new Uint8Array(byteNumbers);
                         
                         // Notify video frame listeners
-                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, byteArray.buffer as ArrayBuffer);
+                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id: feed_id, frame: byteArray.buffer as ArrayBuffer }); // Pass feed_id and frame
                     }
 
                     // Notify KPI listeners
                     if (kpis) {
-                        this.notifyListeners(WebSocketMessageType.KPI_UPDATE, kpis);
+                        this.notifyListeners(WebSocketMessageType.KPI_UPDATE, { feed_id: feed_id, ...kpis }); // Pass feed_id with kpis
                     }
                     return;
                 }

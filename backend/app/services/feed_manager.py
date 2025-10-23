@@ -772,13 +772,39 @@ class FeedManager:
                         WebSocketMessageTypeEnum.METRICS_UPDATE,
                         {"feed_id": feed_id, "metrics": metrics},
                     )
-                    # Base64 encode the frame for WebSocket transport
-                    # frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
-                    # logger.info(f"Broadcasting VIDEO_FRAME for feed {feed_id}. Frame size: {len(frame_b64)} bytes.")
-                    # await self._broadcast(
-                    #     WebSocketMessageTypeEnum.VIDEO_FRAME,
-                    #     VideoFrameData(feed_id=feed_id, frame=frame_b64),
-                    # )
+
+                    # Prepare and broadcast the video frame
+                    if frame_bytes:
+                        try:
+                            # Encode frame as base64 for JSON transport
+                            encoded_frame = base64.b64encode(frame_bytes).decode('utf-8')
+                            
+                            video_frame_data = VideoFrameData(
+                                feed_id=feed_id,
+                                frame_index=frame_idx,
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                frame=encoded_frame
+                            )
+                            
+                            # Use a more specific topic for video frames to allow targeted subscription
+                            video_topic = f"video:{feed_id}"
+                            
+                            # Create a WebSocketMessage for the video frame
+                            video_message = WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.VIDEO_FRAME,
+                                data=video_frame_data
+                            )
+                            
+                            # Broadcast the video frame to the specific topic
+                            if self._connection_manager:
+                                await self._connection_manager.broadcast_to_topic(video_message, video_topic)
+                                logger.debug(f"Broadcasted video frame {frame_idx} for feed {feed_id} to topic {video_topic}.")
+                            else:
+                                logger.debug(f"Skipping video frame broadcast for {feed_id}: ConnectionManager not available.")
+
+                        except Exception as e:
+                            logger.error(f"Error encoding or broadcasting video frame for feed '{feed_id}': {e}", exc_info=True)
+
 
                     if self._analytics_service:
                         try:
@@ -816,37 +842,6 @@ class FeedManager:
                 )
                 break
 
-        async with self._lock:
-            entry = self.process_registry.get(feed_id)
-            if entry and entry.get("process"):
-                process = entry["process"]
-                if not process.is_alive():
-                    exitcode = process.exitcode
-                    if exitcode == 0:
-                        logger.info(
-                            f"Process for feed '{feed_id}' exited cleanly (exitcode 0). Status set to STOPPED."
-                        )
-                        if entry["status"] != FeedOperationalStatusEnum.STOPPED:
-                            entry["status"] = FeedOperationalStatusEnum.STOPPED
-                            entry["error_message"] = None
-                            entry["process"] = None
-                            feed_ids_to_update.add(feed_id)
-                            kpi_update_needed_local = True
-                    else:
-                        logger.warning(
-                            f"Process for feed '{feed_id}' found dead (is_alive=False, exitcode={exitcode}). Marking as error."
-                        )
-                        if entry["status"] != FeedOperationalStatusEnum.ERROR:
-                            entry["status"] = FeedOperationalStatusEnum.ERROR
-                            entry["error_message"] = (
-                                f"Process terminated unexpectedly (exitcode: {exitcode})."
-                            )
-                            entry["process"] = None
-                            feed_ids_to_update.add(feed_id)
-                            kpi_update_needed_local = True
-                            if not entry.get("is_sample_feed"):
-                                sample_feed_check_needed_local = True
-        return processed_items, kpi_update_needed_local, sample_feed_check_needed_local
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if entry and entry.get("process"):

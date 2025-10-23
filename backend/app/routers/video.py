@@ -110,6 +110,7 @@ async def video_ws_endpoint(
                         {
                             "type": "video_update",
                             "data": {
+                                "feed_id": stream_id,
                                 "frame": frame_base64,
                                 "kpis": kpis_serializable,
                             }
@@ -149,8 +150,29 @@ async def video_ws_endpoint(
                 statuses_dict = [status.model_dump() for status in all_statuses]
                 await websocket.send_json({
                     "type": "initial_feed_statuses",
-                    "data": statuses_dict
+                    "data": convert_datetime_to_iso(statuses_dict)
                 })
+            elif message_type == "start_feed":
+                feed_id = data.get("data", {}).get("feed_id")
+                if feed_id:
+                    logger.info(f"Received start_feed request for feed_id: {feed_id}")
+                    await feed_manager.handle_start_feed(feed_id)
+                else:
+                    logger.warning("Received start_feed request without feed_id.")
+            elif message_type == "stop_feed":
+                feed_id = data.get("data", {}).get("feed_id")
+                if feed_id:
+                    logger.info(f"Received stop_feed request for feed_id: {feed_id}")
+                    await feed_manager.handle_stop_feed(feed_id)
+                else:
+                    logger.warning("Received stop_feed request without feed_id.")
+            elif message_type == "refresh_feed":
+                feed_id = data.get("data", {}).get("feed_id")
+                if feed_id:
+                    logger.info(f"Received refresh_feed request for feed_id: {feed_id}")
+                    await feed_manager.refresh_feed(feed_id)
+                else:
+                    logger.warning("Received refresh_feed request without feed_id.")
             else:
                 logger.warning(f"Received unhandled message type: {message_type}")
             

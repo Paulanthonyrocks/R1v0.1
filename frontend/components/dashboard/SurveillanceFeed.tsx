@@ -11,7 +11,8 @@ import StreamOverlayControls from './StreamOverlayControls'; // Import the new c
 
 const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
     const { id, name: feedName, source, status } = feed;
-    const { videoFrame, sendMessage, isConnected, kpis } = useRealtimeUpdates();
+    const { videoFrames, sendMessage, isConnected, kpis } = useRealtimeUpdates();
+    const videoFrame = videoFrames[id];
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
