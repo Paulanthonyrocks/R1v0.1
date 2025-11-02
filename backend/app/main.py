@@ -42,6 +42,7 @@ from app.routers import (
     weather,
     events,
     route_history,
+    ws,
 )
 from app.routers import routes
 
@@ -49,7 +50,7 @@ from app.routers import routes
 from .config import initialize_config  # Import config init/getter
 from .database import initialize_database, close_database
 from .services import initialize_services, get_analytics_service, feed_manager_instance
-from app.dependencies.websocket_manager import get_connection_manager
+
 from app.websocket.connection_manager import ConnectionManager
 
 from app.tasks.prediction_scheduler import (
@@ -373,7 +374,7 @@ async def process_sample_video_on_startup():
             latitude=34.0522,
             longitude=-118.2437,
             name_hint="Sample Video Startup Processing",
-            is_looped=False 
+            is_looped=True 
         )
         logger.info(f"Successfully initiated processing for {video_path}. Result from FeedManager: {result}")
 
@@ -417,6 +418,7 @@ origins = [
     "http://localhost:3000",  # Frontend port
     "https://*.ngrok-free.app", # Allow ngrok origins
     "https://*.loca.lt",
+    "https://*.cloudworkstations.dev", # Allow cloud workstations
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -455,6 +457,7 @@ try:
     app.include_router(
         traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"]
     )
+    app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
     logger.info("API routers included successfully.")
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)

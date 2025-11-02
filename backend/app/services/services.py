@@ -17,6 +17,7 @@ from app.ml.traffic_predictor import TrafficPredictor # Import TrafficPredictor
 
 logger = logging.getLogger(__name__)
 
+connection_manager_instance: Optional[ConnectionManager] = None
 feed_manager_instance: Optional[FMClass] = (
     None  # Keep FeedManager instance global if needed outside initialize_services
 )
@@ -40,9 +41,10 @@ async def initialize_services(
         _route_optimization_service_instance, \
         _personalized_routing_service_instance, \
         _weather_service_instance, \
-        _event_service_instance
+        _event_service_instance, \
+        connection_manager_instance
 
-    
+    connection_manager_instance = connection_manager
 
     # Get the database manager instance
     try:
@@ -154,6 +156,10 @@ async def initialize_services(
 
 
 
+def get_connection_manager() -> ConnectionManager:
+    if connection_manager_instance is None:
+        raise RuntimeError("ConnectionManager not initialized.")
+    return connection_manager_instance
 
 def get_feed_manager() -> FMClass:
     if feed_manager_instance is None:

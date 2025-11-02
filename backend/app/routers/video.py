@@ -2,6 +2,7 @@ import base64
 import asyncio
 import datetime
 import collections.abc
+import uuid
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
@@ -11,11 +12,12 @@ from app.config import get_current_config
 from app.dependency_injection import get_current_active_user, get_token_from_query, get_feed_manager
 from app.exceptions import ResourceNotFound, OperationFailed
 from app.models.common import APIResponse
-from app.services.video_ws_manager import video_ws_manager
 from app.services.video_processor import VideoManager
 from app.services.feed_manager import FeedManager
 from app.database import get_database_manager
 from app.utils.video import FrameReader
+from app.websocket.connection_manager import ConnectionManager
+from app.utils.service_getters import get_connection_manager
 import cv2
 
 router = APIRouter()
@@ -69,30 +71,36 @@ async def video_ws_endpoint(
     websocket: WebSocket, 
     stream_id: str, 
     token: str = Depends(get_token_from_query),
-    feed_manager: FeedManager = Depends(get_feed_manager) # Inject FeedManager
+    feed_manager: FeedManager = Depends(get_feed_manager),
+    connection_manager: ConnectionManager = Depends(get_connection_manager)
 ):
     """WebSocket endpoint for real-time video KPIs."""
+    logger.info(f"New WebSocket connection to video_ws_endpoint with stream_id: {stream_id}")
+    client_id = str(uuid.uuid4())
     try:
         if not token:
             await websocket.close(code=4401, reason="Not authenticated")
             return
-        await verify_firebase_token(token)
+        user_data = await verify_firebase_token(token)
+        user_id = user_data.get("uid")
+        if not user_id:
+            await websocket.close(code=4401, reason="Invalid token: UID missing")
+            return
     except HTTPException as e:
         logger.warning(f"WebSocket authentication failed: {e.detail}")
         await websocket.close(code=e.status_code, reason=e.detail)
         return
 
-    await websocket.accept()
-    await video_ws_manager.connect(websocket, stream_id)
+    await connection_manager.connect(websocket, client_id, user_id)
+    await connection_manager.subscribe_to_topic(client_id, stream_id)
+    current_stream_id = stream_id
 
     config = get_current_config()
     output_directory = config.get("video_output", {}).get("output_directory")
     video_manager = VideoManager.get_instance(output_directory=output_directory)
-    video_manager.cancel_background_task(stream_id)
 
-    processor = video_manager.get_processor(stream_id, feed_manager)
-
-    async def send_video_data():
+    async def send_video_data(feed_id):
+        processor = video_manager.get_processor(feed_id, feed_manager)
         try:
             async for data in processor.get_frame_generator():
                 try:
@@ -105,84 +113,40 @@ async def video_ws_endpoint(
                     frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
 
                     # Send frame and KPIs in a single message
-                    await video_ws_manager.broadcast(
-                        stream_id,
+                    await connection_manager.broadcast_to_topic(
                         {
                             "type": "video_update",
                             "data": {
-                                "feed_id": stream_id,
+                                "feed_id": feed_id,
                                 "frame": frame_base64,
                                 "kpis": kpis_serializable,
                             }
                         },
+                        feed_id
                     )
                     
                     await asyncio.sleep(1 / 30)
 
                 except WebSocketDisconnect:
-                    logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
+                    logger.info(f"WebSocket send_video_data disconnected for stream_id: {feed_id}")
                     break
                 
                 except Exception as e:
-                    logger.error(f"Error in send_video_data for {stream_id}: {e}", exc_info=True)
-                    break
-        except WebSocketDisconnect:
-            logger.info(f"WebSocket send_video_data disconnected for stream_id: {stream_id}")
-        except Exception as e:
-            logger.error(f"Error in send_video_data for {stream_id}: {e}", exc_info=True)
+                    logger.error(f"Error in send_video_data for {feed_id}: {e}")
+        finally:
+            logger.info(f"Closing processor for feed_id: {feed_id}")
+            processor.cancel()
 
-    sender_task = asyncio.create_task(send_video_data())
+    # Start the video data sending task in the background
+    task = asyncio.create_task(send_video_data(current_stream_id))
 
     try:
+        # Keep the connection alive to receive messages
         while True:
-            data = await websocket.receive_json()
-            message_type = data.get("type")
-            
-            if message_type in ("ping", "PING"):
-                await websocket.send_json({
-                    "type": "pong",
-                    "data": {"timestamp": datetime.datetime.utcnow().isoformat()}
-                })
-            elif message_type == "get_initial_feed_statuses":
-                logger.info("Received get_initial_feed_statuses request.")
-                all_statuses = await feed_manager.get_all_statuses()
-                # Pydantic models need to be converted to dicts for JSON serialization
-                statuses_dict = [status.model_dump() for status in all_statuses]
-                await websocket.send_json({
-                    "type": "initial_feed_statuses",
-                    "data": convert_datetime_to_iso(statuses_dict)
-                })
-            elif message_type == "start_feed":
-                feed_id = data.get("data", {}).get("feed_id")
-                if feed_id:
-                    logger.info(f"Received start_feed request for feed_id: {feed_id}")
-                    await feed_manager.handle_start_feed(feed_id)
-                else:
-                    logger.warning("Received start_feed request without feed_id.")
-            elif message_type == "stop_feed":
-                feed_id = data.get("data", {}).get("feed_id")
-                if feed_id:
-                    logger.info(f"Received stop_feed request for feed_id: {feed_id}")
-                    await feed_manager.handle_stop_feed(feed_id)
-                else:
-                    logger.warning("Received stop_feed request without feed_id.")
-            elif message_type == "refresh_feed":
-                feed_id = data.get("data", {}).get("feed_id")
-                if feed_id:
-                    logger.info(f"Received refresh_feed request for feed_id: {feed_id}")
-                    await feed_manager.refresh_feed(feed_id)
-                else:
-                    logger.warning("Received refresh_feed request without feed_id.")
-            else:
-                logger.warning(f"Received unhandled message type: {message_type}")
-            
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        logger.info(f"WebSocket receive loop disconnected for stream_id: {stream_id}")
-        if sender_task:
-            sender_task.cancel()
-        video_ws_manager.disconnect(websocket, stream_id)
-    except Exception as e:
-        logger.error(f"Unexpected error in WebSocket connection for stream_id {stream_id}: {e}", exc_info=True)
-        if sender_task:
-            sender_task.cancel()
-        video_ws_manager.disconnect(websocket, stream_id)
+        logger.info(f"WebSocket client {client_id} disconnected.")
+    finally:
+        task.cancel()
+        await connection_manager.unsubscribe_from_topic(client_id, current_stream_id)
+        await connection_manager.disconnect(client_id)

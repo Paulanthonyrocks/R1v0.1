@@ -409,6 +409,12 @@ export class WebSocketClient implements IWebSocketClient {
 
     private handleMessage(event: MessageEvent): void {
         if (typeof event.data === 'string') {
+            // Handle simple ping messages that are not JSON formatted
+            if (event.data === 'ping') {
+                this.send({ type: WebSocketMessageType.PONG, data: { timestamp: Date.now() } });
+                return;
+            }
+
             try {
                 const message = JSON.parse(event.data) as WebSocketMessage<any>;
 

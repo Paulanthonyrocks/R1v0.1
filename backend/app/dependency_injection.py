@@ -14,6 +14,7 @@ from .services.services import (
     get_weather_service,
     get_event_service,
     get_personalized_routing_service,
+    get_connection_manager,
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService

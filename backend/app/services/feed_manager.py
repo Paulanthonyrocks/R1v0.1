@@ -240,7 +240,7 @@ class FeedManager:
             message = WebSocketMessage(
                 type=message_type, data=data
             )
-            await self._connection_manager.broadcast(message)
+            await self._connection_manager.broadcast(message.model_dump_json())
         else:
             logger.debug(f"Broadcast skipped (No WS Manager): Type={message_type}")
 
@@ -392,7 +392,7 @@ class FeedManager:
 
             # Broadcast to a specific topic for this feed
             topic = f"feed:{feed_id}"
-            await self._connection_manager.broadcast_to_topic(message, topic)
+            await self._connection_manager.broadcast_to_topic(message.model_dump_json(), topic)
             # Also broadcast a general version to a generic "feeds" topic for overview listeners
             # This might be too noisy if many feeds update frequently. Consider if needed.
             # await self._connection_manager.broadcast_message_model(message, specific_topic="feeds_all")
@@ -432,11 +432,11 @@ class FeedManager:
 
         # Broadcast to a general alerts topic, and potentially a feed-specific alert topic
         await self._connection_manager.broadcast_to_topic(
-            message, topic="alerts"
+            message.model_dump_json(), topic="alerts"
         )
         if feed_id:
             await self._connection_manager.broadcast_to_topic(
-                message, topic=f"feed_alerts:{feed_id}"
+                message.model_dump_json(), topic=f"feed_alerts:{feed_id}"
             )
 
         logger.info(
@@ -553,7 +553,7 @@ class FeedManager:
             data=metrics_payload,
         )
         await self._connection_manager.broadcast_to_topic(
-            message, topic="kpis"
+            message.model_dump_json(), topic="kpis"
         )
         logger.debug(
             f"Broadcasted KPI update: {metrics_payload.model_dump_json(indent=2)}"
@@ -797,7 +797,7 @@ class FeedManager:
                             
                             # Broadcast the video frame to the specific topic
                             if self._connection_manager:
-                                await self._connection_manager.broadcast_to_topic(video_message, video_topic)
+                                await self._connection_manager.broadcast_to_topic(video_message.model_dump_json(), video_topic)
                                 logger.debug(f"Broadcasted video frame {frame_idx} for feed {feed_id} to topic {video_topic}.")
                             else:
                                 logger.debug(f"Skipping video frame broadcast for {feed_id}: ConnectionManager not available.")

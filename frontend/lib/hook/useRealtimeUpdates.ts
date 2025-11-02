@@ -43,8 +43,6 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     const [error, setError] = useState<string | null>(null);
     const hasRequestedInitialFeeds = useRef(false);
 
-    const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-
     const sendMessage = useCallback((action: string, payload?: object): boolean => {
         const client = webSocketClientRef.current;
         if (client && client.isConnected()) {
@@ -61,7 +59,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     }, []);
 
     useEffect(() => {
-        const wsUrl = new URL('/api/v1/video/ws', WS_BASE_URL).toString();
+        const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
         const client = new WebSocketClient(wsUrl);
         webSocketClientRef.current = client;
 
@@ -134,7 +132,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             setIsConnected(false);
             setIsReady(false);
         };
-    }, [WS_BASE_URL, sendMessage]); // sendMessage is stable due to useCallback
+    }, [sendMessage]); // sendMessage is stable due to useCallback
 
     useEffect(() => {
         console.log("Internal feeds state updated:", JSON.stringify(feeds));

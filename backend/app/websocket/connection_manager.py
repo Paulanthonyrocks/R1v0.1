@@ -1,722 +1,191 @@
+from __future__ import annotations
 import asyncio
 import logging
+from typing import Dict, Optional, List, Set
+from fastapi import WebSocket
 import time
-from typing import Dict, Any, Set, Optional
-from fastapi import WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
-import json
-from datetime import datetime
 
-from app.models.websocket import (
-    WebSocketMessage,
-    WebSocketMessageTypeEnum,
-    ErrorNotification,
-    GeneralNotification,
-    RefreshFeedData,
-)  # Import new models
-from app.services.exceptions import FeedNotFoundError, FeedOperationError
-from app.exceptions import ConnectionLimitExceeded
-# from app.dependencies import get_current_active_user_ws # We'll define a similar function here or call directly
-
-from app.utils.service_getters import get_feed_manager  # Import the feed manager getter
-
-logger = logging.getLogger(__name__)  # Initialize logger
-
-
-class ActiveWebSocketConnection:
-    def __init__(
-        self,
-        websocket: WebSocket,
-        client_id: str,
-        manager: "ConnectionManager",
-        user_info: Optional[Dict[str, Any]] = None,
-    ):
-        self.websocket = websocket
-        self.client_id = client_id
-        self.manager = manager
-        self.user_info: Optional[Dict[str, Any]] = user_info
-        self.subscriptions: Set[str] = set()
-        self.last_ping_sent: float = time.time() # Renamed to clarify it's last ping sent by server
-        self.last_pong_received: float = time.time() # New: Last time a PONG was received from client
-        self.ping_timeout: float = 300.0  # 300 seconds timeout (5 minutes) - increased from 90s for dashboard stability
-        self.token_refresh_time: Optional[float] = None
-        self.token: Optional[str] = None
-        self.token_expiry: Optional[float] = None  # Unix timestamp of token expiration
-
-    async def send_text(self, text: str):
-        await self.websocket.send_text(text)
-
-    async def send_json_model(self, message: WebSocketMessage):
-        """Sends a Pydantic model as JSON over WebSocket."""
-        try:
-            if self.websocket.client_state == WebSocketState.CONNECTED:
-                logger.debug(
-                    f"Client {self.client_id}: Before send_json. WebSocket state: {self.websocket.client_state}"
-                )
-                await self.websocket.send_json(message.model_dump(mode="json"))
-                logger.debug(
-                    f"Client {self.client_id}: After send_json. WebSocket state: {self.websocket.client_state}"
-                )
-            else:
-                logger.warning(
-                    f"Attempted to send to non-connected websocket: {self.client_id}, state: {self.websocket.client_state}. Message type: {message.type}"
-                )
-        except (
-            RuntimeError,
-            WebSocketDisconnect,
-        ) as e:  # Catch specific exceptions for closed sockets
-            # WebSocketDisconnect is often a normal part of the lifecycle
-            log_level = logger.debug if isinstance(e, WebSocketDisconnect) else logger.warning
-            log_level(
-                f"Attempted to send JSON model to {self.client_id} but socket was already closing or closed: {e}"
-            )
-        except Exception as e:  # Catch other potential errors
-            logger.error(f"Error sending JSON model to {self.client_id}: {e}", exc_info=True)
-
-    async def close(self, code: int = 1000, reason: Optional[str] = None):
-        closed_by_this_call = False
-        exception_during_close = False
-        try:
-            if self.websocket.client_state == WebSocketState.CONNECTED:
-                await self.websocket.close(code=code, reason=reason)
-                closed_by_this_call = True
-                logger.debug(
-                    f"WebSocket {self.client_id} closed by close() method call."
-                )
-        except Exception as e:
-            logger.warning(
-                f"Exception during explicit close for {self.client_id}: {e}. State: {self.websocket.client_state}"
-            )
-            exception_during_close = True # Set the flag here
-
-        finally: # Always ensure the manager removes the connection, even if already closed or error during close
-            self.manager.disconnect(self.client_id)
-            if closed_by_this_call and not exception_during_close:
-                logger.info(
-                    f"ActiveWebSocketConnection {self.client_id} gracefully closed and disconnected."
-                )
-            else:
-                # This covers cases where close() wasn't called, or it failed before setting closed_by_this_call
-                logger.info(
-                    f"ActiveWebSocketConnection {self.client_id} ensured disconnected by manager (was potentially already closed or error on close)."
-                )
-
-    async def handle_incoming_message(self, data_raw: Any):
-        """Handles incoming messages, parsing, authentication, and command dispatch."""
-        try:
-            if isinstance(data_raw, str):
-                data = json.loads(data_raw)
-            elif isinstance(data_raw, bytes):  # Handle bytes if necessary
-                data = json.loads(data_raw.decode("utf-8"))
-            else:  # Assuming it's already a dict (e.g. from websocket.receive_json())
-                data = data_raw
-
-            # Check for specific malformed messages that only contain 'data' and 'timestamp'
-            if (
-                isinstance(data, dict)
-                and "type" not in data
-                and "data" in data
-                and "timestamp" in data
-                and len(data) == 2
-            ):
-                logger.debug(
-                    f"Ignoring malformed client message (missing 'type', contains only 'data' and 'timestamp'): {data}"
-                )
-                return
-
-            elif data.get("type") == "pong":  # Handle incoming PONG from client
-                logger.debug(f"Received PONG from client {self.client_id}")
-                self.last_pong_received = time.time()  # Update last PONG received time
-                return
-
-            # All messages from the client should be in the format {type, data}
-            # For PONG messages, 'data' field is optional
-            if "type" not in data:
-                logger.warning(
-                    f"Invalid message format from client {self.client_id}: Missing 'type' field. Raw data: {data_raw}"
-                )
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data={
-                            "error_code": "INVALID_FORMAT",
-                            "message": "Invalid message format. Expected 'type' field.",
-                        },
-                    )
-                )
-                return
-
-            # For PONG messages, 'data' field is optional
-            if data.get("type") != WebSocketMessageTypeEnum.PONG and "data" not in data:
-                logger.warning(
-                    f"Invalid message format from client {self.client_id}: Missing 'data' field for message type {data.get('type')}. Raw data: {data_raw}"
-                )
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data={
-                            "error_code": "INVALID_FORMAT",
-                            "message": "Invalid message format. Expected 'data' field for this message type.",
-                        },
-                    )
-                )
-                return
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"Failed to decode JSON message from {self.client_id}: {e}. Raw data: {data_raw}"
-            )
-            await self.send_json_model(
-                WebSocketMessage( # Add exc_info=True (Modification for point 8)
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                    data=ErrorNotification(
-                        code="INVALID_JSON", message="Invalid JSON format."
-                    ),
-                ), exc_info=True  # Add exc_info=True here
-            )  # Added exc_info=True
-            return
-        except Exception as e:
-            logger.error(
-                f"Error processing incoming message from {self.client_id}: {e}. Raw data: {data_raw}",
-                exc_info=True,
-            )
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                    data=ErrorNotification(
-                        code="MESSAGE_PROCESSING_ERROR",
-                        message="Could not process message.",
-                    ),
-                )
-            )
-            return
-
-        logger.debug(f"Parsed message from {self.client_id}: {data}")
-
-        try:
-            message = WebSocketMessage(**data)
-        except Exception as e:  # Pydantic validation error or other
-            logger.warning(
-                f"Invalid WebSocketMessage structure from {self.client_id}: {e}. Raw data: {data_raw}"
-            )
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                    data=ErrorNotification(
-                        code="INVALID_MESSAGE_STRUCTURE",
-                        message=f"Invalid message structure: {str(e)}",
-                    ),
-                )
-            )
-            return
-
-        
-
-        # Handle other message types (subscriptions, commands, etc.)
-        if message.type == WebSocketMessageTypeEnum.SUBSCRIBE:
-            topic = (
-                message.data.get("topic") if isinstance(message.data, dict) else None
-            )
-            if topic and isinstance(topic, str):
-                self.subscriptions.add(topic)
-                logger.info(
-                    f"Client {self.client_id} subscribed to {topic}. Current subscriptions: {self.subscriptions}"
-                )
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        data=GeneralNotification(
-                            message_type="subscription_update",
-                            message=f"Subscribed to {topic}",
-                        ),
-                    )
-                )
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="INVALID_SUBSCRIPTION_TOPIC",
-                            message="Invalid or missing topic for subscription.",
-                        ),
-                    )
-                )
-
-        elif message.type == WebSocketMessageTypeEnum.UNSUBSCRIBE:
-            topic = (
-                message.data.get("topic") if isinstance(message.data, dict) else None
-            )
-            if topic and isinstance(topic, str) and topic in self.subscriptions:
-                self.subscriptions.remove(topic)
-                logger.info(
-                    f"Client {self.client_id} unsubscribed from {topic}. Current subscriptions: {self.subscriptions}"
-                )
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        data=GeneralNotification(
-                            message_type="subscription_update",
-                            message=f"Unsubscribed from {topic}",
-                        ),
-                    )
-                )
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="INVALID_UNSUBSCRIPTION_TOPIC",
-                            message="Invalid, missing, or not subscribed topic for unsubscription.",
-                        ),
-                    )
-                )
-
-        elif message.type == WebSocketMessageTypeEnum.ERROR_NOTIFICATION:
-            logger.info(
-                f"Client {self.client_id} sent an ERROR_NOTIFICATION: {message.data}"
-            )
-            # Do not re-send an error notification back to the client for an incoming error notification.
-            # Just log it and acknowledge.
-
-        elif message.type == WebSocketMessageTypeEnum.AUTHENTICATE:
-            new_token = message.data.get("token") if isinstance(message.data, dict) else None
-            if new_token:
-                try:
-                    user_data = await self.manager._verify_firebase_token(new_token)
-                    if user_data:
-                        self.token = new_token
-                        # Assuming token_expiry can be derived from user_data or is handled by Firebase SDK
-                        self.user_info = user_data
-
-                        # CORRECT WAY: Use the 'exp' claim from the decoded token (Unix timestamp)
-                        # user_data should be the decoded token dictionary
-                        self.token_expiry = user_data.get('exp', time.time() + 3600) # Fallback to 1 hour if 'exp' is missing
-
-                        logger.info(f"Client {self.client_id} successfully re-authenticated.")
-                        await self.send_json_model(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
-                                data={"message": "Authentication successful."},
-                            )
-                        )
-                    else:
-                        logger.warning(f"Client {self.client_id} authentication failed: Invalid token.")
-                        await self.send_json_model(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                                data=ErrorNotification(
-                                    code="AUTH_FAILED", message="Invalid token."
-                                ),
-                            )
-                        )
-                except Exception as e:
-                    logger.error(f"Error during re-authentication for client {self.client_id}: {e}")
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                            data=ErrorNotification(
-                                code="AUTH_ERROR", message=f"Authentication error: {str(e)}"
-                            ),
-                        )
-                    )
-            else:
-                logger.warning(f"Client {self.client_id} sent AUTHENTICATE message without a token.")
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                        data=ErrorNotification(
-                            code="MISSING_TOKEN", message="Authentication message missing token."
-                        ),
-                    )
-                )
-
-        elif message.type == WebSocketMessageTypeEnum.REFRESH_FEED:  # Handle the new refresh_feed event type
-            if isinstance(message.data, RefreshFeedData):
-                feed_id = message.data.feed_id
-                logger.info(
-                    f"Client {self.client_id} requested refresh for feed: {feed_id}"
-                )
-                try:
-                    # Get the FeedManager instance
-                    feed_manager = get_feed_manager()
-                    # Call the refresh_feed method on the FeedManager
-                    await feed_manager.refresh_feed(feed_id)
-                    logger.info(f"Refresh process initiated for feed {feed_id}.")
-                    # Send a confirmation back to the client
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                            data=GeneralNotification(
-                                message_type="feed_refresh_initiated",
-                                message=f"Refresh initiated for feed {feed_id}.",
-                            ),
-                        )
-                    )
-                except (FeedNotFoundError, FeedOperationError) as e:
-                    logger.warning(
-                        f"Failed to refresh feed {feed_id} as requested by {self.client_id}: {e}"
-                    )
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                            data=ErrorNotification(
-                                code="FEED_REFRESH_FAILED",
-                                message=f"Failed to refresh feed {feed_id}: {e}",
-                            ),
-                        )
-                    )
-                except RuntimeError as e:
-                    logger.error(
-                        f"Failed to get FeedManager to refresh feed {feed_id}: {e}",
-                        exc_info=True,
-                    )
-                    await self.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                            data=ErrorNotification(
-                                code="INTERNAL_ERROR",
-                                message="Server error attempting to refresh feed.",
-                            ),
-                        )
-                    )
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="INVALID_REFRESH_REQUEST",
-                            message="Invalid or missing feed_id for refresh.",
-                        ),
-                    )
-                )
-        elif message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
-            logger.info(f"Client {self.client_id} requested initial feed statuses.")
-            try:
-                logger.debug("About to get all feed statuses from FeedManager")
-                feed_manager = get_feed_manager()
-                statuses = await feed_manager.get_all_statuses()
-                logger.debug(f"Client {self.client_id}: Got initial feed statuses: {statuses}")
-
-                # Prepare the message to send
-                message_to_send = WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
-                        data=InitialFeedStatusesData(feeds=statuses),
-                    )
-                logger.debug(f"Client {self.client_id}: Prepared INITIAL_FEED_STATUSES message: {message_to_send.model_dump_json()}")
-
-                # Send the message
-                await self.send_json_model(message_to_send)
-
-                logger.debug(f"Client {self.client_id}: Sent INITIAL_FEED_STATUSES message.")
-
-            except Exception as e:
-                logger.error(f"Error getting initial feed statuses: {e}", exc_info=True)
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="INTERNAL_ERROR",
-                            message="Could not retrieve initial feed statuses.",
-                        ),
-                    )
-                )
-        elif message.type == WebSocketMessageTypeEnum.PING:
-            logger.debug(f"Received PING from {self.client_id}, sending PONG.")
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.PONG,
-                    data={"timestamp": datetime.utcnow().isoformat()}
-                )
-            )
-
-        elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
-            feed_id = message.data.get("feed_id") if isinstance(message.data, dict) else None
-            if feed_id:
-                self.subscriptions.add(feed_id)
-                logger.info(f"Client {self.client_id} subscribed to feed {feed_id}")
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                        data=GeneralNotification(
-                            message_type="subscription_update",
-                            message=f"Subscribed to feed {feed_id}",
-                        ),
-                    )
-                )
-            else:
-                await self.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data=ErrorNotification(
-                            code="INVALID_SUBSCRIPTION_REQUEST",
-                            message="Invalid or missing feed_id for subscription.",
-                        ),
-                    )
-                )
-
-        else:
-            logger.warning(
-                f"Unhandled message type from {self.client_id}: {message.type}. Data: {message.data}"
-            )
-            await self.send_json_model(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                    data=ErrorNotification(
-                        code="UNHANDLED_MESSAGE_TYPE",
-                        message=f"Message type '{message.type}' not handled.",
-                    ),
-                )
-            )
-
-    async def listen_for_messages(self):
-        try:
-            while True:
-                data_raw = await self.websocket.receive_text()
-                await self.handle_incoming_message(data_raw) # Pass reason (Modification for point 3)
-        except WebSocketDisconnect as e:
-            logger.info(
-                f"Client {self.client_id} disconnected. Code: {e.code}, Reason: {e.reason}" # This log will be replaced by the disconnect method's log
-            )
-            self.manager.disconnect(self.client_id)
-        except RuntimeError as e:
-            # This can happen if the connection is closed abruptly before the listener loop starts
-            logger.warning(
-                f"RuntimeError in WebSocket loop for client {self.client_id}: {e}. "
-                "This may indicate a client-side race condition or abrupt disconnection."
-            )
-            self.manager.disconnect(self.client_id)
-        except Exception as e:
-            logger.error(
-                f"Unexpected error in WebSocket loop for client {self.client_id}: {e}",
-                exc_info=True,
-            )
-            # Attempt to close the connection gracefully from server-side if an error occurs
-            if (
-                self.websocket.client_state == WebSocketState.CONNECTED
-            ):
-                error_payload = ErrorNotification(
-                    code="UNEXPECTED_SERVER_ERROR", message=str(e)
-                )
-                ws_msg = WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION, data=error_payload
-                )
-                try:
-                    await self.send_json_model(ws_msg)
-                except Exception as send_err:
-                    logger.error(
-                        f"Failed to send error to client {self.client_id} before closing: {send_err}"
-                    )
-                try:
-                    await self.close(
-                        code=1011, reason=f"Server error: {str(e)[:100]}"
-                    )  # Reason has length limit
-                except Exception as close_err:
-                    logger.error(
-                        f"Error trying to close connection for {self.client_id} after exception: {close_err}"
-                    )
-            # Ensure cleanup even if close fails
-            self.manager.disconnect(self.client_id)
-        finally:
-            logger.info(f"WebSocket connection for client {self.client_id} is ending.")
-
+logger = logging.getLogger(__name__)
 
 class ConnectionManager:
-    """Manages active WebSocket connections."""
+    _instance: Optional[ConnectionManager] = None
 
-    def __init__(self):
-        self.active_connections: Optional[Dict[str, ActiveWebSocketConnection]] = None
-        self.ping_interval_seconds: Optional[int] = None
-        self.ping_task: Optional[asyncio.Task] = None
-        self.max_connections: Optional[int] = None
-        self.token_refresh_interval: Optional[int] = None
-        self._initialized = False
-
-    async def init(self, max_connections: int = 1000, token_refresh_interval: int = 300, ping_interval: int = 15):
-        if self._initialized:
-            logger.warning("ConnectionManager already initialized.")
+    def __init__(
+        self,
+        max_connections: int = 1000,
+        token_refresh_interval: int = 300,
+        ping_interval: int = 15,
+    ):
+        if hasattr(self, "_initialized"):
             return
-
-        self.active_connections = {}
-        self.ping_interval_seconds = ping_interval
+        self._initialized = True
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.client_id_to_user_id: Dict[str, str] = {}
+        self.user_id_to_client_ids: Dict[str, List[str]] = {}
+        self.topic_subscriptions: Dict[str, Set[str]] = {}  # New: topic -> set of client_ids
+        self.client_id_to_topics: Dict[str, Set[str]] = {}  # New: client_id -> set of topics
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
-        self.ping_task = None
-        self._initialized = True
-        logger.info(f"ConnectionManager initialized with max_connections={self.max_connections}, token_refresh_interval={self.token_refresh_interval}.")
-        await self.start_ping_task()
+        self.ping_interval = ping_interval
+        self._shutdown_event = asyncio.Event()
 
-    async def shutdown(self):
-        logger.info("Shutting down ConnectionManager.")
-        await self.disconnect_all()
-        if self.ping_task:
-            self.ping_task.cancel()
-            try:
-                await self.ping_task
-            except asyncio.CancelledError:
-                pass  # Expected
-            self.ping_task = None
-        self._initialized = False
-        logger.info("ConnectionManager shut down complete.")
+    async def init(
+        self,
+        max_connections: int,
+        token_refresh_interval: int,
+        ping_interval: int,
+    ):
+        self.max_connections = max_connections
+        self.token_refresh_interval = token_refresh_interval
+        self.ping_interval = ping_interval
+        asyncio.create_task(self._ping_clients())
+        logger.info(
+            f"ConnectionManager initialized with max_connections={max_connections}, "
+            f"token_refresh_interval={token_refresh_interval}, ping_interval={ping_interval}"
+        )
 
-    async def connect(self, websocket: WebSocket, client_id: str, user_data: Dict[str, Any]):
+    @classmethod
+    def get_instance(cls) -> "ConnectionManager":
+        if cls._instance is None:
+            raise RuntimeError(
+                "ConnectionManager not initialized. Ensure initialize_services() is called before accessing services."
+            )
+        return cls._instance
+
+    async def connect(self, websocket: WebSocket, client_id: str, user_id: str):
         if len(self.active_connections) >= self.max_connections:
-            logger.warning(f"Connection limit ({self.max_connections}) exceeded. Rejecting new connection from {client_id}.")
-            raise ConnectionLimitExceeded(detail="Maximum number of connections reached.")
+            logger.warning(
+                f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
+            )
+            await websocket.close(
+                code=4000, reason="Connection limit exceeded"
+            )
+            return
 
-        # The websocket is now accepted in the endpoint handler before this method is called.
-        # logger.debug(f"Client {client_id}: WebSocket connection accepted.") # This log is now in the handler
-        connection = ActiveWebSocketConnection(websocket, client_id, self, user_data)
-        self.active_connections[client_id] = connection
-        logger.debug(f"Client {client_id}: Added to active connections.")
-        logger.info(f"Client {client_id} connected. Total active connections: {len(self.active_connections)}.")
-        if not self.ping_task or self.ping_task.done(): # Modification for point 6
-            await self.start_ping_task()
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+        self.client_id_to_user_id[client_id] = user_id
 
-    def disconnect(self, client_id: str, reason: str = "No reason specified"):
-        """Removes a client from the active connections."""
+        if user_id not in self.user_id_to_client_ids:
+            self.user_id_to_client_ids[user_id] = []
+        self.user_id_to_client_ids[user_id].append(client_id)
+        self.client_id_to_topics[client_id] = set() # Initialize topics for new client
+
+        logger.info(
+            f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
+            f"Total connections: {len(self.active_connections)}"
+        )
+
+    async def disconnect(self, client_id: str):
         if client_id in self.active_connections:
             del self.active_connections[client_id]
+            user_id = self.client_id_to_user_id.pop(client_id, None)
+
+            if user_id and user_id in self.user_id_to_client_ids:
+                if client_id in self.user_id_to_client_ids[user_id]:
+                    self.user_id_to_client_ids[user_id].remove(client_id)
+                if not self.user_id_to_client_ids[user_id]:
+                    del self.user_id_to_client_ids[user_id]
+            
+            # Remove client from all topic subscriptions
+            if client_id in self.client_id_to_topics:
+                for topic in list(self.client_id_to_topics[client_id]): # Iterate over a copy
+                    self.unsubscribe_from_topic(client_id, topic)
+                del self.client_id_to_topics[client_id]
+
             logger.info(
-                f"Client {client_id} disconnected. Reason: {reason}. Total active connections: {len(self.active_connections)}"
+                f"WebSocket connection closed: client_id={client_id}. "
+                f"Total connections: {len(self.active_connections)}"
             )
-        if not self.active_connections and self.ping_task:
-            self.ping_task.cancel()
-            self.ping_task = None
-            logger.info("All clients disconnected, ping task stopped.")
 
-    async def disconnect_all(self):
-        """Disconnects all active WebSocket connections."""
-        logger.info(f"Disconnecting all {len(self.active_connections)} active WebSocket connections.")
-        # Iterate over a copy of keys to avoid RuntimeError: dictionary changed size during iteration
-        for client_id in list(self.active_connections.keys()):
-            connection = self.active_connections.get(client_id)
-            if connection:
-                try:
-                    if connection.websocket.client_state == WebSocketState.CONNECTED:
-                        await connection.websocket.close(code=1000, reason="Server shutting down")
-                except Exception as e:
-                    logger.error(f"Error closing websocket for {client_id} during shutdown: {e}")
-                finally:
-                    self.disconnect(client_id, reason="Server shutting down") # Ensure cleanup
+    async def send_personal_message(self, message: str, client_id: str):
+        if client_id in self.active_connections:
+            await self.active_connections[client_id].send_text(message)
 
-        if self.ping_task:
-            self.ping_task.cancel()
-            try:
-                await self.ping_task
-            except asyncio.CancelledError:
-                logger.info("ConnectionManager ping task stopped during disconnect_all.") # Ensure cleanup (Modification for point 3)
-            self.ping_task = None
-        logger.info("All WebSocket connections disconnected.")
+    async def broadcast(self, message: str):
+        for connection in self.active_connections.values():
+            await connection.send_text(message)
 
-    async def broadcast(self, message: WebSocketMessage, exclude_client_id: Optional[str] = None):
-        """Broadcasts a message to all active connections, optionally excluding one."""
-        # Iterating over a list copy of keys is a potential scaling bottleneck for a very large number of connections.
-        for client_id, connection in list(self.active_connections.items()):
-            if client_id == exclude_client_id:
-                continue
-            try:
-                await connection.send_json_model(message)
-            except Exception as e:
-                logger.error(f"Error broadcasting message to {client_id}: {e}")
-                self.disconnect(client_id, reason="Error during broadcast") # Disconnect problematic client
+    async def send_to_user(self, user_id: str, message: str):
+        client_ids = self.user_id_to_client_ids.get(user_id, [])
+        for client_id in client_ids:
+            if client_id in self.active_connections:
+                await self.active_connections[client_id].send_text(message)
 
-    async def broadcast_to_topic(self, message: WebSocketMessage, topic: str):
-        """Broadcasts a message to all clients subscribed to a specific topic."""
-        # Iterating over a list copy of keys is a potential scaling bottleneck for a very large number of connections.
-        for client_id, connection in list(self.active_connections.items()):
-            if topic in connection.subscriptions:
-                try:
-                    await connection.send_json_model(message)
-                except Exception as e:
-                    logger.error(f"Error broadcasting message to subscribed client {client_id} for topic {topic}, will disconnect: {e}")
-                    self.disconnect(client_id) # Disconnect problematic client
+    async def subscribe_to_topic(self, client_id: str, topic: str):
+        if client_id not in self.active_connections:
+            logger.warning(f"Client {client_id} not active. Cannot subscribe to topic {topic}.")
+            return
 
-    async def send_to_client(self, client_id: str, message: WebSocketMessage):
-        """Sends a message to a specific client."""
-        connection = self.active_connections.get(client_id)
-        if connection:
-            try:
-                await connection.send_json_model(message)
-            except Exception as e:
-                logger.error(f"Error sending message to client {client_id}, will disconnect: {e}")
-                self.disconnect(client_id)
-        else:
-            logger.warning(f"Attempted to send message to non-existent client: {client_id}")
+        if topic not in self.topic_subscriptions:
+            self.topic_subscriptions[topic] = set()
+        self.topic_subscriptions[topic].add(client_id)
+        self.client_id_to_topics.setdefault(client_id, set()).add(topic)
+        logger.info(f"Client {client_id} subscribed to topic: {topic}")
 
-    async def _verify_firebase_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Verifies a Firebase ID token and returns user data if valid."""
-        try:
-            # Import here to avoid circular dependency at top level
-            from app.dependencies import verify_firebase_token
-            user_data = await verify_firebase_token(token)
-            return user_data
-        except Exception as e:
-            logger.warning(f"Firebase token verification failed: {e}")
-            return None
+    async def unsubscribe_from_topic(self, client_id: str, topic: str):
+        if topic in self.topic_subscriptions and client_id in self.topic_subscriptions[topic]:
+            self.topic_subscriptions[topic].remove(client_id)
+            if not self.topic_subscriptions[topic]:
+                del self.topic_subscriptions[topic]
+            logger.info(f"Client {client_id} unsubscribed from topic: {topic}")
+        
+        if client_id in self.client_id_to_topics and topic in self.client_id_to_topics[client_id]:
+            self.client_id_to_topics[client_id].remove(topic)
+            if not self.client_id_to_topics[client_id]:
+                del self.client_id_to_topics[client_id]
 
-    async def start_ping_task(self):
-        if self.ping_task and not self.ping_task.done():
-            self.ping_task.cancel()
-        self.ping_task = asyncio.create_task(self._ping_clients_periodically())
-        logger.info("ConnectionManager ping task started.")
-
-    async def stop_ping_task(self):
-        if self.ping_task:
-            self.ping_task.cancel()
-            try:
-                await self.ping_task
-            except asyncio.CancelledError:
-                logger.info("ConnectionManager ping task stopped.")
-            self.ping_task = None
-
-    async def _ping_clients_periodically(self):
-        while True:
-            await asyncio.sleep(self.ping_interval_seconds)
-            await self._ping_clients()
+    async def broadcast_to_topic(self, message: str, topic: str):
+        if topic in self.topic_subscriptions:
+            for client_id in list(self.topic_subscriptions[topic]): # Iterate over a copy to allow modification during iteration
+                if client_id in self.active_connections:
+                    try:
+                        await self.active_connections[client_id].send_text(message)
+                    except Exception as e:
+                        logger.error(f"Failed to send message to client {client_id} on topic {topic}: {e}")
+                        # Consider disconnecting client if send fails consistently
+                else:
+                    logger.warning(f"Client {client_id} in topic {topic} is no longer active. Removing subscription.")
+                    self.topic_subscriptions[topic].remove(client_id)
+                    if client_id in self.client_id_to_topics:
+                        self.client_id_to_topics[client_id].discard(topic)
 
     async def _ping_clients(self):
-        logger.debug(f"Sending PING to {len(self.active_connections)} clients.")
-        clients_to_remove = []
-        for client_id, connection in list(self.active_connections.items()):
-            if connection.websocket.client_state == WebSocketState.CONNECTED:
-                try:
-                    await connection.send_json_model(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.PING,
-                            data={"timestamp": datetime.utcnow().isoformat()},
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.sleep(self.ping_interval)
+                disconnected_clients = []
+                for client_id, connection in self.active_connections.items():
+                    if connection.client_state == 2: # WebSocketState.DISCONNECTED
+                        disconnected_clients.append(client_id)
+                        continue
+                    try:
+                        await asyncio.wait_for(
+                            connection.send_text("ping"), timeout=5
                         )
-                    )
-                    # Update last_ping_sent for server-initiated pings
-                    connection.last_ping_sent = time.time()
-                except Exception as e:
-                    logger.warning(f"Failed to send PING to client {client_id}: {e}")
-                    clients_to_remove.append(client_id)
+                    except (asyncio.TimeoutError, ConnectionError, RuntimeError):
+                        logger.warning(
+                            f"Client {client_id} failed to respond to ping or is already closed. Marking for disconnection."
+                        )
+                        disconnected_clients.append(client_id)
+                
+                for client_id in disconnected_clients:
+                    await self.disconnect(client_id)
 
-        # Use a set to avoid adding duplicate client_ids to clients_to_remove
-        clients_to_remove_set = set(clients_to_remove) # Add clients with ping send failures initially
-        reasons = {} # Dictionary to store reasons for disconnection
-        for client_id in clients_to_remove:
-            reasons[client_id] = "Ping send error"
-        clients_to_check_for_timeout = list(self.active_connections.keys()) # Check all active connections
-        # Check for clients that haven't responded to pings or need token refresh
-        current_time = time.time()
-        for client_id, connection in list(self.active_connections.items()):
-            # Use last_pong_received for timeout detection
-            if current_time - connection.last_pong_received > connection.ping_timeout:
-                logger.warning(
-                    f"Client {client_id} timed out (no PONG response). Disconnecting."
-                )
-                clients_to_remove_set.add(client_id)
-                reasons[client_id] = "PONG timeout"
-            # Check if token needs refreshing
-            if connection.token_expiry and current_time >= (connection.token_expiry - self.token_refresh_interval):
-                logger.info(f"Client {client_id} token expiring soon. Requesting refresh.")
-                await connection.send_json_model(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.TOKEN_REFRESH_REQUEST,
-                        data={"message": "Your token is expiring soon. Please refresh."},
-                    )
-                )
+            except asyncio.CancelledError:
+                logger.info("Ping task cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Error in ping task: {e}", exc_info=True)
 
-        for client_id in clients_to_remove_set: # Iterate over the set of clients to remove
-            self.disconnect(client_id, reason=reasons.get(client_id, "Unknown ping related issue")) # Provide a default reason
-
+    async def shutdown(self):
+        logger.info("Shutting down ConnectionManager...")
+        self._shutdown_event.set()
+        for ws in self.active_connections.values():
+            await ws.close()
+        self.active_connections.clear()
+        self.client_id_to_user_id.clear()
+        self.user_id_to_client_ids.clear()
+        self.topic_subscriptions.clear() # Clear topic subscriptions on shutdown
+        self.client_id_to_topics.clear() # Clear client topics on shutdown
+        logger.info("All WebSocket connections closed.")

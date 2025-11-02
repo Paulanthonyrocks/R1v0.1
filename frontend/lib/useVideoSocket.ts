@@ -65,8 +65,12 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       return;
     }
 
+    const videoWsBaseUrl = typeof window !== 'undefined'
+        ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000`
+        : process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+
     let reconnectTimer: NodeJS.Timeout;
-    const wsUrl = new URL(`/video/ws/${streamId}`, VIDEO_WS_BASE_URL).toString();
+    const wsUrl = new URL(`/video/ws/${streamId}`, videoWsBaseUrl).toString();
 
     const connect = () => {
       console.log(`useVideoSocket: Connecting to ${streamId}...`);
@@ -107,7 +111,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         wsClientRef.current = null;
       }
     };
-  }, [streamId, token, VIDEO_WS_BASE_URL, handleFrame, handleMetrics]);
+  }, [streamId, token, handleFrame, handleMetrics]);
 
   return { frameData, metrics, isConnected, error, drawFrame, frameRate };
 };
