@@ -332,8 +332,7 @@ async def startup_event():
         from app.services.video_processor import VideoManager
         output_directory = loaded_config.get("video_output", {}).get("output_directory")
         video_manager = VideoManager.get_instance(output_directory=output_directory)
-        task = asyncio.create_task(process_sample_video_on_startup())
-        video_manager.start_background_task("sample-feed", task)
+        asyncio.create_task(process_sample_video_on_startup())
 
     except Exception as e:
         logger.error(f"Failed to schedule sample video processing task: {e}", exc_info=True)
@@ -346,7 +345,6 @@ async def process_sample_video_on_startup():
     Processes the sample video file after startup.
     """
     logger.info("Post-startup task 'process_sample_video_on_startup' initiated. Waiting for services to be fully available...")
-    await asyncio.sleep(15)
     logger.info("Post-startup task resumed. Attempting to process sample video.")
     
     try:
@@ -359,24 +357,11 @@ async def process_sample_video_on_startup():
         video_path = "/home/user/R1v0.1/backend/data/sample_traffic.mp4"
         logger.info(f"Target sample video path for post-startup processing: {video_path}")
         
-        all_feeds = await fm.get_all_statuses()
-        logger.info(f"Found {len(all_feeds)} existing feeds. Checking for duplicates before starting processing.")
-        for feed in all_feeds:
-            if feed.source == video_path:
-                logger.warning(f"A feed for the source '{video_path}' already exists with status '{feed.status}'. Skipping post-startup processing task.")
-                return
-        logger.info("No duplicate feed found. Proceeding to start a new feed for the sample video.")
-
-        logger.info(f"Calling add_and_start_feed for sample video: {video_path}")
+        # The add_dynamic_sample_feed method handles duplicate checks internally.
+        logger.info(f"Calling add_dynamic_sample_feed for sample video: {video_path}")
         
-        result = await fm.add_and_start_feed(
-            source=video_path,
-            latitude=34.0522,
-            longitude=-118.2437,
-            name_hint="Sample Video Startup Processing",
-            is_looped=True 
-        )
-        logger.info(f"Successfully initiated processing for {video_path}. Result from FeedManager: {result}")
+        await fm.add_dynamic_sample_feed(video_path)
+        logger.info(f"Successfully initiated processing for {video_path}.")
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during the sample video processing startup task: {e}", exc_info=True)

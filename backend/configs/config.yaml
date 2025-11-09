@@ -318,6 +318,7 @@ video_output:
   - 480
 vehicle_detection:
   enabled: true
+  model_type: yolo
   model_path: backend/models/yolov8n.pt
   frame_resolution:
   - 640

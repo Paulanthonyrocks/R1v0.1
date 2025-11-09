@@ -1,7 +1,7 @@
 // frontend/app/dashboard/page.tsx
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { APIResponse, AllNodesCongestionResponse } from '@/lib/types/api';
 import AuthGuard from "@/components/auth/AuthGuard";
@@ -21,6 +21,7 @@ import { BackendCongestionNodeData, FeedStatusData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
   const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed } = useRealtimeUpdates();
+  const hasSubscribedRef = useRef(false);
 
   // Log feeds from the hook for debugging
   console.log("DashboardPage - feeds from useRealtimeUpdates:", feeds);
@@ -34,9 +35,10 @@ const DashboardPage: React.FC = () => {
   // Effect to log when feeds actually update in DashboardPage and subscribe
   useEffect(() => {
     console.log("DashboardPage useEffect - feeds updated:", feeds);
-    if (feeds.length > 0 && isConnected && isReady) {
+    if (feeds.length > 0 && isConnected && isReady && !hasSubscribedRef.current) {
       console.log("DashboardPage: Feeds available, subscribing to first feed:", feeds[0].feed_id);
       subscribeToFeed(feeds[0].feed_id);
+      hasSubscribedRef.current = true;
     }
   }, [feeds, isConnected, isReady, subscribeToFeed]);
 

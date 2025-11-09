@@ -1,10 +1,12 @@
 
 import logging
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
-from app.models.websocket import WebSocketMessage, WebSocketMessageType
+from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum
+from app.dependencies.auth import get_current_user_ws
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -15,28 +17,34 @@ async def websocket_endpoint(
     client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
+    user: User = Depends(get_current_user_ws),
 ):
-    await connection_manager.connect(websocket, client_id, "anonymous")  # Or get user_id from token
+    if not user:
+        await websocket.close(code=1008)
+        return
+    await connection_manager.connect(websocket, client_id, user.username)
 
     try:
         while True:
             data = await websocket.receive_json()
             message = WebSocketMessage(**data)
 
-            if message.type == WebSocketMessageType.GET_INITIAL_FEED_STATUSES:
+            if message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                 logger.info(f"Client {client_id} requested initial feed statuses.")
                 statuses = await feed_manager.get_all_statuses()
                 response = WebSocketMessage(
-                    type=WebSocketMessageType.INITIAL_FEED_STATUSES,
-                    data=statuses
+                    type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
+                    data={"feeds": statuses}
                 )
-                await websocket.send_json(response.dict())
+                await websocket.send_text(response.model_dump_json())
 
-            elif message.type == WebSocketMessageType.SUBSCRIBE_TO_FEED:
-                feed_id = message.data.get("feed_id")
+            elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
+                feed_id = getattr(message.data, 'feed_id', None)
                 if feed_id:
                     logger.info(f"Client {client_id} subscribing to feed {feed_id}")
-                    await connection_manager.subscribe_to_topic(client_id, feed_id)
+                    await connection_manager.subscribe_to_topic(client_id, f"video:{feed_id}")
+                    await connection_manager.subscribe_to_topic(client_id, f"feed:{feed_id}")
+                    await connection_manager.subscribe_to_topic(client_id, f"feed_alerts:{feed_id}")
                 else:
                     logger.warning(f"Client {client_id} sent subscribe message without feed_id")
 

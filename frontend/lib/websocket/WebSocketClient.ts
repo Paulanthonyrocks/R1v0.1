@@ -93,7 +93,7 @@ export interface IWebSocketClient {
     connect(token: string): Promise<void>;
     disconnect(): void;
     send<T>(data: WebSocketMessage<T>): void;
-    subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
+    subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void;
     unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
     reconnectWithNewToken(token: string): Promise<void>;
 }
@@ -127,11 +127,24 @@ export class WebSocketClient implements IWebSocketClient {
     private unsubscribeTokenRefresh: (() => void) | null = null;
     private connectionPromise: Promise<void> | null = null;
     private currentToken: string | null = null;
+    private videoWorker: Worker | null = null;
 
     constructor(baseUrl: string) {
         this.url = baseUrl;
         this.tokenManager = TokenManager.getInstance();
         
+        if (typeof window !== 'undefined') {
+            this.videoWorker = new Worker('/workers/video-worker.js');
+            this.videoWorker.onmessage = (e) => {
+                if (e.data.error) {
+                    console.error('Worker: Frame decoding failed', e.data.error);
+                } else {
+                    const { feed_id, frame } = e.data;
+                    this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id, frame });
+                }
+            };
+        }
+
         // Register for token updates
         this.unsubscribeTokenRefresh = this.tokenManager.onTokenRefresh((token) => {
             this.handleTokenRefresh(token);
@@ -456,6 +469,15 @@ export class WebSocketClient implements IWebSocketClient {
                     return;
                 }
 
+                if (message.type === WebSocketMessageType.VIDEO_FRAME && message.data) {
+                    const { feed_id, frame } = message.data as { feed_id: string, frame: string };
+
+                    if (feed_id && frame && typeof frame === 'string' && this.videoWorker) {
+                        this.videoWorker.postMessage({ feed_id: feed_id, frameData: frame });
+                    }
+                    return; // Return after handling
+                }
+
                 this.notifyListeners(message.type, message.data);
 
             } catch (error) {
@@ -476,11 +498,12 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
-    public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
+    public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void {
         if (!this.listeners.has(messageType)) {
             this.listeners.set(messageType, new Set());
         }
         this.listeners.get(messageType)?.add(listener as MessageListener<unknown>);
+        return () => this.unsubscribe(messageType, listener);
     }
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
@@ -538,6 +561,10 @@ export class WebSocketClient implements IWebSocketClient {
         if (this.unsubscribeTokenRefresh) {
             this.unsubscribeTokenRefresh();
             this.unsubscribeTokenRefresh = null;
+        }
+        if (this.videoWorker) {
+            this.videoWorker.terminate();
+            this.videoWorker = null;
         }
         this.messageQueue.length = 0;
     }

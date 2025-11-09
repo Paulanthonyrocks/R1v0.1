@@ -99,6 +99,7 @@ def process_video(
                 fps=config.get("fps", 30),
                 db_queue=db_queue,
                 gemini_api_key=config["ocr_engine"].get("gemini_api_key"),
+                model_type=config["vehicle_detection"].get("model_type", "yolo"),
             )
             traffic_monitor = TrafficMonitor(config)
         else:

@@ -147,8 +147,6 @@ class FrameReader:
 
     def stop(self) -> None:
         self.stop_event.set()
-        if self.thread.is_alive():
-            self.thread.join(timeout=5)
         while not self.frames_queue.empty():
             try:
                 self.frames_queue.get_nowait()

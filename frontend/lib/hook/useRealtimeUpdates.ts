@@ -59,56 +59,68 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
     }, []);
 
     useEffect(() => {
-        const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
-        const client = new WebSocketClient(wsUrl);
-        webSocketClientRef.current = client;
+        if (!webSocketClientRef.current) {
+            const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
+            webSocketClientRef.current = new WebSocketClient(wsUrl);
+            console.log('New WebSocket client created.');
+        }
+        const client = webSocketClientRef.current;
+        const subscriptions: (() => void)[] = [];
 
-        console.log('New WebSocket client created.');
+        console.log('Setting up WebSocket subscriptions.');
 
-        client.onStatusChange((status, message) => {
+        subscriptions.push(client.onStatusChange((status, message) => {
             console.log(`WebSocket status: ${status}`, message);
             const connected = status === 'connected';
             setIsConnected(connected);
             setIsReady(connected);
 
-            // When connection is established, request initial data
             if (connected && !hasRequestedInitialFeeds.current) {
                 console.log("WebSocket connected and ready, requesting initial feed statuses.");
                 sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
                 hasRequestedInitialFeeds.current = true;
             }
-        });
+        }));
 
-        client.onError((type, message) => {
+        subscriptions.push(client.onError((type, message) => {
             console.error(`WebSocket Error (${type}):`, message);
             setError(message);
-        });
+        }));
 
-        // --- Subscription setup ---
-        client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: FeedStatusData[]) => {
+        subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
             console.log("Received INITIAL_FEED_STATUSES data:", JSON.stringify(data));
-            if (data && Array.isArray(data)) {
-                setFeeds(data);
+            if (data && Array.isArray(data.feeds)) {
+                setFeeds(data.feeds);
             } else {
-                console.warn("Received INITIAL_FEED_STATUSES but data is not an array:", data);
+                console.warn("Received INITIAL_FEED_STATUSES but data.feeds is not an array:", data);
             }
-        });
+        }));
 
-        client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: { feed_id: string, frame: ArrayBuffer }) => {
+        subscriptions.push(client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: { feed_id: string, frame: ArrayBuffer }) => {
             if (data && data.feed_id && data.frame) {
                 setVideoFrames(prev => ({ ...prev, [data.feed_id]: data.frame }));
             }
-        });
+        }));
         
-        client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data));
+        subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
 
-        client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
-            if (data?.alert_data) setAlerts(prevAlerts => [...prevAlerts, data.alert_data]);
-        });
-
-        // --- End Subscription setup ---
+        subscriptions.push(client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
+            if (data?.alert_data) {
+                setAlerts(prevAlerts => [...prevAlerts, data.alert_data].slice(-10));
+            }
+        }));
 
         const connect = async () => {
+            if (client.isConnected() || client.getConnectionState() === 'connecting') {
+                // If we are already connected or connecting, we might still need to request initial feeds
+                // if the previous attempt was interrupted by strict mode.
+                if (client.isConnected() && !hasRequestedInitialFeeds.current) {
+                    console.log("WebSocket already connected, requesting initial feed statuses.");
+                    sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
+                    hasRequestedInitialFeeds.current = true;
+                }
+                return;
+            }
             try {
                 const currentToken = TokenManager.getInstance().getCurrentToken();
                 if (currentToken) {
@@ -123,16 +135,15 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
 
         connect();
 
-        // Cleanup function
         return () => {
-            console.log('Cleaning up WebSocket client.');
-            client.destroy();
-            webSocketClientRef.current = null;
-            hasRequestedInitialFeeds.current = false; // Reset for the new client instance
-            setIsConnected(false);
-            setIsReady(false);
+            console.log('Cleaning up WebSocket subscriptions. In React Strict Mode, this runs on unmount.');
+            subscriptions.forEach(unsubscribe => unsubscribe());
+            // We don't destroy the client here anymore.
+            // We also don't disconnect, as another component (or the same one after remount) might need it.
+            // Resetting hasRequestedInitialFeeds allows the remounted effect to request feeds again if needed.
+            hasRequestedInitialFeeds.current = false;
         };
-    }, [sendMessage]); // sendMessage is stable due to useCallback
+    }, [sendMessage]);
 
     useEffect(() => {
         console.log("Internal feeds state updated:", JSON.stringify(feeds));

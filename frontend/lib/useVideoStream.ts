@@ -51,22 +51,24 @@ const useVideoStream = ({
     token
   );
 
-  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frameBuffer: ArrayBuffer) => {
-    const img = new Image();
-    const blob = new Blob([frameBuffer], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    img.onload = () => {
+  const drawFrame = useCallback(async (ctx: CanvasRenderingContext2D, frameBuffer: ArrayBuffer) => {
+    if (!frameBuffer || frameBuffer.byteLength === 0) return;
+    try {
+      const blob = new Blob([frameBuffer], { type: 'image/jpeg' });
+      const imageBitmap = await createImageBitmap(blob);
+
       if (ctx.canvas.offsetWidth !== ctx.canvas.width) {
         ctx.canvas.width = ctx.canvas.offsetWidth;
       }
       if (ctx.canvas.offsetHeight !== ctx.canvas.height) {
         ctx.canvas.height = ctx.canvas.offsetHeight;
       }
-      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  }, []); // frameData is no longer needed here as it's passed directly to useEffect
+      ctx.drawImage(imageBitmap, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      imageBitmap.close(); // Free up memory
+    } catch (e) {
+      console.error("Failed to draw frame:", e);
+    }
+  }, []);
 
   useEffect(() => {
     if (forceSample) {

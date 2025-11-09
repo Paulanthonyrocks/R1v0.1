@@ -132,7 +132,7 @@ async def delete_alert_endpoint(
         type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE, data=status_payload
     )
     try:
-        await conn_manager.broadcast(ws_message)
+        await conn_manager.broadcast(ws_message.model_dump_json())
         logger.info(
             f"Broadcasted alert status update for dismissed alert ID {alert_id}."
         )
@@ -200,7 +200,7 @@ async def acknowledge_alert_endpoint(
         type=WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE, data=status_payload
     )
     try:
-        await conn_manager.broadcast(ws_message)
+        await conn_manager.broadcast(ws_message.model_dump_json())
         logger.info(
             f"Broadcasted alert status update for {status_str} alert ID {alert_id}."
         )

@@ -31,6 +31,7 @@ filterpy>=1.4.5
 tensorflow-cpu>=2.13.0  # CPU-only version for systems without GPU
 scikit-learn>=1.0.0  # For StandardScaler and other ML utilities
 onnxruntime>=1.15.1 # For ONNX model inference
+transformers>=4.36.0 # For EdgeTAM model
 
 # Pavement Analysis Dependencies
 opencv-python-headless>=4.5.0
