@@ -86,6 +86,7 @@ class FeedManager:
         self._feed_id_counter = 1  # Simple counter for unique IDs
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
+        self.frame_subscriber_queues: Dict[str, List[asyncio.Queue]] = {}
         
         self._connection_manager = None  # Added type hint
         self._prediction_scheduler = None  # New: Reference to PredictionScheduler
@@ -766,6 +767,15 @@ class FeedManager:
                                 # Signal the feed running event
                                 if feed_id in self._feed_running_events:
                                     self._feed_running_events[feed_id].set()
+
+                    # Distribute frame to internal subscribers
+                    if feed_id in self.frame_subscriber_queues:
+                        item_to_queue = {"frame": frame_bytes, "kpis": metrics}
+                        for q in self.frame_subscriber_queues[feed_id]:
+                            try:
+                                q.put_nowait(item_to_queue)
+                            except asyncio.QueueFull:
+                                logger.warning(f"Frame subscriber queue for {feed_id} is full. Dropping frame.")
 
                     # Broadcast metrics and frame separately with corrected message types
                     await self._broadcast(
@@ -1548,6 +1558,29 @@ class FeedManager:
             if feed_id not in self._feed_running_events:
                 self._feed_running_events[feed_id] = asyncio.Event()
             return self._feed_running_events[feed_id]
+
+    async def subscribe_to_frames(self, feed_id: str) -> asyncio.Queue:
+        """Adds a queue to the list of subscribers for a given feed's frames."""
+        async with self._lock:
+            if feed_id not in self.frame_subscriber_queues:
+                self.frame_subscriber_queues[feed_id] = []
+            # Using a maxsize to prevent a slow consumer from causing memory bloat
+            queue = asyncio.Queue(maxsize=10) 
+            self.frame_subscriber_queues[feed_id].append(queue)
+            self.logger.info(f"New frame subscriber for feed {feed_id}. Total subscribers: {len(self.frame_subscriber_queues[feed_id])}")
+            return queue
+
+    async def unsubscribe_from_frames(self, feed_id: str, queue: asyncio.Queue):
+        """Removes a queue from the list of subscribers for a given feed's frames."""
+        async with self._lock:
+            if feed_id in self.frame_subscriber_queues:
+                try:
+                    self.frame_subscriber_queues[feed_id].remove(queue)
+                    if not self.frame_subscriber_queues[feed_id]:
+                        del self.frame_subscriber_queues[feed_id]
+                    self.logger.info(f"Unsubscribed from frames for feed {feed_id}. Remaining subscribers: {len(self.frame_subscriber_queues.get(feed_id, []))}")
+                except ValueError:
+                    self.logger.warning(f"Attempted to unsubscribe a queue that was not subscribed for feed {feed_id}")
 
     async def add_dynamic_sample_feed(self, video_path: str):
         """Dynamically adds a new sample feed to the registry."""

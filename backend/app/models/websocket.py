@@ -207,6 +207,10 @@ class RefreshFeedData(BaseModel):
     feed_id: str = Field(..., description="ID of the feed to refresh.")
 
 
+class UnsubscribeFromFeedData(BaseModel):
+    feed_id: str = Field(..., description="ID of the feed to unsubscribe from.")
+
+
 class VideoFrameData(BaseModel):
     feed_id: str = Field(..., description="ID of the feed the frame belongs to.")
     frame: str = Field(..., description="Base64 encoded video frame.")
@@ -251,6 +255,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     TOKEN_REFRESH_REQUEST = "token_refresh_request" # Request for client to refresh token
     REFRESH_FEED = "refresh_feed" # Client requests a feed refresh
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
+    UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
 
 
@@ -278,6 +283,7 @@ class WebSocketMessage(BaseModel):
             SubscribeData,
             UnsubscribeData,
             RefreshFeedData,
+            UnsubscribeFromFeedData,
             VideoFrameData, # New: Add VideoFrameData to the Union
             InitialFeedStatusesData,
         ]

@@ -105,37 +105,39 @@ class VideoProcessor:
 
     async def get_frame_generator(self) -> AsyncGenerator[Dict, None]:
         """
-        Generator that yields dictionaries of raw frames and KPIs.
-        If recording is active, it also processes frames with overlays and saves them.
+        Generator that yields dictionaries of frames with overlays and KPIs.
+        This generator subscribes to the feed manager to receive new frames as they arrive.
         """
-        while True:
-            try:
-                feed_entry = await self.feed_manager.get_feed_entry(self.stream_id)
-                if not feed_entry or "latest_frame_bytes" not in feed_entry or "latest_metrics" not in feed_entry:
-                    logger.debug(f"No new frame or metrics for {self.stream_id}, waiting.")
-                    await asyncio.sleep(0.01) # Prevent busy-waiting
-                    continue
+        frame_queue = await self.feed_manager.subscribe_to_frames(self.stream_id)
+        try:
+            while True:
+                try:
+                    # Wait for a new frame from the feed manager's queue
+                    data = await frame_queue.get()
+                    raw_frame_bytes = data["frame"]
+                    kpis = data["kpis"]
 
-                raw_frame_bytes = feed_entry["latest_frame_bytes"]
-                kpis = feed_entry["latest_metrics"]
-
-                if self._is_recording:
                     np_arr = np.frombuffer(raw_frame_bytes, np.uint8)
                     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-                    if frame is not None:
-                        # Normalize frame format
-                        if frame.dtype != np.uint8:
-                            frame = frame.astype(np.uint8)
-                        if len(frame.shape) == 2:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                        elif frame.shape[2] == 4:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                    if frame is None:
+                        logger.warning(f"Failed to decode frame on stream {self.stream_id}, yielding raw frame.")
+                        yield {"frame": raw_frame_bytes, "kpis": kpis}
+                        continue
 
+                    # Always normalize and draw overlays
+                    if frame.dtype != np.uint8:
+                        frame = frame.astype(np.uint8)
+                    if len(frame.shape) == 2:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    elif frame.shape[2] == 4:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+                    self._draw_overlays(frame, kpis)
+
+                    if self._is_recording:
                         if self._video_writer is None:
                             self._frame_size = (frame.shape[1], frame.shape[0])
-                            # Try commonly available codecs; prioritize mp4v for broad compatibility
-                            # Adding DIVX as another alternative.
                             codec_candidates = ["mp4v", "H264", "avc1", "XVID", "DIVX"]
                             opened = False
                             for c in codec_candidates:
@@ -149,7 +151,7 @@ class VideoProcessor:
                                         break
                                     else:
                                         logger.warning(f"[{self.stream_id}] Failed to open VideoWriter with codec '{c}'. isOpened() returned False. Trying next.")
-                                        try: vw.release() # Release if not opened to free resources
+                                        try: vw.release()
                                         except Exception: pass
                                 except Exception as e_codec:
                                     logger.warning(f"[{self.stream_id}] Exception while trying codec '{c}': {e_codec}. Trying next.")
@@ -158,41 +160,41 @@ class VideoProcessor:
                                 logger.error(f"[{self.stream_id}] Could not open any VideoWriter codec from {codec_candidates}. Disabling recording.")
                                 self._video_writer = None
                                 self._is_recording = False
-                                continue
-                        
-                        self._draw_overlays(frame, kpis)
-                        # Ensure size consistency
-                        if (frame.shape[1], frame.shape[0]) != self._frame_size:
-                            try:
-                                frame = cv2.resize(frame, self._frame_size)
-                            except Exception as e:
-                                logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size}, skipping frame: {e}")
-                                await asyncio.sleep(0.001)
-                                continue
-                        
-                        try:
-                            self._video_writer.write(frame)
-                        except Exception as e_write:
-                            logger.error(f"[{self.stream_id}] Error writing frame to video file: {e_write}", exc_info=True)
-                            # Consider stopping recording if write fails consistently
 
+                        if self._video_writer:
+                            if (frame.shape[1], frame.shape[0]) != self._frame_size:
+                                try:
+                                    resized_frame = cv2.resize(frame, self._frame_size)
+                                except Exception as e:
+                                    logger.error(f"[{self.stream_id}] Failed to resize frame to {self._frame_size} for recording, skipping write: {e}")
+                                    resized_frame = None
+                            else:
+                                resized_frame = frame
+                            
+                            if resized_frame is not None:
+                                try:
+                                    self._video_writer.write(resized_frame)
+                                except Exception as e_write:
+                                    logger.error(f"[{self.stream_id}] Error writing frame to video file: {e_write}", exc_info=True)
+
+                    # Encode frame with overlays for streaming
+                    ret, jpeg_frame = cv2.imencode(".jpg", frame)
+                    if not ret:
+                        logger.warning(f"Failed to encode frame to JPEG for stream {self.stream_id}, yielding raw frame.")
+                        yield {"frame": raw_frame_bytes, "kpis": kpis}
                     else:
-                        logger.warning(f"Failed to decode frame for recording on stream {self.stream_id}.")
+                        overlaid_frame_bytes = jpeg_frame.tobytes()
+                        yield {"frame": overlaid_frame_bytes, "kpis": kpis}
 
-                yield {"frame": raw_frame_bytes, "kpis": kpis}
-                
-                # Adjust sleep based on recording status and frame rate
-                if self._is_recording and self._frame_rate > 0:
-                    await asyncio.sleep(1.0 / self._frame_rate)
-                else:
-                    await asyncio.sleep(0.01) # Yield control to the event loop
+                except asyncio.CancelledError:
+                    logger.info(f"Frame generator for stream {self.stream_id} cancelled.")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in frame generator for {self.stream_id}: {e}", exc_info=True)
+                    await asyncio.sleep(1)
 
-            except asyncio.CancelledError:
-                logger.info(f"Frame generator for stream {self.stream_id} cancelled.")
-                break
-            except Exception as e:
-                logger.error(f"Error in frame generator for {self.stream_id}: {e}", exc_info=True)
-                await asyncio.sleep(1) # Wait a bit before retrying on error
+        finally:
+            await self.feed_manager.unsubscribe_from_frames(self.stream_id, frame_queue)
     
     def _draw_overlays(self, frame: np.ndarray, kpis: Dict):
         """Helper to draw overlays on a frame."""
@@ -225,7 +227,6 @@ class VideoManager:
 
     def __init__(self):
         self.video_processors: Dict[str, VideoProcessor] = {}
-        self.background_tasks: Dict[str, asyncio.Task] = {}
 
     @classmethod
     def get_instance(cls, output_directory: Optional[str] = None) -> "VideoManager":
@@ -245,21 +246,10 @@ class VideoManager:
             )
         return self.video_processors[stream_id]
 
-    def start_background_task(self, stream_id: str, task: asyncio.Task):
-        self.background_tasks[stream_id] = task
-
-    def cancel_background_task(self, stream_id: str):
-        if stream_id in self.background_tasks:
-            self.background_tasks[stream_id].cancel()
-            del self.background_tasks[stream_id]
-
     async def cleanup(self):
         """Stops all active recordings and cleans up processors."""
-        for task in self.background_tasks.values():
-            task.cancel()
         for processor in self.video_processors.values():
             if processor._is_recording:
                 await processor.stop_recording()
         self.video_processors.clear()
-        self.background_tasks.clear()
-        logger.info("All video processors and background tasks cleaned up.")
+        logger.info("All video processors cleaned up.")

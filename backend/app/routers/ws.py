@@ -48,6 +48,16 @@ async def websocket_endpoint(
                 else:
                     logger.warning(f"Client {client_id} sent subscribe message without feed_id")
 
+            elif message.type == WebSocketMessageTypeEnum.UNSUBSCRIBE_FROM_FEED:
+                feed_id = getattr(message.data, 'feed_id', None)
+                if feed_id:
+                    logger.info(f"Client {client_id} unsubscribing from feed {feed_id}")
+                    await connection_manager.unsubscribe_from_topic(client_id, f"video:{feed_id}")
+                    await connection_manager.unsubscribe_from_topic(client_id, f"feed:{feed_id}")
+                    await connection_manager.unsubscribe_from_topic(client_id, f"feed_alerts:{feed_id}")
+                else:
+                    logger.warning(f"Client {client_id} sent unsubscribe message without feed_id")
+
             # Add other message type handlers here
 
     except WebSocketDisconnect:
