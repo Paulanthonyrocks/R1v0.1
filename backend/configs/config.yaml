@@ -506,3 +506,7 @@ prediction_scheduler:
 file_watcher:
   enabled: true
   watch_directory: backend/data/new_sample_videos
+websocket:
+  max_connections: 1000
+  token_refresh_interval: 300
+  ping_interval: 60

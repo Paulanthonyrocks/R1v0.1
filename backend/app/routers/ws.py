@@ -58,6 +58,10 @@ async def websocket_endpoint(
                 else:
                     logger.warning(f"Client {client_id} sent unsubscribe message without feed_id")
 
+            elif message.type == WebSocketMessageTypeEnum.AUTHENTICATE:
+                logger.info(f"Client {client_id} sent an authentication message.")
+
+
             # Add other message type handlers here
 
     except WebSocketDisconnect:

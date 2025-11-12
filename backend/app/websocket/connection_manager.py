@@ -161,7 +161,7 @@ class ConnectionManager:
                         continue
                     try:
                         await asyncio.wait_for(
-                            connection.send_text("ping"), timeout=5
+                            connection.send_text("ping"), timeout=30
                         )
                     except (asyncio.TimeoutError, ConnectionError, RuntimeError):
                         logger.warning(
