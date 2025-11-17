@@ -1533,7 +1533,7 @@ class FeedManager:
         # --- Perform actions outside the lock ---
 
         if feeds_to_stop:
-            self.logger.info(f"Executing stop for {len(feeds_to_stop)} sample feeds.")
+            self.logger.info(f"Executing stop for {len(feeds_to_stop)} sample feeds: {feeds_to_stop}")
             for feed_id in feeds_to_stop:
                 try:
                     await self.stop_feed(feed_id)
@@ -1541,7 +1541,7 @@ class FeedManager:
                     logger.error(f"Error stopping sample feed {feed_id}: {e}", exc_info=True)
 
         if feeds_to_start:
-            self.logger.info(f"Executing start for {len(feeds_to_start)} sample feeds.")
+            self.logger.info(f"Executing start for {len(feeds_to_start)} sample feeds: {feeds_to_start}")
             for feed_id in feeds_to_start:
                 try:
                     # Resource check is inside start_feed, which is now called without holding the lock.
@@ -1582,18 +1582,30 @@ class FeedManager:
                 except ValueError:
                     self.logger.warning(f"Attempted to unsubscribe a queue that was not subscribed for feed {feed_id}")
 
-    async def add_dynamic_sample_feed(self, video_path: str):
+    async def add_dynamic_sample_feed(
+        self,
+        video_path: str,
+        is_looped: bool = True,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+    ):
         """Dynamically adds a new sample feed to the registry."""
         resolved_path = Path(video_path)
         if not resolved_path.exists():
-            self.logger.warning(f"Attempted to add non-existent dynamic sample video: {video_path}")
+            self.logger.warning(
+                f"Attempted to add non-existent dynamic sample video: {video_path}"
+            )
             return
 
         async with self._lock:
             # Check if already registered
             for feed_id, entry in self.process_registry.items():
-                if entry.get("source") == str(resolved_path) and entry.get("is_sample_feed"):
-                    self.logger.info(f"Dynamic sample feed {video_path} already registered as {feed_id}.")
+                if entry.get("source") == str(resolved_path) and entry.get(
+                    "is_sample_feed"
+                ):
+                    self.logger.info(
+                        f"Dynamic sample feed {video_path} already registered as {feed_id}."
+                    )
                     return
 
             feed_name = f"Dynamic Sample Video {len(self._sample_feed_ids) + 1}"
@@ -1611,17 +1623,19 @@ class FeedManager:
                 "metrics_history": [],
                 "timer": None,
                 "is_sample_feed": True,
-                'is_looped_feed': True,
+                "is_looped_feed": is_looped,
                 "config_info": FeedConfigInfo(
                     name=feed_name,
                     source_type="video_file",
                     source_identifier=str(resolved_path),
-                    latitude=34.0522,
-                    longitude=-118.2437, # Default coordinates
+                    latitude=latitude or 34.0522,  # Default coordinates
+                    longitude=longitude or -118.2437,
                 ),
             }
             self._sample_feed_ids.append(feed_id)
-            self.logger.info(f"Dynamically added sample feed '{feed_id}' ({feed_name}).")
+            self.logger.info(
+                f"Dynamically added sample feed '{feed_id}' ({feed_name})."
+            )
 
         # Trigger a check to potentially start the new feed if conditions are met
         await self._check_and_manage_sample_feed()

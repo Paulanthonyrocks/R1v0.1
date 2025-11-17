@@ -6,6 +6,8 @@ import os
 import time
 from typing import Dict, AsyncGenerator, Optional
 from datetime import datetime
+import base64
+import json
 
 from app.services.video_ws_manager import video_ws_manager
 from app.services.feed_manager import FeedManager
@@ -183,8 +185,21 @@ class VideoProcessor:
                         logger.warning(f"Failed to encode frame to JPEG for stream {self.stream_id}, yielding raw frame.")
                         yield {"frame": raw_frame_bytes, "kpis": kpis}
                     else:
-                        overlaid_frame_bytes = jpeg_frame.tobytes()
-                        yield {"frame": overlaid_frame_bytes, "kpis": kpis}
+                        jpeg_base64 = base64.b64encode(jpeg_frame).decode('utf-8')
+                        
+                        payload = {
+                            "feed_id": self.stream_id,
+                            "frame": jpeg_base64,
+                            "kpis": kpis
+                        }
+                        
+                        await video_ws_manager.broadcast_to_stream(
+                            self.stream_id, json.dumps({
+                                "type": "video_frame",
+                                "data": payload
+                            })
+                        )
+                        yield {"frame": jpeg_frame, "kpis": kpis}
 
                 except asyncio.CancelledError:
                     logger.info(f"Frame generator for stream {self.stream_id} cancelled.")

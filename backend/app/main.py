@@ -43,6 +43,7 @@ from app.routers import (
     events,
     route_history,
     ws,
+    video_ws,
 )
 from app.routers import routes
 
@@ -313,58 +314,84 @@ async def startup_event():
         # Define a wrapper for the async callback
         def new_video_callback_wrapper(video_path: str):
             """Synchronous wrapper to schedule the async callback."""
-            logger.info(f"File watcher triggered for new video: {video_path}. Scheduling for processing.")
-            asyncio.create_task(fm.add_dynamic_sample_feed(video_path))
+            logger.info(
+                f"File watcher triggered for new video: {video_path}. Scheduling for processing."
+            )
+            asyncio.create_task(
+                fm.add_dynamic_sample_feed(video_path, is_looped=True, latitude=None, longitude=None)
+            )
 
         try:
             app.state.file_watcher = FileSystemWatcher(
                 path=str(abs_watch_directory),
-                on_new_video_callback=new_video_callback_wrapper
+                on_new_video_callback=new_video_callback_wrapper,
             )
             app.state.file_watcher.start()
-            logger.info(f"File system watcher started for directory: {abs_watch_directory}")
+            logger.info(
+                f"File system watcher started for directory: {abs_watch_directory}"
+            )
         except Exception as e:
             logger.error(f"Failed to start file system watcher: {e}", exc_info=True)
 
-    # 7. Process and store sample video
-    try:
-        logger.info("Scheduling sample video processing task.")
-        from app.services.video_processor import VideoManager
-        output_directory = loaded_config.get("video_output", {}).get("output_directory")
-        video_manager = VideoManager.get_instance(output_directory=output_directory)
-        asyncio.create_task(process_sample_video_on_startup())
+    # 7. Process sample feeds from config
+    post_startup_config = loaded_config.get("post_startup_processing", {})
+    if post_startup_config.get("enabled", False):
+        logger.info("Post-startup processing is enabled. Processing sample feeds...")
+        sample_feeds = post_startup_config.get("sample_feeds", [])
+        if not sample_feeds:
+            logger.info("No sample feeds configured in 'post_startup_processing'.")
+        else:
+            for feed_config in sample_feeds:
+                try:
+                    video_path = feed_config.get("path")
+                    if not video_path:
+                        logger.warning(
+                            "Skipping a sample feed due to missing 'path'."
+                        )
+                        continue
 
-    except Exception as e:
-        logger.error(f"Failed to schedule sample video processing task: {e}", exc_info=True)
+                    # Resolve path relative to project root if it's not absolute
+                    abs_video_path = Path(video_path)
+                    if not abs_video_path.is_absolute():
+                        abs_video_path = (
+                            Path(__file__).parent.parent.parent / video_path
+                        ).resolve()
+
+                    if not abs_video_path.exists():
+                        logger.warning(
+                            f"Sample feed video not found at path: {abs_video_path}"
+                        )
+                        continue
+
+                    is_looped = feed_config.get("is_looped", True)
+                    latitude = feed_config.get("latitude")
+                    longitude = feed_config.get("longitude")
+
+                    logger.info(
+                        f"Scheduling processing for sample feed: {abs_video_path}"
+                    )
+                    # Schedule the addition of the feed as a background task
+                    asyncio.create_task(
+                        fm.add_dynamic_sample_feed(
+                            video_path=str(abs_video_path),
+                            is_looped=is_looped,
+                            latitude=latitude,
+                            longitude=longitude,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to schedule processing for sample feed '{feed_config.get('path')}': {e}",
+                        exc_info=True,
+                    )
+    else:
+        logger.info(
+            "Post-startup sample feed processing is disabled in the configuration."
+        )
 
     logger.info("Application startup complete.")
 
 
-async def process_sample_video_on_startup():
-    """
-    Processes the sample video file after startup.
-    """
-    logger.info("Post-startup task 'process_sample_video_on_startup' initiated. Waiting for services to be fully available...")
-    logger.info("Post-startup task resumed. Attempting to process sample video.")
-    
-    try:
-        from app.services import get_feed_manager
-        fm = get_feed_manager()
-        if fm is None:
-            logger.error("FeedManager instance is None in post-startup task. Cannot process sample video.")
-            return
-
-        video_path = "/home/user/R1v0.1/backend/data/sample_traffic.mp4"
-        logger.info(f"Target sample video path for post-startup processing: {video_path}")
-        
-        # The add_dynamic_sample_feed method handles duplicate checks internally.
-        logger.info(f"Calling add_dynamic_sample_feed for sample video: {video_path}")
-        
-        await fm.add_dynamic_sample_feed(video_path)
-        logger.info(f"Successfully initiated processing for {video_path}.")
-
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during the sample video processing startup task: {e}", exc_info=True)
 
 
 @app.on_event("shutdown")
@@ -443,6 +470,7 @@ try:
         traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"]
     )
     app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
+    app.include_router(video_ws.router, prefix="/api/v1", tags=["Video WebSocket"])
     logger.info("API routers included successfully.")
 except Exception as e:
     logger.critical(f"Failed to include routers: {e}", exc_info=True)

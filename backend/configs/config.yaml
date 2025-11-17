@@ -298,12 +298,19 @@ feed_manager:
   error_check_interval: 5.0
 queue_log_interval: 120.0
 video_input:
-  sample_videos:
-  - backend/data/sample_traffic.mp4
   webcam_index: 0
   webcam_buffer_size: 20
   max_queue_size: 1000
   queue_put_timeout_ms: 1000
+
+post_startup_processing:
+  enabled: true
+  sample_feeds:
+    - path: "backend/data/sample_traffic.mp4"
+      is_looped: false
+      latitude: 34.0522
+      longitude: -118.2437
+
 video_output:
   enabled: true
   processing_enabled: true

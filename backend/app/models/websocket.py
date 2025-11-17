@@ -203,12 +203,8 @@ class UnsubscribeData(BaseModel):
     topic: str = Field(..., description="Topic to unsubscribe from.")
 
 
-class RefreshFeedData(BaseModel):
-    feed_id: str = Field(..., description="ID of the feed to refresh.")
-
-
-class UnsubscribeFromFeedData(BaseModel):
-    feed_id: str = Field(..., description="ID of the feed to unsubscribe from.")
+class FeedIdData(BaseModel):
+    feed_id: str = Field(..., description="ID of the feed.")
 
 
 class VideoFrameData(BaseModel):
@@ -257,6 +253,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
     UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
+    START_FEED = "start_feed"
+    STOP_FEED = "stop_feed"
 
 
 class WebSocketMessage(BaseModel):
@@ -282,8 +280,7 @@ class WebSocketMessage(BaseModel):
             AuthenticateData,
             SubscribeData,
             UnsubscribeData,
-            RefreshFeedData,
-            UnsubscribeFromFeedData,
+            FeedIdData,
             VideoFrameData, # New: Add VideoFrameData to the Union
             InitialFeedStatusesData,
         ]
@@ -291,10 +288,6 @@ class WebSocketMessage(BaseModel):
     client_id: Optional[str] = Field(
         None,
         description="Identifier for a specific client if the message is targeted, otherwise None for broadcast.",
-    )
-    correlation_id: Optional[str] = Field(
-        None,
-        description="Optional ID to correlate requests and responses if applicable",
     )
     correlation_id: Optional[str] = Field(
         None,

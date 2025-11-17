@@ -78,7 +78,9 @@ export enum WebSocketMessageType {
     INTERNAL_PING = '__internal_ping',
     PING = 'ping',
     SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
-    GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses'
+    GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses',
+    START_FEED = 'start_feed',
+    STOP_FEED = 'stop_feed'
 }
 
 export interface WebSocketMessage<T = unknown> {

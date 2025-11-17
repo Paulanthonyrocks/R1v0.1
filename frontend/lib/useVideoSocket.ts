@@ -13,8 +13,14 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   const VIDEO_WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
-  const handleFrame = useCallback((data: ArrayBuffer) => {
-    setFrameData(new Uint8Array(data));
+  const handleFrame = useCallback((data: { frame: string }) => {
+    const byteString = atob(data.frame);
+    const byteNumbers = new Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+        byteNumbers[i] = byteString.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    setFrameData(byteArray);
 
     const now = performance.now();
     if (lastFrameTimeRef.current !== 0) {
@@ -31,13 +37,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
 
-      if (metrics && metrics.kpis && metrics.kpis.vehicles) {
+      if (metrics && metrics.vehicles) {
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         ctx.font = '12px Arial';
         ctx.fillStyle = 'white';
 
-        metrics.kpis.vehicles.forEach(v => {
+        metrics.vehicles.forEach(v => {
           // Draw bounding box
           ctx.strokeRect(v.x1, v.y1, v.x2 - v.x1, v.y2 - v.y1);
           
@@ -56,8 +62,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     img.src = URL.createObjectURL(blob);
   }, [metrics]);
 
-  const handleMetrics = useCallback((data: SurveillanceFeedMessage) => {
-    setMetrics(data);
+  const handleMetrics = useCallback((data: { kpis: SurveillanceFeedMessage }) => {
+    setMetrics(data.kpis);
   }, []);
 
   useEffect(() => {
@@ -65,12 +71,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       return;
     }
 
-    const videoWsBaseUrl = typeof window !== 'undefined'
-        ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000`
-        : process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-
-    let reconnectTimer: NodeJS.Timeout;
-    const wsUrl = new URL(`/video/ws/${streamId}`, videoWsBaseUrl).toString();
+    const wsUrl = `${VIDEO_WS_BASE_URL}/video-ws/${streamId}`;
 
     const connect = () => {
       console.log(`useVideoSocket: Connecting to ${streamId}...`);
@@ -87,9 +88,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
           setError(null);
         } else if (status === 'error' || status === 'disconnected') {
           setError(message || 'Video stream connection error.');
-          // Clear any existing timer and set a new one to reconnect
-          clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connect, 5000); // Reconnect after 5 seconds
         }
       });
 
@@ -105,7 +103,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     return () => {
       console.log(`useVideoSocket: Disconnecting from ${streamId}.`);
-      clearTimeout(reconnectTimer);
       if (wsClientRef.current) {
         wsClientRef.current.disconnect();
         wsClientRef.current = null;

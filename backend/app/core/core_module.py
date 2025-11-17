@@ -18,13 +18,13 @@ from concurrent.futures import ThreadPoolExecutor
 try:
     from ..utils.image_processing import LicensePlatePreprocessor
     from ..utils.lane_detection import process_frame_for_lanes, get_lane_boundaries_from_lines
-    from ..ml.segmentation.edgetam import EdgeTAMSegmenter
+    # from ..ml.segmentation.edgetam import EdgeTAMSegmenter
 except ImportError:
     print("Error importing utils for CoreModule. Ensure utils.py is accessible.")
     LicensePlatePreprocessor = None
     process_frame_for_lanes = None
     get_lane_boundaries_from_lines = None
-    EdgeTAMSegmenter = None
+    # EdgeTAMSegmenter = None
 
 # Logging setup
 logger = logging.getLogger("app.ml")
@@ -200,9 +200,9 @@ class CoreModule:
     
 
     def _load_model(self, use_gpu: bool):
-        if self.model_type == "edgetam":
-            self.model = EdgeTAMSegmenter(model_path=self.model_path, use_gpu=use_gpu)
-            return
+        # if self.model_type == "edgetam":
+        #     self.model = EdgeTAMSegmenter(model_path=self.model_path, use_gpu=use_gpu)
+        #     return
 
         if not Path(self.model_path).exists():
             logger.error(f"Model file not found at {self.model_path}")
@@ -324,10 +324,7 @@ class CoreModule:
         try:
             processed_frame, roi_enabled, x1_crop, y1_crop = self._preprocess_frame(frame)
             
-            if self.model_type == "edgetam":
-                detections = self._run_edgetam_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
-            # FIX: Convert Path object to string before calling .endswith()
-            elif str(self.model_path).endswith(('.onnx', '_quant.onnx')):
+            if str(self.model_path).endswith(('.onnx', '_quant.onnx')):
                 detections = self._run_onnx_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
             else:
                 detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
@@ -370,44 +367,44 @@ class CoreModule:
 
         return processed_frame, roi_enabled, x1_crop, y1_crop
 
-    def _run_edgetam_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
-        results = self.model.segment_frame(processed_frame)
-        
-        masks = results.get("masks")
-        if masks is None:
-            return []
-
-        bboxes = self.model.masks_to_bboxes(masks)
-        
-        detections = []
-        for i, bbox in enumerate(bboxes):
-            x1, y1, x2, y2 = bbox
-            if roi_enabled and not self.roi_polygon_points:
-                x1 += x1_crop
-                y1 += y1_crop
-                x2 += x1_crop
-                y2 += y1_crop
-
-            center_x = (x1 + x2) / 2
-            center_y = (y1 + y2) / 2
-            
-            # EdgeTAM does not provide class_id, so we assign a default one (e.g., 2 for 'car')
-            # Confidence is also not provided, so we can set it to a default value
-            class_id = 2 # Default to 'car'
-            confidence = 0.9 # Default confidence
-
-            if confidence > confidence_threshold:
-                detections.append(
-                    (
-                        float(center_x),
-                        float(center_y),
-                        float(confidence),
-                        int(class_id),
-                        0, # frame_index is not available here, but it is not used in the caller
-                        [int(x1), int(y1), int(x2), int(y2)],
-                    )
-                )
-        return detections
+    # def _run_edgetam_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
+    #     results = self.model.segment_frame(processed_frame)
+    #     
+    #     masks = results.get("masks")
+    #     if masks is None:
+    #         return []
+    #
+    #     bboxes = self.model.masks_to_bboxes(masks)
+    #     
+    #     detections = []
+    #     for i, bbox in enumerate(bboxes):
+    #         x1, y1, x2, y2 = bbox
+    #         if roi_enabled and not self.roi_polygon_points:
+    #             x1 += x1_crop
+    #             y1 += y1_crop
+    #             x2 += x1_crop
+    #             y2 += y1_crop
+    #
+    #         center_x = (x1 + x2) / 2
+    #         center_y = (y1 + y2) / 2
+    #         
+    #         # EdgeTAM does not provide class_id, so we assign a default one (e.g., 2 for 'car')
+    #         # Confidence is also not provided, so we can set it to a default value
+    #         class_id = 2 # Default to 'car'
+    #         confidence = 0.9 # Default confidence
+    #
+    #         if confidence > confidence_threshold:
+    #             detections.append(
+    #                 (
+    #                     float(center_x),
+    #                     float(center_y),
+    #                     float(confidence),
+    #                     int(class_id),
+    #                     0, # frame_index is not available here, but it is not used in the caller
+    #                     [int(x1), int(y1), int(x2), int(y2)],
+    #                 )
+    #             )
+    #     return detections
 
     def _run_onnx_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         img_size = self.yolo_imgsz

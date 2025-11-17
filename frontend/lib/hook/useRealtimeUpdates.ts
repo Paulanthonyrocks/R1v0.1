@@ -23,7 +23,6 @@ interface RealtimeUpdates {
     kpis: KPIData | null;
     alerts: AlertData[];
     nodeCongestionData: BackendCongestionNodeData[];
-    videoFrames: { [key: string]: ArrayBuffer };
     isConnected: boolean;
     isReady: boolean;
     error: string | null;
@@ -31,13 +30,17 @@ interface RealtimeUpdates {
     subscribeToFeed: (feedId: string) => void;
 }
 
-export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[] } => {
+export const useRealtimeUpdates = (): RealtimeUpdates & { 
+    feeds: FeedStatusData[],
+    startFeed: (feedId: string) => void,
+    stopFeed: (feedId: string) => void,
+    startWebSocket: () => void
+} => {
     const webSocketClientRef = useRef<WebSocketClient | null>(null);
     const [kpis, setKpis] = useState<KPIData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
-    const [videoFrames, setVideoFrames] = useState<{ [key: string]: ArrayBuffer }>({});
     const [isConnected, setIsConnected] = useState(false);
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -58,11 +61,44 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         return false;
     }, []);
 
-    useEffect(() => {
+    const connect = useCallback(async () => {
         if (!webSocketClientRef.current) {
             const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
             webSocketClientRef.current = new WebSocketClient(wsUrl);
             console.log('New WebSocket client created.');
+        }
+        const client = webSocketClientRef.current;
+
+        if (client.isConnected() || client.getConnectionState() === 'connecting') {
+            if (client.isConnected() && !hasRequestedInitialFeeds.current) {
+                console.log("WebSocket already connected, requesting initial feed statuses.");
+                sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
+                hasRequestedInitialFeeds.current = true;
+            }
+            return;
+        }
+
+        try {
+            const currentToken = TokenManager.getInstance().getCurrentToken();
+            if (currentToken) {
+                await client.connect(currentToken);
+            } else {
+                console.warn('No auth token for WebSocket, will wait for token update.');
+            }
+        } catch (error) {
+            setError(error instanceof Error ? error.message : 'Connection failed');
+        }
+    }, [sendMessage]);
+
+    const startWebSocket = useCallback(() => {
+        connect();
+    }, [connect]);
+
+    useEffect(() => {
+        if (!webSocketClientRef.current) {
+            const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
+            webSocketClientRef.current = new WebSocketClient(wsUrl);
+            console.log('New WebSocket client created for subscriptions.');
         }
         const client = webSocketClientRef.current;
         const subscriptions: (() => void)[] = [];
@@ -96,10 +132,17 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             }
         }));
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: { feed_id: string, frame: ArrayBuffer }) => {
-            if (data && data.feed_id && data.frame) {
-                setVideoFrames(prev => ({ ...prev, [data.feed_id]: data.frame }));
-            }
+        subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: FeedStatusData) => {
+            console.log("Received FEED_STATUS_UPDATE data:", JSON.stringify(data));
+            setFeeds(prevFeeds => {
+                const index = prevFeeds.findIndex(feed => feed.id === data.id);
+                if (index !== -1) {
+                    const newFeeds = [...prevFeeds];
+                    newFeeds[index] = data;
+                    return newFeeds;
+                }
+                return [...prevFeeds, data];
+            });
         }));
         
         subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
@@ -110,37 +153,9 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
             }
         }));
 
-        const connect = async () => {
-            if (client.isConnected() || client.getConnectionState() === 'connecting') {
-                // If we are already connected or connecting, we might still need to request initial feeds
-                // if the previous attempt was interrupted by strict mode.
-                if (client.isConnected() && !hasRequestedInitialFeeds.current) {
-                    console.log("WebSocket already connected, requesting initial feed statuses.");
-                    sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
-                    hasRequestedInitialFeeds.current = true;
-                }
-                return;
-            }
-            try {
-                const currentToken = TokenManager.getInstance().getCurrentToken();
-                if (currentToken) {
-                    await client.connect(currentToken);
-                } else {
-                    console.warn('No auth token for WebSocket, will wait for token update.');
-                }
-            } catch (error) {
-                setError(error instanceof Error ? error.message : 'Connection failed');
-            }
-        };
-
-        connect();
-
         return () => {
             console.log('Cleaning up WebSocket subscriptions. In React Strict Mode, this runs on unmount.');
             subscriptions.forEach(unsubscribe => unsubscribe());
-            // We don't destroy the client here anymore.
-            // We also don't disconnect, as another component (or the same one after remount) might need it.
-            // Resetting hasRequestedInitialFeeds allows the remounted effect to request feeds again if needed.
             hasRequestedInitialFeeds.current = false;
         };
     }, [sendMessage]);
@@ -154,6 +169,16 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feed_id: feedId });
     }, [sendMessage]);
 
+    const startFeed = useCallback((feedId: string) => {
+        console.log(`Requesting to start feed: ${feedId}`);
+        sendMessage(WebSocketMessageType.START_FEED, { feed_id: feedId });
+    }, [sendMessage]);
+
+    const stopFeed = useCallback((feedId: string) => {
+        console.log(`Requesting to stop feed: ${feedId}`);
+        sendMessage(WebSocketMessageType.STOP_FEED, { feed_id: feedId });
+    }, [sendMessage]);
+
     return { 
         kpis, 
         alerts, 
@@ -164,6 +189,8 @@ export const useRealtimeUpdates = (): RealtimeUpdates & { feeds: FeedStatusData[
         feeds, 
         sendMessage,
         subscribeToFeed,
-        videoFrames
+        startFeed,
+        stopFeed,
+        startWebSocket
     };
 };

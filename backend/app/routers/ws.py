@@ -39,7 +39,7 @@ async def websocket_endpoint(
                 await websocket.send_text(response.model_dump_json())
 
             elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
-                feed_id = getattr(message.data, 'feed_id', None)
+                feed_id = message.data.get('feed_id') if isinstance(message.data, dict) else getattr(message.data, 'feed_id', None)
                 if feed_id:
                     logger.info(f"Client {client_id} subscribing to feed {feed_id}")
                     await connection_manager.subscribe_to_topic(client_id, f"video:{feed_id}")
@@ -49,7 +49,7 @@ async def websocket_endpoint(
                     logger.warning(f"Client {client_id} sent subscribe message without feed_id")
 
             elif message.type == WebSocketMessageTypeEnum.UNSUBSCRIBE_FROM_FEED:
-                feed_id = getattr(message.data, 'feed_id', None)
+                feed_id = message.data.get('feed_id') if isinstance(message.data, dict) else getattr(message.data, 'feed_id', None)
                 if feed_id:
                     logger.info(f"Client {client_id} unsubscribing from feed {feed_id}")
                     await connection_manager.unsubscribe_from_topic(client_id, f"video:{feed_id}")
@@ -57,6 +57,22 @@ async def websocket_endpoint(
                     await connection_manager.unsubscribe_from_topic(client_id, f"feed_alerts:{feed_id}")
                 else:
                     logger.warning(f"Client {client_id} sent unsubscribe message without feed_id")
+
+            elif message.type == WebSocketMessageTypeEnum.START_FEED:
+                feed_id = message.data.get('feed_id') if isinstance(message.data, dict) else getattr(message.data, 'feed_id', None)
+                if feed_id:
+                    logger.info(f"Client {client_id} requested to start feed {feed_id}")
+                    await feed_manager.handle_start_feed(feed_id)
+                else:
+                    logger.warning(f"Client {client_id} sent start_feed message without feed_id")
+
+            elif message.type == WebSocketMessageTypeEnum.STOP_FEED:
+                feed_id = message.data.get('feed_id') if isinstance(message.data, dict) else getattr(message.data, 'feed_id', None)
+                if feed_id:
+                    logger.info(f"Client {client_id} requested to stop feed {feed_id}")
+                    await feed_manager.handle_stop_feed(feed_id)
+                else:
+                    logger.warning(f"Client {client_id} sent stop_feed message without feed_id")
 
             elif message.type == WebSocketMessageTypeEnum.AUTHENTICATE:
                 logger.info(f"Client {client_id} sent an authentication message.")
