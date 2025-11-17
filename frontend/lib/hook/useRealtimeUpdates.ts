@@ -135,7 +135,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: FeedStatusData) => {
             console.log("Received FEED_STATUS_UPDATE data:", JSON.stringify(data));
             setFeeds(prevFeeds => {
-                const index = prevFeeds.findIndex(feed => feed.id === data.id);
+                const index = prevFeeds.findIndex(feed => feed.feed_id === data.feed_id);
                 if (index !== -1) {
                     const newFeeds = [...prevFeeds];
                     newFeeds[index] = data;

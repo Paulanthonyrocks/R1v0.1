@@ -256,6 +256,8 @@ async def startup_event():
 
         logger.info("FeedManager initialized via app.services.")
         
+        fm.set_connection_manager(connection_manager)
+
         if analytics_service:
             logger.info("AnalyticsService initialized successfully.")
             await analytics_service.initialize_prediction_log_table()
