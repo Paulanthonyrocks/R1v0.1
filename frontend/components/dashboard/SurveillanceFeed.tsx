@@ -67,12 +67,20 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
 
     const handleStartFeed = () => {
         if (isToggling || !isSocketConnected) return;
+        if (!id) {
+            console.warn('Cannot start feed: feed ID is missing.');
+            return;
+        }
         setIsToggling(true);
         startFeed(id);
     };
 
     const handleStopFeed = () => {
         if (isToggling || !isSocketConnected) return;
+        if (!id) {
+            console.warn('Cannot stop feed: feed ID is missing.');
+            return;
+        }
         setIsToggling(true);
         stopFeed(id);
     };
