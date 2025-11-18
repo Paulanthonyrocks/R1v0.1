@@ -1008,10 +1008,15 @@ class FeedManager:
             entry = self.process_registry.get(feed_id)
             if not entry:
                 raise FeedNotFoundError(feed_id)
-            if entry["status"] != "stopped":
+            if entry["status"] not in ["stopped", "error"]:
                 raise FeedOperationError(
-                    f"Cannot start feed '{feed_id}': Status is '{entry['status']}' (must be 'stopped')."
+                    f"Cannot start feed '{feed_id}': Status is '{entry['status']}' (must be 'stopped' or 'error')."
                 )
+            if entry["status"] == "error":
+                logger.warning(f"Attempting to start feed '{feed_id}' from ERROR state. This will attempt to reset the feed.")
+                # Clean up any lingering process or queues from the previous error state
+                await self._cleanup_process(feed_id)
+                # After cleanup, the status will be STOPPED, so the rest of the method can proceed normally.
 
             # Check resources only if it's NOT the sample feed OR if other feeds are running
             is_sample = entry.get("is_sample_feed", False)

@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Request
-from app.websocket.connection_manager import ConnectionManager # Import the main ConnectionManager
+from app.services.video_ws_manager import video_ws_manager
 from app.dependency_injection import get_token_from_query, verify_firebase_token
 
 router = APIRouter()
@@ -10,33 +10,34 @@ logger = logging.getLogger(__name__)
 async def video_websocket_endpoint(
     websocket: WebSocket,
     stream_id: str,
-    request: Request, # Add Request to access app.state
     token: str = Depends(get_token_from_query),
 ):
-    connection_manager: ConnectionManager = request.app.state.connection_manager
     try:
         # Verify Firebase token
         user = await verify_firebase_token(token)
         if not user:
-            await websocket.close(code=1008)  # Invalid authentication
+            await websocket.close(code=1008)
             return
 
-        logger.info(f"Client {user['email']} connected to video-ws for stream_id: {stream_id}")
-        # Use the main ConnectionManager's connect method
-        await connection_manager.connect(websocket, client_id=stream_id, user_id=user['email'])
+        logger.info(f"Client {user.get('email', 'Unknown')} connected to video-ws for stream_id: {stream_id}")
+        await video_ws_manager.connect(websocket, stream_id)
+        
         try:
             while True:
-                # Keep the connection alive, or handle specific messages if needed
-                # For now, just receiving to keep the connection open
+                # Keep the connection alive by waiting for messages.
+                # The primary purpose is to maintain the connection for broadcasting frames.
                 await websocket.receive_text()
         except WebSocketDisconnect:
-            logger.info(f"Client {user['email']} disconnected from video-ws for stream_id: {stream_id}")
-            # Use the main ConnectionManager's disconnect method
-            await connection_manager.disconnect(stream_id)
+            logger.info(f"Client {user.get('email', 'Unknown')} disconnected from video-ws for stream_id: {stream_id}")
+            video_ws_manager.disconnect(websocket, stream_id)
         except Exception as e:
-            logger.error(f"Error in video-ws for stream_id {stream_id}, client {user['email']}: {e}", exc_info=True)
-            # Use the main ConnectionManager's disconnect method
-            await connection_manager.disconnect(stream_id)
+            logger.error(f"Error in video-ws for stream_id {stream_id}, client {user.get('email', 'Unknown')}: {e}", exc_info=True)
+            video_ws_manager.disconnect(websocket, stream_id)
+            
     except Exception as e:
         logger.error(f"Authentication or connection error for video-ws on stream_id {stream_id}: {e}", exc_info=True)
-        await websocket.close(code=1011) # Internal error
+        # Ensure the connection is closed if it was accepted before the error.
+        # The `connect` method in the manager now handles acceptance.
+        # If an error occurs before `connect`, the socket might not be managed yet.
+        # The websocket context manager should handle closing.
+        pass

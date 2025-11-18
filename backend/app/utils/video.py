@@ -93,7 +93,12 @@ class FrameReader:
                 break
 
             start_time = time.time()
-            ret, frame = self.cap.read()
+            try:
+                ret, frame = self.cap.read()
+            except Exception as e:
+                logger.error(f"FrameReader '{self.source_name}': Exception during cap.read(): {e}", exc_info=True)
+                ret = False
+                frame = None
 
             if ret:
                 consecutive_fails = 0
