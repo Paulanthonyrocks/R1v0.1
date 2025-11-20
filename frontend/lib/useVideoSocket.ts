@@ -9,7 +9,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
-  const wsClientRef = useRef<WebSocketClient | null>(null); // Use wsClientRef for WebSocketClient
+  const wsClientRef = useRef<WebSocketClient | null>(null);
 
   const VIDEO_WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 
@@ -37,23 +37,20 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       URL.revokeObjectURL(img.src);
 
-      if (metrics && metrics.vehicles) {
+      if (metrics && metrics.kpis?.vehicles) {
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         ctx.font = '12px Arial';
         ctx.fillStyle = 'white';
 
-        metrics.vehicles.forEach(v => {
-          // Draw bounding box
+        metrics.kpis.vehicles.forEach(v => {
           ctx.strokeRect(v.x1, v.y1, v.x2 - v.x1, v.y2 - v.y1);
           
-          // Draw text background
           const text = `ID: ${v.id} | Speed: ${v.speed.toFixed(1)} km/h`;
           const textWidth = ctx.measureText(text).width;
           ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
           ctx.fillRect(v.x1, v.y1 - 18, textWidth + 8, 18);
 
-          // Draw text
           ctx.fillStyle = 'white';
           ctx.fillText(text, v.x1 + 4, v.y1 - 5);
         });
@@ -62,8 +59,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     img.src = URL.createObjectURL(blob);
   }, [metrics]);
 
-  const handleMetrics = useCallback((data: { kpis: SurveillanceFeedMessage }) => {
-    setMetrics(data.kpis);
+  const handleMetrics = useCallback((data: SurveillanceFeedMessage) => {
+    setMetrics(data);
   }, []);
 
   useEffect(() => {
@@ -75,7 +72,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     const connect = () => {
       console.log(`useVideoSocket: Connecting to ${streamId}...`);
-      const client = new WebSocketClient(wsUrl);
+      // Pass requiresClientId as false
+      const client = new WebSocketClient(wsUrl, false);
       wsClientRef.current = client;
 
       client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
@@ -108,7 +106,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         wsClientRef.current = null;
       }
     };
-  }, [streamId, token, handleFrame, handleMetrics]);
+  }, [streamId, token, handleFrame, handleMetrics, VIDEO_WS_BASE_URL]);
 
   return { frameData, metrics, isConnected, error, drawFrame, frameRate };
 };

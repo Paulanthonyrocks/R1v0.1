@@ -1,5 +1,6 @@
 
 import logging
+import json
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
@@ -26,7 +27,14 @@ async def websocket_endpoint(
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except json.JSONDecodeError:
+                logger.warning(f"Could not decode JSON from client {client_id}. It might have disconnected.")
+                break
+
+            if data.get("type") == "__internal_ping":
+                continue
             message = WebSocketMessage(**data)
 
             if message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:

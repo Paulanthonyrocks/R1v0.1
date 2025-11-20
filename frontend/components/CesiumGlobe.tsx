@@ -32,7 +32,7 @@ interface GeoJSON {
 
 // Define FeedMarker Interface
 interface FeedMarker {
-    id: string;
+    feed_id: string;
     name: string;
     position: THREE.Vector3;
     mesh?: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>;
@@ -106,7 +106,7 @@ const ThreeGrid: React.FC = () => {
                     labelText += `\nVehicles: ${metrics.vehicle_count}`;
                 } // Added missing brace here
             }
-            newFeedLabels[marker.id] = { text: labelText, position: marker.position, screenPosition: { x: 0, y: 0 } };
+            newFeedLabels[marker.feed_id] = { text: labelText, position: marker.position, screenPosition: { x: 0, y: 0 } };
         });
         setFeedLabels(newFeedLabels);
     }, [feedMarkers]);
@@ -389,8 +389,8 @@ const ThreeGrid: React.FC = () => {
                 const intersects = raycaster.intersectObjects(markerMeshes);
                 if (intersects.length > 0) {
                     const intersectedObject = intersects[0].object;
-                    if (intersectedObject.userData?.id) {
-                        router.push(`/surveillance/${intersectedObject.userData.id}`);
+                    if (intersectedObject.userData?.feed_id) {
+                        router.push(`/surveillance/${intersectedObject.userData.feed_id}`);
                     }
                     return;
                 }
@@ -429,12 +429,12 @@ const ThreeGrid: React.FC = () => {
         const unsubscribe = onSnapshot(feedsCollection, (querySnapshot) => {
             const fetchedFeeds: FeedStatusData[] = [];
             querySnapshot.forEach((doc) => {
-                fetchedFeeds.push({ id: doc.id, ...doc.data() } as FeedStatusData);
+                fetchedFeeds.push({ feed_id: doc.id, ...doc.data() } as FeedStatusData);
             });
 
             setFeedMarkers(prevFeedMarkers => {
                 const updatedFeedMarkers: Record<string, FeedMarker> = { ...prevFeedMarkers };
-                const incomingFeedIds = new Set(fetchedFeeds.map(f => f.id));
+                const incomingFeedIds = new Set(fetchedFeeds.map(f => f.feed_id));
                 const existingFeedIds = new Set(Object.keys(prevFeedMarkers));
 
                 fetchedFeeds.forEach(feed => {
@@ -442,7 +442,7 @@ const ThreeGrid: React.FC = () => {
                         console.warn("Skipping feed due to missing coordinates:", feed);
                         return;
                     }
-                    const existingFeedMarker = updatedFeedMarkers[feed.id];
+                    const existingFeedMarker = updatedFeedMarkers[feed.feed_id];
                     const position = latLonAltToVector3(feed.latitude, feed.longitude, MARKER_ALTITUDE, GLOBE_RADIUS);
 
                     if (existingFeedMarker) {
@@ -463,18 +463,18 @@ const ThreeGrid: React.FC = () => {
                     } else {
                         // Create new feed marker
                         const newFeedMarker: FeedMarker = {
-                            id: feed.id,
+                            feed_id: feed.feed_id,
                             name: feed.name ?? 'Unknown Feed', // Provide a default if name is undefined
                             position: position,
                             status: feed.status,
                             latest_metrics: feed.latest_metrics as FeedMarker['latest_metrics'],
                         };
                         const mesh = createFeedMesh(position, feed.status);
-                        mesh.userData.id = feed.id; // Store ID for raycasting
+                        mesh.userData.id = feed.feed_id; // Store ID for raycasting
                         newFeedMarker.mesh = mesh;
                         scene.add(mesh);
 
-                        updatedFeedMarkers[feed.id] = newFeedMarker;
+                        updatedFeedMarkers[feed.feed_id] = newFeedMarker;
                     }
                 });
 
@@ -592,7 +592,7 @@ const ThreeGrid: React.FC = () => {
         const matchedFeed = Object.values(currentMarkers).find(
             (f: FeedMarker) =>
                 f.name.toLowerCase().includes(searchTermValue) ||
-                f.id.toLowerCase().includes(searchTermValue)
+                f.feed_id.toLowerCase().includes(searchTermValue)
         );
 
         if (matchedFeed?.position) {

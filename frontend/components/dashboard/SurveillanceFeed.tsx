@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, forwardRef } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Maximize, Minimize } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw, Settings } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
@@ -9,39 +9,24 @@ import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
 import StreamOverlayControls from './StreamOverlayControls';
 
-const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
-    const { id, name: feedName, source, status } = feed;
-    const { startFeed, stopFeed, isConnected: isSocketConnected, kpis } = useRealtimeUpdates();
+const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed }, ref) => {
+    const { feed_id, name: feedName, source, status } = feed;
+    const { startFeed, stopFeed, isConnected: isSocketConnected, /*kpis*/ } = useRealtimeUpdates();
     const { token } = useAuth();
-    const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps } = useVideoSocket(id, token);
+    const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps } = useVideoSocket(feed_id, token);
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
-    const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); // New state for panel visibility
-    const [isFullScreen, setIsFullScreen] = useState<boolean>(false); // New state for fullscreen
-    const cardRef = useRef<HTMLDivElement>(null); // Ref for the card element
+    const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); 
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     const isLive = isConnected && frameData !== null;
     const isLoading = !isConnected && !error;
 
-    const component_name = feedName ?? `Feed ${id}`;
+    const component_name = feedName ?? `Feed ${feed_id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
     
-    const toggleFullScreen = () => {
-        if (cardRef.current) {
-            if (!document.fullscreenElement) {
-                cardRef.current.requestFullscreen().catch(err => {
-                    console.error("Error attempting to enable fullscreen:", err);
-                });
-            } else {
-                document.exitFullscreen();
-            }
-        }
-    };
-
-
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
             setIsToggling(false);
@@ -53,36 +38,31 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-                if (isFullScreen) {
-                    canvas.width = window.innerWidth;
-                    canvas.height = window.innerHeight;
-                } else {
-                    canvas.width = canvas.offsetWidth;
-                    canvas.height = canvas.offsetHeight;
-                }
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
                 drawFrame(ctx, frameData);
             }
         }
-    }, [frameData, isLive, drawFrame, isFullScreen]);
+    }, [frameData, isLive, drawFrame]);
 
     const handleStartFeed = () => {
         if (isToggling || !isSocketConnected) return;
-        if (!id) {
+        if (!feed_id) {
             console.warn('Cannot start feed: feed ID is missing.');
             return;
         }
         setIsToggling(true);
-        startFeed(id);
+        startFeed(feed_id);
     };
 
     const handleStopFeed = () => {
         if (isToggling || !isSocketConnected) return;
-        if (!id) {
+        if (!feed_id) {
             console.warn('Cannot stop feed: feed ID is missing.');
             return;
         }
         setIsToggling(true);
-        stopFeed(id);
+        stopFeed(feed_id);
     };
 
     const handleRefreshFeed = () => {
@@ -90,18 +70,17 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
             console.warn('Refresh prevented: Not connected to WebSocket');
             return;
         }
-        console.log(`Sending refresh_feed for ${id}`);
-        // sendMessage('refresh_feed', { feed_id: id });
+        console.log(`Sending refresh_feed for ${feed_id}`);
+        // sendMessage('refresh_feed', { feed_id: feed_id });
     };
 
     return (
         <Card
-            ref={cardRef} // Attach ref to the Card
+            ref={ref} 
             className={cn(
                 "matrix-glow-card overflow-hidden group",
                 "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                 "font-lcd matrix-glow",
-                isFullScreen ? "fixed inset-0 w-screen h-screen z-50 rounded-none" : "" // Fullscreen styles
             )}
             tabIndex={0}
         >
@@ -159,17 +138,6 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <RotateCw className="h-4 w-4" />
                     </button>)
                 }
-                {/* Fullscreen Button */}
-                {!isToggling && !isLoading && !error && (
-                    <button
-                        className="absolute bottom-1.5 left-10 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
-                        onClick={(e) => { e.stopPropagation(); toggleFullScreen(); }}
-                        title={isFullScreen ? "Exit Fullscreen" : "Fullscreen"}
-                    >
-                        {isFullScreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
-                    </button>
-                )}
-                {/* New: Overlay Controls Button */}
                 {!isToggling && !isLoading && !error && (
                     <button
                         className="absolute top-1.5 right-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
@@ -179,8 +147,6 @@ const SurveillanceFeed = React.memo(({ feed }: SurveillanceFeedProps) => {
                         <Settings className="h-4 w-4" />
                     </button>
                 )}
-
-                {/* New: Overlay Controls Panel */}
                 {showControlsPanel && (
                     <div className="absolute top-10 right-1.5 z-30">
                         <StreamOverlayControls

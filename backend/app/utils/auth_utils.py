@@ -29,13 +29,13 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
             detail="Token has been revoked.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except auth.UserDisabledError:
-        logger.error("User account is disabled.")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is disabled.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # except auth.UserDisabledError:
+    #     logger.error("User account is disabled.")
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="User account is disabled.",
+    #         headers={"WWW-Authenticate": "Bearer"},
+    #     )
     except auth.InvalidIdTokenError as e:
         logger.error(f"Invalid ID token: {e}. Full error details: {e}", exc_info=True)
         raise HTTPException(

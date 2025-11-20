@@ -27,8 +27,8 @@ export const mockCongestionNodes: CongestionNodeProps[] = [
 ];
 
 export const mockSurveillanceFeeds: FeedStatusData[] = [
-    { id: 'feed1', name: "Main St & 5th Ave", source: "#TC-142", status: 'running' },
-    { id: 'feed2', name: "Broadway & 12th St", source: "#TC-187", status: 'running' },
-    { id: 'feed3', name: "I-95 Exit 14", source: "#TC-205", status: 'running' },
-    { id: 'feed4', name: "Park Ave & 34th St", source: "#TC-091", status: 'running' },
+    { feed_id: 'feed1', name: "Main St & 5th Ave", source: "#TC-142", status: 'running' },
+    { feed_id: 'feed2', name: "Broadway & 12th St", source: "#TC-187", status: 'running' },
+    { feed_id: 'feed3', name: "I-95 Exit 14", source: "#TC-205", status: 'running' },
+    { feed_id: 'feed4', name: "Park Ave & 34th St", source: "#TC-091", status: 'running' },
 ];

@@ -90,7 +90,7 @@ class ConnectionManager:
             # Remove client from all topic subscriptions
             if client_id in self.client_id_to_topics:
                 for topic in list(self.client_id_to_topics[client_id]): # Iterate over a copy
-                    self.unsubscribe_from_topic(client_id, topic)
+                    await self.unsubscribe_from_topic(client_id, topic)
                 del self.client_id_to_topics[client_id]
 
             logger.info(

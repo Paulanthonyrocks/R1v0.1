@@ -6,7 +6,7 @@ import { LucideIcon } from 'lucide-react';
 export type SeverityLevel = 'Critical' | 'Warning' | 'Anomaly' | 'INFO' | 'ERROR';
 
 export interface FeedStatusData {
-  id: string;
+  feed_id: string;
   source: string;
   name?: string;
   status: 'stopped' | 'running' | 'starting' | 'error' | 'stopping'; // Added 'stopping'

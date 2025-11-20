@@ -5,16 +5,16 @@ import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 
-import NodeCard from '@/components/nodes/NodeCard';
+// // import NodeCard from '@/components/nodes/NodeCard';
 import { AlertTriangle, Signal, Clock, BatteryFull } from 'lucide-react';
-import { BackendCongestionNodeData } from '@/lib/types';
+// import { BackendCongestionNodeData } from '@/lib/types';
 
 const NodesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   
 
   const {
-    nodeCongestionData,
+    // nodeCongestionData,
     isConnected,
     isReady,
     error: wsError,
@@ -28,10 +28,10 @@ const NodesPage: React.FC = () => {
     }
   }, [startWebSocket, isConnected]);
 
-  const filteredNodes = nodeCongestionData?.filter(node =>
-    node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    node.id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // const filteredNodes = nodeCongestionData?.filter(node =>
+  //   node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  //   node.id.toLowerCase().includes(searchQuery.toLowerCase())
+  // );
 
   const isLoading = !isReady || !isConnected;
   const displayError = wsError;
@@ -59,21 +59,21 @@ const NodesPage: React.FC = () => {
       );
     }
 
-    if (!filteredNodes || filteredNodes.length === 0) {
-      return (
-        <div className="flex justify-center items-center h-64">
-          <p className="text-lcd-text text-lg tracking-normal">
-            {nodeCongestionData?.length === 0 ? "No nodes are currently reporting data via WebSocket." : "No nodes match your search query."}
-          </p>
-        </div>
-      );
-    }
+    // if (!filteredNodes || filteredNodes.length === 0) {
+    //   return (
+    //     <div className="flex justify-center items-center h-64">
+    //       <p className="text-lcd-text text-lg tracking-normal">
+    //         {nodeCongestionData?.length === 0 ? "No nodes are currently reporting data via WebSocket." : "No nodes match your search query."}
+    //       </p>
+    //     </div>
+    //   );
+    // }
 
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-        {filteredNodes.map((node: BackendCongestionNodeData) => (
+        {/* {filteredNodes.map((node: BackendCongestionNodeData) => (
           <NodeCard key={node.id} node={node} />
-        ))}
+        ))} */}
       </div>
     );
   };

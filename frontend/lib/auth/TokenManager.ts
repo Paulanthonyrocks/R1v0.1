@@ -26,8 +26,11 @@ export class TokenManager {
 
         if (user) {
             try {
-                this.currentToken = await user.getIdToken();
-                this.tokenRefreshCallbacks.forEach(callback => callback(this.currentToken!));
+                const newToken = await user.getIdToken();
+                if (newToken !== this.currentToken) {
+                    this.currentToken = newToken;
+                    this.tokenRefreshCallbacks.forEach(callback => callback(this.currentToken!));
+                }
                 this.scheduleTokenRefresh();
             } catch (error) {
                 console.error('Error getting initial token:', error);

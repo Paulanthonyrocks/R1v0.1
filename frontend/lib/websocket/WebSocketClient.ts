@@ -5,7 +5,6 @@ interface WebSocketErrorEvent extends Event {
     message?: string;
 }
 
-// Utility function to get or create a client ID
 const getOrCreateClientId = () => {
     if (typeof window === 'undefined') return '';
     let clientId = localStorage.getItem('ws_client_id');
@@ -16,46 +15,8 @@ const getOrCreateClientId = () => {
     return clientId;
 };
 
-// Make the listener type generic
 type MessageListener<T> = (data: T) => void;
 
-// Type definitions for specific message payloads
-export type MetricValue = string | number | boolean | null;
-
-export interface RealtimeMetricsUpdate {
-    feed_id: string;
-    timestamp: string;
-    metrics: Record<string, MetricValue>;
-}
-
-export interface GlobalRealtimeMetrics {
-    timestamp: string;
-    metrics_source?: string;
-    congestion_index?: number;
-    average_speed_kmh?: number;
-    active_incidents_count?: number;
-    total_flow?: number;
-    feed_statuses?: Record<string, number>;
-    custom_metrics?: Record<string, MetricValue>;
-}
-
-export interface GeneralNotification {
-    message_type: string;
-    title?: string;
-    message: string;
-    severity: 'info' | 'warning' | 'error';
-    suggested_actions?: string[];
-    timestamp: string;
-}
-
-export interface ErrorNotification {
-    error_code?: string;
-    message: string;
-    details?: string;
-    timestamp: string;
-}
-
-// Enum for valid message types expected by the server
 export enum WebSocketMessageType {
     METRICS_UPDATE = 'metrics_update',
     KPI_UPDATE = 'kpi_update',
@@ -130,12 +91,14 @@ export class WebSocketClient implements IWebSocketClient {
     private connectionPromise: Promise<void> | null = null;
     private currentToken: string | null = null;
     private videoWorker: Worker | null = null;
+    private requiresClientId: boolean;
 
-    constructor(baseUrl: string) {
+    constructor(baseUrl: string, requiresClientId = true) {
         this.url = baseUrl;
+        this.requiresClientId = requiresClientId;
         this.tokenManager = TokenManager.getInstance();
         
-        if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined' && this.requiresClientId) {
             this.videoWorker = new Worker('/workers/video-worker.js');
             this.videoWorker.onmessage = (e) => {
                 if (e.data.error) {
@@ -147,7 +110,6 @@ export class WebSocketClient implements IWebSocketClient {
             };
         }
 
-        // Register for token updates
         this.unsubscribeTokenRefresh = this.tokenManager.onTokenRefresh((token) => {
             this.handleTokenRefresh(token);
         });
@@ -180,10 +142,7 @@ export class WebSocketClient implements IWebSocketClient {
         
         if (this.isConnected()) {
             console.log("WebSocket is connected. Sending authentication message with new token.");
-            this.send({
-                type: WebSocketMessageType.AUTHENTICATE,
-                data: { token: token }
-            });
+            this.send({ type: WebSocketMessageType.AUTHENTICATE, data: { token } });
         } else if (this.connectionState === ConnectionState.DISCONNECTED) {
             console.log("WebSocket is disconnected. Reconnecting with new token.");
             await this.reconnectWithNewToken(token);
@@ -191,48 +150,28 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public async reconnectWithNewToken(token: string): Promise<void> {
-        // Cancel any pending operations
         this.cancelPendingOperations();
-        
-        // Close existing connection if it exists
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
-
-        // Reset state
         this.setState(ConnectionState.DISCONNECTED);
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
         this.currentToken = token;
-
-        // Start fresh connection
         return this.connect(token);
     }
 
     private cancelPendingOperations() {
-        if (this.connectTimeout) {
-            clearTimeout(this.connectTimeout);
-            this.connectTimeout = null;
-        }
-        if (this.reconnectTimeout) {
-            clearTimeout(this.reconnectTimeout);
-            this.reconnectTimeout = null;
-        }
+        if (this.connectTimeout) clearTimeout(this.connectTimeout);
+        if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
         this.stopPingInterval();
     }
 
     public async connect(token: string | null): Promise<void> {
-        // If already connecting, return the existing promise
-        if (this.connectionPromise) {
-            return this.connectionPromise;
-        }
-
+        if (this.connectionPromise) return this.connectionPromise;
         this.shouldReconnect = true;
-        
-        // Create and store the connection promise
         this.connectionPromise = this.performConnection(token);
-        
         try {
             await this.connectionPromise;
         } finally {
@@ -241,21 +180,16 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private async performConnection(token: string | null): Promise<void> {
-        // Don't proceed if already connected or connecting
-        if (this.connectionState === ConnectionState.CONNECTED || 
-            this.connectionState === ConnectionState.CONNECTING) {
+        if (this.connectionState === ConnectionState.CONNECTED || this.connectionState === ConnectionState.CONNECTING) {
             return;
         }
 
         this.setState(ConnectionState.CONNECTING, 'Attempting to connect...');
 
-        // Get token if not provided
-        if (!token) {
-            token = this.currentToken || this.tokenManager.getCurrentToken();
-        }
+        if (!token) token = this.currentToken || this.tokenManager.getCurrentToken();
 
         if (!token) {
-            console.warn('No authentication token available for WebSocket connection.');
+            console.warn('No auth token for WebSocket, will wait for token update.');
             this.notifyError('auth_error', 'No authentication token available.');
             return;
         }
@@ -264,78 +198,57 @@ export class WebSocketClient implements IWebSocketClient {
 
         return new Promise<void>((resolve, reject) => {
             try {
-                const clientId = getOrCreateClientId();
-                const fullUrl = `${this.url}/${clientId}?token=${token}`;
+                const clientId = this.requiresClientId ? getOrCreateClientId() : null;
+                const url = new URL(this.url);
+                if (clientId) url.pathname += `/${clientId}`;
+                url.searchParams.set('token', token as string);
                 
-                console.log('WebSocket URL being used:', fullUrl);
-                console.log('Attempting to connect to WebSocket:', fullUrl);
+                console.log('Attempting to connect to WebSocket:', url.toString());
                 
-                this.ws = new WebSocket(fullUrl);
+                this.ws = new WebSocket(url.toString());
                 this.ws.binaryType = 'arraybuffer';
 
                 const connectionTimeout = setTimeout(() => {
-                    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
-                        console.log('Connection timeout, closing WebSocket');
+                    if (this.ws?.readyState === WebSocket.CONNECTING) {
                         this.ws.close();
                         reject(new Error('Connection timeout'));
                     }
-                }, 10000); // 10 second timeout
+                }, 10000);
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
-                    console.log('WebSocket opened. Client ID:', clientId);
-                    
+                    console.log(`WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
                     this.setState(ConnectionState.CONNECTED, 'Connection established');
                     this.reconnectAttempts = 0;
                     this.reconnectDelay = 1000;
                     this.startPingInterval();
-                    
-                    // Send any queued messages
                     this.flushMessageQueue();
-                    
                     resolve();
                 };
 
                 this.ws.onclose = (event: CloseEvent) => {
                     clearTimeout(connectionTimeout);
                     this.stopPingInterval();
-                    
-                    const closeReason = event.reason || 'Connection closed';
-                    const wasClean = event.wasClean;
-                    
-                    console.log('WebSocket closed:', { 
-                        code: event.code, 
-                        reason: closeReason, 
-                        wasClean 
-                    });
+                    const { reason, wasClean, code } = event;
+                    console.log('WebSocket closed:', { code, reason, wasClean });
 
-                    // If we were connecting and got closed, reject the promise
                     if (this.connectionState === ConnectionState.CONNECTING) {
-                        reject(new Error(`Connection failed: ${closeReason}`));
+                        reject(new Error(`Connection failed: ${reason}`));
                         return;
                     }
                     
-                    this.setState(ConnectionState.DISCONNECTED, closeReason);
-                    
-                    // Only attempt to reconnect if shouldReconnect is true and not a clean close
-                    if (this.shouldReconnect && !wasClean) {
-                        this.attemptReconnect(closeReason);
-                    }
+                    this.setState(ConnectionState.DISCONNECTED, reason);
+                    if (this.shouldReconnect && !wasClean) this.attemptReconnect(reason);
                 };
 
-                this.ws.onerror = (error: WebSocketErrorEvent) => {
+                this.ws.onerror = (event: Event) => {
                     clearTimeout(connectionTimeout);
+                    const error = event as WebSocketErrorEvent;
                     const errorMessage = error?.message || 'Unknown WebSocket Error';
-                    
-                    console.error('WebSocket error:', errorMessage, error);
-                    
+                    console.error(`WebSocket error: "${errorMessage}". This is often a generic error. For more details, check your browser\'s developer console for a failed WebSocket "Upgrade" request in the Network tab. The response headers or console logs from the server on initial connection might provide more insight.`, error);
                     this.setState(ConnectionState.ERROR, errorMessage);
                     this.notifyError('connection_error', errorMessage);
-                    
-                    // If we were connecting and got an error, reject the promise
-                    if (this.connectionState === ConnectionState.CONNECTING) {
-                        reject(new Error(errorMessage));
-                    }
+                    if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
                 };
 
                 this.ws.onmessage = this.handleMessage.bind(this);
@@ -351,185 +264,93 @@ export class WebSocketClient implements IWebSocketClient {
     private attemptReconnect(reason: string): void {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.setState(ConnectionState.ERROR, 'Maximum reconnection attempts reached');
-            this.notifyError('max_reconnect_attempts', 
-                `Maximum reconnection attempts (${this.maxReconnectAttempts}) reached. Please refresh the page.`);
+            this.notifyError('max_reconnect_attempts', `Maximum reconnection attempts (${this.maxReconnectAttempts}) reached. Please refresh the page.`);
             return;
         }
 
         this.reconnectAttempts++;
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); // Cap at 30 seconds
-        
-        this.setState(ConnectionState.RECONNECTING, 
-            `Connection lost (${reason}). Attempting to reconnect...`);
-        
-        this.notifyError('connection_closed', 
-            `Connection closed unexpectedly (${reason}). Attempting to reconnect in ${this.reconnectDelay/1000} seconds...`);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+        this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`);
+        this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Attempting to reconnect in ${this.reconnectDelay / 1000} seconds...`);
 
-        this.reconnectTimeout = setTimeout(async () => {
-            try {
-                await this.performConnection(this.currentToken);
-            } catch (error) {
-                console.error('Reconnection failed:', error);
-                // attemptReconnect will be called again by the onclose handler if appropriate
-            }
-        }, this.reconnectDelay);
+        this.reconnectTimeout = setTimeout(() => this.performConnection(this.currentToken), this.reconnectDelay);
     }
 
     private flushMessageQueue(): void {
         while (this.messageQueue.length > 0 && this.isConnected()) {
             const msg = this.messageQueue.shift();
-            if (msg) {
-                this.send(msg);
-            }
+            if (msg) this.send(msg);
         }
     }
 
     private startPingInterval(): void {
-        console.log('Starting ping interval.');
         this.stopPingInterval();
         this.lastPongTime = Date.now();
-        
         this.pingInterval = setInterval(() => {
-            const now = Date.now();
-            
             if (this.isConnected()) {
-                this.send({
-                    type: WebSocketMessageType.INTERNAL_PING,
-                    data: {},
-                    timestamp: now
-                });
+                this.send({ type: WebSocketMessageType.INTERNAL_PING, timestamp: Date.now() });
             }
-            
-            // Check if we haven't received a pong in too long
-            if (now - this.lastPongTime > 90000) { // 90 seconds
-                this.handleConnectionTimeout();
-            }
-        }, 15000); // Send ping every 15 seconds
+            if (Date.now() - this.lastPongTime > 90000) this.handleConnectionTimeout();
+        }, 15000);
     }
 
     private stopPingInterval(): void {
-        if (this.pingInterval) {
-            clearInterval(this.pingInterval);
-            this.pingInterval = null;
-        }
+        if (this.pingInterval) clearInterval(this.pingInterval);
     }
 
     private handleConnectionTimeout(): void {
         console.log('Connection timeout detected. Closing WebSocket.');
-        if (this.ws) {
-            this.ws.close();
-            // Reconnection will be handled by onclose handler
-        }
+        this.ws?.close();
     }
 
     private handleMessage(event: MessageEvent): void {
         if (typeof event.data === 'string') {
-            // Handle simple ping messages that are not JSON formatted
             if (event.data === 'ping') {
-                this.send({ type: WebSocketMessageType.PONG, data: { timestamp: Date.now() } });
+                this.ws?.send('pong');
                 return;
             }
-
+            if (event.data === 'pong') {
+                this.lastPongTime = Date.now();
+                return;
+            }
             try {
-                const message = JSON.parse(event.data) as WebSocketMessage<any>;
-
-                // Handle ping/pong messages
+                const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
                 if (message.type === WebSocketMessageType.PONG) {
                     this.lastPongTime = Date.now();
                     return;
-                } else if (message.type === WebSocketMessageType.PING) {
-                    this.send({ type: WebSocketMessageType.PONG, data: { timestamp: Date.now() } });
-                    return;
                 }
-
-                if (!Object.values(WebSocketMessageType).includes(message.type as WebSocketMessageType)) {
-                    console.error('Invalid message type received:', message.type);
-                    return;
-                }
-
-                // Special handling for video updates
-                if (message.type === WebSocketMessageType.VIDEO_UPDATE && message.data) {
-                    const { frame, kpis, feed_id } = message.data; // Added feed_id
-
-                    if (frame && typeof frame === 'string') {
-                        // Decode base64 frame
-                        const byteString = atob(frame);
-                        const byteNumbers = new Array(byteString.length);
-                        for (let i = 0; i < byteString.length; i++) {
-                            byteNumbers[i] = byteString.charCodeAt(i);
-                        }
-                        const byteArray = new Uint8Array(byteNumbers);
-                        
-                        // Notify video frame listeners
-                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id: feed_id, frame: byteArray.buffer as ArrayBuffer }); // Pass feed_id and frame
-                    }
-
-                    // Notify KPI listeners
-                    if (kpis) {
-                        this.notifyListeners(WebSocketMessageType.KPI_UPDATE, { feed_id: feed_id, ...kpis }); // Pass feed_id with kpis
-                    }
-                    return;
-                }
-
-                if (message.type === WebSocketMessageType.VIDEO_FRAME && message.data) {
-                    const { feed_id, frame } = message.data as { feed_id: string, frame: string };
-
-                    if (feed_id && frame && typeof frame === 'string' && this.videoWorker) {
-                        this.videoWorker.postMessage({ feed_id: feed_id, frameData: frame });
-                    }
-                    return; // Return after handling
-                }
-
                 this.notifyListeners(message.type, message.data);
-
             } catch (error) {
-                console.error('Error handling WebSocket message:', error);
+                console.error('Error handling WebSocket message:', error, event.data);
             }
+        } else if (event.data instanceof ArrayBuffer) {
+            // Handle binary frame data (for video feeds that don't use workers)
+            this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { frame: event.data });
         }
     }
 
     private notifyListeners<T>(type: WebSocketMessageType, data: T): void {
-        if (this.listeners.has(type)) {
-            this.listeners.get(type)?.forEach((listener: MessageListener<T>) => {
-                try {
-                    listener(data);
-                } catch (error) {
-                    console.error(`Error in listener for message type ${type}:`, error);
-                }
-            });
-        }
+        this.listeners.get(type)?.forEach((listener: MessageListener<T>) => {
+            try {
+                listener(data);
+            } catch (error) {
+                console.error(`Error in listener for message type ${type}:`, error);
+            }
+        });
     }
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void {
-        if (!this.listeners.has(messageType)) {
-            this.listeners.set(messageType, new Set());
-        }
+        if (!this.listeners.has(messageType)) this.listeners.set(messageType, new Set());
         this.listeners.get(messageType)?.add(listener as MessageListener<unknown>);
         return () => this.unsubscribe(messageType, listener);
     }
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
         this.listeners.get(messageType)?.delete(listener as MessageListener<unknown>);
-        if (this.listeners.get(messageType)?.size === 0) {
-            this.listeners.delete(messageType);
-        }
     }
 
     public send(message: WebSocketMessage): void {
-        if (message.type === WebSocketMessageType.INTERNAL_PING) {
-            const pingMessage: WebSocketMessage = {
-                type: WebSocketMessageType.PING,
-                data: {},
-                timestamp: message.timestamp ?? Date.now()
-            };
-            if (this.isConnected()) {
-                this.ws!.send(JSON.stringify(pingMessage));
-            }
-            return;
-        }
-
         const messageToSend: WebSocketMessage = { ...message, timestamp: message.timestamp ?? Date.now() };
-
         if (this.isConnected()) {
             this.ws!.send(JSON.stringify(messageToSend));
         } else {
@@ -545,12 +366,7 @@ export class WebSocketClient implements IWebSocketClient {
         console.log('Disconnecting WebSocket...');
         this.shouldReconnect = false;
         this.cancelPendingOperations();
-        
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-        }
-        
+        this.ws?.close();
         this.setState(ConnectionState.DISCONNECTED, 'User disconnected');
     }
 
@@ -560,14 +376,8 @@ export class WebSocketClient implements IWebSocketClient {
         this.listeners.clear();
         this.errorListeners.clear();
         this.statusListeners.clear();
-        if (this.unsubscribeTokenRefresh) {
-            this.unsubscribeTokenRefresh();
-            this.unsubscribeTokenRefresh = null;
-        }
-        if (this.videoWorker) {
-            this.videoWorker.terminate();
-            this.videoWorker = null;
-        }
+        this.unsubscribeTokenRefresh?.();
+        this.videoWorker?.terminate();
         this.messageQueue.length = 0;
     }
 

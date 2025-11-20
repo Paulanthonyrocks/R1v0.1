@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { APIResponse, AllNodesCongestionResponse } from '@/lib/types/api';
+// import { APIResponse, AllNodesCongestionResponse } from '@/lib/types/api';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { Signal, BatteryFull } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -11,14 +11,14 @@ import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { Button } from '@/components/ui/button';
 
-import { getToken } from '@/lib/auth/getToken';
+// import { getToken } from '@/lib/auth/getToken';
 import AnomalyItem from '@/components/dashboard/AnomalyItem';
 import StatCard from '@/components/dashboard/StatCard';
 import {
   Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck
 } from 'lucide-react';
 import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
-import { BackendCongestionNodeData, FeedStatusData } from '@/lib/types';
+// import { BackendCongestionNodeData, FeedStatusData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
     const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed, startFeed, stopFeed, startWebSocket } = useRealtimeUpdates();

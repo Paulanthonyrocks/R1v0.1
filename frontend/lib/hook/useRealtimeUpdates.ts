@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
+import { useRef, useState, useCallback, useEffect } from 'react';
+import { AlertData, FeedStatusData } from '@/lib/types';
 import { WebSocketClient, WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { TokenManager } from '@/lib/auth/TokenManager';
 
@@ -22,7 +22,7 @@ interface KPIData {
 interface RealtimeUpdates {
     kpis: KPIData | null;
     alerts: AlertData[];
-    nodeCongestionData: BackendCongestionNodeData[];
+    // nodeCongestionData: BackendCongestionNodeData[];
     isConnected: boolean;
     isReady: boolean;
     error: string | null;
@@ -40,7 +40,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     const [kpis, setKpis] = useState<KPIData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
-    const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
+    // const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
     const [isConnected, setIsConnected] = useState(false);
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -182,7 +182,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     return { 
         kpis, 
         alerts, 
-        nodeCongestionData, 
+        // nodeCongestionData, 
         isConnected, 
         isReady, 
         error, 

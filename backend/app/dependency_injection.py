@@ -23,6 +23,7 @@ from .services.weather_service import WeatherService
 from .services.event_service import EventService
 from .services.analytics_service import AnalyticsService
 from .services.personalized_routing_service import PersonalizedRoutingService
+from .models.user import User
 
 
 async def get_db():
@@ -95,16 +96,14 @@ USER_ROLE = "user"
 SUPER_ADMIN_ROLE = "super_admin"
 
 
-def is_admin(user_data: dict) -> bool:
+def is_admin(user: User) -> bool:
     """Check if the user has admin role."""
-    return (
-        user_data.get("role") == ADMIN_ROLE or user_data.get("role") == SUPER_ADMIN_ROLE
-    )
+    return user.role in [ADMIN_ROLE, SUPER_ADMIN_ROLE]
 
 
-def is_super_admin(user_data: dict) -> bool:
+def is_super_admin(user: User) -> bool:
     """Check if the user has super admin role."""
-    return user_data.get("role") == SUPER_ADMIN_ROLE
+    return user.role == SUPER_ADMIN_ROLE
 
 
 async def get_current_user(
@@ -122,23 +121,26 @@ async def get_current_user(
 
 
 async def get_current_active_user(
-    token: HTTPAuthorizationCredentials = Depends(auth_scheme),
-) -> Dict[str, Any]:
+    user_data: dict = Depends(get_current_user),
+) -> User:
     """Get the current authenticated user's data and verify account is active."""
-    user_data = await get_current_user(token)
-
     if user_data.get("disabled", False):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled",
         )
 
-    return user_data
+    return User(
+        username=user_data.get("uid") or user_data.get("sub"),
+        email=user_data.get("email", ""),
+        full_name=user_data.get("name", ""),
+        role=user_data.get("role", "user"),
+    )
 
 
 async def get_current_admin(
-    user: Dict[str, Any] = Depends(get_current_active_user),
-) -> Dict[str, Any]:
+    user: User = Depends(get_current_active_user),
+) -> User:
     """Get the current authenticated admin user's data."""
     if not is_admin(user):
         raise HTTPException(
@@ -149,8 +151,8 @@ async def get_current_admin(
 
 
 async def get_current_super_admin(
-    user: Dict[str, Any] = Depends(get_current_active_user),
-) -> Dict[str, Any]:
+    user: User = Depends(get_current_admin),
+) -> User:
     """Get the current authenticated super admin user's data."""
     if not is_super_admin(user):
         raise HTTPException(
@@ -162,13 +164,19 @@ async def get_current_super_admin(
 
 async def get_current_active_user_optional(
     token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
-) -> Optional[Dict[str, Any]]:
+) -> Optional[User]:
     """Optionally get the current authenticated user's data."""
     if not token or not token.credentials:
         return None
 
     try:
-        return await verify_firebase_token(token.credentials)
+        user_data = await verify_firebase_token(token.credentials)
+        return User(
+            username=user_data.get("uid") or user_data.get("sub"),
+            email=user_data.get("email", ""),
+            full_name=user_data.get("name", ""),
+            role=user_data.get("role", "user"),
+        )
     except HTTPException:
         return None
 
