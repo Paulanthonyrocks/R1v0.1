@@ -1,49 +1,42 @@
-## [Task Description] - (2025-08-27)
+## Refactor WebSocket JSON Decoding and Error Handling - (2025-11-20)
 
 **Summary:**
-Resolved the issue where video processing for sample streams was not starting. This involved fixing service initialization errors and ensuring the sample video path was correctly identified and processed by the FeedManager.
+Addressed recurring `json.JSONDecodeError` warnings in WebSocket connections by refactoring the message reception logic in `ws.py`. The changes ensure proper client disconnection and improved debugging information when malformed JSON messages are received.
 
 **Key Activities:**
-- Diagnosed initial startup errors related to `connection_manager_instance` and `FeedManager` not being properly initialized or accessed in `backend/app/main.py`.
-- Corrected the `startup_event` in `backend/app/main.py` to ensure `ConnectionManager` and `FeedManager` instances are correctly retrieved after `initialize_services` is called.
-- Identified and fixed a logic error in `_initialize_available_feeds` within `backend/app/services/feed_manager.py` that prevented the `sample_video` path from being correctly added to the list of available feeds.
+- Modified `backend/app/models/websocket.py` to add `__INTERNAL_PING` to `WebSocketMessageTypeEnum` for better schema completeness, although it was already skipped in processing.
+- Refactored `websocket_endpoint` in `backend/app/routers/ws.py` to explicitly handle `json.JSONDecodeError`, `WebSocketDisconnect`, and `RuntimeError` during message reception.
+- Introduced `websocket.receive_text()` followed by `json.loads()` to allow logging of raw malformed data for debugging.
+- Ensured `connection_manager.disconnect(client_id)` is called explicitly upon JSON decoding failure or unexpected disconnections.
 
 **Changes Made:**
 - **Files Modified:**
-    - `backend/app/main.py`: Removed duplicate import, updated `startup_event` to correctly retrieve `FeedManager` and `AnalyticsService` instances.
-    - `backend/app/services/services.py`: Modified `initialize_services` to `await` the `initialize_feed_manager` call.
-    - `backend/app/services/feed_manager.py`: Corrected the logic in `_initialize_available_feeds` to ensure `sample_video` is always added to the list of available feeds if configured.
+    - `backend/app/models/websocket.py`: Added `__INTERNAL_PING` to `WebSocketMessageTypeEnum`.
+    - `backend/app/routers/ws.py`: Refactored `websocket_endpoint` to improve JSON decoding error handling and client disconnection logic.
 
 **Dependencies & Environment:**
-- No new dependencies added.
-- Existing environment used.
+- No new dependencies were added.
 
 **Technical Decisions:**
-- Prioritized fixing service initialization errors as they were blocking any further processing.
-- Ensured proper asynchronous function calls (`await`) for service initialization to prevent `NoneType` errors.
-- Addressed subtle logic in `_initialize_available_feeds` to correctly parse and utilize the `sample_video` configuration, ensuring robust sample feed detection.
+- Switched from `websocket.receive_json()` to `websocket.receive_text()` followed by `json.loads()` to enable logging of raw message content upon JSON decoding errors. This provides crucial diagnostic information for identifying the source of malformed messages.
+- Explicitly calling `connection_manager.disconnect(client_id)` in all disconnection paths ensures that the connection manager accurately reflects active connections, preventing orphaned entries.
 
 **Current Status:**
-- ✅ Video processing for sample streams is now starting and running correctly.
-- ✅ Application services initialize without errors.
-- ✅ Sample video is correctly identified and processed.
+- ✅ Changes implemented and verified locally.
 
 **Next Steps:**
-- Monitor application stability and performance with the video processing running.
-- Investigate any new issues that may arise during prolonged operation.
+- Monitor backend logs for occurrences of `json.JSONDecodeError` to confirm the effectiveness of the logging improvements and to identify any client-side issues causing malformed JSON.
 
 **Open Questions/Challenges:**
-- The `FrameReader` still reports `cv2.read() returned False` and `Max read fails reached` errors, but the processing continues. This might indicate a non-critical issue with the video file itself (e.g., reaching end of stream) or a minor hiccup in reading. This should be monitored but is not blocking core functionality.
+- The root cause of the malformed JSON messages from clients is still unknown. Further monitoring with the improved logging will be necessary to diagnose.
 
 **Quality Assurance Checklist:**
-- [x] TypeScript compilation: N/A (backend changes)
-- [x] Linting issues: No new violations introduced.
-- [x] Test coverage: N/A (no new tests written, but existing functionality verified via logs)
-- [x] Build time: N/A
-- [x] Bundle size: N/A
-- [x] Accessibility: N/A
+- [ ] TypeScript compilation: ✅ (N/A for backend Python changes)
+- [ ] Linting issues: 0 new violations (Ran `ruff check backend/` - 0 issues)
+- [ ] Test coverage: N/A (No new tests written for this specific fix, as it's error handling for unexpected input. Existing tests should still pass.)
+- [ ] Build time: N/A
+- [ ] Bundle size: N/A
+- [ ] Accessibility: N/A
 
 **Performance/Quality Metrics:**
-- Application now starts successfully.
-- Video frames are being processed and vehicles initialized.
-- No critical errors observed in recent logs related to service startup or feed processing.
+- Linting Issues: 0 resolved (No new issues introduced)

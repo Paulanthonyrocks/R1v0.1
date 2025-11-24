@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { AlertData, FeedStatusData } from '@/lib/types';
-import { WebSocketClient, WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
-import { TokenManager } from '@/lib/auth/TokenManager';
+import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
+import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
 interface VehicleData {
     x1: number;
@@ -36,18 +36,17 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     stopFeed: (feedId: string) => void,
     startWebSocket: () => void
 } => {
-    const webSocketClientRef = useRef<WebSocketClient | null>(null);
+    const client = useWebSocket();
     const [kpis, setKpis] = useState<KPIData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     // const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
-    const [isConnected, setIsConnected] = useState(false);
-    const [isReady, setIsReady] = useState(false);
+    const [isConnected, setIsConnected] = useState(client.isConnected());
+    const [isReady, setIsReady] = useState(client.isConnected());
     const [error, setError] = useState<string | null>(null);
     const hasRequestedInitialFeeds = useRef(false);
 
     const sendMessage = useCallback((action: string, payload?: object): boolean => {
-        const client = webSocketClientRef.current;
         if (client && client.isConnected()) {
             try {
                 client.send({ type: action as WebSocketMessageType, data: payload });
@@ -59,61 +58,45 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         }
         console.warn('WebSocket not connected. Message not sent:', { action, payload });
         return false;
-    }, []);
-
-    const connect = useCallback(async () => {
-        if (!webSocketClientRef.current) {
-            const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
-            webSocketClientRef.current = new WebSocketClient(wsUrl);
-            console.log('New WebSocket client created.');
-        }
-        const client = webSocketClientRef.current;
-
-        if (client.isConnected() || client.getConnectionState() === 'connecting') {
-            if (client.isConnected() && !hasRequestedInitialFeeds.current) {
-                console.log("WebSocket already connected, requesting initial feed statuses.");
-                sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
-                hasRequestedInitialFeeds.current = true;
-            }
-            return;
-        }
-
-        try {
-            const currentToken = TokenManager.getInstance().getCurrentToken();
-            if (currentToken) {
-                await client.connect(currentToken);
-            } else {
-                console.warn('No auth token for WebSocket, will wait for token update.');
-            }
-        } catch (error) {
-            setError(error instanceof Error ? error.message : 'Connection failed');
-        }
-    }, [sendMessage]);
+    }, [client]);
 
     const startWebSocket = useCallback(() => {
-        connect();
-    }, [connect]);
+        // Connection is managed by WebSocketProvider
+        // This is kept for compatibility, but acts as a no-op regarding connection initiation
+        if (!client.isConnected()) {
+             console.log("startWebSocket called. Client state:", client.getConnectionState());
+        }
+    }, [client]);
 
     useEffect(() => {
-        if (!webSocketClientRef.current) {
-            const wsUrl = new URL('/api/v1/ws', process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').toString();
-            webSocketClientRef.current = new WebSocketClient(wsUrl);
-            console.log('New WebSocket client created for subscriptions.');
-        }
-        const client = webSocketClientRef.current;
         const subscriptions: (() => void)[] = [];
 
-        console.log('Setting up WebSocket subscriptions.');
+        const updateConnectionState = () => {
+            const connected = client.isConnected();
+            setIsConnected(connected);
+            setIsReady(connected);
+            return connected;
+        };
+
+        const connected = updateConnectionState();
+        
+        if (connected && !hasRequestedInitialFeeds.current) {
+            console.log("WebSocket already connected, requesting initial feed statuses.");
+            client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
+            hasRequestedInitialFeeds.current = true;
+        }
+
+        console.log('Setting up WebSocket subscriptions in useRealtimeUpdates.');
 
         subscriptions.push(client.onStatusChange((status, message) => {
             console.log(`WebSocket status: ${status}`, message);
-            const connected = status === 'connected';
-            setIsConnected(connected);
-            setIsReady(connected);
+            const isNowConnected = status === 'connected';
+            setIsConnected(isNowConnected);
+            setIsReady(isNowConnected);
 
-            if (connected && !hasRequestedInitialFeeds.current) {
-                console.log("WebSocket connected and ready, requesting initial feed statuses.");
-                sendMessage(WebSocketMessageType.GET_INITIAL_FEED_STATUSES, {});
+            if (isNowConnected) {
+                console.log("WebSocket connected (event), requesting initial feed statuses.");
+                client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
                 hasRequestedInitialFeeds.current = true;
             }
         }));
@@ -156,13 +139,10 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         return () => {
             console.log('Cleaning up WebSocket subscriptions. In React Strict Mode, this runs on unmount.');
             subscriptions.forEach(unsubscribe => unsubscribe());
-            hasRequestedInitialFeeds.current = false;
+            // Do NOT disconnect client here
+            hasRequestedInitialFeeds.current = false; 
         };
-    }, [sendMessage]);
-
-    useEffect(() => {
-        console.log("Internal feeds state updated:", JSON.stringify(feeds));
-    }, [feeds]);
+    }, [client]);
 
     const subscribeToFeed = useCallback((feedId: string) => {
         console.log(`Requesting to subscribe to feed: ${feedId}`);
@@ -179,6 +159,11 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         sendMessage(WebSocketMessageType.STOP_FEED, { feed_id: feedId });
     }, [sendMessage]);
 
+    const restartFeed = useCallback((feedId: string) => {
+        console.log(`Requesting to restart feed: ${feedId}`);
+        sendMessage(WebSocketMessageType.RESTART_FEED, { feed_id: feedId });
+    }, [sendMessage]);
+
     return { 
         kpis, 
         alerts, 
@@ -191,6 +176,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         subscribeToFeed,
         startFeed,
         stopFeed,
+        restartFeed,
         startWebSocket
     };
 };

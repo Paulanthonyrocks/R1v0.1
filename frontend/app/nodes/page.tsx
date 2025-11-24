@@ -17,16 +17,13 @@ const NodesPage: React.FC = () => {
     // nodeCongestionData,
     isConnected,
     isReady,
-    error: wsError,
-    startWebSocket
+    error: wsError
   } = useRealtimeUpdates();
 
   useEffect(() => {
-    if (!isConnected) {
-        console.log("NodesPage: Attempting to start WebSocket connection.");
-        startWebSocket();
-    }
-  }, [startWebSocket, isConnected]);
+    // Connection is handled by WebSocketProvider.
+    console.log(`NodesPage: WebSocket connection status: ${isConnected ? 'Connected' : 'Disconnected'}`);
+  }, [isConnected]);
 
   // const filteredNodes = nodeCongestionData?.filter(node =>
   //   node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||

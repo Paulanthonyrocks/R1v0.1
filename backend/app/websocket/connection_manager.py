@@ -3,7 +3,6 @@ import asyncio
 import logging
 from typing import Dict, Optional, List, Set
 from fastapi import WebSocket
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +21,8 @@ class ConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.client_id_to_user_id: Dict[str, str] = {}
         self.user_id_to_client_ids: Dict[str, List[str]] = {}
-        self.topic_subscriptions: Dict[str, Set[str]] = {}  # New: topic -> set of client_ids
-        self.client_id_to_topics: Dict[str, Set[str]] = {}  # New: client_id -> set of topics
+        self.topic_subscriptions: Dict[str, Set[str]] = {}
+        self.client_id_to_topics: Dict[str, Set[str]] = {}
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
         self.ping_interval = ping_interval
@@ -57,9 +56,7 @@ class ConnectionManager:
             logger.warning(
                 f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
             )
-            await websocket.close(
-                code=4000, reason="Connection limit exceeded"
-            )
+            await websocket.close(code=4000, reason="Connection limit exceeded")
             return
 
         await websocket.accept()
@@ -69,7 +66,7 @@ class ConnectionManager:
         if user_id not in self.user_id_to_client_ids:
             self.user_id_to_client_ids[user_id] = []
         self.user_id_to_client_ids[user_id].append(client_id)
-        self.client_id_to_topics[client_id] = set() # Initialize topics for new client
+        self.client_id_to_topics[client_id] = set()
 
         logger.info(
             f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
@@ -78,7 +75,9 @@ class ConnectionManager:
 
     async def disconnect(self, client_id: str):
         if client_id in self.active_connections:
+            # Remove from active connections first to prevent further sends
             del self.active_connections[client_id]
+            
             user_id = self.client_id_to_user_id.pop(client_id, None)
 
             if user_id and user_id in self.user_id_to_client_ids:
@@ -87,11 +86,14 @@ class ConnectionManager:
                 if not self.user_id_to_client_ids[user_id]:
                     del self.user_id_to_client_ids[user_id]
             
-            # Remove client from all topic subscriptions
+            # Clean up subscriptions
             if client_id in self.client_id_to_topics:
-                for topic in list(self.client_id_to_topics[client_id]): # Iterate over a copy
+                topics = list(self.client_id_to_topics[client_id])
+                for topic in topics:
                     await self.unsubscribe_from_topic(client_id, topic)
-                del self.client_id_to_topics[client_id]
+                
+                if client_id in self.client_id_to_topics:
+                    del self.client_id_to_topics[client_id]
 
             logger.info(
                 f"WebSocket connection closed: client_id={client_id}. "
@@ -100,21 +102,36 @@ class ConnectionManager:
 
     async def send_personal_message(self, message: str, client_id: str):
         if client_id in self.active_connections:
-            await self.active_connections[client_id].send_text(message)
+            try:
+                await self.active_connections[client_id].send_text(message)
+            except Exception:
+                # Sockets can close unexpectedly; log quietly and cleanup
+                logger.info(f"Failed to send to {client_id}, removing dead connection.")
+                await self.disconnect(client_id)
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
+        # Iterate over a copy to allow modification (disconnection) during iteration
+        for client_id, connection in list(self.active_connections.items()):
+            try:
+                await connection.send_text(message)
+            except Exception:
+                # If sending fails, assume the client is gone and clean up immediately
+                # This prevents "Unexpected ASGI message" logs on subsequent frames
+                logger.info(f"Broadcasting failed for {client_id}, removing dead connection.")
+                await self.disconnect(client_id)
 
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
-        for client_id in client_ids:
+        for client_id in list(client_ids): # Iterate copy
             if client_id in self.active_connections:
-                await self.active_connections[client_id].send_text(message)
+                try:
+                    await self.active_connections[client_id].send_text(message)
+                except Exception:
+                    logger.info(f"Failed to send to user {user_id} (client {client_id}), removing connection.")
+                    await self.disconnect(client_id)
 
     async def subscribe_to_topic(self, client_id: str, topic: str):
         if client_id not in self.active_connections:
-            logger.warning(f"Client {client_id} not active. Cannot subscribe to topic {topic}.")
             return
 
         if topic not in self.topic_subscriptions:
@@ -137,16 +154,16 @@ class ConnectionManager:
 
     async def broadcast_to_topic(self, message: str, topic: str):
         if topic in self.topic_subscriptions:
-            for client_id in list(self.topic_subscriptions[topic]): # Iterate over a copy to allow modification during iteration
+            for client_id in list(self.topic_subscriptions[topic]):
                 if client_id in self.active_connections:
                     try:
                         await self.active_connections[client_id].send_text(message)
-                    except Exception as e:
-                        logger.error(f"Failed to send message to client {client_id} on topic {topic}: {e}")
-                        # Consider disconnecting client if send fails consistently
+                    except Exception:
+                        logger.info(f"Topic broadcast failed for {client_id}, removing subscription/connection.")
+                        await self.disconnect(client_id)
                 else:
-                    logger.warning(f"Client {client_id} in topic {topic} is no longer active. Removing subscription.")
-                    self.topic_subscriptions[topic].remove(client_id)
+                    # Cleanup stale subscription if client is already gone from active_connections
+                    self.topic_subscriptions[topic].discard(client_id)
                     if client_id in self.client_id_to_topics:
                         self.client_id_to_topics[client_id].discard(topic)
 
@@ -154,38 +171,32 @@ class ConnectionManager:
         while not self._shutdown_event.is_set():
             try:
                 await asyncio.sleep(self.ping_interval)
-                disconnected_clients = []
-                for client_id, connection in self.active_connections.items():
+                for client_id, connection in list(self.active_connections.items()):
                     if connection.client_state == 2: # WebSocketState.DISCONNECTED
-                        disconnected_clients.append(client_id)
+                        await self.disconnect(client_id)
                         continue
                     try:
                         await asyncio.wait_for(
-                            connection.send_text("ping"), timeout=30
+                            connection.send_text("ping"), timeout=5
                         )
-                    except (asyncio.TimeoutError, ConnectionError, RuntimeError):
-                        logger.warning(
-                            f"Client {client_id} failed to respond to ping or is already closed. Marking for disconnection."
-                        )
-                        disconnected_clients.append(client_id)
-                
-                for client_id in disconnected_clients:
-                    await self.disconnect(client_id)
-
+                    except Exception:
+                        await self.disconnect(client_id)
             except asyncio.CancelledError:
-                logger.info("Ping task cancelled.")
                 break
             except Exception as e:
-                logger.error(f"Error in ping task: {e}", exc_info=True)
+                logger.error(f"Error in ping task: {e}")
 
     async def shutdown(self):
         logger.info("Shutting down ConnectionManager...")
         self._shutdown_event.set()
         for ws in self.active_connections.values():
-            await ws.close()
+            try:
+                await ws.close()
+            except Exception:
+                pass
         self.active_connections.clear()
         self.client_id_to_user_id.clear()
         self.user_id_to_client_ids.clear()
-        self.topic_subscriptions.clear() # Clear topic subscriptions on shutdown
-        self.client_id_to_topics.clear() # Clear client topics on shutdown
+        self.topic_subscriptions.clear()
+        self.client_id_to_topics.clear()
         logger.info("All WebSocket connections closed.")

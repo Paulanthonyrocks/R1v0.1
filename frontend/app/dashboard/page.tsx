@@ -21,41 +21,8 @@ import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 // import { BackendCongestionNodeData, FeedStatusData } from '@/lib/types';
 
 const DashboardPage: React.FC = () => {
-    const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed, startFeed, stopFeed, startWebSocket } = useRealtimeUpdates();
-    const hasSubscribedRef = useRef(false);
-    const [isFeedActive, setIsFeedActive] = useState(false);
-  
-    // Find the first sample feed to display
+    const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed, startFeed, stopFeed } = useRealtimeUpdates();
     const sampleFeed = feeds.length > 0 ? feeds[0] : null;
-  
-    useEffect(() => {
-        startWebSocket();
-    }, [startWebSocket]);
-
-    useEffect(() => {
-      if (feeds.length > 0 && isConnected && isReady && !hasSubscribedRef.current) {
-        if (sampleFeed?.feed_id) {
-          console.log("DashboardPage: Subscribing to feed:", sampleFeed.feed_id);
-          subscribeToFeed(sampleFeed.feed_id);
-          hasSubscribedRef.current = true;
-        }
-      }
-    }, [feeds, isConnected, isReady, subscribeToFeed, sampleFeed]);
-  
-    const handleToggleFeed = () => {
-      if (sampleFeed?.feed_id) {
-        if (isFeedActive) {
-          console.log("Stopping feed:", sampleFeed.feed_id);
-          stopFeed(sampleFeed.feed_id);
-        } else {
-          console.log("Starting feed:", sampleFeed.feed_id);
-          startFeed(sampleFeed.feed_id);
-        }
-        setIsFeedActive(!isFeedActive);
-      } else {
-        console.error("Cannot start feed: feed ID is missing.");
-      }
-    };
 
   // Helper functions to determine status icons
   const getCongestionStatusIcon = (val: number | undefined) => {
@@ -191,9 +158,7 @@ const DashboardPage: React.FC = () => {
               {isReady && sampleFeed ? (
                 <div className="inline-block min-w-[320px] max-w-[480px] w-full align-top">
                   <SurveillanceFeed feed={sampleFeed} />
-                  <Button onClick={handleToggleFeed} className="mt-2">
-                    {isFeedActive ? 'Stop Feed' : 'Start Feed'}
-                  </Button>
+
                 </div>
               ) : (
                 <p className="text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">

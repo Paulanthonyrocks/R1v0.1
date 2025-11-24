@@ -41,7 +41,8 @@ export enum WebSocketMessageType {
     SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
     GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses',
     START_FEED = 'start_feed',
-    STOP_FEED = 'stop_feed'
+    STOP_FEED = 'stop_feed',
+    RESTART_FEED = 'restart_feed'
 }
 
 export interface WebSocketMessage<T = unknown> {
@@ -200,7 +201,14 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 const clientId = this.requiresClientId ? getOrCreateClientId() : null;
                 const url = new URL(this.url);
-                if (clientId) url.pathname += `/${clientId}`;
+
+                if (clientId) {
+                    // Safely join path segments
+                    url.pathname = [url.pathname.replace(/\/$/, ''), clientId]
+                        .filter(Boolean)
+                        .join('/');
+                }
+                
                 url.searchParams.set('token', token as string);
                 
                 console.log('Attempting to connect to WebSocket:', url.toString());

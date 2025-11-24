@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, forwardRef } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2, RotateCw, Settings } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Play, Square } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
@@ -11,7 +11,7 @@ import StreamOverlayControls from './StreamOverlayControls';
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
-    const { startFeed, stopFeed, isConnected: isSocketConnected, /*kpis*/ } = useRealtimeUpdates();
+    const { startFeed, stopFeed, restartFeed, isConnected: isSocketConnected, /*kpis*/ } = useRealtimeUpdates();
     const { token } = useAuth();
     const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps } = useVideoSocket(feed_id, token);
     const [isToggling, setIsToggling] = useState<boolean>(false);
@@ -46,7 +46,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     }, [frameData, isLive, drawFrame]);
 
     const handleStartFeed = () => {
-        if (isToggling || !isSocketConnected) return;
+        if (isToggling) return;
         if (!feed_id) {
             console.warn('Cannot start feed: feed ID is missing.');
             return;
@@ -56,7 +56,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     };
 
     const handleStopFeed = () => {
-        if (isToggling || !isSocketConnected) return;
+        if (isToggling) return;
         if (!feed_id) {
             console.warn('Cannot stop feed: feed ID is missing.');
             return;
@@ -65,13 +65,14 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         stopFeed(feed_id);
     };
 
-    const handleRefreshFeed = () => {
-        if (!isSocketConnected) {
-            console.warn('Refresh prevented: Not connected to WebSocket');
+    const handleRestartFeed = () => {
+        if (!feed_id) {
+            console.warn('Cannot restart feed: feed ID is missing.');
             return;
         }
-        console.log(`Sending refresh_feed for ${feed_id}`);
-        // sendMessage('refresh_feed', { feed_id: feed_id });
+        setIsToggling(true);
+        console.log(`Sending restart_feed for ${feed_id}`);
+        restartFeed(feed_id);
     };
 
     return (
@@ -129,15 +130,34 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         <span>AVG SPEED: {metrics.avg_speed ? metrics.avg_speed.toFixed(1) : '--'} KM/H</span>
                     </div>
                 )}
+
                 {!isToggling && !isLoading && (
-                    <button
-                        className="absolute bottom-1.5 left-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
-                        onClick={(e) => { e.stopPropagation(); handleRefreshFeed(); }}
-                        title="Refresh Feed"
-                    >
-                        <RotateCw className="h-4 w-4" />
-                    </button>)
-                }
+                    <div className="absolute bottom-1.5 left-1.5 flex gap-2 z-20">
+                        <button
+                            onClick={(e) => { e.stopPropagation(); handleRestartFeed(); }}
+                            title="Restart Feed"
+                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none"
+                        >
+                            <RotateCw className="h-4 w-4" />
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); handleStartFeed(); }}
+                            disabled={isToggling || status === 'running' || status === 'starting'}
+                            title="Start Feed"
+                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none"
+                        >
+                            <Play className="h-4 w-4" />
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); handleStopFeed(); }}
+                            disabled={isToggling || status === 'stopped' || status === 'error'}
+                            title="Stop Feed"
+                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none"
+                        >
+                            <Square className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
                 {!isToggling && !isLoading && !error && (
                     <button
                         className="absolute top-1.5 right-1.5 text-lcd-bg group-hover:text-lcd-text z-20 p-1 rounded-none bg-black/50 backdrop-blur-sm"
@@ -164,23 +184,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
             <CardContent className="p-2 rounded-none">
                 <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>
                 <p className="text-[10px] text-lcd-bg group-hover:text-lcd-text transition-colors truncate tracking-normal font-lcd matrix-glow">{component_node}</p>
-                <div className="flex gap-2 mt-2">
-                    <button
-                        onClick={(e) => { e.stopPropagation(); handleStartFeed(); }}
-                        disabled={isToggling || status === 'running' || status === 'starting'}
-                        className="flex-1 px-2 py-1 text-xs font-semibold text-white bg-green-600 rounded-none disabled:bg-gray-500"
-                    >
-                        Start Feed
-                    </button>
-                    <button
-                        onClick={(e) => { e.stopPropagation(); handleStopFeed(); }}
-                        disabled={isToggling || status === 'stopped' || status === 'error'}
-                        className="flex-1 px-2 py-1 text-xs font-semibold text-white bg-red-600 rounded-none disabled:bg-gray-500"
-                    >
-                        Stop Feed
-                    </button>
-                </div>
-            </CardContent>
+                </CardContent>
         </Card>
     );
 });

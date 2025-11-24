@@ -255,6 +255,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
     START_FEED = "start_feed"
     STOP_FEED = "stop_feed"
+    INTERNAL_PING = "__internal_ping"
+    INTERNAL_PONG = "__internal_pong"
 
 
 class WebSocketMessage(BaseModel):

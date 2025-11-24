@@ -13,8 +13,13 @@ export const useWebSocket = () => {
     return context;
 };
 
+const getWsUrl = (path: string) => {
+    const baseUrl = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').replace(/\/$/, '');
+    return `${baseUrl}${path}`;
+}
+
 // Define the base URL for the WebSocket connection
-const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/api/v1/ws';
+const WS_BASE_URL = getWsUrl('/api/v1/ws');
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { token } = useAuth();
@@ -26,19 +31,23 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, []);
 
     useEffect(() => {
+        // Cleanup on unmount
+        return () => {
+            console.log("WebSocketProvider unmounting, destroying WebSocket client");
+            webSocketClient.destroy();
+        };
+    }, [webSocketClient]);
+
+    useEffect(() => {
         if (token) {
             console.log("Token available, connecting WebSocket");
-            webSocketClient.connect(token);
+            webSocketClient.connect(token).catch(error => {
+                console.error("WebSocket connection error:", error);
+            });
         } else {
             console.log("No token, disconnecting WebSocket");
             webSocketClient.disconnect();
         }
-
-        // Cleanup on unmount
-        return () => {
-            console.log("WebSocketProvider unmounting, disconnecting WebSocket");
-            webSocketClient.disconnect();
-        };
     }, [token, webSocketClient]);
 
     return (

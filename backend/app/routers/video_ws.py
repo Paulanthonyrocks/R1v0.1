@@ -16,6 +16,7 @@ async def video_websocket_endpoint(
     stream_id: str,
     user: User = Depends(get_current_user_ws),
 ):
+    await websocket.accept()
     if not user:
         logger.warning("video-ws: WebSocket connection without authenticated user.")
         await websocket.close(code=1008)

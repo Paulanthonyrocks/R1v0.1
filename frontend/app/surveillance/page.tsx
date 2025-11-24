@@ -14,16 +14,13 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 
 const SurveillancePage = () => {
   
-  const { feeds, isConnected, isReady, startWebSocket } = useRealtimeUpdates();
+  const { feeds, isConnected, isReady } = useRealtimeUpdates();
 
   useEffect(() => {
-    // Start WebSocket connection on component mount
-    if (!isConnected) { // Optionally check if already connected if hook supports it
-        console.log("SurveillancePage: Attempting to start WebSocket connection.");
-        startWebSocket();
-    }
-    // No explicit cleanup needed here as the hook manages its own lifecycle
-  }, [startWebSocket, isConnected]);
+    // Connection is handled by WebSocketProvider.
+    // This effect can be used to react to connection status changes.
+    console.log(`SurveillancePage: WebSocket connection status: ${isConnected ? 'Connected' : 'Disconnected'}`);
+  }, [isConnected]);
 
   const renderContent = () => {
     if (!isReady || !isConnected) {
