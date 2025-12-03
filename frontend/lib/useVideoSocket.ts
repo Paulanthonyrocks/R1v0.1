@@ -26,8 +26,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
-  const frameTimesRef = useRef<number[]>([]); // To store last N frame durations
-  const FPS_SMOOTHING_WINDOW_SIZE = 10; // Number of frames to average over
+  const smoothedFrameTimeRef = useRef<number>(0); // Using EMA for frame time
+  const FPS_EMA_ALPHA = 0.1; // Exponential Moving Average alpha. Lower is smoother, higher is more responsive.
+
 
   const handleFrame = useCallback((data: VideoFrameMessage) => {
     if (data.feed_id && data.feed_id !== streamId) return;
@@ -59,13 +60,18 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const now = performance.now();
     if (lastFrameTimeRef.current > 0) {
         const frameTime = now - lastFrameTimeRef.current;
-        frameTimesRef.current.push(frameTime);
-        if (frameTimesRef.current.length > FPS_SMOOTHING_WINDOW_SIZE) {
-            frameTimesRef.current.shift(); // Remove oldest frame time
+
+        // Use Exponential Moving Average to smooth frame time
+        if (smoothedFrameTimeRef.current === 0) {
+            smoothedFrameTimeRef.current = frameTime;
+        } else {
+            smoothedFrameTimeRef.current = (FPS_EMA_ALPHA * frameTime) + ((1 - FPS_EMA_ALPHA) * smoothedFrameTimeRef.current);
         }
 
-        const averageFrameTime = frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
-        setFrameRate(1000 / averageFrameTime);
+        // Update FPS only if smoothedFrameTime is positive to avoid division by zero
+        if (smoothedFrameTimeRef.current > 0) {
+            setFrameRate(1000 / smoothedFrameTimeRef.current);
+        }
     }
     lastFrameTimeRef.current = now;
   }, [streamId]);

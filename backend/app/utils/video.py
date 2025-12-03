@@ -41,9 +41,11 @@ class FrameReader:
 
         # Data
         self.frames_queue = Queue(maxsize=max_queue_size)
-        self.frame_processed_count = 0
+        self.frames_processed_count = 0
         self.end_of_video = False
         self.start_time: Optional[float] = None
+        self.frame_index = -1
+        self.frames_read_count = 0
         
         # Start
         self._start_thread()
@@ -194,6 +196,7 @@ class FrameReader:
             "resolution": f"{self.frame_width}x{self.frame_height}",
             "target_fps": self.target_fps,
             "frames_read": self.frames_read_count,
+            "frames_processed_count": self.frames_processed_count,
             "frames_queued": self.frames_queue.qsize(),
             "alive": self.thread.is_alive() if self.thread else False,
         }
