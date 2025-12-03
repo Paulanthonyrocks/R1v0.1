@@ -35,10 +35,14 @@ def draw_lines(img: np.ndarray, lines: List[np.ndarray], color: Tuple[int, int, 
             cv2.line(line_img, (x1, y1), (x2, y2), color, thickness)
     return cv2.addWeighted(img, 0.8, line_img, 1.0, 0.0)
 
-def process_frame_for_lanes(frame: np.ndarray, config: Dict[str, Any]) -> Optional[List[Tuple[int, int, int, int]]]:
+def process_frame_for_lanes(frame: Optional[np.ndarray], config: Dict[str, Any]) -> Optional[List[Tuple[int, int, int, int]]]:
     """
     Processes a single frame to detect lane lines.
     """
+    if frame is None or frame.size == 0:
+        logger.warning("Received empty or None frame for lane detection.")
+        return None
+
     lane_cfg = config.get("lane_detection", {})
     
     # 1. Grayscale

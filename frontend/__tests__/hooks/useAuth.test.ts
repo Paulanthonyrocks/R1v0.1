@@ -21,7 +21,7 @@ const mockTokenManagerInstance = {
   getCurrentToken: jest.fn(),
   onTokenRefresh: jest.fn(),
 };
-(TokenManager as jest.Mock).getInstance = jest.fn().mockReturnValue(mockTokenManagerInstance);
+(TokenManager as unknown as { getInstance: jest.Mock }).getInstance = jest.fn().mockReturnValue(mockTokenManagerInstance);
 
 describe('useAuth Hook', () => {
   beforeEach(() => {

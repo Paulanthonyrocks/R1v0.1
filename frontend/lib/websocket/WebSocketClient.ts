@@ -39,10 +39,12 @@ export enum WebSocketMessageType {
     INTERNAL_PING = '__internal_ping',
     PING = 'ping',
     SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
+    UNSUBSCRIBE_FROM_FEED = 'unsubscribe_from_feed',
     GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses',
     START_FEED = 'start_feed',
     STOP_FEED = 'stop_feed',
-    RESTART_FEED = 'restart_feed'
+    RESTART_FEED = 'restart_feed',
+    INTERNAL_PONG = '__internal_pong'
 }
 
 export interface WebSocketMessage<T = unknown> {
@@ -323,7 +325,7 @@ export class WebSocketClient implements IWebSocketClient {
             }
             try {
                 const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
-                if (message.type === WebSocketMessageType.PONG) {
+                if (message.type === WebSocketMessageType.PONG || message.type === WebSocketMessageType.INTERNAL_PONG) {
                     this.lastPongTime = Date.now();
                     return;
                 }

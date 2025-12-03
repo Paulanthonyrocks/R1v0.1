@@ -22,7 +22,27 @@ import SurveillanceFeed from '@/components/dashboard/SurveillanceFeed';
 
 const DashboardPage: React.FC = () => {
     const { kpis, alerts, feeds, isConnected, isReady, error, subscribeToFeed, startFeed, stopFeed } = useRealtimeUpdates();
-    const sampleFeed = feeds.length > 0 ? feeds[0] : null;
+  const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
+
+  // Effect to manage selected feed stability
+  useEffect(() => {
+    if (feeds.length > 0) {
+      // If no feed is selected, select the first one
+      if (!selectedFeedId) {
+        setSelectedFeedId(feeds[0].feed_id);
+      } else {
+        // Verify the currently selected feed still exists
+        const feedExists = feeds.find(f => f.feed_id === selectedFeedId);
+        if (!feedExists) {
+          // If it's gone, switch to the first available one
+          setSelectedFeedId(feeds[0].feed_id);
+        }
+      }
+    }
+  }, [feeds, selectedFeedId]);
+
+  // Derive the actual feed object based on the stable ID
+  const sampleFeed = feeds.find(f => f.feed_id === selectedFeedId) || null;
 
   // Helper functions to determine status icons
   const getCongestionStatusIcon = (val: number | undefined) => {
@@ -55,10 +75,10 @@ const DashboardPage: React.FC = () => {
     );
   }
 
-  const congestionIndex = null;
-  const activeIncidents = null;
-  const averageSpeed = kpis?.avg_speed;
-  const totalFlow = kpis?.vehicle_count;
+  const congestionIndex = kpis?.congestion_index ?? null;
+  const activeIncidents = kpis?.active_incidents_count ?? null;
+  const averageSpeed = kpis?.average_speed_kmh ?? null; // Removed fallback to kpis?.avg_speed
+  const totalFlow = kpis?.total_flow ?? null; // Removed fallback to kpis?.vehicle_count
 
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
@@ -103,7 +123,7 @@ const DashboardPage: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6 matrix-card">
             <StatCard
               title="Congestion Index"
-              value={`${congestionIndex ?? '--'}%`}
+              value={`${typeof congestionIndex === 'number' ? congestionIndex : '--'}%`}
               icon={Activity}
               statusIcon={getCongestionStatusIcon(typeof congestionIndex === 'number' ? congestionIndex : undefined)}
               change="N/A"
@@ -111,7 +131,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Average Speed"
-              value={`${averageSpeed ? averageSpeed.toFixed(2) : '--'} km/h`}
+              value={`${typeof averageSpeed === 'number' ? averageSpeed.toFixed(2) : '--'} km/h`}
               icon={Zap}
               statusIcon={getSpeedStatusIcon(typeof averageSpeed === 'number' ? averageSpeed : undefined)}
               change="N/A"
@@ -119,7 +139,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Active Incidents"
-              value={`${activeIncidents ?? '--'}`}
+              value={`${typeof activeIncidents === 'number' ? activeIncidents : '--'}`}
               icon={AlertTriangle}
               statusIcon={getIncidentStatusIcon(typeof activeIncidents === 'number' ? activeIncidents : undefined)}
               change="N/A"
@@ -127,7 +147,7 @@ const DashboardPage: React.FC = () => {
             />
             <StatCard
               title="Total Flow"
-              value={`${totalFlow ?? '--'} vehicles/hr`}
+              value={`${typeof totalFlow === 'number' ? totalFlow : '--'} vehicles/hr`}
               icon={Users}
               change="N/A"
               changeText="Change data not available"

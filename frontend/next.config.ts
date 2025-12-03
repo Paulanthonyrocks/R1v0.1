@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   experimental: {
     // This allows the specific cloud workstation domain you are using
+    // @ts-ignore
     allowedDevOrigins: [
       "http://localhost:3000",
       "https://*.cloudworkstations.dev",

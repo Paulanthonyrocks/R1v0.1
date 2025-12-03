@@ -3,268 +3,190 @@ from typing import Optional, Dict, Any, Union, List
 from datetime import datetime, timezone
 import enum
 
-from app.models.alerts import Alert
-from app.models.signals import SignalState
-from app.models.feeds import FeedStatusData  # For feed status updates
+# Ensure these imports exist in your project structure
+# or replace them with generic Dicts if those files aren't created yet.
+try:
+    from app.models.alerts import Alert
+    from app.models.signals import SignalState
+    from app.models.feeds import FeedStatusData
+except ImportError:
+    # Fallback placeholders for standalone testing
+    class Alert(BaseModel):
+        id: str
+        severity: str
+        message: str
+        timestamp: datetime
 
+    class SignalState(BaseModel):
+        intersection_id: str
+        current_phase: str
+
+    class FeedStatusData(BaseModel):
+        feed_id: str
+        status: str
+        fps: Optional[float] = 0.0
 
 # --- Specific Payload Models ---
+
 class RealtimeMetricsUpdate(BaseModel):
     feed_id: str = Field(..., description="ID of the feed generating the metrics")
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="Timestamp of the metrics update (UTC)",
-    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metrics: Dict[str, Any] = Field(
         ...,
         description="Key-value pairs of metrics",
         example={"vehicle_count": 15, "avg_speed_kmh": 45.6},
     )
 
-
 class GlobalRealtimeMetrics(BaseModel):
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="Timestamp of the metrics update (UTC)",
-    )
-    metrics_source: Optional[str] = Field(
-        None,
-        description="Source of the metrics, e.g., 'FeedManagerGlobalKPIs', 'SystemOverall'",
-    )
-    congestion_index: Optional[float] = Field(
-        None,
-        example=45.5,
-        description="Overall congestion index for the monitored area",
-    )
-    average_speed_kmh: Optional[float] = Field(
-        None, example=30.2, description="Average speed across relevant feeds or areas"
-    )
-    active_incidents_count: Optional[int] = Field(
-        None, example=3, description="Current count of active incidents"
-    )
-    total_flow: Optional[int] = Field(
-        None,
-        example=1250,
-        description="Total vehicle flow (e.g., count) across all active feeds in the current interval",
-    )
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    metrics_source: Optional[str] = Field(None, description="Source of the metrics")
+    congestion_index: Optional[float] = Field(None, example=45.5)
+    average_speed_kmh: Optional[float] = Field(None, example=30.2)
+    active_incidents_count: Optional[int] = Field(None, example=3)
+    total_flow: Optional[int] = Field(None, example=1250)
     feed_statuses: Optional[Dict[str, int]] = Field(
-        None,
-        example={"running": 5, "stopped": 2, "error": 1},
-        description="Counts of feeds by status",
+        None, example={"running": 5, "stopped": 2, "error": 1}
     )
-    custom_metrics: Optional[Dict[str, Any]] = Field(
-        None, description="Flexible field for other global metrics"
-    )
-
+    custom_metrics: Optional[Dict[str, Any]] = None
 
 class NewAlertNotification(BaseModel):
-    alert_data: Alert  # Embed the full Alert model
-
+    alert_data: Alert
 
 class SignalStateUpdate(BaseModel):
-    signal_data: SignalState  # Embed the full SignalState model
-
+    signal_data: SignalState
 
 class FeedStatusUpdate(BaseModel):
-    feed_status_data: FeedStatusData  # Embed the full FeedStatusData model
-
+    feed_status_data: FeedStatusData
 
 class GeneralNotification(BaseModel):
-    message_type: str = Field(
-        ...,
-        example="system_maintenance_scheduled",
-        description="Type of general notification",
-    )
-    title: Optional[str] = Field(None, example="System Update")
-    message: str = Field(
-        ..., example="System will undergo maintenance tonight from 2 AM to 3 AM UTC."
-    )
-    severity: str = Field(
-        default="info",
-        example="info|warning|error",
-        description="Severity of the notification",
-    )
-    suggested_actions: Optional[List[str]] = Field(
-        None,
-        example=["Consider rerouting traffic.", "Dispatch emergency services."],
-        description="Optional list of suggested actions related to the notification.",
-    )
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
+    message_type: str = Field(..., example="system_maintenance_scheduled")
+    title: Optional[str] = None
+    message: str
+    severity: str = Field(default="info", pattern="^(info|warning|error)$")
+    suggested_actions: Optional[List[str]] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ErrorNotification(BaseModel):
-    error_code: Optional[str] = Field(None, example="E5001_FEED_CONNECTION_FAILED")
-    message: str = Field(..., example="Failed to connect to video feed XYZ.")
-    details: Optional[str] = Field(
-        None, description="Additional technical details about the error"
-    )
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
+    error_code: Optional[str] = None
+    message: str
+    details: Optional[str] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AlertStatusUpdatePayload(BaseModel):
-    alert_id: Union[int, str] = Field(
-        ..., description="ID of the alert that was updated."
-    )
-    status: str = Field(
-        ...,
-        example="acknowledged",
-        description="New status of the alert (e.g., 'acknowledged', 'dismissed', 'resolved').",
-    )
-    # Optional: include more details if needed by the frontend
-    # details: Optional[Dict[str, Any]] = Field(None, description="Additional details about the status update.")
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="Timestamp of when the status update occurred.",
-    )
-
-
-# For Node Congestion Updates via WebSocket
-class NodeCongestionUpdateData(BaseModel):
-    id: str = Field(..., description="Unique identifier for the node.")
-    name: str = Field(..., description="Display name for the node.")
-    latitude: float = Field(..., description="Latitude of the node.")
-    longitude: float = Field(..., description="Longitude of the node.")
-    congestion_score: Optional[float] = Field(
-        None, description="Calculated congestion score for the node (0-100)."
-    )
-    vehicle_count: Optional[int] = Field(
-        None, description="Number of vehicles detected at the node."
-    )
-    average_speed: Optional[float] = Field(
-        None, description="Average speed of vehicles at the node (km/h)."
-    )
+    alert_id: Union[int, str]
+    status: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    # Add other fields if needed, ensure consistency with NodeCongestionData in routers/analytics.py
 
+class NodeCongestionUpdateData(BaseModel):
+    id: str
+    name: str
+    latitude: float
+    longitude: float
+    congestion_score: Optional[float] = None
+    vehicle_count: Optional[int] = None
+    average_speed: Optional[float] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class NodeCongestionUpdatePayload(BaseModel):
-    nodes: List[NodeCongestionUpdateData] = Field(
-        ..., description="List of node congestion data updates."
-    )
+    nodes: List[NodeCongestionUpdateData]
 
-
-class UserSpecificConditionAlert(BaseModel):  # Renamed and adjusted
-    user_id: str = Field(
-        ..., description="The ID of the user this notification is for."
-    )
-    alert_type: str = Field(
-        ...,
-        example="predicted_congestion_on_usual_route",
-        description="Specific type of condition alert for the user.",
-    )  # Renamed from notification_type
-    title: str = Field(..., example="Congestion Alert on Your Route to Work")
-    message: str = Field(
-        ...,
-        example="Heads up! We're seeing unusual congestion on your typical route to work via Main St.",
-    )
-    severity: str = Field(
-        default="info",
-        example="info|warning|error",
-        description="Severity of the user-specific alert.",
-    )  # Added
-    suggested_actions: Optional[List[str]] = Field(
-        None,
-        example=["Consider leaving 15 minutes earlier.", "Check alternative routes."],
-    )
-    route_context: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Optional details about the route or location relevant to this alert.",
-    )  # Renamed from related_location and changed type
+class UserSpecificConditionAlert(BaseModel):
+    user_id: str
+    alert_type: str
+    title: str
+    message: str
+    severity: str = "info"
+    suggested_actions: Optional[List[str]] = None
+    route_context: Optional[Dict[str, Any]] = None
     issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-
 # --- Specific Payload Models for WebSocket Communication ---
-class PingData(BaseModel):
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+class PingData(BaseModel):
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class PongData(BaseModel):
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AuthSuccessData(BaseModel):
     message: str = "Authentication successful."
     user_info: Optional[Dict[str, Any]] = None
 
-
 class AuthFailureData(ErrorNotification):
-    pass  # Inherits from ErrorNotification
-
+    pass
 
 class AuthenticateData(BaseModel):
-    token: str = Field(..., description="Firebase ID token for authentication.")
-
+    token: str
 
 class SubscribeData(BaseModel):
-    topic: str = Field(..., description="Topic to subscribe to.")
-
+    topic: str
 
 class UnsubscribeData(BaseModel):
-    topic: str = Field(..., description="Topic to unsubscribe from.")
-
+    topic: str
 
 class FeedIdData(BaseModel):
-    feed_id: str = Field(..., description="ID of the feed.")
-
+    feed_id: str
 
 class VideoFrameData(BaseModel):
-    feed_id: str = Field(..., description="ID of the feed the frame belongs to.")
-    frame: str = Field(..., description="Base64 encoded video frame.")
+    feed_id: str
+    frame: str = Field(..., description="Base64 encoded string of the JPEG frame")
     frame_index: int
     timestamp: str
-
+    metrics: Optional[Dict[str, Any]] = None
+    vehicles: Optional[List[Dict[str, Any]]] = None
 
 class InitialFeedStatusesData(BaseModel):
     feeds: List[FeedStatusData]
 
-
 # --- WebSocket Message Wrapper ---
+
 class WebSocketMessageTypeEnum(str, enum.Enum):
+    # Data Pushes
     METRICS_UPDATE = "metrics_update"
     KPI_UPDATE = "kpi_update"
     NEW_ALERT = "new_alert"
     SIGNAL_UPDATE = "signal_update"
     VIDEO_FRAME = "video_frame"
-    FEED_METRICS = "feed_metrics"  # Added for feed-specific metrics
+    FEED_METRICS = "feed_metrics"
     FEED_STATUS_UPDATE = "feed_status_update"
     GENERAL_NOTIFICATION = "general_notification"
     ERROR_NOTIFICATION = "error_notification"
-    PREDICTION_ALERT = "prediction_alert"  # New type for predictions
-    ALERT_STATUS_UPDATE = "alert_status_update"  # For acknowledged, dismissed alerts
-    NODE_CONGESTION_UPDATE = (
-        "node_congestion_update"  # For broadcasting node congestion data
-    )
-    USER_SPECIFIC_ALERT = (
-        "user_specific_alert"  # Renamed from USER_SPECIFIC_NOTIFICATION
-    )
-    INITIAL_FEED_STATUSES = (
-        "initial_feed_statuses"  # New type for initial feed status dump
-    )
-    # Add other specific event types as needed
-    PONG = "pong"  # For keep-alive
+    PREDICTION_ALERT = "prediction_alert"
+    ALERT_STATUS_UPDATE = "alert_status_update"
+    NODE_CONGESTION_UPDATE = "node_congestion_update"
+    USER_SPECIFIC_ALERT = "user_specific_alert"
+    INITIAL_FEED_STATUSES = "initial_feed_statuses"
+    
+    # Connection / Auth
+    PONG = "pong"
     AUTH_SUCCESS = "auth_success"
     AUTH_FAILURE = "auth_failure"
+    
+    # Client Requests (Incoming to Backend)
     AUTHENTICATE = "authenticate"
     SUBSCRIBE = "subscribe"
     UNSUBSCRIBE = "unsubscribe"
     PING = "ping"
-    TOKEN_REFRESH_REQUEST = "token_refresh_request" # Request for client to refresh token
-    REFRESH_FEED = "refresh_feed" # Client requests a feed refresh
+    TOKEN_REFRESH_REQUEST = "token_refresh_request"
+    
+    # Feed Control (Incoming to Backend)
+    REFRESH_FEED = "refresh_feed"
+    RESTART_FEED = "restart_feed"
+    START_FEED = "start_feed"
+    STOP_FEED = "stop_feed"
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
     UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
-    START_FEED = "start_feed"
-    STOP_FEED = "stop_feed"
+    
+    # Internal
     INTERNAL_PING = "__internal_ping"
     INTERNAL_PONG = "__internal_pong"
 
-
 class WebSocketMessage(BaseModel):
-    type: WebSocketMessageTypeEnum = Field(
-        ..., description="The type of event this message represents"
-    )
+    type: WebSocketMessageTypeEnum = Field(..., description="The type of event")
     data: Optional[
         Union[
+            # Payload Models
             RealtimeMetricsUpdate,
             GlobalRealtimeMetrics,
             NewAlertNotification,
@@ -274,7 +196,11 @@ class WebSocketMessage(BaseModel):
             ErrorNotification,
             AlertStatusUpdatePayload,
             NodeCongestionUpdatePayload,
-            UserSpecificConditionAlert,  # Updated to new model name
+            UserSpecificConditionAlert,
+            VideoFrameData,
+            InitialFeedStatusesData,
+            
+            # Protocol Models
             PingData,
             PongData,
             AuthSuccessData,
@@ -282,16 +208,14 @@ class WebSocketMessage(BaseModel):
             AuthenticateData,
             SubscribeData,
             UnsubscribeData,
-            FeedIdData,
-            VideoFrameData, # New: Add VideoFrameData to the Union
-            InitialFeedStatusesData,
+            
+            # Control Models
+            FeedIdData, # Used for Start/Stop/Restart/SubscribeToFeed
         ]
     ] = None
-    client_id: Optional[str] = Field(
-        None,
-        description="Identifier for a specific client if the message is targeted, otherwise None for broadcast.",
-    )
-    correlation_id: Optional[str] = Field(
-        None,
-        description="Optional ID to correlate requests and responses if applicable",
-    )
+    client_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+    class Config:
+        # This helps Pydantic serialize enums to strings in the JSON output
+        use_enum_values = True

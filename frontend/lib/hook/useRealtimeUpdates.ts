@@ -13,10 +13,15 @@ interface VehicleData {
 }
 
 interface KPIData {
-    vehicles: VehicleData[]; 
-    vehicle_count: number;
-    avg_speed: number;
-    [key: string]: unknown;
+    timestamp?: string | Date; // Matches backend GlobalRealtimeMetrics
+    metrics_source?: string; // Matches backend GlobalRealtimeMetrics
+    congestion_index?: number | null; // Matches backend GlobalRealtimeMetrics
+    average_speed_kmh?: number | null; // Matches backend GlobalRealtimeMetrics
+    active_incidents_count?: number | null; // Matches backend GlobalRealtimeMetrics
+    total_flow?: number | null; // Matches backend GlobalRealtimeMetrics
+    feed_statuses?: { [key: string]: number } | null; // Matches backend GlobalRealtimeMetrics
+    custom_metrics?: { [key: string]: unknown }; // Matches backend GlobalRealtimeMetrics
+    [key: string]: unknown; // Allow for other potential metrics not explicitly defined
 }
 
 interface RealtimeUpdates {
@@ -34,6 +39,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     feeds: FeedStatusData[],
     startFeed: (feedId: string) => void,
     stopFeed: (feedId: string) => void,
+    restartFeed: (feedId: string) => void,
     startWebSocket: () => void
 } => {
     const client = useWebSocket();

@@ -1,12 +1,12 @@
-
 import logging
 import json
 import asyncio
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
-from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum
+from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, FeedIdData
 from app.dependencies.auth import get_current_user_ws
 from app.models.user import User
 
@@ -14,25 +14,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 async def keepalive_sender(websocket: WebSocket):
-    """Sends a keepalive message every 15 seconds."""
+    """
+    Sends a keepalive message every 15 seconds.
+    Stops immediately if the socket closes.
+    """
+    # Create the JSON string once to save CPU in the loop
     pong_message = WebSocketMessage(type=WebSocketMessageTypeEnum.INTERNAL_PONG, data={}).model_dump_json()
-    while True:
-        try:
+    
+    try:
+        while True:
+            if websocket.client_state == WebSocketState.DISCONNECTED:
+                break
+            
             await asyncio.sleep(15)
             await websocket.send_text(pong_message)
-            logger.debug("Sent keepalive pong to client.")
-        except WebSocketDisconnect:
-            logger.debug("Client disconnected, stopping keepalive sender.")
-            break
-        except RuntimeError as e:
-            if "after sending 'websocket.close'" in str(e) or "Unexpected ASGI message" in str(e):
-                logger.debug("Keepalive sender: connection already closed.")
-            else:
-                logger.error(f"Error in keepalive sender: {e}", exc_info=True)
-            break
-        except Exception as e:
-            logger.error(f"Error in keepalive sender: {e}", exc_info=True)
-            break
+            # logger.debug("Sent keepalive pong.") # Commented out to reduce log noise
+    except (WebSocketDisconnect, ConnectionResetError):
+        pass  # Normal closure
+    except Exception as e:
+        logger.error(f"Keepalive sender error: {e}")
 
 async def message_receiver(
     websocket: WebSocket,
@@ -41,76 +41,84 @@ async def message_receiver(
     feed_manager: FeedManager,
 ):
     """Receives and processes messages from the client."""
-    while True:
-        try:
+    try:
+        while True:
+            # receive_text raises WebSocketDisconnect if client closes
             raw_data = await websocket.receive_text()
+
+            # 1. Quick check for heartbeat strings (often sent by browsers directly)
+            if raw_data == "ping" or raw_data == "pong":
+                continue
+
             try:
-                # Handle non-JSON keepalive messages (like browser-sent pongs)
-                if raw_data.strip().startswith("pong"):
-                    logger.debug(f"Received browser pong from {client_id}.")
-                    continue
-                
                 data = json.loads(raw_data)
-
-                # Also handle our own internal ping from client
-                if data.get("type") == WebSocketMessageTypeEnum.INTERNAL_PING.value:
-                    logger.debug(f"Received internal ping from {client_id}.")
-                    continue
-
             except json.JSONDecodeError:
-                logger.warning(
-                    f"Could not decode JSON from client {client_id}. "
-                    f"Received data: {raw_data[:200]}... (truncated). Ignoring."
-                )
-                continue  # Ignore malformed JSON
+                logger.warning(f"Client {client_id} sent invalid JSON.")
+                continue
 
-            message = WebSocketMessage(**data)
+            # 2. Parse into Pydantic Model
+            try:
+                message = WebSocketMessage(**data)
+            except Exception as e:
+                logger.warning(f"Invalid message format from {client_id}: {e}")
+                continue
 
-            if message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
-                logger.info(f"Client {client_id} requested initial feed statuses.")
+            # 3. Handle Message Types
+            if message.type == WebSocketMessageTypeEnum.INTERNAL_PING:
+                continue # Just a heartbeat
+
+            elif message.type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                 statuses = await feed_manager.get_all_statuses()
                 response = WebSocketMessage(
                     type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
                     data={"feeds": statuses}
                 )
                 await websocket.send_text(response.model_dump_json())
+                continue
 
-            elif message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
-                feed_id = message.data.feed_id
-                if feed_id:
-                    logger.info(f"Client {client_id} subscribing to feed {feed_id}")
-                    await connection_manager.subscribe_to_topic(client_id, f"video:{feed_id}")
-                    await connection_manager.subscribe_to_topic(client_id, f"feed:{feed_id}")
-                    await connection_manager.subscribe_to_topic(client_id, f"feed_alerts:{feed_id}")
+            # For feed control messages, ensure we have valid FeedIdData
+            # Pydantic (in WebSocketMessage) should have already parsed 'data' into FeedIdData
+            # but we verify it has the attribute to be safe.
+            feed_id = getattr(message.data, 'feed_id', None)
+
+            if not feed_id and message.type in [
+                WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED,
+                WebSocketMessageTypeEnum.UNSUBSCRIBE_FROM_FEED,
+                WebSocketMessageTypeEnum.START_FEED,
+                WebSocketMessageTypeEnum.STOP_FEED,
+                WebSocketMessageTypeEnum.RESTART_FEED
+            ]:
+                logger.warning(f"Client {client_id} sent {message.type} without a valid feed_id.")
+                continue
+
+            if message.type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
+                logger.info(f"Client {client_id} subscribing to {feed_id}")
+                await connection_manager.subscribe_to_topic(client_id, f"video:{feed_id}")
+                await connection_manager.subscribe_to_topic(client_id, f"feed:{feed_id}")
+                await connection_manager.subscribe_to_topic(client_id, f"feed_alerts:{feed_id}")
 
             elif message.type == WebSocketMessageTypeEnum.UNSUBSCRIBE_FROM_FEED:
-                feed_id = message.data.feed_id
-                if feed_id:
-                    logger.info(f"Client {client_id} unsubscribing from feed {feed_id}")
-                    await connection_manager.unsubscribe_from_topic(client_id, f"video:{feed_id}")
-                    await connection_manager.unsubscribe_from_topic(client_id, f"feed:{feed_id}")
-                    await connection_manager.unsubscribe_from_topic(client_id, f"feed_alerts:{feed_id}")
+                logger.info(f"Client {client_id} unsubscribing from {feed_id}")
+                await connection_manager.unsubscribe_from_topic(client_id, f"video:{feed_id}")
+                await connection_manager.unsubscribe_from_topic(client_id, f"feed:{feed_id}")
+                await connection_manager.unsubscribe_from_topic(client_id, f"feed_alerts:{feed_id}")
 
             elif message.type == WebSocketMessageTypeEnum.START_FEED:
-                feed_id = message.data.feed_id
-                if feed_id:
-                    logger.info(f"Client {client_id} requested to start feed {feed_id}")
-                    await feed_manager.handle_start_feed(feed_id)
+                logger.info(f"Client {client_id} requesting START {feed_id}")
+                await feed_manager.handle_start_feed(feed_id)
 
             elif message.type == WebSocketMessageTypeEnum.STOP_FEED:
-                feed_id = message.data.feed_id
-                if feed_id:
-                    logger.info(f"Client {client_id} requested to stop feed {feed_id}")
-                    await feed_manager.handle_stop_feed(feed_id)
+                logger.info(f"Client {client_id} requesting STOP {feed_id}")
+                await feed_manager.handle_stop_feed(feed_id)
             
-            # Other message types can be handled here
+            elif message.type == WebSocketMessageTypeEnum.RESTART_FEED:
+                logger.info(f"Client {client_id} requesting RESTART {feed_id}")
+                await feed_manager.handle_restart_feed(feed_id)
 
-        except WebSocketDisconnect:
-            logger.info(f"Client {client_id} disconnected during message reception.")
-            break # Exit loop to end the receiver task
-        except RuntimeError as e:
-            logger.warning(f"RuntimeError during message reception for client {client_id}: {e}")
-            break
+    except WebSocketDisconnect:
+        logger.info(f"Client {client_id} disconnected.")
+    except Exception as e:
+        logger.error(f"Error in message_receiver for {client_id}: {e}", exc_info=True)
 
 
 @router.websocket("/ws/{client_id}")
@@ -122,20 +130,34 @@ async def websocket_endpoint(
     user: User = Depends(get_current_user_ws),
 ):
     if not user:
+        # Auth failed (usually caught by dependency, but safe double check)
         await websocket.close(code=1008)
         return
-        
+
     await connection_manager.connect(websocket, client_id, user.username)
 
     try:
-        # Run sender and receiver concurrently
-        await asyncio.gather(
-            keepalive_sender(websocket),
+        # Create tasks for sending and receiving
+        sender_task = asyncio.create_task(keepalive_sender(websocket))
+        receiver_task = asyncio.create_task(
             message_receiver(websocket, client_id, connection_manager, feed_manager)
         )
+
+        # Wait until EITHER the sender fails/stops OR the receiver fails/stops (client disconnects)
+        done, pending = await asyncio.wait(
+            [sender_task, receiver_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Cancel whichever task is still running
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     except Exception as e:
-        # This will catch errors from either gather task
-        logger.error(f"Error in WebSocket endpoint for client {client_id}: {e}", exc_info=True)
+        logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
     finally:
-        logger.info(f"Closing connection for client {client_id}.")
         await connection_manager.disconnect(client_id)

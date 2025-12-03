@@ -32,6 +32,90 @@ logger = logging.getLogger("app.ml")
 
 class CoreModule:
 
+    # Vehicle type mapping
+    vehicle_type_map = {
+        0: "person",
+        1: "bicycle",
+        2: "car",
+        3: "motorcycle",
+        4: "airplane",
+        5: "bus",
+        6: "train",
+        7: "truck",
+        8: "boat",
+        9: "traffic light",
+        10: "fire hydrant",
+        11: "stop sign",
+        12: "parking meter",
+        13: "bench",
+        14: "bird",
+        15: "cat",
+        16: "dog",
+        17: "horse",
+        18: "sheep",
+        19: "cow",
+        20: "elephant",
+        21: "bear",
+        22: "zebra",
+        23: "giraffe",
+        24: "backpack",
+        25: "umbrella",
+        26: "handbag",
+        27: "tie",
+        28: "suitcase",
+        29: "frisbee",
+        30: "skis",
+        31: "snowboard",
+        32: "sports ball",
+        33: "kite",
+        34: "baseball bat",
+        35: "baseball glove",
+        36: "skateboard",
+        37: "surfboard",
+        38: "tennis racket",
+        39: "bottle",
+        40: "wine glass",
+        41: "cup",
+        42: "fork",
+        43: "knife",
+        44: "spoon",
+        45: "bowl",
+        46: "banana",
+        47: "apple",
+        48: "sandwich",
+        49: "orange",
+        50: "broccoli",
+        51: "carrot",
+        52: "hot dog",
+        53: "pizza",
+        54: "donut",
+        55: "cake",
+        56: "chair",
+        57: "couch",
+        58: "potted plant",
+        59: "bed",
+        60: "dining table",
+        61: "toilet",
+        62: "tv",
+        63: "laptop",
+        64: "mouse",
+        65: "remote",
+        66: "keyboard",
+        67: "cell phone",
+        68: "microwave",
+        69: "oven",
+        70: "toaster",
+        71: "sink",
+        72: "refrigerator",
+        73: "book",
+        74: "clock",
+        75: "vase",
+        76: "scissors",
+        77: "teddy bear",
+        78: "hair drier",
+        79: "toothbrush",
+    }
+
     def __init__(
         self,
         feed_id: str,
@@ -43,7 +127,7 @@ class CoreModule:
         model_type: str = "yolo",
     ):
         self.feed_id = feed_id
-        self.video_path = Path(config["project_root_dir"]) / feed_id # Store absolute path to video
+
         self.model_path = Path(config["project_root_dir"]) / model_path
         self.config = config
         self.fps = fps
@@ -54,6 +138,9 @@ class CoreModule:
         self.vehicle_data: Dict[str, Dict] = {}
         self.model = None
         self.preprocessor = None
+        
+        # Initialize OCR executor as instance attribute
+        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
 
         # Configuration parameters from config
         self.vehicle_class_ids = config["vehicle_detection"].get(
@@ -99,94 +186,7 @@ class CoreModule:
         self.last_lane_detection_frame = -1
         self.cached_lane_boundaries = None
 
-        # Thread pool for asynchronous OCR
-        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
-
-        # Vehicle type mapping
-        self.vehicle_type_map = {
-            0: "person",
-            1: "bicycle",
-            2: "car",
-            3: "motorcycle",
-            4: "airplane",
-            5: "bus",
-            6: "train",
-            7: "truck",
-            8: "boat",
-            9: "traffic light",
-            10: "fire hydrant",
-            11: "stop sign",
-            12: "parking meter",
-            13: "bench",
-            14: "bird",
-            15: "cat",
-            16: "dog",
-            17: "horse",
-            18: "sheep",
-            19: "cow",
-            20: "elephant",
-            21: "bear",
-            22: "zebra",
-            23: "giraffe",
-            24: "backpack",
-            25: "umbrella",
-            26: "handbag",
-            27: "tie",
-            28: "suitcase",
-            29: "frisbee",
-            30: "skis",
-            31: "snowboard",
-            32: "sports ball",
-            33: "kite",
-            34: "baseball bat",
-            35: "baseball glove",
-            36: "skateboard",
-            37: "surfboard",
-            38: "tennis racket",
-            39: "bottle",
-            40: "wine glass",
-            41: "cup",
-            42: "fork",
-            43: "knife",
-            44: "spoon",
-            45: "bowl",
-            46: "banana",
-            47: "apple",
-            48: "sandwich",
-            49: "orange",
-            50: "broccoli",
-            51: "carrot",
-            52: "hot dog",
-            53: "pizza",
-            54: "donut",
-            55: "cake",
-            56: "chair",
-            57: "couch",
-            58: "potted plant",
-            59: "bed",
-            60: "dining table",
-            61: "toilet",
-            62: "tv",
-            63: "laptop",
-            64: "mouse",
-            65: "remote",
-            66: "keyboard",
-            67: "cell phone",
-            68: "microwave",
-            69: "oven",
-            70: "toaster",
-            71: "sink",
-            72: "refrigerator",
-            73: "book",
-            74: "clock",
-            75: "vase",
-            76: "scissors",
-            77: "teddy bear",
-            78: "hair drier",
-            79: "toothbrush",
-        }
-
-        self._load_model(config["performance"].get("gpu_acceleration", False))
+        # Initialize OCR Preprocessor
         if self.ocr_cfg.get("enabled", False) and self.gemini_api_key:
             try:
                 self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
@@ -195,6 +195,14 @@ class CoreModule:
                 self.preprocessor = None
         else:
             logger.info("OCR engine disabled or Gemini API key not provided.")
+
+        # Load Model
+        try:
+            use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
+            self._load_model(use_gpu)
+        except Exception as e:
+            logger.error(f"Failed to load model in CoreModule __init__: {e}")
+            raise
 
 
     
@@ -331,11 +339,7 @@ class CoreModule:
 
             logger.info(f"Frame {frame_index}: Detections after ROI processing: {len(detections)}")
 
-            # --- Custom Merging Logic for Overlapping Detections ---
-            merged_detections = self._merge_overlapping_detections(detections)
-
-            logger.info(f"Frame {frame_index}: Detections after merging: {len(merged_detections)}")
-            return merged_detections
+            return detections
 
         except Exception as e:
             logger.error(
@@ -530,107 +534,36 @@ class CoreModule:
                 )
         return detections
 
-    def _merge_overlapping_detections(self, detections: List[Tuple]) -> List[Tuple]:
-        if not detections:
-            return []
 
-        detections.sort(key=lambda x: x[2], reverse=True)
-        is_merged = [False] * len(detections)
-        merged_detections = []
 
-        for i, det1 in enumerate(detections):
-            if is_merged[i]:
-                continue
 
-            x1_1, y1_1, x2_1, y2_1 = det1[5]
-            class_id_1 = det1[3]
-
-            current_merged_bbox = list(det1[5])
-            current_merged_conf = det1[2]
-
-            for j, det2 in enumerate(detections):
-                if i == j or is_merged[j]:
-                    continue
-
-                x1_2, y1_2, x2_2, y2_2 = det2[5]
-                class_id_2 = det2[3]
-
-                if class_id_1 == class_id_2 and self._calculate_iou(det1[5], det2[5]) > 0.6:
-                    current_merged_bbox[0] = min(current_merged_bbox[0], x1_2)
-                    current_merged_bbox[1] = min(current_merged_bbox[1], y1_2)
-                    current_merged_bbox[2] = max(current_merged_bbox[2], x2_2)
-                    current_merged_bbox[3] = max(current_merged_bbox[3], y2_2)
-                    current_merged_conf = max(current_merged_conf, det2[2])
-                    is_merged[j] = True
-
-            merged_center_x = (current_merged_bbox[0] + current_merged_bbox[2]) / 2
-            merged_center_y = (current_merged_bbox[1] + current_merged_bbox[3]) / 2
-            merged_detections.append((
-                float(merged_center_x),
-                float(merged_center_y),
-                float(current_merged_conf),
-                int(class_id_1),
-                det1[4], # frame_index
-                [int(val) for val in current_merged_bbox]
-            ))
-
-        return merged_detections
-
-    def _calculate_iou(self, box1, box2):
-        # Ensure box1 and box2 are not None and are valid bounding box formats
-        if box1 is None or box2 is None or len(box1) < 4 or len(box2) < 4:
-            return 0.0  # Return 0.0 if inputs are invalid
-
-        # Extract coordinates
-        x1, y1, x2, y2 = box1
-        x1_g, y1_g, x2_g, y2_g = box2
-
-        # Determine the coordinates of the intersection rectangle
-        ix1 = max(x1, x1_g)
-        iy1 = max(y1, y1_g)
-        ix2 = min(x2, x2_g)
-        iy2 = min(y2, y2_g)
-
-        # Compute the area of intersection
-        intersection_area = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-
-        # Compute the area of both bounding boxes
-        box1_area = (x2 - x1) * (y2 - y1)
-        box2_area = (x2_g - x1_g) * (y2_g - y1_g)
-
-        # Compute the area of union
-        union_area = box1_area + box2_area - intersection_area
-
-        # Handle the case where union_area is zero to avoid division by zero
-        if union_area == 0:
-            return 0.0
-
-        # Compute the IoU
-        iou = intersection_area / union_area
-        return iou
 
     def _calculate_cost_matrix(self, tracks: Dict, detections: List[Tuple], predicted_positions: List[np.ndarray], proximity_threshold: int, max_cost: float) -> np.ndarray:
         num_tracks = len(tracks)
         num_detections = len(detections)
-        cost_matrix = np.full((num_tracks, num_detections), max_cost)
-
-        for i in range(num_tracks):
-            predicted_pos = predicted_positions[i]
-
-            if np.isnan(predicted_pos).any():
-                continue
-
-            for j in range(num_detections):
-                detection = detections[j]
-                detection_pos = np.array([detection[0], detection[1]])
-                
-                dist = np.linalg.norm(predicted_pos - detection_pos)
-
-                if dist < proximity_threshold:
-                    # Cost can be a combination of distance and other factors, like appearance
-                    # For now, just use distance
-                    cost_matrix[i, j] = dist
         
+        if num_tracks == 0 or num_detections == 0:
+            return np.empty((num_tracks, num_detections))
+
+        # Convert to numpy arrays for vectorization
+        # predicted_positions is a list of arrays, stack them -> (M, 2)
+        track_coords = np.vstack(predicted_positions) 
+        
+        # Extract coordinates from detections -> (N, 2)
+        det_coords = np.array([[d[0], d[1]] for d in detections])
+
+        # Broadcasting: (M, 1, 2) - (1, N, 2) -> (M, N, 2)
+        deltas = track_coords[:, np.newaxis, :] - det_coords[np.newaxis, :, :]
+        
+        # Calculate Euclidean distance: (M, N)
+        dists = np.linalg.norm(deltas, axis=2)
+        
+        # Apply threshold masking
+        cost_matrix = np.where(dists < proximity_threshold, dists, max_cost)
+        
+        # Handle NaNs from predictions if any (optional safety)
+        cost_matrix = np.nan_to_num(cost_matrix, nan=max_cost)
+
         return cost_matrix
 
     def _match_tracks_to_detections(self, tracks: Dict, detections: List[Tuple], cost_matrix: np.ndarray, kalman_filters: List[KalmanFilter], current_time: float, frame: np.ndarray, frame_index: int, matched_detection_indices: set) -> Dict:
@@ -914,7 +847,7 @@ class CoreModule:
                     )
 
                     # --- Asynchronous OCR ---
-                    self.ocr_executor.submit(self._run_ocr, frame, track)
+                    self.ocr_executor.submit(self._run_ocr, frame.copy(), track)
 
         except Exception as e:
             logger.error(
@@ -1168,33 +1101,46 @@ class CoreModule:
             logger.error(f"Kalman filter initialization failed: {e}", exc_info=True)
             raise
 
-    def _estimate_lane(self, frame: np.ndarray, bbox: List[int], frame_index: int) -> int:
+    def _estimate_lane(self, frame: Optional[np.ndarray], bbox: List[int], frame_index: int) -> int:
         if not bbox or len(bbox) != 4:
             return -1
 
-        # Check if we should use cached lane boundaries
-        if (
-            self.cached_lane_boundaries is not None
-            and self.last_lane_detection_frame != -1
-            and (frame_index - self.last_lane_detection_frame) < self.lane_detection_interval
-        ):
-            lane_boundaries = self.cached_lane_boundaries
-        else:
-            # Process the frame to detect lane lines dynamically
-            if process_frame_for_lanes:
-                detected_lines = process_frame_for_lanes(frame, self.config)
-                if detected_lines:
-                    # Get dynamic lane boundaries based on detected lines
-                    self.cached_lane_boundaries = get_lane_boundaries_from_lines(
-                        frame.shape[1], detected_lines, self.config
-                    )
-                    self.last_lane_detection_frame = frame_index
-                    lane_boundaries = self.cached_lane_boundaries
-                else:
-                    logger.debug("Dynamic lane boundaries could not be determined. Falling back to static.")
-                    lane_boundaries = None
+        lane_boundaries = None
+        dynamic_lane_detection_enabled = self.config.get("lane_detection", {}).get("dynamic_lane_detection_enabled", False)
+
+        if dynamic_lane_detection_enabled and frame is not None:
+            # Check if we should use cached lane boundaries
+            if (
+                self.cached_lane_boundaries is not None
+                and self.last_lane_detection_frame != -1
+                and (frame_index - self.last_lane_detection_frame) < self.lane_detection_interval
+            ):
+                lane_boundaries = self.cached_lane_boundaries
             else:
-                lane_boundaries = None
+                # Process the frame to detect lane lines dynamically
+                if process_frame_for_lanes:
+                    detected_lines = process_frame_for_lanes(frame, self.config)
+                    if detected_lines:
+                        # Get dynamic lane boundaries based on detected lines
+                        self.cached_lane_boundaries = get_lane_boundaries_from_lines(
+                            frame.shape[1], detected_lines, self.config
+                        )
+                        self.last_lane_detection_frame = frame_index
+                        lane_boundaries = self.cached_lane_boundaries
+                    else:
+                        logger.debug("Dynamic lane boundaries could not be determined. Falling back to static.")
+                        lane_boundaries = None
+                else:
+                    lane_boundaries = None
+        
+        # If dynamic detection is disabled, frame is None, or dynamic detection failed, fallback to static
+        if lane_boundaries is None or not dynamic_lane_detection_enabled or frame is None:
+            num_lanes = self.config.get("lane_detection", {}).get("num_lanes", 0)
+            lane_width = frame.shape[1] / num_lanes if num_lanes > 0 and frame is not None else 0 # Use frame.shape[1] if frame exists
+            if num_lanes > 0 and lane_width > 0:
+                lane_boundaries = [int(i * lane_width) for i in range(num_lanes + 1)]
+            else:
+                lane_boundaries = []
 
 
         if lane_boundaries and len(lane_boundaries) > 1:
@@ -1206,7 +1152,7 @@ class CoreModule:
             # If outside detected lanes, return -1 or closest lane
             return -1
 
-        # Fallback to static lane estimation if dynamic detection fails or is disabled
+        # Fallback to static lane estimation if dynamic detection fails or is disabled or frame is None
         x_center = (bbox[0] + bbox[2]) / 2
         if self.lane_width_pixels <= 0:
             return -1
@@ -1332,6 +1278,46 @@ class CoreModule:
         if "speed_history" in serializable_track:
             serializable_track["speed_history"] = list(serializable_track["speed_history"])
         return serializable_track
+
+    def predict_only(self, frame_index: int) -> Dict[str, Dict]:
+        """
+        Advances the state of tracks using Kalman filter prediction without new detections.
+        Used for frames where heavy detection is skipped.
+        """
+        for track in self.vehicle_data.values():
+            kf = track.get("kalman_filter")
+            if kf:
+                # Predict state
+                kf.predict()
+                
+                # Update bbox based on predicted center and existing dimensions
+                # KF state is [center_x, bottom_center_y, vx, vy] based on _initialize_kalman_filter
+                pred_x, pred_y = kf.x[0], kf.x[1]
+                
+                current_bbox = track["bbox"]
+                w = current_bbox[2] - current_bbox[0]
+                h = current_bbox[3] - current_bbox[1]
+                
+                # Reconstruct bbox (x1, y1, x2, y2)
+                # Note: pred_y is the bottom of the bounding box
+                new_x1 = int(pred_x - w / 2)
+                new_y2 = int(pred_y)
+                new_y1 = int(pred_y - h)
+                new_x2 = int(pred_x + w / 2)
+                
+                track["bbox"] = [new_x1, new_y1, new_x2, new_y2]
+                
+                # Update lane based on predicted position (lightweight)
+                # We pass None for frame as we might not want to run heavy lane line detection here
+                # But _estimate_lane handles None or fallback if lines aren't recalculated
+                # Ideally we reuse cached lines.
+                new_lane = self._estimate_lane(None, track["bbox"], frame_index)
+                if new_lane != -1:
+                    track["lane"] = new_lane
+                    if not track["lane_history"] or track["lane_history"][-1][1] != new_lane:
+                        track["lane_history"].append((frame_index, new_lane))
+
+        return self.vehicle_data
 
     def cleanup(self):
         logger.info(

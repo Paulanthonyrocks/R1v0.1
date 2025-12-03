@@ -15,8 +15,8 @@ export interface FeedStatusData {
   latitude?: number; // Added latitude
   longitude?: number; // Added longitude
   latest_metrics?: { // Added latest_metrics with a more specific structure
-    avg_speed?: number | null;
-    vehicle_count?: number | null;
+    average_speed_kmh?: number | null;
+    total_vehicles?: number | null;
     [key: string]: unknown; // Allow for other potential metrics
   } | null;
 }
@@ -188,9 +188,30 @@ export interface RealtimeDataActions {
 export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { sendMessage: (action: string, payload?: object) => boolean; };
 
 export interface SurveillanceFeedMessage {
-  kpis?: {
-    vehicles?: { x1: number; y1: number; x2: number; y2: number; id: string; speed: number; }[];
-  };
-  vehicle_count?: number;
-  avg_speed?: number;
+  total_vehicles?: number;
+  average_speed_kmh?: number;
+  timestamp?: string | Date;
+  latitude?: number;
+  longitude?: number;
+  // Individual vehicle data is now sent directly in VideoFrameMessage.vehicles
+}
+
+export interface VideoFrameMessage {
+  feed_id: string;
+  frame: string | ArrayBuffer;
+  frame_index?: number;
+  timestamp?: string;
+  metrics?: SurveillanceFeedMessage;
+  vehicles?: { // Detailed vehicle data for frontend visualization
+    vehicle_id: string;
+    bbox: [number, number, number, number];
+    speed: number;
+    license_plate: string;
+    class_id: number;
+    class_name: string;
+    behavior: string;
+    confidence: number;
+    is_occluded: boolean;
+    lane: number;
+  }[];
 }

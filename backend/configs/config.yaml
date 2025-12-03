@@ -313,14 +313,14 @@ queue_log_interval: 120.0
 video_input:
   webcam_index: 0
   webcam_buffer_size: 20
-  max_queue_size: 1000
+  max_queue_size: 100
   queue_put_timeout_ms: 1000
 
 post_startup_processing:
   enabled: true
   sample_feeds:
     - path: "backend/data/sample_traffic.mp4"
-      is_looped: false
+      is_looped: true
       latitude: 34.0522
       longitude: -118.2437
 
@@ -398,7 +398,7 @@ kalman_filter_params:
   kf_sigma_ay: 0.5
 lane_detection:
   dynamic_lane_detection_enabled: false
-  num_lanes: 8 # Fallback if dynamic detection fails or is disabled
+  num_lanes: 6 # Fallback if dynamic detection fails or is disabled
   lane_width: 120 # Fallback if dynamic detection fails or is disabled
   lane_change_buffer: 10
   gaussian_blur_kernel_size: 5
@@ -472,8 +472,8 @@ performance:
   skip_factor_adjustment_interval: 360.0
   long_sleep_after_increase: 10
 vis_options_default:
-- Tracked Vehicles
-- Vehicle Data
+- Grid Overlay
+- Lane Lines
 interface:
   camera_warmup_time: 0.5
 roi_processing:
