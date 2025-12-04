@@ -307,11 +307,17 @@ class CoreModule:
             track_timeout if track_timeout is not None else self.track_timeout
         )
         current_time = time.time()
+        
+        # Use a low threshold for detection to allow ByteTrack-like association (matching low-conf detections to existing tracks)
+        LOW_CONF_THRESHOLD = 0.1
 
         try:
-            detections = self._detect_vehicles(frame, frame_index, used_confidence)
+            # Detect with low threshold
+            detections = self._detect_vehicles(frame, frame_index, LOW_CONF_THRESHOLD)
+            
+            # Update tracks using ByteTrack logic
             current_tracks = self._update_tracks(
-                frame, detections, used_proximity, current_time, frame_index
+                frame, detections, used_proximity, current_time, frame_index, used_confidence
             )
             logger.debug("Tracks updated")
             logger.debug("Removing stale tracks")
@@ -337,7 +343,7 @@ class CoreModule:
             else:
                 detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
 
-            logger.info(f"Frame {frame_index}: Detections after ROI processing: {len(detections)}")
+            # logger.debug(f"Frame {frame_index}: Detections after ROI processing: {len(detections)}") # Reduce noise
 
             return detections
 
@@ -370,45 +376,6 @@ class CoreModule:
                 processed_frame = processed_frame[y1_crop:y2_crop, x1_crop:x2_crop]
 
         return processed_frame, roi_enabled, x1_crop, y1_crop
-
-    # def _run_edgetam_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
-    #     results = self.model.segment_frame(processed_frame)
-    #     
-    #     masks = results.get("masks")
-    #     if masks is None:
-    #         return []
-    #
-    #     bboxes = self.model.masks_to_bboxes(masks)
-    #     
-    #     detections = []
-    #     for i, bbox in enumerate(bboxes):
-    #         x1, y1, x2, y2 = bbox
-    #         if roi_enabled and not self.roi_polygon_points:
-    #             x1 += x1_crop
-    #             y1 += y1_crop
-    #             x2 += x1_crop
-    #             y2 += y1_crop
-    #
-    #         center_x = (x1 + x2) / 2
-    #         center_y = (y1 + y2) / 2
-    #         
-    #         # EdgeTAM does not provide class_id, so we assign a default one (e.g., 2 for 'car')
-    #         # Confidence is also not provided, so we can set it to a default value
-    #         class_id = 2 # Default to 'car'
-    #         confidence = 0.9 # Default confidence
-    #
-    #         if confidence > confidence_threshold:
-    #             detections.append(
-    #                 (
-    #                     float(center_x),
-    #                     float(center_y),
-    #                     float(confidence),
-    #                     int(class_id),
-    #                     0, # frame_index is not available here, but it is not used in the caller
-    #                     [int(x1), int(y1), int(x2), int(y2)],
-    #                 )
-    #             )
-    #     return detections
 
     def _run_onnx_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         img_size = self.yolo_imgsz
@@ -534,10 +501,6 @@ class CoreModule:
                 )
         return detections
 
-
-
-
-
     def _calculate_cost_matrix(self, tracks: Dict, detections: List[Tuple], predicted_positions: List[np.ndarray], proximity_threshold: int, max_cost: float) -> np.ndarray:
         num_tracks = len(tracks)
         num_detections = len(detections)
@@ -624,49 +587,89 @@ class CoreModule:
         proximity_threshold: int,
         current_time: float,
         frame_index: int,
+        high_confidence_threshold: float,
     ) -> Dict[str, Dict]:
+        
+        # 1. Predict all tracks (Kalman Filter Step)
+        for track in self.vehicle_data.values():
+             if track.get("kalman_filter"):
+                 track["kalman_filter"].predict()
+
+        # 2. Split detections into High and Low confidence
+        high_dets = []
+        low_dets = []
+        for d in detections:
+            # d[2] is confidence
+            if d[2] >= high_confidence_threshold:
+                high_dets.append(d)
+            else:
+                low_dets.append(d)
+        
+        # Create lists of indices for tracking original positions in the 'detections' list if needed, 
+        # but here we just work with the subset lists. Note that _match_tracks expects a list of tuples.
+        
         current_tracks_in_frame = {}
-        if not detections:
-            for track in self.vehicle_data.values():
-                if track.get("kalman_filter"):
-                    track["kalman_filter"].predict()
-            return current_tracks_in_frame
-
-        detection_indices = list(range(len(detections)))
-        matched_detection_indices = set()
-        max_cost = 1e5 # Define max_cost here
-
+        max_cost = 1e5 
+        matched_high_indices = set() # Indices within high_dets list
+        
         # Separate active and lost tracks
         active_tracks = {vid: track for vid, track in self.vehicle_data.items() if track.get("status", "active") == "active"}
         lost_tracks = {vid: track for vid, track in self.vehicle_data.items() if track.get("status", "active") == "lost"}
 
-        # 1. Process active tracks for matching
-        if active_tracks and detections:
-            predicted_positions_active, kalman_filters_active = self._predict_track_positions(active_tracks, current_time)
-            cost_matrix_active = self._calculate_cost_matrix(active_tracks, detections, predicted_positions_active, proximity_threshold, max_cost)
-            current_tracks_in_frame.update(self._match_tracks_to_detections(active_tracks, detections, cost_matrix_active, kalman_filters_active, current_time, frame, frame_index, matched_detection_indices))
+        # --- Stage 1: Match Active Tracks with High Confidence Detections ---
+        unmatched_active_tracks = list(active_tracks.keys())
+        if active_tracks and high_dets:
+            predicted_pos_active, kf_active = self._predict_track_positions(active_tracks, current_time)
+            cost_matrix = self._calculate_cost_matrix(active_tracks, high_dets, predicted_pos_active, proximity_threshold, max_cost)
+            
+            # Perform matching
+            stage1_matches = self._match_tracks_to_detections(active_tracks, high_dets, cost_matrix, kf_active, current_time, frame, frame_index, matched_high_indices)
+            current_tracks_in_frame.update(stage1_matches)
+            
+            # Update unmatched active tracks list
+            unmatched_active_tracks = [vid for vid in active_tracks if vid not in stage1_matches]
 
-        # 2. Attempt to re-identify lost tracks with unmatched detections
-        unmatched_detections_indices = set(detection_indices) - matched_detection_indices
-        if lost_tracks and unmatched_detections_indices:
-            unmatched_detections_list = [detections[idx] for idx in unmatched_detections_indices]
-            predicted_positions_lost, kalman_filters_lost = self._predict_track_positions(lost_tracks, current_time)
-            cost_matrix_lost = self._calculate_cost_matrix(lost_tracks, unmatched_detections_list, predicted_positions_lost, proximity_threshold, max_cost)
+        # --- Stage 2: Match Remaining Active Tracks with Low Confidence Detections ---
+        # This keeps tracks alive even if detection confidence drops temporarily (e.g. occlusion/blur)
+        unmatched_active_tracks_dict = {vid: active_tracks[vid] for vid in unmatched_active_tracks}
+        if unmatched_active_tracks_dict and low_dets:
+            predicted_pos_rem, kf_rem = self._predict_track_positions(unmatched_active_tracks_dict, current_time)
+            cost_matrix_low = self._calculate_cost_matrix(unmatched_active_tracks_dict, low_dets, predicted_pos_rem, proximity_threshold, max_cost)
             
-            # Need to map back the matched indices from unmatched_detections_list to original detections
-            temp_matched_indices = set()
-            reidentified_tracks = self._match_tracks_to_detections(lost_tracks, unmatched_detections_list, cost_matrix_lost, kalman_filters_lost, current_time, frame, frame_index, temp_matched_indices)
+            matched_low_indices = set()
+            stage2_matches = self._match_tracks_to_detections(unmatched_active_tracks_dict, low_dets, cost_matrix_low, kf_rem, current_time, frame, frame_index, matched_low_indices)
+            current_tracks_in_frame.update(stage2_matches)
             
-            # Correctly update matched_detection_indices
-            unmatched_detections_indices_list = list(unmatched_detections_indices)
-            for i in temp_matched_indices:
-                matched_detection_indices.add(unmatched_detections_indices_list[i])
-            
-            current_tracks_in_frame.update(reidentified_tracks)
+            # Update unmatched list again
+            unmatched_active_tracks = [vid for vid in unmatched_active_tracks if vid not in stage2_matches]
 
-        # 3. Initialize new tracks for remaining unmatched detections
-        unmatched_detections_indices = set(detection_indices) - matched_detection_indices
-        current_tracks_in_frame.update(self._initialize_new_tracks_from_unmatched(unmatched_detections_indices, detections, current_time, frame, frame_index))
+        # Mark remaining unmatched active tracks as lost
+        for vid in unmatched_active_tracks:
+            self.vehicle_data[vid]["status"] = "lost"
+
+        # --- Stage 3: Match Lost Tracks with Remaining High Confidence Detections (ReID) ---
+        unmatched_high_dets = [d for i, d in enumerate(high_dets) if i not in matched_high_indices]
+        
+        if lost_tracks and unmatched_high_dets:
+            predicted_pos_lost, kf_lost = self._predict_track_positions(lost_tracks, current_time)
+            cost_matrix_lost = self._calculate_cost_matrix(lost_tracks, unmatched_high_dets, predicted_pos_lost, proximity_threshold, max_cost)
+            
+            matched_lost_indices = set() # Indices within unmatched_high_dets
+            stage3_matches = self._match_tracks_to_detections(lost_tracks, unmatched_high_dets, cost_matrix_lost, kf_lost, current_time, frame, frame_index, matched_lost_indices)
+            current_tracks_in_frame.update(stage3_matches)
+            
+            # Filter out the high dets that were matched in this stage
+            unmatched_high_dets = [d for i, d in enumerate(unmatched_high_dets) if i not in matched_lost_indices]
+
+        # --- Stage 4: Initialize New Tracks from Remaining High Confidence Detections ---
+        # We only initialize new tracks from high confidence detections to avoid false positives
+        for det in unmatched_high_dets:
+            if len(self.vehicle_data) >= self.max_active_tracks:
+                break
+            new_vehicle_id = self._initialize_new_track(frame, det, current_time, frame_index)
+            if new_vehicle_id:
+                 self.vehicle_data[new_vehicle_id]["status"] = "active"
+                 current_tracks_in_frame[new_vehicle_id] = self.vehicle_data[new_vehicle_id]
 
         return current_tracks_in_frame
 
