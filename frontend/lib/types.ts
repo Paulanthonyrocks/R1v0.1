@@ -193,6 +193,17 @@ export interface SurveillanceFeedMessage {
   timestamp?: string | Date;
   latitude?: number;
   longitude?: number;
+  
+  // New cumulative/session metrics
+  total_vehicles_cumulative?: number;
+  session_average_speed_kmh?: number;
+  session_congestion_level_percent?: number;
+  
+  // Additional instantaneous metrics
+  stopped_vehicles?: number;
+  congestion_level_percent?: number;
+  is_congested?: boolean;
+
   // Individual vehicle data is now sent directly in VideoFrameMessage.vehicles
 }
 

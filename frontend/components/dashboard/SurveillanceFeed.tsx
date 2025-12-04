@@ -193,8 +193,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 {/* Metrics Display - Top Right */}
                 {metrics && isLive && !isToggling && !isLoading && !error && (
                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow flex flex-col items-end z-20">
-                        <span>VEH: {metrics.total_vehicles ?? '--'}</span>
-                        <span>AVG SPEED: {metrics.average_speed_kmh ? metrics.average_speed_kmh.toFixed(1) : '--'} KM/H</span>
+                        <span>VEH: {metrics.total_vehicles_cumulative ?? metrics.total_vehicles ?? '--'}</span>
+                        <span>AVG SPEED: {metrics.session_average_speed_kmh ? metrics.session_average_speed_kmh.toFixed(1) : (metrics.average_speed_kmh ? metrics.average_speed_kmh.toFixed(1) : '--')} KM/H</span>
                     </div>
                 )}
 

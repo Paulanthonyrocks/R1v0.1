@@ -1,5 +1,4 @@
 import React from 'react';
-import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 
 interface StreamOverlayControlsProps {
@@ -11,6 +10,30 @@ interface StreamOverlayControlsProps {
   setShowVehicleDetails: (value: boolean) => void;
   controlId: string;
 }
+
+const MatrixCheckbox = ({ id, checked, onCheckedChange }: { id: string, checked: boolean, onCheckedChange: (c: boolean) => void }) => (
+  <div className="relative flex items-center">
+    <input
+      type="checkbox"
+      id={id}
+      checked={checked}
+      onChange={(e) => onCheckedChange(e.target.checked)}
+      className="peer h-5 w-5 appearance-none border-2 border-lcd-text bg-lcd-bg rounded-none checked:bg-lcd-text cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-lcd-text"
+    />
+    <svg
+      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none hidden peer-checked:block text-lcd-bg"
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="4"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  </div>
+);
 
 const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   showOverlays,
@@ -26,35 +49,32 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
       className="p-4 space-y-3 bg-black/70 backdrop-blur-sm rounded-none font-lcd matrix-glow text-lcd-text border border-lcd-text"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between">
-        <Label htmlFor={`toggle-overlays-${controlId}`} className="text-lcd-text text-sm">Show All Overlays</Label>
-        <Switch
+      <div className="flex items-center justify-between gap-4">
+        <Label htmlFor={`toggle-overlays-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Show All Overlays</Label>
+        <MatrixCheckbox
           id={`toggle-overlays-${controlId}`}
           checked={showOverlays}
           onCheckedChange={setShowOverlays}
-          className="data-[state=checked]:bg-lcd-text data-[state=unchecked]:bg-lcd-bg"
         />
       </div>
 
       {showOverlays && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <Label htmlFor={`toggle-boxes-${controlId}`} className="text-lcd-text text-sm">Bounding Boxes</Label>
-            <Switch
+        <div className="space-y-3 pl-2 border-l border-lcd-text/30">
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-boxes-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Bounding Boxes</Label>
+            <MatrixCheckbox
               id={`toggle-boxes-${controlId}`}
               checked={showBoundingBoxes}
               onCheckedChange={setShowBoundingBoxes}
-              className="data-[state=checked]:bg-lcd-text data-[state=unchecked]:bg-lcd-bg"
             />
           </div>
 
-          <div className="flex items-center justify-between">
-            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-text text-sm">Vehicle Details</Label>
-            <Switch
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Vehicle Details</Label>
+            <MatrixCheckbox
               id={`toggle-details-${controlId}`}
               checked={showVehicleDetails}
               onCheckedChange={setShowVehicleDetails}
-              className="data-[state=checked]:bg-lcd-text data-[state=unchecked]:bg-lcd-bg"
             />
           </div>
         </div>

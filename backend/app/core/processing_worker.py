@@ -38,7 +38,7 @@ def _make_serializable(obj):
         return obj.tolist()
     return obj
 
-def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict]) -> List[Dict[str, Any]]:
+def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: float = 1.0, scale_y: float = 1.0) -> List[Dict[str, Any]]:
     """
     Serializes tracking data, ensuring all NumPy types are converted to Python native types
     to prevent JSON serialization errors in the API layer.
@@ -50,9 +50,20 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict]) -> List[Dict[
             c_id = data.get("class_id", -1)
             c_name = CoreModule.vehicle_type_map.get(c_id, "unknown") if CoreModule else "unknown"
 
+            # Apply scaling to bbox
+            bbox = data.get("bbox", [])
+            scaled_bbox = []
+            if bbox and len(bbox) == 4:
+                scaled_bbox = [
+                    bbox[0] * scale_x,
+                    bbox[1] * scale_y,
+                    bbox[2] * scale_x,
+                    bbox[3] * scale_y
+                ]
+
             serializable_data = {
                 "vehicle_id": str(vehicle_id),
-                "bbox": [_make_serializable(x) for x in data.get("bbox", [])],
+                "bbox": [_make_serializable(x) for x in scaled_bbox],
                 "speed": _make_serializable(data.get("speed", 0)),
                 "license_plate": str(data.get("license_plate", "Unknown")),
                 "class_id": int(c_id),
@@ -220,9 +231,17 @@ def process_video(
 
                 # 5. Prepare for Stream (Resized)
                 try:
-                    stream_frame = cv2.resize(vis_frame, stream_res, interpolation=cv2.INTER_LINEAR)
+                    # Use raw frame for stream to allow client-side rendering (better performance/flexibility)
+                    stream_frame = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
                     _, buffer = cv2.imencode(".jpg", stream_frame, encode_params)
-                    serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles)
+                    
+                    # Calculate scale factors
+                    orig_h, orig_w = frame.shape[:2]
+                    target_w, target_h = stream_res
+                    scale_x = target_w / orig_w if orig_w > 0 else 1.0
+                    scale_y = target_h / orig_h if orig_h > 0 else 1.0
+                    
+                    serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y)
                     
                     # Push to Frontend
                     frame_queue.put((feed_id, frame_index, buffer.tobytes(), metrics, serialized_vehicles, {}))

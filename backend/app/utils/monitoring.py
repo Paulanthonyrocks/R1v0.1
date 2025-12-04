@@ -34,6 +34,15 @@ class TrafficMonitor:
         self.tracked_vehicles: Dict[int, Dict[str, Any]] = {}
         self.lane_counts: Dict[int, int] = {}  # Stores count of vehicles per lane_id
 
+        # Cumulative / Session metrics
+        self.seen_vehicle_ids = set()
+        self.session_metrics = {
+            "speed_sum": 0.0,
+            "speed_samples": 0,
+            "congestion_sum": 0.0,
+            "congestion_samples": 0
+        }
+
         # Extract relevant settings from the main configuration dict
         # Provide defaults if keys are missing to make the class more robust
         self.speed_limit_kmh: float = config.get("speed_limit", 60.0)
@@ -59,7 +68,10 @@ class TrafficMonitor:
         """
         self.tracked_vehicles = vehicles
         self.lane_counts.clear()  # Reset lane counts for the new update
-        for _track_id, data in vehicles.items():
+        for track_id, data in vehicles.items():
+            # Update cumulative count
+            self.seen_vehicle_ids.add(track_id)
+            
             lane = data.get("lane", -1)  # Default to -1 if lane info is missing
             if lane != -1:  # Only count if lane info is valid
                 self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
@@ -71,7 +83,7 @@ class TrafficMonitor:
             A dictionary containing metrics like total vehicles, counts of stopped/speeding vehicles,
             average speed, congestion level, vehicle counts per lane, etc.
         """
-        total_vehicles = len(self.tracked_vehicles)
+        current_vehicle_count = len(self.tracked_vehicles)
         stopped_count = 0
         speeding_count = 0
         speeds_list_kmh: list[float] = []
@@ -105,15 +117,31 @@ class TrafficMonitor:
 
         # Congestion level as percentage of stopped vehicles
         congestion_lvl_percent = (
-            float((stopped_count / total_vehicles) * 100.0)
-            if total_vehicles > 0
+            float((stopped_count / current_vehicle_count) * 100.0)
+            if current_vehicle_count > 0
             else 0.0
+        )
+        
+        # Update Session Metrics (Rolling Averages)
+        if current_vehicle_count > 0:
+            self.session_metrics["speed_sum"] += avg_speed_kmh
+            self.session_metrics["speed_samples"] += 1
+            self.session_metrics["congestion_sum"] += congestion_lvl_percent
+            self.session_metrics["congestion_samples"] += 1
+
+        session_avg_speed = (
+            self.session_metrics["speed_sum"] / self.session_metrics["speed_samples"]
+            if self.session_metrics["speed_samples"] > 0 else 0.0
+        )
+        session_avg_congestion = (
+            self.session_metrics["congestion_sum"] / self.session_metrics["congestion_samples"]
+            if self.session_metrics["congestion_samples"] > 0 else 0.0
         )
 
         # Determine if overall congestion is occurring
         is_congested = (
             avg_speed_kmh < self.congestion_speed_threshold
-            and total_vehicles > self.density_threshold
+            and current_vehicle_count > self.density_threshold
         )  # Basic congestion heuristic
 
         # Identify lanes with high density
@@ -126,7 +154,7 @@ class TrafficMonitor:
         # Calculate a simple congestion score (0-100)
         # Lower speed and higher vehicle count contribute to higher congestion
         congestion_score = 0.0
-        if total_vehicles > 0:
+        if current_vehicle_count > 0:
             # Inverse of speed (normalized by speed limit)
             speed_factor = (
                 1 - (avg_speed_kmh / self.speed_limit_kmh)
@@ -137,7 +165,7 @@ class TrafficMonitor:
 
             # Vehicle density factor (normalized by a reasonable max density, e.g., 100 vehicles in view)
             density_factor = (
-                total_vehicles / 100.0
+                current_vehicle_count / 100.0
             )  # Assuming 100 is a high density for a single view
             density_factor = max(0, min(1, density_factor))  # Clamp between 0 and 1
 
@@ -146,7 +174,10 @@ class TrafficMonitor:
             congestion_score = round(congestion_score, 1)
 
         return {
-            "total_vehicles": total_vehicles,
+            "total_vehicles": current_vehicle_count, # Instantaneous count
+            "total_vehicles_cumulative": len(self.seen_vehicle_ids), # Session unique count
+            "session_average_speed_kmh": round(session_avg_speed, 1),
+            "session_congestion_level_percent": round(session_avg_congestion, 1),
             "stopped_vehicles": stopped_count,
             "speeding_vehicles": speeding_count,
             "average_speed_kmh": round(avg_speed_kmh, 1),

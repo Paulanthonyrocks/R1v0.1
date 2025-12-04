@@ -503,13 +503,13 @@ class FeedManager:
         sample_check = False
         
         try:
-            # Process up to 5 items per iteration to prevent one busy feed starving others
-            for _ in range(5):
+            # Process 1 item per iteration to prevent burstiness and ensure smoother frame delivery
+            for _ in range(1):
                 item = q.get_nowait()
                 processed = True
                 
                 # Unpack
-                _fid, frame_idx, frame_bytes, metrics, _, _ = item
+                _fid, frame_idx, frame_bytes, metrics, vehicles, _ = item
                 if _fid != feed_id: continue
 
                 async with self._lock:
@@ -541,7 +541,7 @@ class FeedManager:
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
-                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics})
+                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
                             except asyncio.QueueFull:
                                 pass # Drop if subscriber slow
 
@@ -553,7 +553,7 @@ class FeedManager:
                     vid_msg = VideoFrameData(
                         feed_id=feed_id, frame_index=frame_idx,
                         timestamp=datetime.now(timezone.utc).isoformat(),
-                        frame=b64_frame, metrics=metrics, vehicles=[]
+                        frame=b64_frame, metrics=metrics, vehicles=vehicles
                     )
                     if self._connection_manager:
                         await self._connection_manager.broadcast_to_topic(
@@ -738,6 +738,22 @@ class FeedManager:
 
         if sample_needed:
             await self._check_and_manage_sample_feed()
+
+    async def subscribe_to_frames(self, feed_id: str) -> asyncio.Queue:
+        async with self._lock:
+            if feed_id not in self.frame_subscriber_queues:
+                self.frame_subscriber_queues[feed_id] = []
+            q = asyncio.Queue(maxsize=30) # Drop older frames if consumer is slow
+            self.frame_subscriber_queues[feed_id].append(q)
+            return q
+
+    async def unsubscribe_from_frames(self, feed_id: str, q: asyncio.Queue):
+        async with self._lock:
+            if feed_id in self.frame_subscriber_queues:
+                if q in self.frame_subscriber_queues[feed_id]:
+                    self.frame_subscriber_queues[feed_id].remove(q)
+                if not self.frame_subscriber_queues[feed_id]:
+                    del self.frame_subscriber_queues[feed_id]
 
     async def shutdown(self):
         logger.info("Shutdown initiated.")

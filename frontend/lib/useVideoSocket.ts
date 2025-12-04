@@ -82,7 +82,16 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
-        ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+        const canvasWidth = ctx.canvas.width;
+        const canvasHeight = ctx.canvas.height;
+        const imgWidth = img.width;
+        const imgHeight = img.height;
+
+        // Calculate scale factors (protect against division by zero)
+        const scaleX = imgWidth > 0 ? canvasWidth / imgWidth : 1;
+        const scaleY = imgHeight > 0 ? canvasHeight / imgHeight : 1;
+
+        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
         URL.revokeObjectURL(url);
 
         if (vehicles && vehicles.length > 0) { // Use the new 'vehicles' state
@@ -92,7 +101,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             ctx.fillStyle = 'white';
 
             vehicles.forEach(v => {
-                const [x1, y1, x2, y2] = v.bbox;
+                let [x1, y1, x2, y2] = v.bbox;
+                
+                // Apply scaling to match canvas dimensions
+                x1 *= scaleX;
+                y1 *= scaleY;
+                x2 *= scaleX;
+                y2 *= scaleY;
 
                 // Map behavior to color (simplified for frontend, can be expanded)
                 let color = 'red'; // Default to red

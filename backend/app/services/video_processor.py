@@ -163,7 +163,8 @@ class VideoProcessor:
             while True:
                 data = await frame_queue.get()
                 raw_frame_bytes = data["frame"]
-                kpis = data["kpis"]
+                kpis = data.get("metrics", {})
+                vehicles_data = data.get("vehicles", [])
 
                 # Run heavy processing in thread pool
                 processed_jpeg_bytes = await loop.run_in_executor(
@@ -174,26 +175,8 @@ class VideoProcessor:
                 )
 
                 if processed_jpeg_bytes:
-                    # Transform kpis['detections'] to 'vehicles' for frontend
-                    vehicles = []
-                    if kpis and "detections" in kpis:
-                        for det in kpis["detections"]:
-                            # Ensure bbox is valid
-                            bbox = det.get("bbox")
-                            if not bbox or len(bbox) != 4: continue
-                            
-                            vehicles.append({
-                                "vehicle_id": str(det.get("track_id", det.get("id", "unknown"))),
-                                "bbox": bbox,
-                                "speed": float(det.get("speed", 0.0)),
-                                "license_plate": det.get("license_plate", "Unknown"),
-                                "class_id": int(det.get("class_id", 0)),
-                                "class_name": det.get("label", "vehicle"),
-                                "behavior": det.get("behavior", "moving"),
-                                "confidence": float(det.get("confidence", 0.0)),
-                                "is_occluded": bool(det.get("is_occluded", False)),
-                                "lane": int(det.get("lane_id", 0))
-                            })
+                    # Use already serialized vehicles from FeedManager
+                    vehicles = vehicles_data
 
                     # Broadcast via WebSocket
                     jpeg_base64 = base64.b64encode(processed_jpeg_bytes).decode('utf-8')
