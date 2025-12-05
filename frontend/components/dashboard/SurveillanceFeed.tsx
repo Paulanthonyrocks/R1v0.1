@@ -59,6 +59,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     canvas.width = displayWidth;
                     canvas.height = displayHeight;
                 }
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 drawFrame(ctx, frameData, vehicles, {
                     showBoundingBoxes: showOverlays && showBoundingBoxes,
                     showVehicleDetails: showOverlays && showVehicleDetails
