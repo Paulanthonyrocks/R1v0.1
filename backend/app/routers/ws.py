@@ -105,15 +105,15 @@ async def message_receiver(
 
             elif message.type == WebSocketMessageTypeEnum.START_FEED:
                 logger.info(f"Client {client_id} requesting START {feed_id}")
-                await feed_manager.handle_start_feed(feed_id)
+                await feed_manager.start_feed(feed_id)
 
             elif message.type == WebSocketMessageTypeEnum.STOP_FEED:
                 logger.info(f"Client {client_id} requesting STOP {feed_id}")
-                await feed_manager.handle_stop_feed(feed_id)
+                await feed_manager.stop_feed(feed_id)
             
             elif message.type == WebSocketMessageTypeEnum.RESTART_FEED:
                 logger.info(f"Client {client_id} requesting RESTART {feed_id}")
-                await feed_manager.handle_restart_feed(feed_id)
+                await feed_manager.restart_feed(feed_id)
 
     except WebSocketDisconnect:
         logger.info(f"Client {client_id} disconnected.")

@@ -21,7 +21,7 @@ data
 .idx
 .cursor
 .firebase
-.gemini
+.gemini/
 
 # Python cache files
 backend/__pycache__/
@@ -41,4 +41,5 @@ backend/__pycache__/__init__.cpython-311.pyc
 backend/logs
 backend/data/vehicle_data.db
 memory.md
+.gemini/memory.md
 .gemini/memory.md

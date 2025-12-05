@@ -19,8 +19,8 @@ const StreamPage: React.FC = () => {
         const now = new Date().toLocaleTimeString();
         const newEntry = {
           timestamp: now,
-          congestion: typeof metrics.vehicle_count === 'number' ? metrics.vehicle_count : 0, // Using vehicle_count as placeholder for congestion
-          speed: typeof metrics.avg_speed === 'number' ? metrics.avg_speed : 0, // Using avg_speed for average_speed_kmh
+          congestion: typeof metrics.total_flow === 'number' ? metrics.total_flow : (typeof metrics.vehicle_count === 'number' ? metrics.vehicle_count : 0), // Fallback to vehicle_count if legacy
+          speed: typeof metrics.average_speed_kmh === 'number' ? metrics.average_speed_kmh : (typeof metrics.avg_speed === 'number' ? metrics.avg_speed : 0), // Fallback to avg_speed
         };
         const updated = [...prev, newEntry];
         return updated.length > MAX_HISTORY ? updated.slice(-MAX_HISTORY) : updated;
@@ -76,8 +76,8 @@ const StreamPage: React.FC = () => {
 
           {/* Metric Cards */}
           <div className="col-span-full grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-            <StatCard title="Vehicles Detected" value={String(metrics?.vehicle_count ?? '--')} unit="" icon={Activity} change="N/A" changeText="N/A" />
-            <StatCard title="Average Speed" value={metrics?.avg_speed ? metrics.avg_speed.toFixed(2) : '--'} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
+            <StatCard title="Vehicles Detected" value={String(metrics?.total_flow ?? metrics?.vehicle_count ?? '--')} unit="" icon={Activity} change="N/A" changeText="N/A" />
+            <StatCard title="Average Speed" value={(metrics?.average_speed_kmh ?? metrics?.avg_speed) ? Number(metrics?.average_speed_kmh ?? metrics?.avg_speed).toFixed(2) : '--'} unit="km/h" icon={Zap} change="N/A" changeText="N/A" />
             <StatCard title="Active Incidents" value={String(metrics?.active_incidents_count ?? '--')} icon={AlertTriangle} change="N/A" changeText="N/A" />
             <StatCard title="Feeds" value={String(feeds ? feeds.filter(f => f.status === 'running').length : '--')} unit="/ running" icon={Users} change="N/A" changeText="N/A">
               <div className="text-xs text-lcd-text mt-1 tracking-normal"> {/* Changed color, added tracking */}

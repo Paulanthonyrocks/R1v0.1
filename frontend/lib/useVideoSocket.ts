@@ -15,6 +15,7 @@ interface VehicleFrontendData {
     confidence: number;
     is_occluded: boolean;
     lane: number;
+    status?: string; // Added status
 }
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -76,7 +77,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     lastFrameTimeRef.current = now;
   }, [streamId]);
 
-  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
+  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array, currentVehicles: VehicleFrontendData[] | null, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
     const { showBoundingBoxes = true, showVehicleDetails = true } = options;
     const blob = new Blob([frame as unknown as BlobPart], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
@@ -94,13 +95,16 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
         URL.revokeObjectURL(url);
 
-        if (vehicles && vehicles.length > 0) { // Use the new 'vehicles' state
+        if (currentVehicles && currentVehicles.length > 0) {
             ctx.strokeStyle = 'red'; // Default color
             ctx.lineWidth = 2;
             ctx.font = '12px Arial';
             ctx.fillStyle = 'white';
 
-            vehicles.forEach(v => {
+            currentVehicles.forEach(v => {
+                // Only draw active vehicles to prevent "sticky" ghost boxes
+                if (v.status && v.status !== 'active') return;
+
                 let [x1, y1, x2, y2] = v.bbox;
                 
                 // Apply scaling to match canvas dimensions
@@ -164,7 +168,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         }
     };
     img.src = url;
-  }, [vehicles]); // Dependency on 'vehicles'
+  }, []); // Removed dependency on 'vehicles' as it is now passed as an argument
 
   // Removed handleMetrics callback, as metrics are now part of handleFrame
 

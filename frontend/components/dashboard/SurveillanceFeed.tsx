@@ -13,7 +13,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed, isConnected: isSocketConnected, /*kpis*/ } = useRealtimeUpdates();
     const { token } = useAuth();
-    const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps } = useVideoSocket(feed_id, token);
+    const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles } = useVideoSocket(feed_id, token);
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
@@ -59,13 +59,13 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     canvas.width = displayWidth;
                     canvas.height = displayHeight;
                 }
-                drawFrame(ctx, frameData, {
+                drawFrame(ctx, frameData, vehicles, {
                     showBoundingBoxes: showOverlays && showBoundingBoxes,
                     showVehicleDetails: showOverlays && showVehicleDetails
                 });
             }
         }
-    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails]);
+    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles]);
 
     const handleStartFeed = () => {
         if (isToggling) return;

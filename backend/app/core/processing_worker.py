@@ -72,6 +72,7 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: floa
                 "confidence": _make_serializable(data.get("confidence", 0)),
                 "is_occluded": bool(data.get("is_occluded", False)),
                 "lane": int(data.get("lane", -1)),
+                "status": str(data.get("status", "unknown")),
             }
             serialized_list.append(serializable_data)
         except Exception as e:
