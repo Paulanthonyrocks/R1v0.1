@@ -526,6 +526,10 @@ class FeedManager:
                         if feed_id in self._feed_running_events:
                             self._feed_running_events[feed_id].set()
 
+                    # Update Timer
+                    if entry.get("timer"):
+                        entry["timer"].tick()
+
                     # Metrics Handling
                     metrics["timestamp"] = datetime.now(timezone.utc)
                     entry["latest_metrics"] = metrics

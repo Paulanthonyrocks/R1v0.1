@@ -1,8 +1,8 @@
 project_root_dir: /home/user/R1v0.1
-fps: 10
+fps: 15
 speed_limit: 60
 video_processing:
-  target_fps: 5
+  target_fps: 15
 firebase_admin:
   service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
@@ -325,7 +325,7 @@ post_startup_processing:
       longitude: -118.2437
 
 video_output:
-  enabled: true
+  enabled: false
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
@@ -351,9 +351,10 @@ vehicle_detection:
   confidence_threshold: 0.4
   proximity_threshold: 50
   track_timeout: 20
+  reid_timeout: 30
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 5
+  skip_frames: 2
 analytics_service:
   node_congestion_broadcast:
     enabled: false

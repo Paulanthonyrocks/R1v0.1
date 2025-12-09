@@ -43,7 +43,10 @@ if (app) {
     storage = getStorage(app);
     functions = getFunctions(app);
 
-    if (typeof window !== 'undefined' && window.location.hostname === "localhost") {
+    const useEmulator = (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) || process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true';
+
+    if (useEmulator) {
+      console.log('Connecting to Firebase Emulators...');
       connectAuthEmulator(auth, "http://127.0.0.1:9099");
       connectFirestoreEmulator(db, "127.0.0.1", 8080);
       connectStorageEmulator(storage, "127.0.0.1", 9199);

@@ -15,7 +15,7 @@ interface VehicleFrontendData {
     confidence: number;
     is_occluded: boolean;
     lane: number;
-    status?: string; // Added status
+    status?: string;
 }
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -31,8 +31,15 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const FPS_EMA_ALPHA = 0.1; // Exponential Moving Average alpha. Lower is smoother, higher is more responsive.
 
 
+  const frameCountRef = useRef<number>(0);
+
   const handleFrame = useCallback((data: VideoFrameMessage) => {
     if (data.feed_id && data.feed_id !== streamId) return;
+
+    frameCountRef.current += 1;
+    if (frameCountRef.current % 100 === 0) {
+        console.log(`[useVideoSocket] Received frame #${frameCountRef.current} for ${streamId}. Data size: ${data.frame instanceof ArrayBuffer ? data.frame.byteLength : data.frame.length}`);
+    }
 
     if (data.metrics) {
         setMetrics(data.metrics);
@@ -83,6 +90,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
+        // console.log('[useVideoSocket] Image loaded for drawing'); // Uncomment for deep debugging
         const canvasWidth = ctx.canvas.width;
         const canvasHeight = ctx.canvas.height;
         const imgWidth = img.width;
@@ -107,6 +115,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                 let [x1, y1, x2, y2] = v.bbox;
                 
+                // Validate bbox coordinates to prevent "random blotches" (rendering artifacts)
+                if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) {
+                    return;
+                }
+
                 // Apply scaling to match canvas dimensions
                 x1 *= scaleX;
                 y1 *= scaleY;

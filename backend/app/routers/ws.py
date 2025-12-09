@@ -160,4 +160,4 @@ async def websocket_endpoint(
     except Exception as e:
         logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
     finally:
-        await connection_manager.disconnect(client_id)
+        await connection_manager.disconnect(client_id, websocket)

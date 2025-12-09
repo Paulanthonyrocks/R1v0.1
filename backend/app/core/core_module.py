@@ -362,9 +362,9 @@ class CoreModule:
 
         processed_frame = frame.copy()
 
-        if self.perspective_matrix is not None:
-            h, w = processed_frame.shape[:2]
-            processed_frame = cv2.warpPerspective(processed_frame, self.perspective_matrix, (w, h))
+        # if self.perspective_matrix is not None:
+        #     h, w = processed_frame.shape[:2]
+        #     processed_frame = cv2.warpPerspective(processed_frame, self.perspective_matrix, (w, h))
 
         if roi_enabled:
             if self.roi_polygon_points:
@@ -1287,9 +1287,15 @@ class CoreModule:
         Advances the state of tracks using Kalman filter prediction without new detections.
         Used for frames where heavy detection is skipped.
         """
+        dt = 1.0 / self.fps if self.fps > 0 else 0.1 # Default to 0.1s if FPS is invalid
+
         for track in self.vehicle_data.values():
             kf = track.get("kalman_filter")
             if kf:
+                # Update F matrix with correct dt for this step
+                kf.F[0, 2] = dt
+                kf.F[1, 3] = dt
+                
                 # Predict state
                 kf.predict()
                 

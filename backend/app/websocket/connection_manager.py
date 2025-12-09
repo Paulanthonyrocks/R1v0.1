@@ -73,8 +73,13 @@ class ConnectionManager:
             f"Total connections: {len(self.active_connections)}"
         )
 
-    async def disconnect(self, client_id: str):
+    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None):
         if client_id in self.active_connections:
+            # Prevent removing a NEW connection if the OLD one is disconnecting
+            if websocket and self.active_connections[client_id] != websocket:
+                logger.warning(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
+                return
+
             # Remove from active connections first to prevent further sends
             del self.active_connections[client_id]
             
