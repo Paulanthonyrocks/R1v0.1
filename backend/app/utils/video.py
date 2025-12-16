@@ -91,10 +91,9 @@ class FrameReader:
         max_read_fails = 100 if not self.is_file else 0 # Be more patient with streams
 
         self.start_time = time.time() # Set start time when the reading actually begins
+        next_frame_time = self.start_time
 
         while not self.stop_event.is_set():
-            loop_start = time.time()
-            
             # 1. Read Frame
             ret, frame = cap.read()
 
@@ -106,7 +105,8 @@ class FrameReader:
                 if self.is_file:
                     if self.is_looped:
                         logger.info(f"Looping video '{self.source_name}'")
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        cap.release()
+                        cap = cv2.VideoCapture(self.source)
                         self.frame_index = -1
                         continue
                     else:
@@ -150,12 +150,16 @@ class FrameReader:
             
             self.frames_queue.put(frame_data)
 
-            # 5. FPS Control
-            # Calculate how long processing took, sleep for the remainder of the target delay
-            processing_time = time.time() - loop_start
-            sleep_time = self.delay - processing_time
+            # 5. FPS Control (Drift-corrected)
+            next_frame_time += self.delay
+            sleep_time = next_frame_time - time.time()
+            
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            else:
+                # If we are significantly behind (e.g. > 10 frames), reset to avoid burst
+                if sleep_time < -0.5:
+                     next_frame_time = time.time()
 
         # Cleanup within thread
         if cap.isOpened():
@@ -205,6 +209,13 @@ class FrameTimer:
     """Helper to calculate internal processing FPS"""
     def __init__(self, window_size: int = 100):
         self.timings = defaultdict(lambda: deque(maxlen=window_size))
+        self.last_tick = time.time()
+
+    def tick(self, name: str = "loop_total"):
+        now = time.time()
+        duration = now - self.last_tick
+        self.last_tick = now
+        self.log_time(name, duration)
 
     def log_time(self, name: str, duration: float):
         self.timings[name].append(duration)

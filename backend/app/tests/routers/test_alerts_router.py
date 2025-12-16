@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.main import app  # Assuming main app instance is here
 from app.dependency_injection import get_db, get_current_active_user
+from app.utils.service_getters import get_connection_manager
 
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
@@ -13,6 +14,7 @@ from app.models.websocket import (
     WebSocketMessageTypeEnum,
     AlertStatusUpdatePayload,
 )
+from app.models.user import User
 
 # --- Mock Dependencies ---
 mock_db_manager = MagicMock(spec=DatabaseManager)
@@ -26,7 +28,7 @@ async def override_get_db():
 
 
 async def override_get_current_active_user():
-    return {"username": "testuser", "uid": "testuid123", "role": "admin"}
+    return User(username="testuser", email="test@example.com", full_name="Test User", role="admin")
 
 
 async def override_get_connection_manager():
@@ -39,6 +41,7 @@ class TestAlertsRouter(unittest.TestCase):
         app.dependency_overrides[get_current_active_user] = (
             override_get_current_active_user
         )
+        app.dependency_overrides[get_connection_manager] = override_get_connection_manager
         app.state.connection_manager = mock_connection_manager
 
         self.client = TestClient(app)
@@ -61,14 +64,14 @@ class TestAlertsRouter(unittest.TestCase):
         # Verify WebSocket broadcast
         mock_connection_manager.broadcast.assert_awaited_once()
         args, _ = mock_connection_manager.broadcast.call_args
-        sent_message: WebSocketMessage = args[0]
+        sent_message = WebSocketMessage.model_validate_json(args[0])
 
         self.assertEqual(
             sent_message.type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE
         )
-        self.assertIsInstance(sent_message.data, AlertStatusUpdatePayload)
-        self.assertEqual(sent_message.data.alert_id, alert_id_to_delete)
-        self.assertEqual(sent_message.data.status, "dismissed")
+        self.assertIsInstance(sent_message.data, dict)
+        self.assertEqual(sent_message.data['alert_id'], alert_id_to_delete)
+        self.assertEqual(sent_message.data['status'], "dismissed")
 
     def test_delete_alert_not_found(self):
         alert_id_to_delete = 999
@@ -118,14 +121,14 @@ class TestAlertsRouter(unittest.TestCase):
         # Verify WebSocket broadcast
         mock_connection_manager.broadcast.assert_awaited_once()
         args, _ = mock_connection_manager.broadcast.call_args
-        sent_message: WebSocketMessage = args[0]
+        sent_message = WebSocketMessage.model_validate_json(args[0])
 
         self.assertEqual(
             sent_message.type, WebSocketMessageTypeEnum.ALERT_STATUS_UPDATE
         )
-        self.assertIsInstance(sent_message.data, AlertStatusUpdatePayload)
-        self.assertEqual(sent_message.data.alert_id, alert_id_to_ack)
-        self.assertEqual(sent_message.data.status, "acknowledged")
+        self.assertIsInstance(sent_message.data, dict)
+        self.assertEqual(sent_message.data['alert_id'], alert_id_to_ack)
+        self.assertEqual(sent_message.data['status'], "acknowledged")
 
     def test_unacknowledge_alert_success(self):
         alert_id_to_unack = 2

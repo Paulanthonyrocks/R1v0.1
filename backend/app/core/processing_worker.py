@@ -5,6 +5,7 @@ import logging
 import time
 import numpy as np
 import queue
+import threading
 from typing import Dict, Optional, Set, Tuple, Union, TYPE_CHECKING, Any, List
 from multiprocessing import Queue as MPQueue
 from pathlib import Path
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("Process")
 
-# Conditional Imports to prevent worker crash on startup
+# Conditional Imports
 try:
     from ..utils.video import FrameReader
     from ..utils.monitoring import TrafficMonitor
@@ -28,7 +29,7 @@ except ImportError as e:
     logger.error(f"Error importing CoreModule in processing_worker: {e}")
     CoreModule = None
 
-# --- Helper: Safe Serialization for NumPy Types ---
+# --- Helpers ---
 def _make_serializable(obj):
     if isinstance(obj, (np.integer, np.int64, np.int32)):
         return int(obj)
@@ -39,19 +40,17 @@ def _make_serializable(obj):
     return obj
 
 def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: float = 1.0, scale_y: float = 1.0) -> List[Dict[str, Any]]:
-    """
-    Serializes tracking data, ensuring all NumPy types are converted to Python native types
-    to prevent JSON serialization errors in the API layer.
-    """
     serialized_list = []
+    # Optimization: Pre-fetch map to avoid repeated attribute lookup
+    v_map = CoreModule.vehicle_type_map if CoreModule else {}
+    
     for vehicle_id, data in tracked_vehicles.items():
         try:
-            # Map class ID to Name safely
             c_id = data.get("class_id", -1)
-            c_name = CoreModule.vehicle_type_map.get(c_id, "unknown") if CoreModule else "unknown"
+            # Use local map reference
+            c_name = v_map.get(c_id, "unknown")
 
-            # Apply scaling to bbox
-            bbox = data.get("bbox", [])
+            bbox = data.get("bbox")
             scaled_bbox = []
             if bbox and len(bbox) == 4:
                 scaled_bbox = [
@@ -61,7 +60,7 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: floa
                     bbox[3] * scale_y
                 ]
 
-            serializable_data = {
+            serialized_list.append({
                 "vehicle_id": str(vehicle_id),
                 "bbox": [_make_serializable(x) for x in scaled_bbox],
                 "speed": _make_serializable(data.get("speed", 0)),
@@ -73,11 +72,9 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: floa
                 "is_occluded": bool(data.get("is_occluded", False)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
-            }
-            serialized_list.append(serializable_data)
+            })
         except Exception as e:
-            logger.warning(f"Error serializing vehicle {vehicle_id}: {e}")
-            continue
+            continue # Skip malformed tracks
     return serialized_list
 
 def _read_frame(feed_id: str, reader: Any, stop_event: Any) -> Tuple[Optional[int], Optional[np.ndarray]]:
@@ -115,33 +112,73 @@ def process_video(
 ) -> None:
     pid = os.getpid()
     
-    # --- Setup Logging ---
+    # --- Setup Logging (Process Safe) ---
     log_cfg = config.get("logging", {})
     log_level = getattr(logging, log_cfg.get("level", "INFO").upper(), logging.INFO)
     logger.setLevel(log_level)
+    
+    # Always ensure we have handlers (File + Stream)
     if not logger.handlers:
         formatter = logging.Formatter("%(asctime)s - %(process)d - %(levelname)s - %(message)s")
+        
+        # 1. Console Handler
         sh = logging.StreamHandler()
         sh.setFormatter(formatter)
         logger.addHandler(sh)
-    
+        
+        # 2. File Handler (if configured)
+        handlers_cfg = log_cfg.get("handlers", {})
+        worker_handler_cfg = handlers_cfg.get("workerFileHandler")
+        if worker_handler_cfg and worker_handler_cfg.get("filename"):
+            try:
+                fh = logging.FileHandler(worker_handler_cfg["filename"], mode='a')
+                fh.setFormatter(formatter)
+                logger.addHandler(fh)
+            except Exception as e:
+                # Fallback to console if file access fails
+                print(f"Failed to setup worker file logging: {e}")
+
     logger.info(f"Process {pid} started for {feed_id}")
 
-    # --- Configuration Caching (Optimization) ---
-    # Extract configs once to avoid dictionary lookups inside the loop
+    # --- Parent Monitoring (Anti-Zombie) ---
+    def _monitor_parent(stop_evt, orig_ppid):
+        while not stop_evt.is_set():
+            try:
+                curr_ppid = os.getppid()
+                if curr_ppid != orig_ppid:
+                    logger.warning(f"[{feed_id}] Parent changed ({orig_ppid} -> {curr_ppid}). Exiting.")
+                    stop_evt.set()
+                    break
+                os.kill(orig_ppid, 0) # Check existence
+            except OSError:
+                logger.warning(f"[{feed_id}] Parent {orig_ppid} dead. Exiting.")
+                stop_evt.set()
+                break
+            time.sleep(1.0)
+
+    parent_monitor = threading.Thread(target=_monitor_parent, args=(stop_event, os.getppid()), daemon=True)
+    parent_monitor.start()
+
+    # --- Config Extraction (Optimization) ---
     vehicle_det_cfg = config.get("vehicle_detection", {})
     video_out_cfg = config.get("video_output", {})
     ocr_cfg = config.get("ocr_engine", {})
     
     target_fps = config.get("video_processing", {}).get("target_fps", 30)
     skip_interval = max(1, vehicle_det_cfg.get("skip_frames", 1))
-    
-    # Stream resolution (width, height)
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
     processing_enabled = video_out_cfg.get("processing_enabled", True)
-    
-    # JPEG Compression: Quality 80 offers good speed/size balance
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+
+    # Pre-extract location data
+    lat, lon = 0.0, 0.0
+    if feed_config_info:
+        if isinstance(feed_config_info, dict):
+            lat = feed_config_info.get("latitude", 0.0)
+            lon = feed_config_info.get("longitude", 0.0)
+        else:
+            lat = getattr(feed_config_info, "latitude", 0.0)
+            lon = getattr(feed_config_info, "longitude", 0.0)
 
     # --- Component Initialization ---
     reader = None
@@ -188,10 +225,9 @@ def process_video(
 
             if frame is None:
                 if stop_event.is_set(): break
-                time.sleep(0.01) # Avoid busy wait
+                time.sleep(0.005) # Reduced sleep for better responsiveness
                 continue
 
-            # --- Processing Pipeline ---
             tracked_vehicles = {}
             metrics = {}
             serialized_vehicles = []
@@ -199,87 +235,106 @@ def process_video(
             if core_module and traffic_monitor:
                 # 1. Detection / Tracking
                 if frame_index % skip_interval == 0:
-                    # Heavy Detection
                     tracked_vehicles = core_module.detect_and_track(
                         frame, frame_index, confidence_threshold, proximity_threshold, track_timeout
                     )
                 else:
-                    # Lightweight Prediction
                     tracked_vehicles = core_module.predict_only(frame_index)
 
                 # 2. Update Statistics
                 traffic_monitor.update_vehicles(tracked_vehicles)
                 metrics = traffic_monitor.get_metrics()
+                metrics["latitude"] = lat
+                metrics["longitude"] = lon
                 
-                # Inject Feed Configuration Data (Location) into metrics
-                if feed_config_info:
-                    if isinstance(feed_config_info, dict):
-                        metrics["latitude"] = feed_config_info.get("latitude", 0.0)
-                        metrics["longitude"] = feed_config_info.get("longitude", 0.0)
-                    else:
-                        metrics["latitude"] = getattr(feed_config_info, "latitude", 0.0)
-                        metrics["longitude"] = getattr(feed_config_info, "longitude", 0.0)
-                
-                # 3. Visualization
-                # Note: We visualize on a copy to keep the original frame clean if needed for other pipes
-                vis_frame = visualize_data(frame.copy(), tracked_vehicles, metrics, vis_options, config, feed_id)
-
-                # 4. Video Writer (Full Resolution)
+                # 3. Video Writer (Conditional)
+                # OPTIMIZATION: Only visualize if someone is listening (writer enabled)
                 if video_writer_queue:
-                    # Only put if queue isn't full to prevent blocking the processing loop
-                    if not video_writer_queue.full():
-                        video_writer_queue.put(vis_frame)
+                    try:
+                        # Only copy and draw if we have a writer
+                        vis_frame = visualize_data(frame.copy(), tracked_vehicles, metrics, vis_options, config, feed_id)
+                        video_writer_queue.put_nowait(vis_frame)
+                    except queue.Full:
+                        pass 
+                    except Exception as e:
+                        logger.error(f"[{feed_id}] Video writer error: {e}")
 
-                # 5. Prepare for Stream (Resized)
+                # 4. Stream Preparation
+                # OPTIMIZATION: Check queue size BEFORE expensive encoding
+                # On Linux, qsize() is reliable. If queue is full, skipping encoding saves significant CPU.
+                q_max = config.get("video_input", {}).get("max_queue_size", 500)
+                q_current = 0
                 try:
-                    # Use raw frame for stream to allow client-side rendering (better performance/flexibility)
-                    stream_frame = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
-                    _, buffer = cv2.imencode(".jpg", stream_frame, encode_params)
-                    
-                    # Calculate scale factors
-                    orig_h, orig_w = frame.shape[:2]
-                    target_w, target_h = stream_res
-                    scale_x = target_w / orig_w if orig_w > 0 else 1.0
-                    scale_y = target_h / orig_h if orig_h > 0 else 1.0
-                    
-                    serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y)
-                    
-                    # Push to Frontend
-                    frame_queue.put((feed_id, frame_index, buffer.tobytes(), metrics, serialized_vehicles, {}))
-                except Exception as e:
-                    logger.error(f"[{feed_id}] Encoding/Streaming error: {e}")
+                    q_current = frame_queue.qsize()
+                except NotImplementedError:
+                    # Fallback for OS where qsize is not available (macOS)
+                    pass
+                
+                if q_current >= q_max - 5:
+                    # Queue is effectively full. Drop frame early.
+                    if now - last_log_time > 5.0: # Reuse last_log_time or add new throttler
+                         pass # Don't spam logs for every dropped frame
+                else:
+                    try:
+                        # Resize raw frame for stream
+                        stream_frame = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
+                        success, buffer = cv2.imencode(".jpg", stream_frame, encode_params)
+                        
+                        if success:
+                            # Calculate scale factors for frontend drawing
+                            orig_h, orig_w = frame.shape[:2]
+                            target_w, target_h = stream_res
+                            scale_x = target_w / orig_w if orig_w > 0 else 1.0
+                            scale_y = target_h / orig_h if orig_h > 0 else 1.0
+                            
+                            serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y)
+                            
+                            try:
+                                frame_queue.put_nowait((feed_id, frame_index, buffer.tobytes(), metrics, serialized_vehicles, {}))
+                            except queue.Full:
+                                 # Should be rare due to qsize check, but possible due to race condition
+                                 pass
+                        else:
+                            logger.error(f"[{feed_id}] Frame encoding failed.")
+                    except Exception as e:
+                        logger.error(f"[{feed_id}] Encoding error: {e}")
 
             else:
-                # Pass-through mode (No ML)
+                # Pass-through mode
+                # Apply same optimization for pass-through
+                q_max = config.get("video_input", {}).get("max_queue_size", 500)
+                q_current = 0
                 try:
-                    stream_frame = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
-                    _, buffer = cv2.imencode(".jpg", stream_frame, encode_params)
-                    frame_queue.put((feed_id, frame_index, buffer.tobytes(), {}, [], {}))
-                except Exception as e:
-                    logger.error(f"[{feed_id}] Pass-through encoding error: {e}")
+                    q_current = frame_queue.qsize()
+                except NotImplementedError:
+                    pass
+                
+                if q_current < q_max - 5:
+                    try:
+                        stream_frame = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
+                        success, buffer = cv2.imencode(".jpg", stream_frame, encode_params)
+                        if success:
+                            try:
+                                frame_queue.put_nowait((feed_id, frame_index, buffer.tobytes(), {}, [], {}))
+                            except queue.Full:
+                                pass
+                        else:
+                            logger.error(f"[{feed_id}] Frame encoding failed in pass-through mode.")
+                    except Exception as e:
+                        logger.error(f"[{feed_id}] Pass-through error: {e}")
 
             # --- Loop Maintenance ---
             frame_count += 1
             
-            # periodic logging
+            # Periodic logging
             now = time.time()
             if now - last_log_time > 10.0:
                 fps = frame_count / (now - last_log_time)
-                logger.info(f"[{feed_id}] Processing Speed: {fps:.2f} FPS | Frames: {frame_count}")
-                if reader:
-                    reader_stats = reader.get_stats()
-                    # Calculate actual FPS from frames_read_count in reader
-                    reader_actual_fps = reader_stats["frames_read"] / (now - reader.start_time) if reader.start_time else 0
-                    logger.info(f"[{feed_id}] FrameReader Stats: {reader_stats['target_fps']} Target FPS, "
-                                f"{reader_actual_fps:.2f} Actual Read FPS, "
-                                f"{reader_stats['frames_queued']} Frames in Queue, "
-                                f"Read Count: {reader_stats['frames_read']}, Processed Count: {reader_stats['frames_processed_count']}")
+                logger.info(f"[{feed_id}] Speed: {fps:.2f} FPS | Frames: {frame_count}")
                 last_log_time = now
                 frame_count = 0
-
-            # Optional: Periodic GC to prevent memory fragmentation in long-running processes
-            if frame_count % 1000 == 0:
-                gc.collect()
+            
+            # REMOVED: gc.collect() - Reliance on Python's ref counting is better for real-time video
 
     except Exception as e:
         logger.critical(f"[{feed_id}] FATAL Process Error: {e}", exc_info=True)

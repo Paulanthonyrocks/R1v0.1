@@ -1,36 +1,40 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Dict, Any, Union, List
 from datetime import datetime, timezone
 import enum
 
-# Ensure these imports exist in your project structure
-# or replace them with generic Dicts if those files aren't created yet.
-try:
-    from app.models.alerts import Alert
-    from app.models.signals import SignalState
-    from app.models.feeds import FeedStatusData
-except ImportError:
-    # Fallback placeholders for standalone testing
-    class Alert(BaseModel):
-        id: str
-        severity: str
-        message: str
-        timestamp: datetime
+# Import FeedStatusData directly to avoid redefinition mismatch
+# app.models.feeds does not import websocket, so this is safe.
+from app.models.feeds import FeedStatusData
 
-    class SignalState(BaseModel):
-        intersection_id: str
-        current_phase: str
+# --- 1. Standardization: Use ISO Strings for WS Timestamps ---
+def get_utc_now_str() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    class FeedStatusData(BaseModel):
-        feed_id: str
-        status: str
-        fps: Optional[float] = 0.0
+# --- 2. Local DTO definitions ---
+# Defined locally to avoid circular imports and enforce string timestamps for WebSocket payloads.
 
-# --- Specific Payload Models ---
+class AlertData(BaseModel):
+    id: str
+    severity: str
+    message: str
+    timestamp: str
+
+class SignalStateData(BaseModel):
+    signal_id: str
+    current_phase: str
+    status: str
+    timestamp: str
+
+# FeedStatusData is imported from app.models.feeds
+
+# --- 3. Specific Payload Models ---
 
 class RealtimeMetricsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    
     feed_id: str = Field(..., description="ID of the feed generating the metrics")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
     metrics: Dict[str, Any] = Field(
         ...,
         description="Key-value pairs of metrics",
@@ -38,7 +42,7 @@ class RealtimeMetricsUpdate(BaseModel):
     )
 
 class GlobalRealtimeMetrics(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
     metrics_source: Optional[str] = Field(None, description="Source of the metrics")
     congestion_index: Optional[float] = Field(None, example=45.5)
     average_speed_kmh: Optional[float] = Field(None, example=30.2)
@@ -50,10 +54,10 @@ class GlobalRealtimeMetrics(BaseModel):
     custom_metrics: Optional[Dict[str, Any]] = None
 
 class NewAlertNotification(BaseModel):
-    alert_data: Alert
+    alert_data: AlertData
 
 class SignalStateUpdate(BaseModel):
-    signal_data: SignalState
+    signal_data: SignalStateData
 
 class FeedStatusUpdate(BaseModel):
     feed_status_data: FeedStatusData
@@ -64,18 +68,18 @@ class GeneralNotification(BaseModel):
     message: str
     severity: str = Field(default="info", pattern="^(info|warning|error)$")
     suggested_actions: Optional[List[str]] = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class ErrorNotification(BaseModel):
     error_code: Optional[str] = None
     message: str
     details: Optional[str] = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class AlertStatusUpdatePayload(BaseModel):
     alert_id: Union[int, str]
     status: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class NodeCongestionUpdateData(BaseModel):
     id: str
@@ -85,7 +89,7 @@ class NodeCongestionUpdateData(BaseModel):
     congestion_score: Optional[float] = None
     vehicle_count: Optional[int] = None
     average_speed: Optional[float] = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class NodeCongestionUpdatePayload(BaseModel):
     nodes: List[NodeCongestionUpdateData]
@@ -98,15 +102,15 @@ class UserSpecificConditionAlert(BaseModel):
     severity: str = "info"
     suggested_actions: Optional[List[str]] = None
     route_context: Optional[Dict[str, Any]] = None
-    issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    issued_at: str = Field(default_factory=get_utc_now_str)
 
-# --- Specific Payload Models for WebSocket Communication ---
+# --- 4. Specific Payload Models for WebSocket Communication ---
 
 class PingData(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class PongData(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: str = Field(default_factory=get_utc_now_str)
 
 class AuthSuccessData(BaseModel):
     message: str = "Authentication successful."
@@ -128,6 +132,8 @@ class FeedIdData(BaseModel):
     feed_id: str
 
 class VideoFrameData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     feed_id: str
     frame: str = Field(..., description="Base64 encoded string of the JPEG frame")
     frame_index: int
@@ -138,7 +144,7 @@ class VideoFrameData(BaseModel):
 class InitialFeedStatusesData(BaseModel):
     feeds: List[FeedStatusData]
 
-# --- WebSocket Message Wrapper ---
+# --- 5. WebSocket Message Wrapper ---
 
 class WebSocketMessageTypeEnum(str, enum.Enum):
     # Data Pushes
@@ -183,39 +189,20 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     INTERNAL_PONG = "__internal_pong"
 
 class WebSocketMessage(BaseModel):
+    """
+    Optimized Wrapper. 
+    'data' is generic Any/Dict to prevent Pydantic from running 
+    expensive Union validation on every frame.
+    """
     type: WebSocketMessageTypeEnum = Field(..., description="The type of event")
-    data: Optional[
-        Union[
-            # Payload Models
-            RealtimeMetricsUpdate,
-            GlobalRealtimeMetrics,
-            NewAlertNotification,
-            SignalStateUpdate,
-            FeedStatusUpdate,
-            GeneralNotification,
-            ErrorNotification,
-            AlertStatusUpdatePayload,
-            NodeCongestionUpdatePayload,
-            UserSpecificConditionAlert,
-            VideoFrameData,
-            InitialFeedStatusesData,
-            
-            # Protocol Models
-            PingData,
-            PongData,
-            AuthSuccessData,
-            AuthFailureData,
-            AuthenticateData,
-            SubscribeData,
-            UnsubscribeData,
-            
-            # Control Models
-            FeedIdData, # Used for Start/Stop/Restart/SubscribeToFeed
-        ]
-    ] = None
+    data: Optional[Dict[str, Any]] = None 
     client_id: Optional[str] = None
     correlation_id: Optional[str] = None
 
-    class Config:
-        # This helps Pydantic serialize enums to strings in the JSON output
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
+
+    # Helper method to parse data only when needed
+    def parse_data(self, model_class):
+        if self.data is None:
+            return None
+        return model_class.model_validate(self.data)

@@ -452,10 +452,10 @@ class AnalyticsService:
             severity=severity,
         )
         message = WebSocketMessage(
-            type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification
+            type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification.model_dump()
         )
         await self._connection_manager.broadcast_to_topic(
-            message, topic="operational_alerts"
+            message.model_dump_json(), topic="operational_alerts"
         )
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):

@@ -329,6 +329,9 @@ export class WebSocketClient implements IWebSocketClient {
                     this.lastPongTime = Date.now();
                     return;
                 }
+                if (message.type === WebSocketMessageType.VIDEO_FRAME) {
+                    // console.log(`[WebSocketClient] Received VIDEO_FRAME. Data size: ${JSON.stringify(message.data).length}`);
+                }
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
                 console.error('Error handling WebSocket message:', error, event.data);

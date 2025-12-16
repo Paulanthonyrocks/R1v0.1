@@ -34,13 +34,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const frameCountRef = useRef<number>(0);
 
   const handleFrame = useCallback((data: VideoFrameMessage) => {
+    // console.log(`[useVideoSocket] Raw data for ${streamId}:`, data.feed_id);
     if (data.feed_id && data.feed_id !== streamId) return;
 
     frameCountRef.current += 1;
-    if (frameCountRef.current % 100 === 0) {
-        console.log(`[useVideoSocket] Received frame #${frameCountRef.current} for ${streamId}. Data size: ${data.frame instanceof ArrayBuffer ? data.frame.byteLength : data.frame.length}`);
-    }
-
+    // Log every frame for debugging
+    // console.log(`[useVideoSocket] Received frame #${frameCountRef.current} for ${streamId}. Data size: ${data.frame instanceof ArrayBuffer ? data.frame.byteLength : data.frame.length}`);
+    
     if (data.metrics) {
         setMetrics(data.metrics);
     }
@@ -87,26 +87,29 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array, currentVehicles: VehicleFrontendData[] | null, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
     const { showBoundingBoxes = true, showVehicleDetails = true } = options;
     const blob = new Blob([frame as unknown as BlobPart], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-        // console.log('[useVideoSocket] Image loaded for drawing'); // Uncomment for deep debugging
+
+    // Helper to draw the image bitmap or image element
+    const drawToCanvas = (imageSource: ImageBitmap | HTMLImageElement) => {
         const canvasWidth = ctx.canvas.width;
         const canvasHeight = ctx.canvas.height;
-        const imgWidth = img.width;
-        const imgHeight = img.height;
+        const imgWidth = imageSource.width;
+        const imgHeight = imageSource.height;
 
         // Calculate scale factors (protect against division by zero)
         const scaleX = imgWidth > 0 ? canvasWidth / imgWidth : 1;
         const scaleY = imgHeight > 0 ? canvasHeight / imgHeight : 1;
 
-        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
-        URL.revokeObjectURL(url);
+        ctx.drawImage(imageSource, 0, 0, canvasWidth, canvasHeight);
+        
+        // If it's a bitmap, close it to free memory
+        if (imageSource instanceof ImageBitmap) {
+            imageSource.close();
+        }
 
         if (currentVehicles && currentVehicles.length > 0) {
             ctx.strokeStyle = 'red'; // Default color
-            ctx.lineWidth = 2;
-            ctx.font = '12px Arial';
+            ctx.lineWidth = 1;
+            ctx.font = '10px Arial';
             ctx.fillStyle = 'white';
 
             currentVehicles.forEach(v => {
@@ -152,12 +155,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         lines.push(`LP: ${v.license_plate}`);
                     }
 
-                    const fontScale = 0.5; // From backend's visualization_options
-                    const font = `${fontScale * 24}px Arial`; // Convert scale to px, adjust as needed
+                    const font = `10px Arial`; 
                     ctx.font = font;
 
-                    const lineHeight = 18; // Approx line height
-                    let textY = y1 - 5; // Start above bbox
+                    const lineHeight = 14; 
+                    let textY = y1 - 3; // Start closer to bbox
 
                     // Adjust if text goes off screen top
                     if (textY < lines.length * lineHeight) {
@@ -170,7 +172,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                         // Background for text
                         ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Semi-transparent black
-                        ctx.fillRect(textX - 4, textY + (i * lineHeight) - lineHeight + 2, textWidth + 8, lineHeight);
+                        ctx.fillRect(textX - 2, textY + (i * lineHeight) - lineHeight + 2, textWidth + 4, lineHeight);
                         
                         // Text
                         ctx.fillStyle = 'white';
@@ -180,7 +182,30 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             });
         }
     };
-    img.src = url;
+
+    if ('createImageBitmap' in window) {
+        createImageBitmap(blob).then(drawToCanvas).catch(e => {
+            console.error('[useVideoSocket] createImageBitmap failed, falling back:', e);
+            fallbackDraw();
+        });
+    } else {
+        fallbackDraw();
+    }
+
+    function fallbackDraw() {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+            drawToCanvas(img);
+            URL.revokeObjectURL(url);
+        };
+        img.onerror = (e) => {
+            console.error('[useVideoSocket] Error loading image for drawing:', e);
+            URL.revokeObjectURL(url);
+        };
+        img.src = url;
+    }
+
   }, []); // Removed dependency on 'vehicles' as it is now passed as an argument
 
   // Removed handleMetrics callback, as metrics are now part of handleFrame

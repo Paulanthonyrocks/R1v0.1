@@ -6,6 +6,8 @@ import time
 import numpy as np
 import psutil
 import re
+import atexit
+from collections import deque
 from multiprocessing import (
     Process,
     Queue as MPQueue,
@@ -20,7 +22,7 @@ import queue  # For queue.Empty exception
 from datetime import datetime, timezone
 
 # Import custom exceptions
-from .exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
+from app.services.exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
 
 # Import Pydantic models
 from app.models.feeds import (
@@ -47,14 +49,15 @@ from app.services.analytics_service import AnalyticsService
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.video_writer import VideoWriter
 
+from concurrent.futures import ThreadPoolExecutor
+
 logger = logging.getLogger("app.services.feed_manager")
 
-try:
-    if get_start_method(allow_none=True) is None:
-        set_start_method("spawn")
-    logger.info(f"Multiprocessing start method: {get_start_method()}")
-except Exception as e:
-    logger.warning(f"Could not set multiprocessing start method ('spawn'): {e}")
+# Constants
+PROCESS_JOIN_TIMEOUT = 3.0
+QUEUE_MAX_SIZE = 500
+QUEUE_DRAIN_LIMIT = 100
+MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
 
 
 class FeedManager:
@@ -63,6 +66,10 @@ class FeedManager:
         self.process_registry: Dict[str, Dict[str, Any]] = {}
         self.video_writers: Dict[str, VideoWriter] = {}
         self._lock = asyncio.Lock()
+        
+        # Dedicated thread pool for CPU bound tasks (Base64 encoding)
+        self._cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="FeedEncoder")
+        
         self._global_fps = None
         self._feed_id_counter = 1
         self._stop_reader_flag = False
@@ -96,9 +103,52 @@ class FeedManager:
 
         self._initialize_available_feeds()
 
+        # Broadcast Queue for Backpressure
+        self.broadcast_queue = asyncio.Queue(maxsize=50)
+        self._broadcast_worker_task = asyncio.create_task(self._broadcast_worker())
+
         # Start background reader
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self.logger.info("FeedManager initialized and result reader task started.")
+
+        # Register exit handler
+        atexit.register(self._atexit_cleanup)
+
+    def _atexit_cleanup(self):
+        """Synchronous cleanup for interpreter exit."""
+        logger.info("FeedManager executing atexit cleanup...")
+        for feed_id, entry in list(self.process_registry.items()):
+            process = entry.get("process")
+            if process and process.is_alive():
+                logger.info(f"Terminating process {process.pid} for {feed_id} in atexit")
+                process.terminate()
+                process.join(timeout=0.5)
+                if process.is_alive():
+                    process.kill()
+
+    async def _broadcast_worker(self):
+        """
+        Dedicated worker to broadcast messages from the queue.
+        This decouples the read loop from network I/O and provides backpressure
+        via the fixed-size queue.
+        """
+        logger.info("Broadcast worker started.")
+        while True:
+            try:
+                # Get a "work item" out of the queue.
+                msg_json, topic = await self.broadcast_queue.get()
+                
+                logger.info(f"Broadcast worker processing topic: {topic}") # DEBUG
+
+                if self._connection_manager:
+                    await self._connection_manager.broadcast_to_topic(msg_json, topic)
+                    # logger.info(f"Broadcast worker sent to topic: {topic}") # DEBUG
+                
+                self.broadcast_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in broadcast worker: {e}")
 
     def set_prediction_scheduler(self, scheduler: PredictionScheduler):
         self._prediction_scheduler = scheduler
@@ -212,7 +262,7 @@ class FeedManager:
                 "start_time": None,
                 "error_message": None,
                 "latest_metrics": None,
-                "metrics_history": [],
+                "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
                 "timer": FrameTimer(),
                 "is_sample_feed": False,
                 "is_looped_feed": is_looped,
@@ -242,6 +292,8 @@ class FeedManager:
             }
 
     async def start_feed(self, feed_id: str):
+        resources_to_cleanup = None
+        failed_resources_to_cleanup = None
         is_sample = False
         started_real_feed = False
         
@@ -253,7 +305,7 @@ class FeedManager:
             # Clean up if previously in error or running state (force restart logic)
             if entry["status"] != FeedOperationalStatusEnum.STOPPED:
                 logger.warning(f"Feed '{feed_id}' is in state '{entry['status']}'. Cleaning up before start.")
-                await self._cleanup_process(feed_id)
+                resources_to_cleanup = self._detach_resources(feed_id)
 
             # Check resources
             is_sample = entry.get("is_sample_feed", False)
@@ -264,14 +316,21 @@ class FeedManager:
 
             # Initialize Queues and Events
             entry["result_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
-            entry["video_writer_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
+            
+            # Only create video writer queue if enabled
+            video_output_config = self.config.get("video_output", {})
+            if video_output_config.get("enabled", False):
+                entry["video_writer_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
+            else:
+                entry["video_writer_queue"] = None
+
             entry["stop_event"] = Event()
             entry["reduce_fps_event"] = Event()
             entry["status"] = FeedOperationalStatusEnum.STARTING
             entry["start_time"] = time.time()
             entry["error_message"] = None
             entry["latest_metrics"] = None
-            entry["metrics_history"] = []
+            entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
             entry["timer"] = FrameTimer()
 
             try:
@@ -281,24 +340,33 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Failed to launch worker for '{feed_id}': {e}", exc_info=True)
                 # Cleanup on failure
-                await self._cleanup_process(feed_id)
+                failed_resources_to_cleanup = self._detach_resources(feed_id)
                 entry["status"] = FeedOperationalStatusEnum.ERROR
                 entry["error_message"] = str(e)
-                await self._broadcast_feed_update(feed_id)
-                raise FeedOperationError(f"Failed to launch worker for '{feed_id}'") from e
+                # We will handle broadcast and raise after cleanup
 
-            # Start Video Writer if enabled
-            video_output_config = self.config.get("video_output", {})
-            if video_output_config.get("enabled", False):
-                video_writer = VideoWriter(
-                    feed_id=feed_id,
-                    output_dir=video_output_config.get("output_directory"),
-                    fps=video_output_config.get("fps"),
-                    frame_queue=entry["video_writer_queue"],
-                    codec=video_output_config.get("codec", "mp4v"),
-                )
-                self.video_writers[feed_id] = video_writer
-                video_writer.start()
+            # Start Video Writer if enabled (and no error)
+            if not failed_resources_to_cleanup:
+                video_output_config = self.config.get("video_output", {})
+                if video_output_config.get("enabled", False):
+                    video_writer = VideoWriter(
+                        feed_id=feed_id,
+                        output_dir=video_output_config.get("output_directory"),
+                        fps=video_output_config.get("fps"),
+                        frame_queue=entry["video_writer_queue"],
+                        codec=video_output_config.get("codec", "mp4v"),
+                    )
+                    self.video_writers[feed_id] = video_writer
+                    video_writer.start()
+
+        # Perform cleanups outside the lock
+        if resources_to_cleanup:
+            await self._terminate_resources(resources_to_cleanup)
+        
+        if failed_resources_to_cleanup:
+            await self._terminate_resources(failed_resources_to_cleanup)
+            await self._broadcast_feed_update(feed_id)
+            raise FeedOperationError(f"Failed to launch worker for '{feed_id}'")
 
         # Broadcast updates
         await self._broadcast_feed_update(feed_id)
@@ -307,13 +375,17 @@ class FeedManager:
             await self._check_and_manage_sample_feed()
 
     async def stop_feed(self, feed_id: str):
+        resources_to_cleanup = None
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
                 raise FeedNotFoundError(feed_id)
 
             logger.info(f"Stopping feed: '{feed_id}'")
-            await self._cleanup_process(feed_id)
+            resources_to_cleanup = self._detach_resources(feed_id)
+
+        if resources_to_cleanup:
+            await self._terminate_resources(resources_to_cleanup)
 
         await self._broadcast_feed_update(feed_id)
         await self._broadcast_kpi_update()
@@ -323,7 +395,6 @@ class FeedManager:
         logger.info(f"Restart requested for: '{feed_id}'")
         try:
             await self.stop_feed(feed_id)
-            await asyncio.sleep(0.5) # Allow cleanup to settle
             await self.start_feed(feed_id)
         except Exception as e:
             logger.error(f"Restart failed for '{feed_id}': {e}", exc_info=True)
@@ -391,58 +462,26 @@ class FeedManager:
         entry["start_time"] = time.time()
         logger.info(f"Launched process PID {process.pid} for '{feed_id}'")
 
-    async def _cleanup_process(self, feed_id: str):
+    def _detach_resources(self, feed_id: str) -> Optional[Dict[str, Any]]:
         """
-        Forcefully stops, joins, and cleans up a feed's resources. 
+        Detaches resources from the registry entry for later cleanup.
         MUST be called while holding self._lock.
         """
         entry = self.process_registry.get(feed_id)
         if not entry:
-            return
+            return None
 
-        process = entry.get("process")
-        stop_event = entry.get("stop_event")
-        result_queue = entry.get("result_queue")
-        writer_queue = entry.get("video_writer_queue")
+        # Gather resources to clean up
+        resources = {
+            "feed_id": feed_id,
+            "process": entry.get("process"),
+            "stop_event": entry.get("stop_event"),
+            "result_queue": entry.get("result_queue"),
+            "video_writer_queue": entry.get("video_writer_queue"),
+            "video_writer": self.video_writers.pop(feed_id, None)
+        }
 
-        # 1. Stop VideoWriter
-        if feed_id in self.video_writers:
-            try:
-                self.video_writers[feed_id].stop()
-                del self.video_writers[feed_id]
-            except Exception as e:
-                logger.error(f"Error stopping video writer for {feed_id}: {e}")
-
-        # 2. Signal Worker Stop
-        if stop_event:
-            stop_event.set()
-
-        # 3. Join/Kill Process
-        if process and process.is_alive():
-            try:
-                loop = asyncio.get_running_loop()
-                # Use executor to avoid blocking event loop
-                await loop.run_in_executor(None, process.join, 3.0)
-                if process.is_alive():
-                    logger.warning(f"Process {process.pid} for {feed_id} hung. Terminating.")
-                    process.terminate()
-                    await asyncio.sleep(0.5)
-                    if process.is_alive():
-                        logger.error(f"Process {process.pid} failed to terminate. Killing.")
-                        process.kill() # Hard kill
-            except Exception as e:
-                logger.error(f"Error joining process for {feed_id}: {e}")
-
-        # 4. Drain and Close Queues
-        for q in [result_queue, writer_queue]:
-            if q:
-                try:
-                    q.close()
-                    q.join_thread()
-                except Exception:
-                    pass
-
-        # 5. Reset Entry
+        # Reset Entry to Stopped state
         entry.update({
             "status": FeedOperationalStatusEnum.STOPPED,
             "error_message": None,
@@ -455,138 +494,242 @@ class FeedManager:
         
         if feed_id in self._feed_running_events:
             self._feed_running_events[feed_id].clear()
+            
+        return resources
+
+    async def _terminate_resources(self, resources: Dict[str, Any]):
+        """
+        Robust cleanup sequence to prevent zombie processes and deadlocks.
+        """
+        feed_id = resources.get("feed_id", "unknown")
+        process = resources.get("process")
+        stop_event = resources.get("stop_event")
+        result_queue = resources.get("result_queue")
+        writer_queue = resources.get("video_writer_queue")
+        video_writer = resources.get("video_writer")
+        
+        queues = [q for q in [result_queue, writer_queue] if q]
+
+        # 1. Signal Stop
+        if stop_event:
+            stop_event.set()
+
+        # 2. Stop Video Writer
+        if video_writer:
+            try:
+                await asyncio.to_thread(video_writer.stop)
+            except Exception as e:
+                logger.error(f"Error stopping video writer for {feed_id}: {e}")
+
+        # 3. Aggressively drain queues to unblock the worker's put() calls
+        # If the worker is stuck on q.put(), it won't check stop_event until the put succeeds.
+        start_wait = time.time()
+        while process and process.is_alive() and (time.time() - start_wait < PROCESS_JOIN_TIMEOUT):
+            drained_any = False
+            for q in queues:
+                try:
+                    # Drain in chunks
+                    while True:
+                        q.get_nowait()
+                        drained_any = True
+                except (queue.Empty, OSError, ValueError):
+                    pass
+            
+            if not drained_any:
+                await asyncio.sleep(0.1)
+            else:
+                # If we drained something, give the process a tiny bit of CPU time to advance
+                await asyncio.sleep(0.01)
+
+        # 4. Join or Kill
+        if process and process.is_alive():
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, process.join, 1.0)
+                
+                if process.is_alive():
+                    logger.warning(f"Process {process.pid} for {feed_id} hung. Terminating.")
+                    process.terminate()
+                    # Wait briefly for termination to take effect
+                    await asyncio.sleep(0.5) 
+                    
+                    if process.is_alive():
+                        logger.error(f"Process {process.pid} failed to terminate. Killing.")
+                        process.kill()
+            except Exception as e:
+                logger.error(f"Error joining process for {feed_id}: {e}")
+
+        # 5. Close Queues
+        for q in queues:
+            try:
+                q.close()
+                q.cancel_join_thread() # Important: Don't wait for background thread to flush
+            except Exception:
+                pass
 
     # --- Background Reader ---
 
     async def _read_result_queues(self):
         logger.info("Result reader task started.")
         while not self._stop_reader_flag:
-            feed_ids_to_update = set()
-            kpi_update_needed = False
-            sample_check_needed = False
-            processed_any = False
+            try:
+                # Snapshot active queues to avoid holding lock during processing
+                active_queues = await self._get_active_queues_snapshot()
 
-            active_queues = await self._get_active_queues_info()
+                if not active_queues:
+                    await asyncio.sleep(0.1)
+                    continue
 
-            for feed_id, result_q in active_queues["result_queues"]:
-                processed, kpi_local, sample_local = await self._process_result_queue(feed_id, result_q, feed_ids_to_update)
-                processed_any |= processed
-                kpi_update_needed |= kpi_local
-                sample_check_needed |= sample_local
-
-            for feed_id, db_q in active_queues["db_queues"]:
-                processed_any |= await self._process_db_queue(feed_id, db_q)
-
-            await self._perform_broadcasts(feed_ids_to_update, kpi_update_needed, sample_check_needed)
-
-            # Adaptive Delay Logic
-            if processed_any:
-                self._current_read_delay = self._min_read_delay
-                await asyncio.sleep(0) # Yield control
-            else:
-                self._current_read_delay = min(self._max_read_delay, self._current_read_delay * self._delay_adjustment_factor)
-                await asyncio.sleep(self._current_read_delay)
-
-    async def _get_active_queues_info(self):
-        active_res = []
-        active_db = []
-        async with self._lock:
-            for fid, entry in self.process_registry.items():
-                if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
-                    if entry.get("result_queue"): active_res.append((fid, entry["result_queue"]))
-                    if entry.get("db_queue"): active_db.append((fid, entry["db_queue"]))
-        return {"result_queues": active_res, "db_queues": active_db}
-
-    async def _process_result_queue(self, feed_id: str, q: MPQueue, feed_ids_to_update: set):
-        processed = False
-        kpi_update = False
-        sample_check = False
-        
-        try:
-            # Process 1 item per iteration to prevent burstiness and ensure smoother frame delivery
-            for _ in range(1):
-                item = q.get_nowait()
-                processed = True
+                processed_any = False
+                feed_ids_to_update = set()
                 
-                # Unpack
+                # Iterate over snapshot
+                for feed_id, result_q in active_queues:
+                    processed = await self._process_single_queue(feed_id, result_q, feed_ids_to_update)
+                    if processed:
+                        processed_any = True
+
+                # Broadcast updates if status changed
+                if feed_ids_to_update:
+                    for fid in feed_ids_to_update:
+                        await self._broadcast_feed_update(fid)
+                    await self._broadcast_kpi_update()
+
+                # Periodic Resource Check (every 30s)
+                now = time.time()
+                if now - self._last_queue_log_time >= 30.0:
+                    self._last_queue_log_time = now
+                    try:
+                        self._check_resources()
+                    except ResourceLimitError as e:
+                        logger.error(f"Resource limit exceeded during operation: {e}")
+
+                # Adaptive sleep
+                if processed_any:
+                    await asyncio.sleep(0.001) # Minimal yield
+                else:
+                    await asyncio.sleep(0.01) # Save CPU when idle
+
+            except Exception as e:
+                logger.error(f"Error in result reader loop: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
+
+    async def _get_active_queues_snapshot(self):
+        """Get list of (feed_id, queue) without holding lock long-term."""
+        async with self._lock:
+            return [
+                (fid, entry["result_queue"]) 
+                for fid, entry in self.process_registry.items() 
+                if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING] 
+                and entry.get("result_queue")
+            ]
+
+    async def _process_single_queue(self, feed_id: str, q: MPQueue, feed_ids_to_update: set) -> bool:
+        processed = False
+        items_buffer = []
+
+        # 1. Drain Queue (Sync, Fast)
+        try:
+            for _ in range(QUEUE_DRAIN_LIMIT):
+                items_buffer.append(q.get_nowait())
+        except queue.Empty:
+            pass
+        except Exception:
+            return False # Queue closed or error
+
+        if not items_buffer:
+            return False
+
+        # 2. Process Items
+        last_item = None
+        
+        # We only lock ONCE per batch, not per item
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry: return False
+
+            if entry["status"] == FeedOperationalStatusEnum.STARTING:
+                entry["status"] = FeedOperationalStatusEnum.RUNNING
+                feed_ids_to_update.add(feed_id)
+                if feed_id in self._feed_running_events:
+                    self._feed_running_events[feed_id].set()
+
+            for item in items_buffer:
                 _fid, frame_idx, frame_bytes, metrics, vehicles, _ = item
                 if _fid != feed_id: continue
 
-                async with self._lock:
-                    entry = self.process_registry.get(feed_id)
-                    if not entry: continue
-
-                    # Status transition
-                    if entry["status"] == FeedOperationalStatusEnum.STARTING:
-                        entry["status"] = FeedOperationalStatusEnum.RUNNING
-                        feed_ids_to_update.add(feed_id)
-                        kpi_update = True
-                        if not entry.get("is_sample_feed"):
-                            sample_check = True
-                        if feed_id in self._feed_running_events:
-                            self._feed_running_events[feed_id].set()
-
-                    # Update Timer
-                    if entry.get("timer"):
-                        entry["timer"].tick()
-
-                    # Metrics Handling
-                    metrics["timestamp"] = datetime.now(timezone.utc)
-                    entry["latest_metrics"] = metrics
-                    
-                    # Update History for Smoothing
-                    now = time.time()
-                    if "metrics_history" not in entry: entry["metrics_history"] = []
-                    entry["metrics_history"].append((now, metrics.copy()))
-                    entry["metrics_history"] = [(t, m) for t, m in entry["metrics_history"] 
-                                                if t >= now - self._metrics_averaging_window]
-
-                    # Distribute Frames to Subscribers
-                    if feed_id in self.frame_subscriber_queues:
-                        for sub_q in self.frame_subscriber_queues[feed_id]:
-                            try:
-                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
-                            except asyncio.QueueFull:
-                                pass # Drop if subscriber slow
-
-                # Broadcasts
-                await self._broadcast(WebSocketMessageTypeEnum.METRICS_UPDATE, {"feed_id": feed_id, "metrics": metrics})
+                processed = True
                 
-                if frame_bytes:
-                    b64_frame = base64.b64encode(frame_bytes).decode('utf-8')
+                # Update Metrics
+                metrics["timestamp"] = datetime.now(timezone.utc)
+                entry["latest_metrics"] = metrics
+                if entry.get("timer"): entry["timer"].tick()
+
+                # Update History
+                now = time.time()
+                if "metrics_history" not in entry or not isinstance(entry["metrics_history"], deque):
+                    entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
+                entry["metrics_history"].append((now, metrics.copy()))
+                
+                # Efficiently remove old metrics
+                while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
+                    entry["metrics_history"].popleft()
+
+                # Distribute Frames to Subscribers (Internal)
+                if feed_id in self.frame_subscriber_queues:
+                    for sub_q in self.frame_subscriber_queues[feed_id]:
+                        try:
+                            sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
+                        except asyncio.QueueFull:
+                            pass
+
+                # Analytics hook (for every frame)
+                if self._analytics_service:
+                    asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics))
+
+                last_item = item
+
+        # 3. Handle Broadcast (Outside Lock)
+        if last_item:
+            _fid, frame_idx, frame_bytes, metrics, vehicles, _ = last_item
+            
+            if frame_bytes and self._connection_manager:
+                # Offload encoding to thread pool to avoid blocking the event loop
+                loop = asyncio.get_running_loop()
+                try:
+                    b64_frame = await loop.run_in_executor(
+                        self._cpu_executor, 
+                        self._encode_frame, 
+                        frame_bytes
+                    )
+                    
                     vid_msg = VideoFrameData(
                         feed_id=feed_id, frame_index=frame_idx,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         frame=b64_frame, metrics=metrics, vehicles=vehicles
                     )
-                    if self._connection_manager:
-                        await self._connection_manager.broadcast_to_topic(
-                            WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg).model_dump_json(),
-                            f"video:{feed_id}"
-                        )
+                    
+                    # Put into broadcast queue with backpressure (drop if full)
+                    try:
+                        msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
+                        topic = f"video:{feed_id}"
+                        self.broadcast_queue.put_nowait((msg_json, topic))
+                    except asyncio.QueueFull:
+                        # Log periodically to avoid flooding logs
+                        if time.time() - self._last_queue_log_time > 5.0:
+                             logger.warning(f"Broadcast queue full! Dropping frame {frame_idx} for {feed_id}.")
+                    
+                except Exception as e:
+                    logger.error(f"Error encoding/broadcasting frame for {feed_id}: {e}")
+            elif not frame_bytes:
+                logger.warning(f"Skipping broadcast for {feed_id}: Empty frame bytes.")
 
-                if self._analytics_service:
-                     await self._analytics_service.process_feed_metrics(feed_id, metrics)
-
-        except queue.Empty:
-            pass
-        except Exception as e:
-            logger.error(f"Error processing result queue {feed_id}: {e}")
-            
-        return processed, kpi_update, sample_check
-
-    async def _process_db_queue(self, feed_id: str, q: MPQueue):
-        processed = False
-        try:
-            data = q.get_nowait()
-            processed = True
-            if self._analytics_service:
-                await self._analytics_service.save_vehicle_data(data)
-        except queue.Empty:
-            pass
-        except Exception as e:
-            logger.error(f"Error processing DB queue {feed_id}: {e}")
         return processed
+
+    @staticmethod
+    def _encode_frame(frame_bytes: bytes) -> str:
+        # This runs in a separate thread
+        return base64.b64encode(frame_bytes).decode('utf-8')
 
     # --- Sample Feed Management ---
 
@@ -670,7 +813,7 @@ class FeedManager:
         
         msg = WebSocketMessage(
             type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
-            data=FeedStatusUpdate(feed_status_data=data)
+            data=FeedStatusUpdate(feed_status_data=data).model_dump()
         )
         await self._connection_manager.broadcast_to_topic(msg.model_dump_json(), f"feed:{feed_id}")
 
@@ -712,7 +855,7 @@ class FeedManager:
 
         # Construct Payload
         kpi_data = GlobalRealtimeMetrics(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             metrics_source="aggregated_feeds",
             total_flow=total_vehicles,
             average_speed_kmh=round(global_avg_speed, 1),
@@ -727,7 +870,7 @@ class FeedManager:
         # Broadcast
         message = WebSocketMessage(
             type=WebSocketMessageTypeEnum.KPI_UPDATE,
-            data=kpi_data
+            data=kpi_data.model_dump()
         )
         await self._connection_manager.broadcast(message.model_dump_json())
 
@@ -762,6 +905,14 @@ class FeedManager:
     async def shutdown(self):
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
+        
+        if self._broadcast_worker_task:
+            self._broadcast_worker_task.cancel()
+            try:
+                await self._broadcast_worker_task
+            except asyncio.CancelledError:
+                pass
+
         await self.stop_all_feeds()
         if self._result_reader_task:
             await asyncio.wait([self._result_reader_task], timeout=5.0)

@@ -18,6 +18,7 @@ from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
     SignalStateUpdate,
+    SignalStateData,
 )
 from app.models.traffic import (
     IncidentSeverityEnum,  # Import IncidentSeverityEnum
@@ -84,13 +85,22 @@ class TrafficSignalService:
             )
             return
 
-        ws_payload = SignalStateUpdate(signal_data=signal_state)
+        # Map Domain Model to DTO for WebSocket
+        signal_data_dto = SignalStateData(
+            signal_id=signal_state.signal_id,
+            current_phase=signal_state.current_phase.value,
+            status=signal_state.operational_status.value,
+            timestamp=signal_state.last_updated.isoformat()
+        )
+
+        ws_payload = SignalStateUpdate(signal_data=signal_data_dto)
         message = WebSocketMessage(
-            type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE, data=ws_payload
+            type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE, 
+            data=ws_payload.model_dump()
         )
         topic = f"signal:{signal_id}"
         await self._connection_manager.broadcast_to_topic(
-            message, topic="signal_updates"
+            message.model_dump_json(), topic="signal_updates"
         )
         logger.debug(
             f"Broadcasted signal state update for {signal_id} to topic {topic}"

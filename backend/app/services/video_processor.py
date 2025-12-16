@@ -110,6 +110,10 @@ class VideoProcessor:
         Synchronous function to decode, draw, write to file, and re-encode.
         Run this in a separate thread.
         """
+        # Optimization: If not recording and no overlays are drawn, return raw bytes
+        if not self._is_recording:
+             return raw_frame_bytes
+
         try:
             np_arr = np.frombuffer(raw_frame_bytes, np.uint8)
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -175,26 +179,6 @@ class VideoProcessor:
                 )
 
                 if processed_jpeg_bytes:
-                    # Use already serialized vehicles from FeedManager
-                    vehicles = vehicles_data
-
-                    # Broadcast via WebSocket
-                    jpeg_base64 = base64.b64encode(processed_jpeg_bytes).decode('utf-8')
-                    payload = {
-                        "feed_id": self.stream_id,
-                        "frame": jpeg_base64,
-                        "kpis": kpis,
-                        "vehicles": vehicles
-                    }
-                    
-                    # Fire and forget broadcast to avoid slowing down generator
-                    asyncio.create_task(video_ws_manager.broadcast(
-                        self.stream_id, {
-                            "type": "video_frame",
-                            "data": payload
-                        }
-                    ))
-                    
                     yield {"frame": processed_jpeg_bytes, "kpis": kpis}
 
         except asyncio.CancelledError:

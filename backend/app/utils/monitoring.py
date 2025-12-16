@@ -74,6 +74,10 @@ class TrafficMonitor:
             
             lane = data.get("lane", -1)  # Default to -1 if lane info is missing
             if lane != -1:  # Only count if lane info is valid
+                try:
+                    lane = int(lane) # Ensure native int for JSON serialization
+                except (ValueError, TypeError):
+                    pass # Keep original if cast fails (though unlikely for lane ID)
                 self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
 
     def get_metrics(self) -> Dict[str, Any]:

@@ -95,7 +95,7 @@ const FeaturesSection: React.FC<FeaturesSectionProps> = ({ addToScrollRefs }) =>
              <div className="feature-underline"></div>
          </div>
          {/* Feature Card 5 */}
-         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-[400ms] backdrop-blur-sm bg-card/80 hover:shadow-lg">
+         <div ref={addToScrollRefs} className="matrix-glow-card p-8 scroll-transition delay-500 backdrop-blur-sm bg-card/80 hover:shadow-lg">
              <div className="w-16 h-16 border border-primary rounded-full flex items-center justify-center mb-6 float">
                  <Cloud size={32} className="text-primary" /> {/* Replaced fa-cloud */}
              </div>
