@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { WebSocketClient } from './WebSocketClient';
 import useAuth from '../hook/useAuth';
 
@@ -18,20 +18,18 @@ const getWsUrl = (path: string) => {
     return `${baseUrl}${path}`;
 }
 
-// Define the base URL for the WebSocket connection
 const WS_BASE_URL = getWsUrl('/api/v1/ws');
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { token } = useAuth();
+    const { token, loading } = useAuth(); // Destructure loading state from useAuth
 
-    // Use useMemo to ensure the WebSocketClient is only created once
     const webSocketClient = useMemo(() => {
         console.log("Creating new WebSocketClient instance");
         return new WebSocketClient(WS_BASE_URL);
     }, []);
 
     useEffect(() => {
-        // Cleanup on unmount
+        // Cleanup on unmount - this is crucial
         return () => {
             console.log("WebSocketProvider unmounting, destroying WebSocket client");
             webSocketClient.destroy();
@@ -39,16 +37,26 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, [webSocketClient]);
 
     useEffect(() => {
+        // Don't do anything while auth state is loading
+        if (loading) {
+            console.log("Auth state is loading, WebSocket connection deferred.");
+            return;
+        }
+
         if (token) {
-            console.log("Token available, connecting WebSocket");
-            webSocketClient.connect(token).catch(error => {
-                console.error("WebSocket connection error:", error);
-            });
+            // Only connect if there's a token and we are not already connected/connecting
+            if (!webSocketClient.isConnected() && webSocketClient.getConnectionState() !== 'connecting') {
+                console.log("Token available and not connected, connecting WebSocket");
+                webSocketClient.connect(token).catch(error => {
+                    console.error("WebSocket connection error on connect:", error);
+                });
+            }
         } else {
+            // Disconnect if there is no token (e.g., user logs out)
             console.log("No token, disconnecting WebSocket");
             webSocketClient.disconnect();
         }
-    }, [token, webSocketClient]);
+    }, [token, loading, webSocketClient]); // Add loading to dependency array
 
     return (
         <WebSocketContext.Provider value={webSocketClient}>

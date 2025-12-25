@@ -1,7 +1,7 @@
 import cv2
 import threading
 import time
-from queue import Queue, Full, Empty
+from queue import Queue, Empty
 import logging
 from typing import Optional, Union, Any, Dict, Tuple
 from collections import deque, defaultdict
@@ -221,7 +221,8 @@ class FrameTimer:
         self.timings[name].append(duration)
 
     def get_avg(self, name: str) -> float:
-        if not self.timings[name]: return 0.0
+        if not self.timings[name]:
+            return 0.0
         return sum(self.timings[name]) / len(self.timings[name])
 
     def get_fps(self, name: str) -> float:

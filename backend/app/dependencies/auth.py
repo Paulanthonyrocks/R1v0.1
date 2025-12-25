@@ -1,5 +1,5 @@
 
-from fastapi import Depends, HTTPException, status, Query
+from fastapi import HTTPException, status, Query
 from app.utils.auth_utils import verify_firebase_token
 from app.models.user import User
 import logging

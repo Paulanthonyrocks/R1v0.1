@@ -1,5 +1,4 @@
 import cv2
-import os
 import logging
 import time
 import numpy as np
@@ -505,7 +504,7 @@ class CoreModule:
             if kf:
                 kf.predict()
                 predicted_state = kf.x
-                x, y, vx, vy = predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]
+                x, y, _vx, _vy = predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]
                 
                 # Update bbox based on predicted center and original dimensions
                 # Assuming bbox stored is (x1, y1, x2, y2)
@@ -554,7 +553,7 @@ class CoreModule:
             if kf:
                 kf.predict()
                 # Store predicted bbox as (x1, y1, x2, y2) for association
-                x, y, vx, vy = kf.x[0], kf.x[1], kf.x[2], kf.x[3]
+                x, y, _vx, _vy = kf.x[0], kf.x[1], kf.x[2], kf.x[3]
                 x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
                 width_orig = x2_orig - x1_orig
                 height_orig = y2_orig - y1_orig
@@ -857,7 +856,8 @@ class CoreModule:
 
     def _estimate_speed_kalman(self, track: Dict, current_time: float, prev_time: float) -> float:
         kf = track.get("kalman_filter")
-        if not kf: return 0.0
+        if not kf:
+            return 0.0
         
         try:
             vx, vy = kf.x[2], kf.x[3]

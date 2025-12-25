@@ -12,7 +12,6 @@ from app.websocket.connection_manager import ConnectionManager
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
-    AlertStatusUpdatePayload,
 )
 from app.models.user import User
 

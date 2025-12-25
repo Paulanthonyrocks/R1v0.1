@@ -15,7 +15,7 @@ except RuntimeError:
 
 import firebase_admin
 from firebase_admin import credentials
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -27,7 +27,6 @@ from app.exceptions import (
     BadRequest,
     Unauthorized,
     Forbidden,
-    ConnectionLimitExceeded,
 )
 from app.middleware.logging_middleware import LoggingMiddleware
 
@@ -109,6 +108,7 @@ async def lifespan(app: FastAPI):
         max_connections=loaded_config.get("websocket", {}).get("max_connections", 1000),
         token_refresh_interval=loaded_config.get("websocket", {}).get("token_refresh_interval", 300),
         ping_interval=loaded_config.get("websocket", {}).get("ping_interval", 15),
+        pong_timeout=loaded_config.get("websocket", {}).get("pong_timeout", 60),
     )
     app.state.connection_manager = connection_manager
 
@@ -162,7 +162,8 @@ async def lifespan(app: FastAPI):
         for feed_cfg in post_startup.get("sample_feeds", []):
             try:
                 path_str = feed_cfg.get("path")
-                if not path_str: continue
+                if not path_str:
+                    continue
 
                 p = Path(path_str)
                 if not p.is_absolute():

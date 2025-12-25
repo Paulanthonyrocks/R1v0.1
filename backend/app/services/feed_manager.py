@@ -3,20 +3,15 @@ import base64
 import asyncio
 import logging
 import time
-import numpy as np
-import psutil
 import re
-import atexit
+
 from collections import deque
 from multiprocessing import (
     Process,
     Queue as MPQueue,
     Event,
-    set_start_method,
-    get_start_method,
 )
-from typing import Dict, Any, Optional, List, Tuple
-from enum import Enum
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import queue  # For queue.Empty exception
 from datetime import datetime, timezone
@@ -30,12 +25,10 @@ from app.models.feeds import (
     FeedConfigInfo,
     FeedOperationalStatusEnum,
 )
-from app.models.alerts import Alert, AlertSeverityEnum
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
     FeedStatusUpdate,
-    NewAlertNotification,
     GlobalRealtimeMetrics,
     VideoFrameData,
 )
@@ -103,16 +96,13 @@ class FeedManager:
 
         self._initialize_available_feeds()
 
-        # Broadcast Queue for Backpressure
-        self.broadcast_queue = asyncio.Queue(maxsize=50)
-        self._broadcast_worker_task = asyncio.create_task(self._broadcast_worker())
+
 
         # Start background reader
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self.logger.info("FeedManager initialized and result reader task started.")
 
-        # Register exit handler
-        atexit.register(self._atexit_cleanup)
+
 
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
@@ -126,29 +116,7 @@ class FeedManager:
                 if process.is_alive():
                     process.kill()
 
-    async def _broadcast_worker(self):
-        """
-        Dedicated worker to broadcast messages from the queue.
-        This decouples the read loop from network I/O and provides backpressure
-        via the fixed-size queue.
-        """
-        logger.info("Broadcast worker started.")
-        while True:
-            try:
-                # Get a "work item" out of the queue.
-                msg_json, topic = await self.broadcast_queue.get()
-                
-                logger.info(f"Broadcast worker processing topic: {topic}") # DEBUG
 
-                if self._connection_manager:
-                    await self._connection_manager.broadcast_to_topic(msg_json, topic)
-                    # logger.info(f"Broadcast worker sent to topic: {topic}") # DEBUG
-                
-                self.broadcast_queue.task_done()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in broadcast worker: {e}")
 
     def set_prediction_scheduler(self, scheduler: PredictionScheduler):
         self._prediction_scheduler = scheduler
@@ -646,7 +614,8 @@ class FeedManager:
         # We only lock ONCE per batch, not per item
         async with self._lock:
             entry = self.process_registry.get(feed_id)
-            if not entry: return False
+            if not entry:
+                return False
 
             if entry["status"] == FeedOperationalStatusEnum.STARTING:
                 entry["status"] = FeedOperationalStatusEnum.RUNNING
@@ -656,14 +625,15 @@ class FeedManager:
 
             for item in items_buffer:
                 _fid, frame_idx, frame_bytes, metrics, vehicles, _ = item
-                if _fid != feed_id: continue
+
 
                 processed = True
                 
                 # Update Metrics
                 metrics["timestamp"] = datetime.now(timezone.utc)
                 entry["latest_metrics"] = metrics
-                if entry.get("timer"): entry["timer"].tick()
+                if entry.get("timer"):
+                    entry["timer"].tick()
 
                 # Update History
                 now = time.time()
@@ -694,6 +664,7 @@ class FeedManager:
             _fid, frame_idx, frame_bytes, metrics, vehicles, _ = last_item
             
             if frame_bytes and self._connection_manager:
+                logger.debug(f"Received frame_bytes for {feed_id}. Length: {len(frame_bytes) if frame_bytes else 0}")
                 # Offload encoding to thread pool to avoid blocking the event loop
                 loop = asyncio.get_running_loop()
                 try:
@@ -709,18 +680,26 @@ class FeedManager:
                         frame=b64_frame, metrics=metrics, vehicles=vehicles
                     )
                     
-                    # Put into broadcast queue with backpressure (drop if full)
-                    try:
-                        msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
-                        topic = f"video:{feed_id}"
-                        self.broadcast_queue.put_nowait((msg_json, topic))
-                    except asyncio.QueueFull:
-                        # Log periodically to avoid flooding logs
-                        if time.time() - self._last_queue_log_time > 5.0:
-                             logger.warning(f"Broadcast queue full! Dropping frame {frame_idx} for {feed_id}.")
+                    msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
+                        
+                    # Get subscribers for this specific feed
+                    # Note: get_clients_for_feed returns client_ids that have explicitly subscribed to feed frames.
+                    # This is different from topic_subscriptions.
+                    
+                    subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
+                    logger.debug(f"Subscribed clients for feed {feed_id}: {subscribed_client_ids}. Attempting to send VIDEO_FRAME for {feed_id} to {len(subscribed_client_ids)} clients. Message size: {len(msg_json)} bytes.")
+                    
+                    send_tasks = []
+                    for client_id in subscribed_client_ids:
+                        send_tasks.append(
+                            self._connection_manager.send_personal_message(msg_json, client_id)
+                        )
+                    
+                    if send_tasks:
+                        await asyncio.gather(*send_tasks, return_exceptions=True) # Use return_exceptions to allow all sends to attempt
                     
                 except Exception as e:
-                    logger.error(f"Error encoding/broadcasting frame for {feed_id}: {e}")
+                    logger.error(f"Error encoding/sending frame for {feed_id}: {e}")
             elif not frame_bytes:
                 logger.warning(f"Skipping broadcast for {feed_id}: Empty frame bytes.")
 
@@ -742,7 +721,8 @@ class FeedManager:
         return False
 
     async def _check_and_manage_sample_feed(self):
-        if not self._sample_feed_ids: return
+        if not self._sample_feed_ids:
+            return
 
         to_start = []
         to_stop = []
@@ -775,12 +755,12 @@ class FeedManager:
         for fid in to_stop:
             try:
                 await self.stop_feed(fid)
-            except Exception: pass
+            except Exception: pass  # noqa: E701
 
         for fid in to_start:
             try:
                 await self.start_feed(fid)
-            except Exception: pass
+            except Exception: pass  # noqa: E701
 
     # --- Helper Methods ---
     
@@ -805,10 +785,12 @@ class FeedManager:
         )
 
     async def _broadcast_feed_update(self, feed_id: str):
-        if not self._connection_manager: return
+        if not self._connection_manager:
+            return
         async with self._lock:
             entry = self.process_registry.get(feed_id)
-            if not entry: return
+            if not entry:
+                return
             data = self._entry_to_status_data(feed_id, entry)
         
         msg = WebSocketMessage(
@@ -906,12 +888,7 @@ class FeedManager:
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
         
-        if self._broadcast_worker_task:
-            self._broadcast_worker_task.cancel()
-            try:
-                await self._broadcast_worker_task
-            except asyncio.CancelledError:
-                pass
+
 
         await self.stop_all_feeds()
         if self._result_reader_task:

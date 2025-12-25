@@ -1,17 +1,16 @@
 import os
 import cv2
-import gc
 import logging
 import time
 import numpy as np
 import queue
 import threading
-from typing import Dict, Optional, Set, Tuple, Union, TYPE_CHECKING, Any, List
+import signal
+from typing import Dict, Optional, Set, Tuple, TYPE_CHECKING, Any, List
 from multiprocessing import Queue as MPQueue
-from pathlib import Path
 
 if TYPE_CHECKING:
-    from ..core.core_module import CoreModule as CoreModuleType
+    pass
 
 logger = logging.getLogger("Process")
 
@@ -73,7 +72,7 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: floa
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
             })
-        except Exception as e:
+        except Exception:
             continue # Skip malformed tracks
     return serialized_list
 
@@ -142,18 +141,60 @@ def process_video(
 
     # --- Parent Monitoring (Anti-Zombie) ---
     def _monitor_parent(stop_evt, orig_ppid):
+        # Allow brief startup grace period
+        time.sleep(2.0)
+        
         while not stop_evt.is_set():
             try:
                 curr_ppid = os.getppid()
+                parent_dead = False
+                
                 if curr_ppid != orig_ppid:
-                    logger.warning(f"[{feed_id}] Parent changed ({orig_ppid} -> {curr_ppid}). Exiting.")
+                    parent_dead = True
+                else:
+                    try:
+                         # Signal 0 checks if process exists and we can send signals
+                         os.kill(orig_ppid, 0)
+                    except OSError:
+                         parent_dead = True
+                
+                if parent_dead:
+                    # Parent is gone. We must die.
                     stop_evt.set()
+                    
+                    # Log attempt (might fail if pipes broken)
+                    try:
+                        logger.warning(f"[{feed_id}] Parent {orig_ppid} gone (curr: {curr_ppid}). Initiating shutdown.")
+                    except:  # noqa: E722
+                        pass
+                    
+                    # Give the main loop a moment to see stop_evt and exit cleanly
+                    time.sleep(3.0)
+                    
+                    # If we are still here, force exit
+                    try:
+                        logger.warning(f"[{feed_id}] Force terminating self (parent gone).")
+                    except:  # noqa: E722
+                        pass
+                        
+                    # 1. Try SIGTERM first
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(1.0)
+                    
+                    # 2. SIGKILL if still alive
+                    os.kill(os.getpid(), signal.SIGKILL)
                     break
-                os.kill(orig_ppid, 0) # Check existence
-            except OSError:
-                logger.warning(f"[{feed_id}] Parent {orig_ppid} dead. Exiting.")
-                stop_evt.set()
-                break
+                    
+            except (Exception) as e: # Catch all exceptions to prevent the monitor thread from crashing
+                # Should not happen, but if monitor fails, we default to safety
+                try:
+                    logger.error(f"[{feed_id}] Monitor thread error: {e}")
+                except:  # noqa: E722
+                    pass
+                # Don't kill immediately on glitch, but sleep and retry or exit?
+                # For safety, if monitoring is broken, maybe we should exit.
+                # But let's just log for now to avoid premature death on transient errors.
+                
             time.sleep(1.0)
 
     parent_monitor = threading.Thread(target=_monitor_parent, args=(stop_event, os.getppid()), daemon=True)
@@ -224,7 +265,8 @@ def process_video(
             frame_index, frame = _read_frame(feed_id, reader, stop_event)
 
             if frame is None:
-                if stop_event.is_set(): break
+                if stop_event.is_set():
+                    break
                 time.sleep(0.005) # Reduced sleep for better responsiveness
                 continue
 
@@ -272,6 +314,7 @@ def process_video(
                 
                 if q_current >= q_max - 5:
                     # Queue is effectively full. Drop frame early.
+                    now = time.time() # Define 'now' before use in this block
                     if now - last_log_time > 5.0: # Reuse last_log_time or add new throttler
                          pass # Don't spam logs for every dropped frame
                 else:
@@ -342,7 +385,10 @@ def process_video(
             error_queue.put(f"[{feed_id}] FATAL: {e}")
     finally:
         logger.info(f"[{feed_id}] Shutting down...")
-        if reader: reader.stop()
-        if core_module: core_module.cleanup()
-        if video_writer_queue: video_writer_queue.put(None)
+        if reader:
+            reader.stop()
+        if core_module:
+            core_module.cleanup()
+        if video_writer_queue:
+            video_writer_queue.put(None)
         logger.info(f"[{feed_id}] Process terminated.")

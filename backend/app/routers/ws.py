@@ -1,8 +1,6 @@
 import logging
 import json
-import asyncio
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
@@ -56,6 +54,11 @@ async def message_receiver(
                         ).model_dump_json(),
                         client_id
                     )
+                elif msg_type == WebSocketMessageTypeEnum.PONG:
+                    # Client responded to a server PING
+                    logger.debug(f"Received PONG from {client_id}")
+                    connection_manager.record_pong(client_id) # Record the pong message
+                    pass
 
                 elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                     statuses = await feed_manager.get_all_statuses()
@@ -101,10 +104,15 @@ async def message_receiver(
                     except Exception as e:
                         logger.warning(f"Unsubscribe error: {e}")
                 
-                # Add more handlers as needed...
+                elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE_TO_FEED:
+                    try:
+                        feed_id_data = FeedIdData(**data)
+                        await connection_manager.subscribe_to_feed(client_id, feed_id_data.feed_id)
+                    except Exception as e:
+                        logger.warning(f"Subscribe to feed error: {e}")
 
             except json.JSONDecodeError:
-                logger.warning(f"Received invalid JSON from {client_id}")
+                logger.warning(f"Received invalid JSON from {client_id}: {message_text}")
             except Exception as e:
                 logger.error(f"Error processing message from {client_id}: {e}", exc_info=True)
 

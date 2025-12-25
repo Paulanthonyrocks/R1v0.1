@@ -11,7 +11,7 @@ import StreamOverlayControls from './StreamOverlayControls';
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
-    const { startFeed, stopFeed, restartFeed, isConnected: isSocketConnected, /*kpis*/ } = useRealtimeUpdates();
+    const { startFeed, stopFeed, restartFeed, isConnected: isSocketConnected } = useRealtimeUpdates();
     const { token } = useAuth();
     const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles } = useVideoSocket(feed_id, token);
     const [isToggling, setIsToggling] = useState<boolean>(false);
@@ -29,13 +29,6 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const component_name = feedName ?? `Feed ${feed_id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
 
-    // Clear timeout on unmount
-    useEffect(() => {
-        return () => {
-            if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
-        };
-    }, []);
-    
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
             setIsToggling(false);
@@ -49,9 +42,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     useEffect(() => {
         if (isLive && canvasRef.current && frameData) {
             const canvas = canvasRef.current;
-            const ctx = canvas.getContext('2d', { alpha: false }); // alpha: false optimizes rendering if no transparency needed
+            const ctx = canvas.getContext('2d', { alpha: false });
             if (ctx) {
-                // OPTIMIZATION: Only resize if dimensions mismatch
                 const displayWidth = canvas.offsetWidth;
                 const displayHeight = canvas.offsetHeight;
                 
@@ -65,7 +57,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 });
             }
         }
-    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles]);
+    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles, feed_id]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -118,7 +110,6 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         }
     };
 
-    // Effect to handle clicking outside the controls panel
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (showControlsPanel && containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -128,13 +119,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [showControlsPanel, containerRef]); // Add containerRef to dependencies
+    }, [showControlsPanel, containerRef]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'f' || e.key === 'F') {
             toggleFullScreen();
         }
-        // Add other shortcuts as needed
     };
 
     return (
@@ -170,14 +160,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     </div>
                 )}
 
-                {/* FPS Badge - Top Left */}
                 {isLive && typeof fps === 'number' && !isToggling && !isLoading && !error && (
                     <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-primary-foreground/80 group-hover:text-lcd-text backdrop-blur-sm tracking-normal rounded-none font-lcd matrix-glow">
                         {fps.toFixed(0)} FPS
                     </Badge>
                 )}
 
-                {/* Status Badge - Bottom Right */}
                 <Badge
                     variant={isLive ? "default" : "outline"}
                     className={cn(
@@ -190,7 +178,6 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     {isLive ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
 
-                {/* Metrics Display - Top Right */}
                 {metrics && isLive && !isToggling && !isLoading && !error && (
                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow flex flex-col items-end z-20">
                         <span>VEH: {metrics.total_vehicles_cumulative ?? metrics.total_vehicles ?? '--'}</span>
@@ -198,7 +185,6 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     </div>
                 )}
 
-                {/* Playback Controls - Bottom Left */}
                 {!isToggling && !isLoading && (
                     <div className="absolute bottom-1.5 left-1.5 flex gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button
@@ -227,7 +213,6 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     </div>
                 )}
 
-                {/* Tools (Settings & Fullscreen) - Below Metrics (Top Right Area) */}
                 {!isToggling && !isLoading && !error && (
                     <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button

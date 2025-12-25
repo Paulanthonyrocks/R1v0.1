@@ -14,7 +14,6 @@ from .services.services import (
     get_weather_service,
     get_event_service,
     get_personalized_routing_service,
-    get_connection_manager,
 )
 from .config import get_current_config
 from .services.traffic_signal_service import TrafficSignalService
@@ -24,6 +23,9 @@ from .services.event_service import EventService
 from .services.analytics_service import AnalyticsService
 from .services.personalized_routing_service import PersonalizedRoutingService
 from .models.user import User
+
+
+from .websocket.connection_manager import ConnectionManager
 
 
 async def get_db():
@@ -37,6 +39,12 @@ async def get_fm():
     """Dependency to get the feed manager instance."""
     fm = get_feed_manager()
     return fm
+
+
+async def get_connection_manager() -> ConnectionManager:
+    """Dependency to get the ConnectionManager instance."""
+    cm = ConnectionManager()
+    return cm
 
 
 async def get_config() -> Dict[str, Any]:

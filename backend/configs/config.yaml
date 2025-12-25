@@ -186,7 +186,7 @@ logging:
       handlers:
       - consoleHandler
       - mainFileHandler
-      level: INFO
+      level: DEBUG
       propagate: false
     app.services.analytics_service:
       handlers:

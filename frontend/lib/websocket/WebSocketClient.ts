@@ -298,8 +298,10 @@ export class WebSocketClient implements IWebSocketClient {
         this.lastPongTime = Date.now();
         this.pingInterval = setInterval(() => {
             if (this.isConnected()) {
-                this.send({ type: WebSocketMessageType.INTERNAL_PING, timestamp: Date.now() });
+                // Sending a PING to the server, expecting a PONG back
+                this.send({ type: WebSocketMessageType.PING, timestamp: Date.now() });
             }
+            // If no pong is received within 90 seconds, consider connection timed out
             if (Date.now() - this.lastPongTime > 90000) this.handleConnectionTimeout();
         }, 15000);
     }
@@ -315,16 +317,16 @@ export class WebSocketClient implements IWebSocketClient {
 
     private handleMessage(event: MessageEvent): void {
         if (typeof event.data === 'string') {
-            if (event.data === 'ping') {
-                this.ws?.send('pong');
-                return;
-            }
-            if (event.data === 'pong') {
-                this.lastPongTime = Date.now();
-                return;
-            }
             try {
                 const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
+
+                if (message.type === WebSocketMessageType.PING) {
+                    // Server sent a PING, respond with a PONG
+                    this.send({ type: WebSocketMessageType.PONG, correlation_id: message.correlation_id });
+                    this.lastPongTime = Date.now(); // Also update last pong time on receiving a PING (as a form of activity)
+                    return;
+                }
+
                 if (message.type === WebSocketMessageType.PONG || message.type === WebSocketMessageType.INTERNAL_PONG) {
                     this.lastPongTime = Date.now();
                     return;
@@ -334,7 +336,11 @@ export class WebSocketClient implements IWebSocketClient {
                 }
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
-                console.error('Error handling WebSocket message:', error, event.data);
+                console.error('Error handling WebSocket message (might not be JSON):', error, event.data);
+                // Fallback for non-JSON messages if necessary, or just ignore
+                if (event.data === 'pong') { // Still handle old 'pong' string if it exists for backward compatibility during transition
+                    this.lastPongTime = Date.now();
+                }
             }
         } else if (event.data instanceof ArrayBuffer) {
             // Handle binary frame data (for video feeds that don't use workers)

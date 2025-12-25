@@ -10,7 +10,7 @@ patch('firebase_admin.auth', _mock_firebase_admin.auth).start()
 patch('firebase_admin.credentials.Certificate', MagicMock()).start()
 patch('firebase_admin.initialize_app', MagicMock()).start()
 
-from app.main import app  # Now it's safe to import the app
+from app.main import app  # Now it's safe to import the app # noqa: E402
 
 @pytest.fixture
 def client():

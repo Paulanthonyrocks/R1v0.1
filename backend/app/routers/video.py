@@ -1,24 +1,11 @@
-import base64
-import asyncio
 import datetime
 import collections.abc
-import uuid
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pathlib import Path
-from app.utils.auth_utils import verify_firebase_token
 import logging
 from app.config import get_current_config
-from app.dependency_injection import get_current_active_user, get_token_from_query, get_feed_manager
-from app.exceptions import ResourceNotFound, OperationFailed
-from app.models.common import APIResponse
+from app.dependency_injection import get_current_active_user, get_feed_manager
 from app.services.video_processor import VideoManager
-from app.services.feed_manager import FeedManager
-from app.database import get_database_manager
-from app.utils.video import FrameReader
-from app.websocket.connection_manager import ConnectionManager
-from app.utils.service_getters import get_connection_manager
-import cv2
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

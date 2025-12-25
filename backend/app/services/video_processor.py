@@ -6,11 +6,8 @@ import os
 import time
 from typing import Dict, AsyncGenerator, Optional
 from datetime import datetime
-import base64
-import json
 from concurrent.futures import ThreadPoolExecutor
 
-from app.services.video_ws_manager import video_ws_manager
 from app.services.feed_manager import FeedManager
 from app.database import get_database_manager
 from app.models.processed_video import ProcessedVideo
@@ -168,7 +165,7 @@ class VideoProcessor:
                 data = await frame_queue.get()
                 raw_frame_bytes = data["frame"]
                 kpis = data.get("metrics", {})
-                vehicles_data = data.get("vehicles", [])
+                _vehicles_data = data.get("vehicles", [])
 
                 # Run heavy processing in thread pool
                 processed_jpeg_bytes = await loop.run_in_executor(
@@ -198,7 +195,8 @@ class VideoProcessor:
         for det in detections:
             # Check for numpy array from some detection pipelines
             bbox = det.get("bbox")
-            if bbox is None: continue
+            if bbox is None:
+                continue
             
             # Safe unpacking
             try:

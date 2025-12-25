@@ -4,7 +4,6 @@ from pathlib import Path
 import logging
 from queue import Queue, Empty
 from threading import Thread, Event
-import firebase_admin
 from firebase_admin import storage
 
 import numpy as np

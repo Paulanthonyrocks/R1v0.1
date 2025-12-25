@@ -33,6 +33,7 @@ interface RealtimeUpdates {
     error: string | null;
     sendMessage: (action: string, payload?: object) => boolean;
     subscribeToFeed: (feedId: string) => void;
+    unsubscribeFromFeed: (feedId: string) => void;
 }
 
 export const useRealtimeUpdates = (): RealtimeUpdates & { 
@@ -121,16 +122,21 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
             }
         }));
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: FeedStatusData) => {
+        subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
             console.log("Received FEED_STATUS_UPDATE data:", JSON.stringify(data));
+            if (!data?.feed_status_data) {
+                console.warn("Received FEED_STATUS_UPDATE but no feed_status_data found:", data);
+                return;
+            }
+            const statusData = data.feed_status_data;
             setFeeds(prevFeeds => {
-                const index = prevFeeds.findIndex(feed => feed.feed_id === data.feed_id);
+                const index = prevFeeds.findIndex(feed => feed.feed_id === statusData.feed_id);
                 if (index !== -1) {
                     const newFeeds = [...prevFeeds];
-                    newFeeds[index] = data;
+                    newFeeds[index] = statusData;
                     return newFeeds;
                 }
-                return [...prevFeeds, data];
+                return [...prevFeeds, statusData];
             });
         }));
         
@@ -146,13 +152,17 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
             console.log('Cleaning up WebSocket subscriptions. In React Strict Mode, this runs on unmount.');
             subscriptions.forEach(unsubscribe => unsubscribe());
             // Do NOT disconnect client here
-            hasRequestedInitialFeeds.current = false; 
         };
     }, [client]);
 
     const subscribeToFeed = useCallback((feedId: string) => {
         console.log(`Requesting to subscribe to feed: ${feedId}`);
         sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feed_id: feedId });
+    }, [sendMessage]);
+
+    const unsubscribeFromFeed = useCallback((feedId: string) => {
+        console.log(`Requesting to unsubscribe from feed: ${feedId}`);
+        sendMessage(WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, { feed_id: feedId });
     }, [sendMessage]);
 
     const startFeed = useCallback((feedId: string) => {
@@ -180,6 +190,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         feeds, 
         sendMessage,
         subscribeToFeed,
+        unsubscribeFromFeed,
         startFeed,
         stopFeed,
         restartFeed,

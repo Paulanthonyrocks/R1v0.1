@@ -1,7 +1,7 @@
 # backend/app/ml/segmentation/edgetam.py
 import logging
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import numpy as np
 import torch

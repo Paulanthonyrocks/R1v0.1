@@ -5,7 +5,6 @@ from app.services.video_ws_manager import video_ws_manager
 from app.dependencies.auth import get_current_user_ws
 from app.models.user import User
 from app.dependency_injection import is_admin
-import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
