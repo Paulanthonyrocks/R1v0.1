@@ -107,7 +107,8 @@ def process_video(
     error_queue: Optional["MPQueue"] = None, 
     feed_config_info: Optional[Dict] = None,
     video_writer_queue: Optional["MPQueue"] = None, 
-    is_looped: bool = False
+    is_looped: bool = False,
+    command_queue: Optional["MPQueue"] = None
 ) -> None:
     pid = os.getpid()
     
@@ -211,15 +212,23 @@ def process_video(
     processing_enabled = video_out_cfg.get("processing_enabled", True)
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
 
-    # Pre-extract location data
+    # Pre-extract location data and ROI
     lat, lon = 0.0, 0.0
+    roi_polygon = None
     if feed_config_info:
         if isinstance(feed_config_info, dict):
             lat = feed_config_info.get("latitude", 0.0)
             lon = feed_config_info.get("longitude", 0.0)
+            roi = feed_config_info.get("roi")
         else:
             lat = getattr(feed_config_info, "latitude", 0.0)
             lon = getattr(feed_config_info, "longitude", 0.0)
+            roi = getattr(feed_config_info, "roi", None)
+        
+        if roi and len(roi) >= 3:
+            # ROI is stored as normalized coordinates [{'x': 0.1, 'y': 0.1}, ...]
+            # We'll convert to pixel coordinates inside the loop once we know frame size
+            roi_polygon = np.array([[p['x'], p['y']] for p in roi], dtype=np.float32)
 
     # --- Component Initialization ---
     reader = None
@@ -262,6 +271,49 @@ def process_video(
         
         # --- Main Loop ---
         while not stop_event.is_set():
+            # Check for commands (e.g., Config Updates)
+            if command_queue:
+                try:
+                    cmd = command_queue.get_nowait()
+                    if cmd and cmd.get("type") == "config_update":
+                        data = cmd.get("data", {})
+                        logger.info(f"[{feed_id}] Received config update command.")
+                        
+                        # Update Local ROI Polygon
+                        if "roi" in data:
+                            roi = data["roi"]
+                            if roi and len(roi) >= 3:
+                                roi_polygon = np.array([[p['x'], p['y']] for p in roi], dtype=np.float32)
+                                logger.info(f"[{feed_id}] Worker ROI polygon updated.")
+                            else:
+                                roi_polygon = None
+                                logger.info(f"[{feed_id}] Worker ROI polygon cleared.")
+                                
+                        # Update CoreModule
+                        if core_module:
+                            # Pass normalized points to CoreModule
+                            cm_update = data.copy()
+                            if "roi" in data:
+                                if "roi_processing" not in cm_update:
+                                    cm_update["roi_processing"] = {}
+                                
+                                roi = data["roi"]
+                                if roi and len(roi) >= 3:
+                                    # Pass as list of [x, y] floats
+                                    normalized_points = [[p['x'], p['y']] for p in roi]
+                                    cm_update["roi_processing"]["roi_points_normalized"] = normalized_points
+                                    cm_update["roi_processing"]["enabled"] = True
+                                else:
+                                    cm_update["roi_processing"]["roi_points_normalized"] = None
+                                    cm_update["roi_processing"]["enabled"] = False
+                            
+                            core_module.update_config(cm_update)
+
+                except queue.Empty:
+                    pass
+                except Exception as e:
+                    logger.error(f"[{feed_id}] Error processing command: {e}")
+
             frame_index, frame = _read_frame(feed_id, reader, stop_event)
 
             if frame is None:
@@ -282,6 +334,29 @@ def process_video(
                     )
                 else:
                     tracked_vehicles = core_module.predict_only(frame_index)
+
+                # ROI Filtering
+                if roi_polygon is not None and len(roi_polygon) >= 3:
+                    h, w = frame.shape[:2]
+                    # Scale polygon to current frame size
+                    scaled_poly = (roi_polygon * [w, h]).astype(np.int32)
+                    
+                    filtered_vehicles = {}
+                    for vid, vdata in tracked_vehicles.items():
+                        bbox = vdata.get("bbox")
+                        if bbox:
+                            # Calculate center point
+                            cx = (bbox[0] + bbox[2]) / 2
+                            cy = (bbox[1] + bbox[3]) / 2
+                            # Check if point is inside or on the edge of the polygon
+                            if cv2.pointPolygonTest(scaled_poly, (cx, cy), False) >= 0:
+                                filtered_vehicles[vid] = vdata
+                    
+                    tracked_vehicles = filtered_vehicles
+                    
+                    # Optional: Draw ROI for visualization/debugging (if enabled)
+                    # if "ROI" in vis_options:
+                    #     cv2.polylines(frame, [scaled_poly], True, (0, 255, 255), 2)
 
                 # 2. Update Statistics
                 traffic_monitor.update_vehicles(tracked_vehicles)

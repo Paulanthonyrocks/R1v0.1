@@ -24,7 +24,6 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const { token, loading } = useAuth(); // Destructure loading state from useAuth
 
     const webSocketClient = useMemo(() => {
-        console.log("Creating new WebSocketClient instance");
         return new WebSocketClient(WS_BASE_URL);
     }, []);
 

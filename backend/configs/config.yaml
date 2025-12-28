@@ -462,7 +462,7 @@ perspective_calibration:
   matrix_path: backend/configs/perspective_matrix.npy
 performance:
   gpu_acceleration: false
-  memory_limit_percent: 85
+  memory_limit_percent: 95
   cpu_limit_percent: 90
   min_global_skip_factor: 1.0
   max_global_skip_factor: 3.0

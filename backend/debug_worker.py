@@ -2,7 +2,6 @@ import sys
 import os
 import time
 import threading
-import multiprocessing
 import logging
 
 # Add backend to sys.path
@@ -72,7 +71,7 @@ def run_debug():
     
     # Monitor output
     count = 0
-    start_time = time.time()
+    _start_time = time.time()
     try:
         while t.is_alive():
             if not frame_queue.empty():

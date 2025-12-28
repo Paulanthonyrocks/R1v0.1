@@ -1,0 +1,20 @@
+
+This modification adds instance-specific ID logging and zombie interval protection.
+
+Key changes:
+1.  `private instanceId = Math.random().toString(36).substring(7);`
+2.  `startPingInterval`:
+    ```typescript
+    if (!this.isConnected()) {
+        console.warn(`[WebSocketClient ${this.instanceId}] Ping interval running but socket not connected. Stopping.`);
+        this.stopPingInterval();
+        return;
+    }
+    ```
+3.  All logs now include `[WebSocketClient ${this.instanceId}]`.
+
+This will help:
+1.  Confirm if "Last activity" timeouts come from zombie instances.
+2.  Automatically kill those zombie intervals if they are running disconnected.
+
+I also need to verify that `frontend` builds with this change.

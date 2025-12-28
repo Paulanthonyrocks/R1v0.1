@@ -47,6 +47,7 @@ async def message_receiver(
 
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
+                    logger.info(f"Received PING from {client_id}")
                     await connection_manager.send_personal_message(
                         WebSocketMessage(
                             type=WebSocketMessageTypeEnum.PONG,
@@ -89,6 +90,13 @@ async def message_receiver(
                         await feed_manager.restart_feed(feed_id_data.feed_id)
                     except Exception as e:
                         logger.error(f"Error restarting feed: {e}")
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": f"Failed to restart feed: {str(e)}"}
+                            ).model_dump_json(),
+                            client_id
+                        )
 
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:

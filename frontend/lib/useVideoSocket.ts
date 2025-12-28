@@ -31,15 +31,18 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   const frameCountRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!streamId || !token) return;
-
-    const subscribeToFeed = () => {
+  const subscribeToFeed = useCallback(() => {
+    if (client.isConnected() && streamId) {
+      console.log(`[useVideoSocket] Subscribing to feed ${streamId}`);
       client.send({
         type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
         data: { feed_id: streamId },
       });
-    };
+    }
+  }, [client, streamId]);
+
+  useEffect(() => {
+    if (!streamId || !token) return;
 
     if (client.isConnected()) {
       subscribeToFeed();
@@ -57,10 +60,14 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     return () => {
       unsubscribe();
     };
-  }, [client, streamId, token]);
+  }, [client, streamId, token, subscribeToFeed]);
 
   const handleFrame = useCallback((data: VideoFrameMessage) => {
-    if (data.feed_id && data.feed_id !== streamId) return;
+    // console.log(`[useVideoSocket] handleFrame called. FeedID: ${data.feed_id}, Expected: ${streamId}`);
+    if (data.feed_id && data.feed_id !== streamId) {
+        console.warn(`[useVideoSocket] Feed ID mismatch. Received: ${data.feed_id}, Expected: ${streamId}`);
+        return;
+    }
 
     frameCountRef.current += 1;
     
@@ -81,9 +88,12 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             byteNumbers[i] = byteString.charCodeAt(i);
         }
         byteArray = new Uint8Array(byteNumbers);
+        // console.log(`[useVideoSocket] Converted base64 frame to Uint8Array. Size: ${byteArray.length}`);
     } else if (data.frame instanceof ArrayBuffer) {
         byteArray = new Uint8Array(data.frame);
+        console.log(`[useVideoSocket] Received ArrayBuffer frame. Size: ${byteArray.length}`);
     } else {
+        console.warn('[useVideoSocket] Unknown frame data type received');
         return;
     }
     setFrameData(byteArray);
@@ -104,10 +114,12 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   }, [streamId]);
 
   const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array, currentVehicles: VehicleFrontendData[] | null, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
+    // console.log(`[useVideoSocket] drawFrame called. Frame size: ${frame.length}`);
     const { showBoundingBoxes = true, showVehicleDetails = true } = options;
     const blob = new Blob([frame as unknown as BlobPart], { type: 'image/jpeg' });
 
     const drawToCanvas = (imageSource: ImageBitmap | HTMLImageElement) => {
+        // console.log(`[useVideoSocket] Drawing to canvas. Image dims: ${imageSource.width}x${imageSource.height}`);
         const canvasWidth = ctx.canvas.width;
         const canvasHeight = ctx.canvas.height;
         const imgWidth = imageSource.width;
@@ -227,6 +239,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         setIsConnected(connected);
         if (connected) {
             setError(null);
+            subscribeToFeed();
         } else if (status === 'error' || status === 'disconnected') {
             setError(message || 'Video stream connection error.');
         }
@@ -236,7 +249,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         unsubscribeFrame();
         unsubscribeStatus();
     };
-  }, [client, streamId, token, handleFrame]);
+  }, [client, streamId, token, handleFrame, subscribeToFeed]);
 
   return { frameData, metrics, vehicles, isConnected, error, drawFrame, frameRate };
 };

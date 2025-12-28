@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 class ConnectionManager:
     _instance: Optional[ConnectionManager] = None
 
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(ConnectionManager, cls).__new__(cls)
+        return cls._instance
+
     def __init__(
         self,
         max_connections: int = 1000,
@@ -18,7 +23,7 @@ class ConnectionManager:
         ping_interval: int = 15,
         pong_timeout: int = 60, # New: seconds to wait for a pong after a ping
     ):
-        if hasattr(self, "_initialized"):
+        if hasattr(self, "_initialized") and self._initialized:
             return
         self._initialized = True
         self.active_connections: Dict[str, WebSocket] = {}
@@ -28,6 +33,11 @@ class ConnectionManager:
         self.client_id_to_topics: Dict[str, Set[str]] = {}
         self.feed_subscriptions: Dict[str, Set[str]] = {}
         self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
+        
+        # Output queues for backpressure management
+        self.client_queues: Dict[str, asyncio.Queue] = {}
+        self.client_tasks: Dict[str, asyncio.Task] = {}
+        
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
         self.ping_interval = ping_interval
@@ -41,11 +51,16 @@ class ConnectionManager:
         ping_interval: int,
         pong_timeout: int, # New: include pong_timeout in init
     ):
+        # Update config even if already initialized
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
         self.ping_interval = ping_interval
         self.pong_timeout = pong_timeout # New: set pong_timeout
-        asyncio.create_task(self._ping_clients())
+        
+        # Only start ping task if not already running
+        if not hasattr(self, "_ping_task") or self._ping_task.done():
+            self._ping_task = asyncio.create_task(self._ping_clients())
+            
         logger.info(
             f"ConnectionManager initialized with max_connections={max_connections}, "
             f"token_refresh_interval={token_refresh_interval}, ping_interval={ping_interval}, "
@@ -55,9 +70,8 @@ class ConnectionManager:
     @classmethod
     def get_instance(cls) -> "ConnectionManager":
         if cls._instance is None:
-            raise RuntimeError(
-                "ConnectionManager not initialized. Ensure initialize_services() is called before accessing services."
-            )
+             # Fallback: create instance if accessed before explicit init (should rarely happen in strict flow)
+             cls._instance = ConnectionManager()
         return cls._instance
 
     async def connect(self, websocket: WebSocket, client_id: str, user_id: str):
@@ -78,6 +92,10 @@ class ConnectionManager:
         self.client_id_to_topics[client_id] = set()
         self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
+        # Initialize sender queue and task
+        self.client_queues[client_id] = asyncio.Queue(maxsize=50)
+        self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
+
         logger.info(
             f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
             f"Total connections: {len(self.active_connections)}"
@@ -89,6 +107,19 @@ class ConnectionManager:
             if websocket and self.active_connections[client_id] != websocket:
                 logger.info(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
                 return
+
+            # Cancel sender task
+            if client_id in self.client_tasks:
+                self.client_tasks[client_id].cancel()
+                try:
+                    await self.client_tasks[client_id]
+                except asyncio.CancelledError:
+                    pass
+                del self.client_tasks[client_id]
+            
+            # Remove queue
+            if client_id in self.client_queues:
+                del self.client_queues[client_id]
 
             # Remove from active connections first to prevent further sends
             del self.active_connections[client_id]
@@ -116,6 +147,28 @@ class ConnectionManager:
                 f"Total connections: {len(self.active_connections)}"
             )
 
+    async def _client_sender(self, client_id: str, websocket: WebSocket):
+        """Background task to send messages from queue to websocket."""
+        queue = self.client_queues.get(client_id)
+        if not queue:
+            return
+
+        try:
+            while True:
+                message = await queue.get()
+                try:
+                    # Use a timeout for the actual socket send to detect dead sockets faster
+                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                    queue.task_done()
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"Error sending to {client_id}: {e}. Disconnecting.")
+                    await self.disconnect(client_id, websocket)
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Unexpected error in sender task for {client_id}: {e}")
+
     def record_pong(self, client_id: str):
         """Record the time a PONG was received from a client."""
         if client_id in self.active_connections:
@@ -123,35 +176,43 @@ class ConnectionManager:
             logger.debug(f"Recorded PONG for client {client_id}")
 
     async def send_personal_message(self, message: str, client_id: str):
-        if client_id in self.active_connections:
+        """
+        Send a message reliably (waits for queue space). 
+        Use this for control messages (config updates, status changes).
+        """
+        if client_id in self.client_queues:
             try:
-                await self.active_connections[client_id].send_text(message)
-                logger.debug(f"Successfully sent message to client {client_id}. Message size: {len(message)} bytes.")
-            except Exception:
-                # Sockets can close unexpectedly; log quietly and cleanup
-                logger.info(f"Failed to send to {client_id}, removing dead connection.")
-                await self.disconnect(client_id)
+                # Wait for slot in queue
+                await self.client_queues[client_id].put(message)
+            except Exception as e:
+                 logger.error(f"Failed to enqueue message for {client_id}: {e}")
+
+    async def send_realtime_message(self, message: str, client_id: str):
+        """
+        Send a message with 'fire-and-forget' logic.
+        Use this for high-frequency data (video frames).
+        Drops the message if the client is slow (queue full).
+        """
+        if client_id in self.client_queues:
+            try:
+                self.client_queues[client_id].put_nowait(message)
+            except asyncio.QueueFull:
+                # Queue is full, drop frame to prevent backing up backend
+                # Optional: Log sporadically to avoid spam
+                pass 
+            except Exception as e:
+                logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
 
     async def broadcast(self, message: str):
+        """Broadcast reliable message to all."""
         # Iterate over a copy to allow modification (disconnection) during iteration
-        for client_id, connection in list(self.active_connections.items()):
-            try:
-                await connection.send_text(message)
-            except Exception:
-                # If sending fails, assume the client is gone and clean up immediately
-                # This prevents "Unexpected ASGI message" logs on subsequent frames
-                logger.info(f"Broadcasting failed for {client_id}, removing dead connection.")
-                await self.disconnect(client_id)
+        for client_id in list(self.active_connections.keys()):
+            await self.send_personal_message(message, client_id)
 
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
-        for client_id in list(client_ids): # Iterate copy
-            if client_id in self.active_connections:
-                try:
-                    await self.active_connections[client_id].send_text(message)
-                except Exception:
-                    logger.info(f"Failed to send to user {user_id} (client {client_id}), removing connection.")
-                    await self.disconnect(client_id)
+        for client_id in list(client_ids): 
+            await self.send_personal_message(message, client_id)
 
     async def subscribe_to_topic(self, client_id: str, topic: str):
         if client_id not in self.active_connections:
@@ -187,22 +248,14 @@ class ConnectionManager:
     async def broadcast_to_topic(self, message: str, topic: str):
         if topic in self.topic_subscriptions:
             for client_id in list(self.topic_subscriptions[topic]):
-                if client_id in self.active_connections:
-                    try:
-                        await self.active_connections[client_id].send_text(message)
-                    except Exception:
-                        logger.info(f"Topic broadcast failed for {client_id}, removing subscription/connection.")
-                        await self.disconnect(client_id)
-                else:
-                    # Cleanup stale subscription if client is already gone from active_connections
-                    self.topic_subscriptions[topic].discard(client_id)
-                    if client_id in self.client_id_to_topics:
-                        self.client_id_to_topics[client_id].discard(topic)
+                await self.send_personal_message(message, client_id)
 
     async def _ping_clients(self):
+        logger.info("Ping task started.")
         while not self._shutdown_event.is_set():
             try:
                 await asyncio.sleep(self.ping_interval)
+                # logger.debug("Ping task waking up.") 
                 ping_message = WebSocketMessage(
                     type=WebSocketMessageTypeEnum.PING,
                     data=PingData().model_dump()
@@ -211,6 +264,9 @@ class ConnectionManager:
                 current_time = time.time()
                 clients_to_disconnect = []
 
+                if not self.active_connections:
+                    continue
+
                 for client_id, connection in list(self.active_connections.items()):
                     if connection.client_state == 2: # WebSocketState.DISCONNECTED
                         clients_to_disconnect.append(client_id)
@@ -218,36 +274,40 @@ class ConnectionManager:
 
                     # Check if PONG was received within timeout
                     last_pong_time = self.last_pong_received_time.get(client_id, 0)
-                    if current_time - last_pong_time > self.pong_timeout + self.ping_interval: # Give some grace for network delay
-                        logger.warning(f"Client {client_id} timed out (no PONG received). Disconnecting.")
+                    if current_time - last_pong_time > self.pong_timeout + self.ping_interval: 
+                        logger.warning(f"Client {client_id} timed out (no PONG received). Last pong: {last_pong_time}, Now: {current_time}. Disconnecting.")
                         clients_to_disconnect.append(client_id)
                         continue
 
-                    try:
-                        await asyncio.wait_for(
-                            connection.send_text(ping_message), timeout=5
-                        )
-                    except Exception:
-                        logger.info(f"Failed to send PING to {client_id}, marking for disconnection.")
-                        clients_to_disconnect.append(client_id)
+                    # Send PING via reliable queue
+                    await self.send_personal_message(ping_message, client_id)
                 
                 for client_id in clients_to_disconnect:
                     await self.disconnect(client_id)
 
             except asyncio.CancelledError:
+                logger.info("Ping task cancelled.")
                 break
             except Exception as e:
-                logger.error(f"Error in ping task: {e}")
+                logger.error(f"Error in ping task: {e}", exc_info=True)
 
     async def shutdown(self):
         logger.info("Shutting down ConnectionManager...")
         self._shutdown_event.set()
+        
+        # Cancel all sender tasks
+        for task in self.client_tasks.values():
+            task.cancel()
+        
         for ws in self.active_connections.values():
             try:
                 await ws.close()
             except Exception:
                 pass
+                
         self.active_connections.clear()
+        self.client_queues.clear()
+        self.client_tasks.clear()
         self.client_id_to_user_id.clear()
         self.user_id_to_client_ids.clear()
         self.topic_subscriptions.clear()

@@ -14,9 +14,19 @@ export interface FeedStatusData {
   error_message?: string | null;
   latitude?: number; // Added latitude
   longitude?: number; // Added longitude
+  config?: {
+      name: string;
+      source_type: string;
+      source_identifier: string;
+      latitude: number;
+      longitude: number;
+      roi?: { x: number; y: number }[];
+  };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;
     total_vehicles?: number | null;
+    total_vehicles_cumulative?: number | null;
+    session_average_speed_kmh?: number | null;
     [key: string]: unknown; // Allow for other potential metrics
   } | null;
 }

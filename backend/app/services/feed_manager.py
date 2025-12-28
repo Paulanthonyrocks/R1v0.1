@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 import re
+import atexit
 
 from collections import deque
 from multiprocessing import (
@@ -96,7 +97,8 @@ class FeedManager:
 
         self._initialize_available_feeds()
 
-
+        # Register cleanup on exit
+        atexit.register(self._atexit_cleanup)
 
         # Start background reader
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
@@ -198,6 +200,42 @@ class FeedManager:
 
     # --- Feed Management ---
 
+    async def update_feed_config(self, feed_id: str, updates: Dict[str, Any]):
+        """Updates the configuration for a running or stopped feed."""
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                raise FeedNotFoundError(feed_id)
+            
+            # Update the config object
+            current_config = entry.get("config_info")
+            if current_config:
+                update_data = updates.copy()
+                # Validate/convert ROI if present
+                if "roi" in update_data and isinstance(update_data["roi"], list):
+                     # Ensure it matches the expected structure
+                     pass
+                
+                updated_config = current_config.model_copy(update=update_data)
+                entry["config_info"] = updated_config
+                
+                # If the feed is running, signal the worker via command_queue
+                if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
+                    command_queue = entry.get("command_queue")
+                    if command_queue:
+                        try:
+                            command_queue.put_nowait({
+                                "type": "config_update", 
+                                "data": update_data
+                            })
+                            logger.info(f"Sent config update to worker for feed {feed_id}")
+                        except queue.Full:
+                            logger.warning(f"Command queue full for feed {feed_id}, skipping config update.")
+                        except Exception as e:
+                            logger.error(f"Failed to send config update to worker {feed_id}: {e}")
+
+        await self._broadcast_feed_update(feed_id)
+
     async def add_and_start_feed(
         self,
         source: str,
@@ -223,6 +261,7 @@ class FeedManager:
             self.process_registry[feed_id] = {
                 "process": None,
                 "result_queue": None,
+                "command_queue": None,
                 "stop_event": None,
                 "reduce_fps_event": None,
                 "status": FeedOperationalStatusEnum.STOPPED,
@@ -235,6 +274,7 @@ class FeedManager:
                 "is_sample_feed": False,
                 "is_looped_feed": is_looped,
                 "config_info": feed_config,
+                "last_broadcast_time": 0.0,
             }
 
         await self._broadcast_feed_update(feed_id)
@@ -284,6 +324,7 @@ class FeedManager:
 
             # Initialize Queues and Events
             entry["result_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
+            entry["command_queue"] = MPQueue(maxsize=50) # Small queue for control commands
             
             # Only create video writer queue if enabled
             video_output_config = self.config.get("video_output", {})
@@ -363,6 +404,8 @@ class FeedManager:
         logger.info(f"Restart requested for: '{feed_id}'")
         try:
             await self.stop_feed(feed_id)
+            # Give the system a moment to reclaim resources (ports, file handles, memory)
+            await asyncio.sleep(2.0)
             await self.start_feed(feed_id)
         except Exception as e:
             logger.error(f"Restart failed for '{feed_id}': {e}", exc_info=True)
@@ -417,6 +460,7 @@ class FeedManager:
             entry.get("config_info"),
             entry.get("video_writer_queue"),
             entry.get("is_looped_feed", False),
+            entry.get("command_queue"),
         )
 
         process = Process(
@@ -445,6 +489,7 @@ class FeedManager:
             "process": entry.get("process"),
             "stop_event": entry.get("stop_event"),
             "result_queue": entry.get("result_queue"),
+            "command_queue": entry.get("command_queue"),
             "video_writer_queue": entry.get("video_writer_queue"),
             "video_writer": self.video_writers.pop(feed_id, None)
         }
@@ -456,6 +501,7 @@ class FeedManager:
             "process": None,
             "stop_event": None,
             "result_queue": None,
+            "command_queue": None,
             "video_writer_queue": None,
             "timer": None
         })
@@ -473,10 +519,11 @@ class FeedManager:
         process = resources.get("process")
         stop_event = resources.get("stop_event")
         result_queue = resources.get("result_queue")
+        command_queue = resources.get("command_queue")
         writer_queue = resources.get("video_writer_queue")
         video_writer = resources.get("video_writer")
         
-        queues = [q for q in [result_queue, writer_queue] if q]
+        queues = [q for q in [result_queue, command_queue, writer_queue] if q]
 
         # 1. Signal Stop
         if stop_event:
@@ -562,6 +609,12 @@ class FeedManager:
                     for fid in feed_ids_to_update:
                         await self._broadcast_feed_update(fid)
                     await self._broadcast_kpi_update()
+
+                # Periodic KPI Broadcast
+                now = time.time()
+                if now - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval:
+                    await self._broadcast_kpi_update()
+                    self._last_kpi_broadcast_time = now
 
                 # Periodic Resource Check (every 30s)
                 now = time.time()
@@ -660,11 +713,26 @@ class FeedManager:
                 last_item = item
 
         # 3. Handle Broadcast (Outside Lock)
+        should_broadcast = False
         if last_item:
+            # Check throttling
+            now = time.time()
+            target_fps = self.config.get("video_output", {}).get("fps", 10) # Use configured output FPS or default to 10
+            min_interval = 1.0 / target_fps
+            
+            async with self._lock:
+                entry = self.process_registry.get(feed_id)
+                if entry:
+                    last_time = entry.get("last_broadcast_time", 0.0)
+                    if now - last_time >= min_interval:
+                        entry["last_broadcast_time"] = now
+                        should_broadcast = True
+
+        if last_item and should_broadcast:
             _fid, frame_idx, frame_bytes, metrics, vehicles, _ = last_item
             
             if frame_bytes and self._connection_manager:
-                logger.debug(f"Received frame_bytes for {feed_id}. Length: {len(frame_bytes) if frame_bytes else 0}")
+                # logger.debug(f"Received frame_bytes for {feed_id}. Length: {len(frame_bytes) if frame_bytes else 0}")
                 # Offload encoding to thread pool to avoid blocking the event loop
                 loop = asyncio.get_running_loop()
                 try:
@@ -683,25 +751,21 @@ class FeedManager:
                     msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
                         
                     # Get subscribers for this specific feed
-                    # Note: get_clients_for_feed returns client_ids that have explicitly subscribed to feed frames.
-                    # This is different from topic_subscriptions.
-                    
                     subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
-                    logger.debug(f"Subscribed clients for feed {feed_id}: {subscribed_client_ids}. Attempting to send VIDEO_FRAME for {feed_id} to {len(subscribed_client_ids)} clients. Message size: {len(msg_json)} bytes.")
+                    if subscribed_client_ids:
+                        logger.info(f"Broadcasting VIDEO_FRAME for {feed_id} to {len(subscribed_client_ids)} clients. Frame: {frame_idx}")
                     
-                    send_tasks = []
+                    # Use send_realtime_message (fire-and-forget / drop-if-full) for video frames
+                    # to prevent slow clients from blocking the feed manager.
                     for client_id in subscribed_client_ids:
-                        send_tasks.append(
-                            self._connection_manager.send_personal_message(msg_json, client_id)
-                        )
-                    
-                    if send_tasks:
-                        await asyncio.gather(*send_tasks, return_exceptions=True) # Use return_exceptions to allow all sends to attempt
+                        await self._connection_manager.send_realtime_message(msg_json, client_id)
                     
                 except Exception as e:
                     logger.error(f"Error encoding/sending frame for {feed_id}: {e}")
             elif not frame_bytes:
                 logger.warning(f"Skipping broadcast for {feed_id}: Empty frame bytes.")
+            elif not self._connection_manager:
+                logger.warning(f"Skipping broadcast for {feed_id}: No connection manager.")
 
         return processed
 

@@ -19,6 +19,11 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); 
+    
+    // ROI State
+    const [roiMode, setRoiMode] = useState<boolean>(false);
+    const [roiPoints, setRoiPoints] = useState<{x: number, y: number}[]>([]);
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const toggleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -28,6 +33,13 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     const component_name = feedName ?? `Feed ${feed_id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
+
+    // Load existing ROI if available
+    useEffect(() => {
+        if (feed && feed.config && feed.config.roi) {
+            setRoiPoints(feed.config.roi);
+        }
+    }, [feed]);
 
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
@@ -39,8 +51,47 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         }
     }, [status]);
 
+    const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (!roiMode || !canvasRef.current) return;
+
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+
+        setRoiPoints(prev => [...prev, { x, y }]);
+    };
+
+    const handleSaveROI = async () => {
+        if (!feed_id) return;
+        try {
+            const response = await fetch(`/api/v1/feeds/${feed_id}/config`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ roi: roiPoints })
+            });
+            
+            if (response.ok) {
+                setRoiMode(false);
+                // Ideally show success toast
+                console.log("ROI Saved successfully");
+            } else {
+                console.error("Failed to save ROI");
+            }
+        } catch (error) {
+            console.error("Error saving ROI:", error);
+        }
+    };
+
+    const handleClearROI = () => {
+        setRoiPoints([]);
+    };
+
     useEffect(() => {
-        if (isLive && canvasRef.current && frameData) {
+        if (canvasRef.current && frameData) {
+            // console.log('[SurveillanceFeed] Triggering drawFrame');
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d', { alpha: false });
             if (ctx) {
@@ -51,13 +102,49 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     canvas.width = displayWidth;
                     canvas.height = displayHeight;
                 }
-                drawFrame(ctx, frameData, vehicles, {
-                    showBoundingBoxes: showOverlays && showBoundingBoxes,
-                    showVehicleDetails: showOverlays && showVehicleDetails
-                });
+                
+                // Draw Video
+                if (isLive) {
+                    drawFrame(ctx, frameData, vehicles, {
+                        showBoundingBoxes: showOverlays && showBoundingBoxes,
+                        showVehicleDetails: showOverlays && showVehicleDetails
+                    });
+                } else {
+                    // Clear canvas if not live
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+
+                // Draw ROI
+                if (roiPoints.length > 0 || roiMode) {
+                    ctx.save();
+                    ctx.strokeStyle = roiMode ? '#00ff00' : 'rgba(0, 255, 0, 0.5)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    roiPoints.forEach((p, i) => {
+                        const px = p.x * canvas.width;
+                        const py = p.y * canvas.height;
+                        if (i === 0) ctx.moveTo(px, py);
+                        else ctx.lineTo(px, py);
+                        
+                        // Draw anchor points in edit mode
+                        if (roiMode) {
+                            ctx.fillStyle = '#00ff00';
+                            ctx.fillRect(px - 3, py - 3, 6, 6);
+                        }
+                    });
+                    if (roiPoints.length > 2) {
+                        ctx.closePath();
+                    }
+                    ctx.stroke();
+                    if (roiPoints.length > 2) {
+                        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                }
             }
         }
-    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles, feed_id]);
+    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles, feed_id, roiPoints, roiMode]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -140,10 +227,26 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         >
             <div ref={containerRef} className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden">
                 {isLive ? (
-                    <canvas ref={canvasRef} className="w-full h-full object-cover image-rendering-pixelated filter-contrast-125" width="640" height="480" />
+                    <canvas 
+                        ref={canvasRef} 
+                        className={cn("w-full h-full object-cover image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
+                        width="640" 
+                        height="480" 
+                        onClick={handleCanvasClick}
+                    />
                 ) : (
                     <div className="absolute inset-0 flex items-center justify-center opacity-30">
                         <Eye className="text-lcd-bg group-hover:text-lcd-text text-4xl" />
+                    </div>
+                )}
+
+                {/* ROI Controls */}
+                {roiMode && (
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
+                        <span className="text-white text-xs self-center mr-2">Click to add points</span>
+                        <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
+                        <button onClick={handleSaveROI} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700">Save</button>
+                        <button onClick={() => setRoiMode(false)} className="px-2 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700">Cancel</button>
                     </div>
                 )}
 
@@ -209,6 +312,13 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70 disabled:opacity-50"
                         >
                             <Square className="h-4 w-4" />
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setRoiMode(!roiMode); }}
+                            title="Set Region of Interest"
+                            className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode && "bg-primary text-primary-foreground")}
+                        >
+                            <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
                         </button>
                     </div>
                 )}

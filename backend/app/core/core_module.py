@@ -162,6 +162,7 @@ class CoreModule:
         )
         self.perspective_matrix = None  # Initialize as None, load if needed
         self.roi_polygon_points = config["roi_processing"].get("polygon_points", None)
+        self.roi_points_normalized = None # Store normalized points for resolution-independent scaling
         
         # --- Optimization: Cache ROI Mask ---
         self.roi_mask = None
@@ -212,8 +213,16 @@ class CoreModule:
         """Generate the ROI mask once to save CPU cycles per frame."""
         width, height = resolution
         self.roi_mask = np.zeros((height, width), dtype=np.uint8)
-        points_np = np.array(self.roi_polygon_points, dtype=np.int32)
-        cv2.fillPoly(self.roi_mask, [points_np], 255)
+        
+        points_np = None
+        if self.roi_points_normalized is not None and len(self.roi_points_normalized) >= 3:
+             # Scale normalized points to current resolution
+             points_np = (np.array(self.roi_points_normalized, dtype=np.float32) * [width, height]).astype(np.int32)
+        elif self.roi_polygon_points:
+             points_np = np.array(self.roi_polygon_points, dtype=np.int32)
+             
+        if points_np is not None:
+            cv2.fillPoly(self.roi_mask, [points_np], 255)
 
     def _load_model(self, use_gpu: bool):
         # if self.model_type == "edgetam":
@@ -1006,3 +1015,28 @@ class CoreModule:
         if self.ocr_executor:
             self.ocr_executor.shutdown(wait=True)
             logger.info(f"OCR ThreadPoolExecutor for {self.feed_id} shut down.")
+
+    def update_config(self, updates: Dict[str, Any]):
+        """
+        Updates the CoreModule configuration dynamically.
+        """
+        # Update ROI
+        if "roi_processing" in updates:
+            roi_cfg = updates["roi_processing"]
+            self.config["roi_processing"] = roi_cfg # Update internal config storage
+            
+            # Handle normalized points if passed (preferred for dynamic updates)
+            if "roi_points_normalized" in roi_cfg:
+                self.roi_points_normalized = roi_cfg["roi_points_normalized"]
+                self.roi_polygon_points = None # Invalidate pixel points to force usage of normalized
+            elif "polygon_points" in roi_cfg:
+                self.roi_polygon_points = roi_cfg["polygon_points"]
+                self.roi_points_normalized = None # Clear normalized if explicit pixels provided
+            
+            if self.roi_points_normalized or self.roi_polygon_points:
+                # Use current config resolution as baseline, or it will be re-inited on next frame if mismatch
+                self._initialize_roi_mask(self.config["vehicle_detection"]["frame_resolution"])
+            else:
+                self.roi_mask = None
+            
+            logger.info(f"[{self.feed_id}] ROI configuration updated.")

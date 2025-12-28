@@ -7,12 +7,9 @@ interface WebSocketErrorEvent extends Event {
 
 const getOrCreateClientId = () => {
     if (typeof window === 'undefined') return '';
-    let clientId = localStorage.getItem('ws_client_id');
-    if (!clientId) {
-        clientId = crypto.randomUUID();
-        localStorage.setItem('ws_client_id', clientId);
-    }
-    return clientId;
+    // Always generate a new unique Client ID for each session/tab/instance
+    // This prevents collisions where multiple tabs/reloads fight for the same backend socket slot
+    return crypto.randomUUID();
 };
 
 type MessageListener<T> = (data: T) => void;
@@ -78,6 +75,8 @@ export class WebSocketClient implements IWebSocketClient {
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 5;
     private reconnectDelay = 1000;
+    private instanceId = Math.random().toString(36).substring(7);
+
     private tokenManager: TokenManager;
     private url: string;
     private messageQueue: WebSocketMessage[] = [];
@@ -97,6 +96,7 @@ export class WebSocketClient implements IWebSocketClient {
     private requiresClientId: boolean;
 
     constructor(baseUrl: string, requiresClientId = true) {
+        console.log(`[WebSocketClient ${this.instanceId}] Created`);
         this.url = baseUrl;
         this.requiresClientId = requiresClientId;
         this.tokenManager = TokenManager.getInstance();
@@ -105,7 +105,7 @@ export class WebSocketClient implements IWebSocketClient {
             this.videoWorker = new Worker('/workers/video-worker.js');
             this.videoWorker.onmessage = (e) => {
                 if (e.data.error) {
-                    console.error('Worker: Frame decoding failed', e.data.error);
+                    console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
                 } else {
                     const { feed_id, frame } = e.data;
                     this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id, frame });
@@ -130,7 +130,7 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 listener(status, message);
             } catch (error) {
-                console.error('Error in status listener:', error);
+                console.error(`[WebSocketClient ${this.instanceId}] Error in status listener:`, error);
             }
         });
     }
@@ -144,10 +144,10 @@ export class WebSocketClient implements IWebSocketClient {
         this.currentToken = token;
         
         if (this.isConnected()) {
-            console.log("WebSocket is connected. Sending authentication message with new token.");
+            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is connected. Sending authentication message with new token.`);
             this.send({ type: WebSocketMessageType.AUTHENTICATE, data: { token } });
         } else if (this.connectionState === ConnectionState.DISCONNECTED) {
-            console.log("WebSocket is disconnected. Reconnecting with new token.");
+            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is disconnected. Reconnecting with new token.`);
             await this.reconnectWithNewToken(token);
         }
     }
@@ -192,7 +192,7 @@ export class WebSocketClient implements IWebSocketClient {
         if (!token) token = this.currentToken || this.tokenManager.getCurrentToken();
 
         if (!token) {
-            console.warn('No auth token for WebSocket, will wait for token update.');
+            console.warn(`[WebSocketClient ${this.instanceId}] No auth token for WebSocket, will wait for token update.`);
             this.notifyError('auth_error', 'No authentication token available.');
             return;
         }
@@ -213,7 +213,7 @@ export class WebSocketClient implements IWebSocketClient {
                 
                 url.searchParams.set('token', token as string);
                 
-                console.log('Attempting to connect to WebSocket:', url.toString());
+                console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, url.toString());
                 
                 this.ws = new WebSocket(url.toString());
                 this.ws.binaryType = 'arraybuffer';
@@ -227,7 +227,14 @@ export class WebSocketClient implements IWebSocketClient {
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
-                    console.log(`WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
+                    
+                    if (!this.shouldReconnect) {
+                        console.debug(`[WebSocketClient ${this.instanceId}] Connection opened but client is destroyed/disconnecting. Closing.`);
+                        this.ws?.close();
+                        return;
+                    }
+
+                    console.log(`[WebSocketClient ${this.instanceId}] WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
                     this.setState(ConnectionState.CONNECTED, 'Connection established');
                     this.reconnectAttempts = 0;
                     this.reconnectDelay = 1000;
@@ -240,7 +247,7 @@ export class WebSocketClient implements IWebSocketClient {
                     clearTimeout(connectionTimeout);
                     this.stopPingInterval();
                     const { reason, wasClean, code } = event;
-                    console.log('WebSocket closed:', { code, reason, wasClean });
+                    console.log(`[WebSocketClient ${this.instanceId}] WebSocket closed:`, { code, reason, wasClean });
 
                     if (this.connectionState === ConnectionState.CONNECTING) {
                         reject(new Error(`Connection failed: ${reason}`));
@@ -255,7 +262,7 @@ export class WebSocketClient implements IWebSocketClient {
                     clearTimeout(connectionTimeout);
                     const error = event as WebSocketErrorEvent;
                     const errorMessage = error?.message || 'Unknown WebSocket Error';
-                    console.error(`WebSocket error: "${errorMessage}". This is often a generic error. For more details, check your browser\'s developer console for a failed WebSocket "Upgrade" request in the Network tab. The response headers or console logs from the server on initial connection might provide more insight.`, error);
+                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error: "${errorMessage}". This is often a generic error. For more details, check your browser's developer console for a failed WebSocket "Upgrade" request in the Network tab. The response headers or console logs from the server on initial connection might provide more insight.`, error);
                     this.setState(ConnectionState.ERROR, errorMessage);
                     this.notifyError('connection_error', errorMessage);
                     if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
@@ -264,7 +271,7 @@ export class WebSocketClient implements IWebSocketClient {
                 this.ws.onmessage = this.handleMessage.bind(this);
 
             } catch (error) {
-                console.error('WebSocket connection error:', error);
+                console.error(`[WebSocketClient ${this.instanceId}] WebSocket connection error:`, error);
                 this.setState(ConnectionState.ERROR, 'Failed to initialize WebSocket connection');
                 reject(error);
             }
@@ -296,39 +303,58 @@ export class WebSocketClient implements IWebSocketClient {
     private startPingInterval(): void {
         this.stopPingInterval();
         this.lastPongTime = Date.now();
+        console.debug(`[WebSocketClient ${this.instanceId}] Starting ping interval`);
+        
         this.pingInterval = setInterval(() => {
-            if (this.isConnected()) {
-                // Sending a PING to the server, expecting a PONG back
-                this.send({ type: WebSocketMessageType.PING, timestamp: Date.now() });
+            if (!this.isConnected()) {
+                console.warn(`[WebSocketClient ${this.instanceId}] Ping interval running but socket not connected. Stopping.`);
+                this.stopPingInterval();
+                return;
             }
-            // If no pong is received within 90 seconds, consider connection timed out
-            if (Date.now() - this.lastPongTime > 90000) this.handleConnectionTimeout();
+
+            // Sending a PING to the server, expecting a PONG back
+            console.debug(`[WebSocketClient ${this.instanceId}] Sending PING`);
+            this.send({ type: WebSocketMessageType.PING, timestamp: Date.now() });
+
+            // If no pong is received within 120 seconds, consider connection timed out
+            const timeSinceLastPong = Date.now() - this.lastPongTime;
+            if (timeSinceLastPong > 120000) {
+                 console.warn(`[WebSocketClient ${this.instanceId}] Connection timed out. Last activity: ${timeSinceLastPong}ms ago.`);
+                 this.handleConnectionTimeout();
+            }
         }, 15000);
     }
 
     private stopPingInterval(): void {
-        if (this.pingInterval) clearInterval(this.pingInterval);
+        if (this.pingInterval) {
+            console.debug(`[WebSocketClient ${this.instanceId}] Stopping ping interval`);
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
     }
 
     private handleConnectionTimeout(): void {
-        console.log('Connection timeout detected. Closing WebSocket.');
+        console.log(`[WebSocketClient ${this.instanceId}] Connection timeout detected. Closing WebSocket.`);
         this.ws?.close();
     }
 
     private handleMessage(event: MessageEvent): void {
         if (typeof event.data === 'string') {
+            // Update activity timestamp on ANY message received
+            this.lastPongTime = Date.now();
+
             try {
                 const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
 
                 if (message.type === WebSocketMessageType.PING) {
+                    console.debug(`[WebSocketClient ${this.instanceId}] Received PING, sending PONG`);
                     // Server sent a PING, respond with a PONG
                     this.send({ type: WebSocketMessageType.PONG, correlation_id: message.correlation_id });
-                    this.lastPongTime = Date.now(); // Also update last pong time on receiving a PING (as a form of activity)
                     return;
                 }
 
                 if (message.type === WebSocketMessageType.PONG || message.type === WebSocketMessageType.INTERNAL_PONG) {
-                    this.lastPongTime = Date.now();
+                    console.debug(`[WebSocketClient ${this.instanceId}] Received PONG`);
                     return;
                 }
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
@@ -336,7 +362,7 @@ export class WebSocketClient implements IWebSocketClient {
                 }
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
-                console.error('Error handling WebSocket message (might not be JSON):', error, event.data);
+                console.error(`[WebSocketClient ${this.instanceId}] Error handling WebSocket message (might not be JSON):`, error, event.data);
                 // Fallback for non-JSON messages if necessary, or just ignore
                 if (event.data === 'pong') { // Still handle old 'pong' string if it exists for backward compatibility during transition
                     this.lastPongTime = Date.now();
@@ -353,7 +379,7 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 listener(data);
             } catch (error) {
-                console.error(`Error in listener for message type ${type}:`, error);
+                console.error(`[WebSocketClient ${this.instanceId}] Error in listener for message type ${type}:`, error);
             }
         });
     }
@@ -375,14 +401,14 @@ export class WebSocketClient implements IWebSocketClient {
         } else {
             if (this.messageQueue.length >= this.maxMessageQueueSize) {
                 this.messageQueue.shift();
-                console.warn('WebSocket message queue full. Dropping oldest message.');
+                console.warn(`[WebSocketClient ${this.instanceId}] WebSocket message queue full. Dropping oldest message.`);
             }
             this.messageQueue.push(messageToSend);
         }
     }
 
     public disconnect(): void {
-        console.log('Disconnecting WebSocket...');
+        console.log(`[WebSocketClient ${this.instanceId}] Disconnecting WebSocket...`);
         this.shouldReconnect = false;
         this.cancelPendingOperations();
         this.ws?.close();
@@ -390,7 +416,7 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public destroy(): void {
-        console.log('Destroying WebSocket client...');
+        console.log(`[WebSocketClient ${this.instanceId}] Destroying WebSocket client...`);
         this.disconnect();
         this.listeners.clear();
         this.errorListeners.clear();

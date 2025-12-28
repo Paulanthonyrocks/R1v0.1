@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -44,6 +44,7 @@ class FeedConfigInfo(BaseModel):
     source_identifier: str
     latitude: float
     longitude: float
+    roi: Optional[List[Dict[str, float]]] = None
 
 
 class FeedOperationalStatusEnum(str, Enum):
@@ -65,3 +66,7 @@ class FeedStatusData(BaseModel):
 
 class FeedStatusUpdate(BaseModel):
     feed_status_data: FeedStatusData
+
+
+class FeedConfigRequest(BaseModel):
+    roi: Optional[List[Dict[str, float]]] = None

@@ -1,5 +1,4 @@
 import multiprocessing
-import sys
 
 def check_qsize():
     q = multiprocessing.Queue(maxsize=10)

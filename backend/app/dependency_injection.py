@@ -43,7 +43,7 @@ async def get_fm():
 
 async def get_connection_manager() -> ConnectionManager:
     """Dependency to get the ConnectionManager instance."""
-    cm = ConnectionManager()
+    cm = ConnectionManager.get_instance()
     return cm
 
 

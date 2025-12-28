@@ -23,11 +23,42 @@ from app.models.feeds import (
     FeedCreateRequest,
     FeedCreateResponse,
     StandardResponse,
+    FeedConfigRequest,
 )
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.patch(
+    "/{feed_id}/config",
+    response_model=APIResponse[StandardResponse],
+    summary="Update Feed Configuration",
+)
+async def update_feed_config(
+    feed_id: str,
+    request: FeedConfigRequest,
+    fm: FeedManager = Depends(get_feed_manager),
+    current_user: User = Depends(get_current_admin),
+) -> APIResponse[StandardResponse]:
+    """
+    Endpoint to update configuration (e.g., ROI) for a specific feed. Requires admin privileges.
+    """
+    logger.info(
+        f"Admin user {current_user.username} updating config for feed: {feed_id}"
+    )
+    try:
+        # Convert request to dict, filtering out None values
+        updates = request.model_dump(exclude_unset=True)
+        await fm.update_feed_config(feed_id, updates)
+        return APIResponse.success(message=f"Configuration for feed '{feed_id}' updated.")
+    except FeedNotFoundError:
+        raise ResourceNotFound(detail=f"Feed ID '{feed_id}' not found.")
+    except Exception as e:
+        logger.error(f"Failed to update config for feed '{feed_id}': {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to update config for feed '{feed_id}': {e}")
 
 
 @router.get(
@@ -38,7 +69,7 @@ router = APIRouter()
 )
 async def get_all_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[dict] = Depends(get_current_active_user_optional),
+    current_user: Optional[User] = Depends(get_current_active_user_optional),
 ) -> APIResponse[List[FeedStatus]]:
     """
     Endpoint to get the status of all registered feeds.
@@ -46,7 +77,7 @@ async def get_all_feeds_status(
     logger.info("Received request for get_all_feeds_status")
     if current_user:
         logger.info(
-            f"User {current_user.get('uid', 'unknown_user_uid')} requested status of all feeds."
+            f"User {current_user.username} requested status of all feeds."
         )
     else:
         logger.info("Anonymous user requested status of all feeds.")
@@ -68,10 +99,10 @@ async def get_all_feeds_status(
 )
 async def get_sample_feed_data(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[dict] = Depends(get_current_active_user_optional),
+    current_user: Optional[User] = Depends(get_current_active_user_optional),
 ) -> APIResponse[dict]:
     logger.info(
-        f"GET /feeds/sample-feed-data endpoint called by user: {current_user.get('email') if current_user else 'anonymous'}"
+        f"GET /feeds/sample-feed-data endpoint called by user: {current_user.email if current_user else 'anonymous'}"
     )
     if not fm._sample_feed_id or not fm.process_registry.get(fm._sample_feed_id):
         raise ResourceNotFound(detail="Sample feed not found.")
@@ -101,16 +132,16 @@ async def get_sample_feed_data(
 async def add_and_start_feed(
     request: FeedCreateRequest,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ) -> APIResponse[FeedCreateResponse]:
     logger.info(
-        f"POST /feeds endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')} to add feed: {request.source}"
+        f"POST /feeds endpoint called by admin user: {current_user.username} to add feed: {request.source}"
     )
     """
     Endpoint to add a new feed source and attempt to start it. Requires authentication.
     """
     logger.info(
-        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to add feed: {request.source}"
+        f"Admin user {current_user.username} attempting to add feed: {request.source}"
     )
     try:
         result = await fm.add_and_start_feed(
@@ -147,16 +178,16 @@ async def add_and_start_feed(
 async def start_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatus]:
     logger.info(
-        f"POST /feeds/{feed_id}/start endpoint called by user: {current_user.get('uid', 'unknown_user_uid')}"
+        f"POST /feeds/{feed_id}/start endpoint called by user: {current_user.username}"
     )
     """
     Endpoint to start a feed that is currently stopped. Requires authentication.
     """
     logger.info(
-        f"User {current_user.get('uid', 'unknown_user_uid')} attempting to start feed: {feed_id}"
+        f"User {current_user.username} attempting to start feed: {feed_id}"
     )
     try:
         success = await fm.start_feed(feed_id)
@@ -196,16 +227,16 @@ async def start_feed(
 async def stop_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatus]:
     logger.info(
-        f"POST /feeds/{feed_id}/stop endpoint called by user: {current_user.get('uid', 'unknown_user_uid')}"
+        f"POST /feeds/{feed_id}/stop endpoint called by user: {current_user.username}"
     )
     """
     Endpoint to stop a feed that is currently running or starting. Requires authentication.
     """
     logger.info(
-        f"User {current_user.get('uid', 'unknown_user_uid')} attempting to stop feed: {feed_id}"
+        f"User {current_user.username} attempting to stop feed: {feed_id}"
     )
     try:
         success = await fm.stop_feed(feed_id)
@@ -244,16 +275,16 @@ async def stop_feed(
 async def restart_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ) -> APIResponse[StandardResponse]:
     logger.info(
-        f"POST /feeds/{feed_id}/restart endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}"
+        f"POST /feeds/{feed_id}/restart endpoint called by admin user: {current_user.username}"
     )
     """
     Endpoint to stop and then start a feed. Requires authentication.
     """
     logger.info(
-        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to restart feed: {feed_id}"
+        f"Admin user {current_user.username} attempting to restart feed: {feed_id}"
     )
     try:
         await fm.restart_feed(feed_id)
@@ -274,13 +305,13 @@ async def restart_feed(
 )
 async def stop_all_feeds(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ) -> APIResponse[StandardResponse]:
     """
     Endpoint to stop all feeds that are currently running or starting. Requires authentication.
     """
     logger.info(
-        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to stop all feeds."
+        f"Admin user {current_user.username} attempting to stop all feeds."
     )
     try:
         await fm.stop_all_feeds()
@@ -299,13 +330,13 @@ async def stop_all_feeds(
 async def delete_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ):
     """
     Endpoint to delete a specific feed. Requires authentication.
     """
     logger.info(
-        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} attempting to delete feed: {feed_id}"
+        f"Admin user {current_user.username} attempting to delete feed: {feed_id}"
     )
     try:
         success = await fm.remove_feed(feed_id)
@@ -337,12 +368,12 @@ async def delete_feed(
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[dict] = Depends(get_current_active_user_optional),
+    current_user: Optional[User] = Depends(get_current_active_user_optional),
 ) -> APIResponse[FeedStatus]:
     """Endpoint to get the current status of a specific feed."""
     if current_user:
         logger.info(
-            f"User {current_user.get('uid', 'unknown_user_uid')} requesting status for feed {feed_id}"
+            f"User {current_user.username} requesting status for feed {feed_id}"
         )
     else:
         logger.info(f"Anonymous user requesting status for feed {feed_id}")
@@ -359,12 +390,12 @@ async def get_specific_feed_status(
 async def get_feed_kpis(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[dict] = Depends(get_current_active_user_optional),
+    current_user: Optional[User] = Depends(get_current_active_user_optional),
 ):
     """Get the latest KPIs/metrics for a specific feed (including sample video)."""
     if current_user:
         logger.info(
-            f"User {current_user.get('uid', 'unknown_user_uid')} requesting KPIs for feed {feed_id}"
+            f"User {current_user.username} requesting KPIs for feed {feed_id}"
         )
     else:
         logger.info(f"Anonymous user requesting KPIs for feed {feed_id}")
