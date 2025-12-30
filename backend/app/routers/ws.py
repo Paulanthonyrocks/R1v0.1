@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
+from app.utils.auth_utils import verify_firebase_token
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
@@ -11,7 +12,10 @@ from app.models.websocket import (
     PongData,
     InitialFeedStatusesData,
     SubscribeData,
-    UnsubscribeData
+    UnsubscribeData,
+    AuthenticateData,
+    AuthSuccessData,
+    AuthFailureData
 )
 from app.dependencies.auth import get_current_user_ws
 from app.models.user import User
@@ -61,6 +65,34 @@ async def message_receiver(
                     connection_manager.record_pong(client_id) # Record the pong message
                     pass
 
+                elif msg_type == WebSocketMessageTypeEnum.AUTHENTICATE:
+                    try:
+                        auth_data = AuthenticateData(**data)
+                        await verify_firebase_token(auth_data.token)
+                        # If verification succeeds, we assume the user is still valid.
+                        # We could update the user_id mapping if the user changed, but typically it's a refresh.
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                                data=AuthSuccessData().model_dump()
+                            ).model_dump_json(),
+                            client_id
+                        )
+                        logger.info(f"Client {client_id} re-authenticated successfully.")
+                    except Exception as e:
+                        logger.warning(f"Client {client_id} failed re-authentication: {e}")
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                                data=AuthFailureData(message=str(e)).model_dump()
+                            ).model_dump_json(),
+                            client_id
+                        )
+                        # Disconnect if authentication fails
+                        # The client should handle the AUTH_FAILURE and maybe redirect to login
+                        # but we should close the socket from our end to be safe.
+                        # However, we'll let the client close it or the next ping fail if context is lost.
+
                 elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                     statuses = await feed_manager.get_all_statuses()
                     response = WebSocketMessage(
@@ -101,14 +133,14 @@ async def message_receiver(
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
                         sub_data = SubscribeData(**data)
-                        await connection_manager.subscribe(client_id, sub_data.topic)
+                        await connection_manager.subscribe_to_topic(client_id, sub_data.topic)
                     except Exception as e:
                         logger.warning(f"Subscribe error: {e}")
 
                 elif msg_type == WebSocketMessageTypeEnum.UNSUBSCRIBE:
                     try:
                         unsub_data = UnsubscribeData(**data)
-                        await connection_manager.unsubscribe(client_id, unsub_data.topic)
+                        await connection_manager.unsubscribe_from_topic(client_id, unsub_data.topic)
                     except Exception as e:
                         logger.warning(f"Unsubscribe error: {e}")
                 
@@ -118,6 +150,13 @@ async def message_receiver(
                         await connection_manager.subscribe_to_feed(client_id, feed_id_data.feed_id)
                     except Exception as e:
                         logger.warning(f"Subscribe to feed error: {e}")
+                
+                elif msg_type == WebSocketMessageTypeEnum.UNSUBSCRIBE_FROM_FEED:
+                    try:
+                        feed_id_data = FeedIdData(**data)
+                        await connection_manager.unsubscribe_from_feed(client_id, feed_id_data.feed_id)
+                    except Exception as e:
+                        logger.warning(f"Unsubscribe from feed error: {e}")
 
             except json.JSONDecodeError:
                 logger.warning(f"Received invalid JSON from {client_id}: {message_text}")

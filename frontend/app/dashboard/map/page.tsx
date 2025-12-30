@@ -1,60 +1,34 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import dynamic from 'next/dynamic';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
-import { Signal, BatteryFull, Clock } from 'lucide-react';
-import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import DashboardShell from '@/components/dashboard/DashboardShell';
 
 // Dynamically import CesiumGlobe to ensure it's client-side rendered
 const DynamicCesiumGlobe = dynamic(() => import('@/components/CesiumGlobe'), {
   ssr: false,
   loading: () => (
-    <div className="fixed inset-0 bg-lcd-bg text-lcd-text font-lcd flex items-center justify-center z-50">
-      <div className="animate-pulse text-2xl tracking-normal">LOADING GLOBE...</div>
+    <div className="fixed inset-0 bg-lcd-text text-lcd-bg font-lcd flex items-center justify-center z-50">
+      <div className="animate-pulse text-2xl tracking-normal matrix-glow">LOADING GLOBE...</div>
     </div>
   ),
 });
 
 const LiveMapPage: React.FC = () => {
-  const [time, setTime] = useState("--:--");
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}>
-      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-        {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <div className="flex items-center space-x-2 cursor-pointer">
-                <Signal size={20} />
-                <span className="font-lcd matrix-glow">LIVE MAP</span>
-              </div>
-            </DropdownMenuTrigger>
-            
-          </DropdownMenu>
-          <div className="flex items-center space-x-2">
-            <Clock size={20} />
-            <span className="font-lcd matrix-glow">{time}</span>
-            <BatteryFull size={20} />
+      <DashboardShell className="flex flex-col h-[calc(100vh-64px)] p-0 md:p-0 max-w-none">
+        <div className="flex-1 flex flex-col relative">
+          <div className="absolute top-4 left-0 right-0 z-10 pointer-events-none">
+             <h1 className="text-2xl font-bold uppercase tracking-widest text-center font-lcd matrix-glow text-lcd-bg drop-shadow-md">GLOBAL TRAFFIC OVERVIEW</h1>
           </div>
-        </header>
-
-        <main className="flex-1 flex flex-col items-center justify-center p-4">
-          <h1 className="text-2xl font-bold mb-4 uppercase tracking-widest text-center font-lcd matrix-glow">GLOBAL TRAFFIC OVERVIEW</h1>
-          <div className="w-full h-[calc(100vh-200px)]">
+          <div className="flex-1 w-full h-full">
             <DynamicCesiumGlobe />
           </div>
-        </main>
-      </div>
+        </div>
+      </DashboardShell>
     </AuthGuard>
   );
 };

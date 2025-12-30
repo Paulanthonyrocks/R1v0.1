@@ -46,6 +46,7 @@ from app.routers import (
     ws,
     video_ws,
     routes,
+    vehicles,
 )
 
 # --- Initializers & Services ---
@@ -307,6 +308,7 @@ app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
 app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
 app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["History"])
 app.include_router(traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"])
+app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(video_ws.router, prefix="/api/v1", tags=["VideoWebSocket"])
 app.include_router(routes.router, prefix="/api/v1", tags=["General"])

@@ -1,7 +1,8 @@
 "use client";
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { AlertTriangle, XOctagon, CheckCircle2 } from 'lucide-react'; // Import error icon & traffic impact icons
+import { AlertTriangle, XOctagon, CheckCircle2, History, ArrowRight } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface RouteAnalytics {
   total_routes: number;
@@ -31,7 +32,7 @@ const RouteHistoryPanel: React.FC = () => {
   const [historyData, setHistoryData] = useState<RouteHistoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState('week'); // 'day', 'week', 'month'
+  const [timeRange, setTimeRange] = useState('week');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -39,7 +40,6 @@ const RouteHistoryPanel: React.FC = () => {
         const end = new Date();
         const start = new Date();
         
-        // Calculate start date based on time range
         if (timeRange === 'day') {
           start.setDate(start.getDate() - 1);
         } else if (timeRange === 'week') {
@@ -57,7 +57,7 @@ const RouteHistoryPanel: React.FC = () => {
 
         setHistoryData(response.data);
       } catch (err) {
-        setError('Failed to load route history');
+        setError('Failed to load route history archives');
         console.error('Error fetching route history:', err);
       } finally {
         setLoading(false);
@@ -67,98 +67,123 @@ const RouteHistoryPanel: React.FC = () => {
     fetchData();
   }, [timeRange]);
 
-  if (loading) return <div className="p-4">Loading route history...</div>; // Loading text already themed in previous step
-  if (error) return ( // Added icon to error message
-    <div className="p-4 text-primary tracking-normal flex items-center">
-      <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" /> {/* Icon added, color inherited */}
-      {error}
+  if (loading) return <div className="text-center py-20 uppercase font-bold animate-pulse tracking-widest opacity-50">Retrieving Historical Log...</div>;
+  if (error) return (
+    <div className="p-10 text-red-500 border-2 border-red-500 flex flex-col items-center gap-4">
+      <XOctagon className="h-12 w-12" />
+      <p className="font-bold uppercase tracking-widest">{error}</p>
     </div>
   );
-  if (!historyData?.routes.length) return <div className="p-4 text-primary tracking-normal">No route history found.</div>; {/* Added color & tracking */}
+  
+  if (!historyData?.routes.length) return (
+      <div className="py-20 text-center border-2 border-dashed border-lcd-text/20 rounded opacity-50">
+          <p className="tracking-widest uppercase font-bold">No historical data found for this period</p>
+      </div>
+  );
 
   return (
-    <div className="p-4 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Removed shadow-lg, added border and pixel-drop-shadow */}
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-bold text-primary tracking-normal">Route History</h2> {/* Added text-primary tracking-normal */}
-        <div className="flex gap-2">
-          <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(e.target.value)}
-            className="px-3 py-1 border border-primary rounded bg-matrix-panel text-primary tracking-normal focus:ring-2 focus:ring-primary focus:outline-none focus:border-primary" // Added focus styling
-            aria-label="Time range filter"
-            title="Select time range for route history"
-          >
-            <option value="day">Last 24 Hours</option>
-            <option value="week">Last 7 Days</option>
-            <option value="month">Last 30 Days</option>
-          </select>
-        </div>
+    <div className="max-w-6xl mx-auto w-full space-y-8">
+      <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4">
+          <div>
+              <h1 className="text-4xl font-bold uppercase tracking-tighter flex items-center gap-3">
+                  <History size={32} className="text-primary" /> Logged Traversals
+              </h1>
+              <p className="text-lcd-text/60 mt-2">Historical analysis of corridor throughput and agent routing efficiency.</p>
+          </div>
+          <div className="flex bg-lcd-text/10 p-1 rounded border border-lcd-text/20">
+              {(['day', 'week', 'month'] as const).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setTimeRange(r)}
+                    className={`px-4 py-1 text-xs uppercase transition-all ${timeRange === r ? 'bg-lcd-text text-lcd-bg font-bold' : 'hover:bg-lcd-text/20'}`}
+                  >
+                      {r}
+                  </button>
+              ))}
+          </div>
       </div>
 
       {/* Analytics Summary */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <div className="text-sm text-muted-foreground tracking-normal">Total Routes</div> {/* Changed color, added tracking */}
-          <div className="text-xl font-semibold text-primary tracking-normal">{historyData.analytics.total_routes}</div> {/* Added color & tracking */}
-        </div>
-        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <div className="text-sm text-muted-foreground tracking-normal">Avg Duration</div> {/* Changed color, added tracking */}
-          <div className="text-xl font-semibold text-primary tracking-normal">{Math.round(historyData.analytics.avg_duration / 60)} min</div> {/* Added color & tracking */}
-        </div>
-        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <div className="text-sm text-muted-foreground tracking-normal">Traffic Impact</div> {/* Changed color, added tracking */}
-          <div className="text-xl font-semibold text-primary tracking-normal capitalize">{historyData.analytics.avg_traffic_impact}</div> {/* Added color & tracking */}
-        </div>
-        <div className="p-3 bg-card rounded-lg border border-primary pixel-drop-shadow"> {/* Added border and shadow */}
-          <div className="text-sm text-muted-foreground tracking-normal">Common Weather</div> {/* Changed color, added tracking */}
-          <div className="text-sm font-semibold text-primary tracking-normal">{historyData.analytics.common_weather_impacts.join(', ')}</div> {/* Added color & tracking */}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <HistoryStat label="Total Routes" value={historyData.analytics.total_routes.toString()} />
+          <HistoryStat label="Avg Duration" value={`${Math.round(historyData.analytics.avg_duration / 60)}m`} />
+          <HistoryStat label="Net Impact" value={historyData.analytics.avg_traffic_impact} capitalize />
+          <HistoryStat label="Atmosphere" value={historyData.analytics.common_weather_impacts[0] || 'Clear'} />
       </div>
 
       {/* Routes Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border border-primary"> {/* Added border-primary for table border */}
-          <thead>
-            <tr className="bg-primary text-primary-foreground"> {/* Themed header row */}
-              <th className="p-2 border border-primary tracking-normal">Date</th> {/* Added tracking, themed border */}
-              <th className="p-2 border border-primary tracking-normal">Route</th> {/* Added tracking, themed border */}
-              <th className="p-2 border border-primary tracking-normal">Duration</th> {/* Added tracking, themed border */}
-              <th className="p-2 border border-primary tracking-normal">Distance</th> {/* Added tracking, themed border */}
-              <th className="p-2 border border-primary tracking-normal">Traffic</th> {/* Added tracking, themed border */}
-              <th className="p-2 border border-primary tracking-normal">Weather</th> {/* Added tracking, themed border */}
-            </tr>
-          </thead>
-          <tbody className="tracking-normal"> {/* Added tracking-normal to be inherited by td */}
-            {historyData.routes.map(entry => (
-              <tr key={entry.id} className="border-b border-primary hover:bg-black/10"> {/* Themed border and hover */}
-                <td className="p-2 border border-primary whitespace-nowrap">{new Date(entry.date).toLocaleString()}</td> {/* Themed border */}
-                <td className="p-2 border border-primary"> {/* Themed border */}
-                  <div className="font-medium text-primary">{entry.origin} → {entry.destination}</div> {/* Ensured text-primary */}
-                  <div className="text-xs text-muted-foreground tracking-normal">{entry.routeSummary}</div> {/* Changed color, added tracking */}
-                </td>
-                <td className="p-2 border border-primary whitespace-nowrap">{Math.round(entry.duration / 60)} min</td> {/* Themed border */}
-                <td className="p-2 border border-primary whitespace-nowrap">{(entry.distance / 1000).toFixed(1)} km</td> {/* Themed border */}
-                <td className="p-2 border border-primary">
-                  <div className="flex items-center">
-                    {(() => {
-                      const impactText = entry.trafficImpact.toLowerCase();
-                      let IconComponent = null;
-                      if (impactText.includes('high')) IconComponent = XOctagon;
-                      else if (impactText.includes('medium')) IconComponent = AlertTriangle;
-                      else if (impactText.includes('low')) IconComponent = CheckCircle2;
-                      return IconComponent ? <IconComponent className="h-4 w-4 mr-1.5 text-primary flex-shrink-0" /> : null;
-                    })()}
-                    <span className="capitalize text-primary tracking-normal">{entry.trafficImpact}</span>
-                  </div>
-                </td>
-                <td className="p-2 border border-primary font-lcd">{entry.weatherImpact || '-'}</td> {/* Themed border */}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="matrix-card overflow-hidden">
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+            <thead>
+                <tr className="bg-lcd-text/10 text-primary border-b-2 border-lcd-text/20">
+                <th className="p-4 text-left font-bold uppercase tracking-widest text-[10px]">Timestamp</th>
+                <th className="p-4 text-left font-bold uppercase tracking-widest text-[10px]">Trajectory</th>
+                <th className="p-4 text-left font-bold uppercase tracking-widest text-[10px]">Metrics</th>
+                <th className="p-4 text-left font-bold uppercase tracking-widest text-[10px]">Conditions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {historyData.routes.map(entry => (
+                <tr key={entry.id} className="border-b border-lcd-text/5 hover:bg-lcd-text/5 transition-colors group">
+                    <td className="p-4 whitespace-nowrap">
+                        <div className="flex flex-col">
+                            <span className="font-bold">{new Date(entry.date).toLocaleDateString()}</span>
+                            <span className="text-[10px] opacity-60">{new Date(entry.date).toLocaleTimeString()}</span>
+                        </div>
+                    </td>
+                    <td className="p-4">
+                        <div className="flex items-center gap-2 font-medium">
+                            <span className="truncate max-w-[150px]">{entry.origin}</span>
+                            <ArrowRight size={14} className="opacity-40" />
+                            <span className="truncate max-w-[150px]">{entry.destination}</span>
+                        </div>
+                        <div className="text-[10px] opacity-60 mt-1 uppercase tracking-tighter">{entry.routeSummary}</div>
+                    </td>
+                    <td className="p-4">
+                        <div className="flex gap-4">
+                            <div className="flex flex-col">
+                                <span className="text-[10px] uppercase opacity-40">Time</span>
+                                <span className="font-bold">{Math.round(entry.duration / 60)}m</span>
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-[10px] uppercase opacity-40">Dist</span>
+                                <span className="font-bold">{(entry.distance / 1000).toFixed(1)}km</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td className="p-4">
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-1.5">
+                                {(() => {
+                                const impactText = entry.trafficImpact.toLowerCase();
+                                if (impactText.includes('high')) return <XOctagon size={14} className="text-red-500" />;
+                                if (impactText.includes('medium')) return <AlertTriangle size={14} className="text-yellow-500" />;
+                                return <CheckCircle2 size={14} className="text-green-500" />;
+                                })()}
+                                <span className="text-xs uppercase font-bold">{entry.trafficImpact}</span>
+                            </div>
+                            {entry.weatherImpact && (
+                                <div className="h-4 w-px bg-lcd-text/20"></div>
+                            )}
+                            <span className="text-xs opacity-60">{entry.weatherImpact}</span>
+                        </div>
+                    </td>
+                </tr>
+                ))}
+            </tbody>
+            </table>
+        </div>
       </div>
     </div>
   );
 };
+
+const HistoryStat = ({ label, value, capitalize }: { label: string, value: string, capitalize?: boolean }) => (
+    <div className="matrix-card p-4 flex flex-col justify-center">
+        <span className="text-[10px] uppercase opacity-60 font-bold mb-1 tracking-widest">{label}</span>
+        <span className={cn("text-2xl font-bold tracking-tighter", capitalize && "capitalize")}>{value}</span>
+    </div>
+);
 
 export default RouteHistoryPanel;

@@ -49,7 +49,7 @@ export interface TrendDataPoint {
   timestamp: string;
   total_vehicles: number;
   avg_speed: number;
-  congestion_index?: number;
+  congestion_index: number;
 }
 
 export interface KpiData {

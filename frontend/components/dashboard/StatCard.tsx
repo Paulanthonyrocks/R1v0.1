@@ -10,9 +10,10 @@ import { StatCardProps as OriginalStatCardProps } from '@/lib/types'; // Renamed
 // Extend StatCardProps to include an optional statusIcon
 interface StatCardProps extends OriginalStatCardProps {
   statusIcon?: React.ElementType;
+  statusColor?: string;
 }
 
-const StatCard = React.memo(({ title, value, change, changeText, icon: Icon, statusIcon: StatusIconComponent }: StatCardProps) => {
+const StatCard = React.memo(({ title, value, change, changeText, icon: Icon, statusIcon: StatusIconComponent, statusColor }: StatCardProps) => {
     const isPositive = change.startsWith('+');
 
     return (
@@ -27,7 +28,7 @@ const StatCard = React.memo(({ title, value, change, changeText, icon: Icon, sta
                     <div className="space-y-1.5 flex-1">
                         <p className="text-sm font-medium text-lcd-text group-hover:text-lcd-bg tracking-normal font-lcd matrix-glow">{title}</p>
                         <h3 className={cn("text-2xl font-semibold tracking-normal text-lcd-text group-hover:text-lcd-bg flex items-center font-lcd matrix-glow")}>
-                          {StatusIconComponent && <StatusIconComponent className="mr-2 h-5 w-5" />} {value}
+                          {StatusIconComponent && <StatusIconComponent className={cn("mr-2 h-5 w-5", statusColor)} />} {value}
                         </h3>
                     </div>
                     <div className="p-2 rounded bg-secondary flex-shrink-0">

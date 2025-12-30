@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo } from 'react';
 import { WebSocketClient } from './WebSocketClient';
 import useAuth from '../hook/useAuth';
 

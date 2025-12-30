@@ -20,10 +20,10 @@ import RetroModal from '@/components/ui/RetroModal';
 const menuItems = [
   { href: '/dashboard', label: 'DASHBOARD', icon: <LayoutDashboard size={48} /> },
   { href: '/dashboard/map', label: 'LIVE MAP', icon: <Map size={48} /> },
-  { href: '/dashboard/logs', label: 'SYSTEM LOGS', icon: <Book size={48} /> },
+  { href: '/logs', label: 'SYSTEM LOGS', icon: <Book size={48} /> },
   { href: '/anomalies', label: 'ANOMALIES', icon: <AlertTriangle size={48} /> },
   { href: '/dashboard/analytics', label: 'ANALYTICS', icon: <BarChart2 size={48} /> },
-  { href: '/dashboard/preferences', label: 'PREFERENCES', icon: <Settings size={48} /> },
+  { href: '/preferences', label: 'PREFERENCES', icon: <Settings size={48} /> },
 ];
 
 const NokiaHomeScreen = () => {

@@ -684,10 +684,12 @@ class CoreModule:
             # If DB queue is available, put the data
             if self.db_queue and data.get("speed") is not None:
                 try:
+                    now = time.time()
                     self.db_queue.put_nowait({
+                        "type": "vehicle_data",
                         "feed_id": self.feed_id,
                         "vehicle_id": vehicle_id,
-                        "timestamp": time.time(),
+                        "timestamp": now,
                         "bbox": data["bbox"],
                         "centroid": data["centroid"],
                         "speed": data["speed"],
@@ -703,6 +705,18 @@ class CoreModule:
                         "direction": data.get("direction", "N/A"),
                         "acceleration": data.get("acceleration"),
                     })
+                    
+                    # Persistent Identification
+                    lp = data.get("license_plate")
+                    if lp and lp != "Unknown":
+                        self.db_queue.put_nowait({
+                            "type": "identified_vehicle",
+                            "license_plate": lp,
+                            "vehicle_type": self.vehicle_type_map.get(data["class_id"], "unknown"),
+                            "timestamp": now,
+                            "confidence": data.get("ocr_confidence", 0.0),
+                            # Could add more metadata here if available
+                        })
                 except queue.Full:
                     logger.warning(f"DB queue full, dropping data for {vehicle_id}")
                 except Exception as e:

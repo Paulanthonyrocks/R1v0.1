@@ -8,6 +8,8 @@ interface StreamOverlayControlsProps {
   setShowBoundingBoxes: (value: boolean) => void;
   showVehicleDetails: boolean;
   setShowVehicleDetails: (value: boolean) => void;
+  showROI: boolean;
+  setShowROI: (value: boolean) => void;
   controlId: string;
 }
 
@@ -42,6 +44,8 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   setShowBoundingBoxes,
   showVehicleDetails,
   setShowVehicleDetails,
+  showROI,
+  setShowROI,
   controlId,
 }) => {
   return (
@@ -50,7 +54,7 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor={`toggle-overlays-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Show All Overlays</Label>
+        <Label htmlFor={`toggle-overlays-${controlId}`} className="text-lcd-text text-sm cursor-pointer uppercase font-bold">Show All Overlays</Label>
         <MatrixCheckbox
           id={`toggle-overlays-${controlId}`}
           checked={showOverlays}
@@ -61,7 +65,7 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
       {showOverlays && (
         <div className="space-y-3 pl-2 border-l border-lcd-text/30">
           <div className="flex items-center justify-between gap-4">
-            <Label htmlFor={`toggle-boxes-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Bounding Boxes</Label>
+            <Label htmlFor={`toggle-boxes-${controlId}`} className="text-lcd-text text-sm cursor-pointer uppercase">Bounding Boxes</Label>
             <MatrixCheckbox
               id={`toggle-boxes-${controlId}`}
               checked={showBoundingBoxes}
@@ -70,11 +74,20 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
           </div>
 
           <div className="flex items-center justify-between gap-4">
-            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-text text-sm cursor-pointer">Vehicle Details</Label>
+            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-text text-sm cursor-pointer uppercase">Vehicle Details</Label>
             <MatrixCheckbox
               id={`toggle-details-${controlId}`}
               checked={showVehicleDetails}
               onCheckedChange={setShowVehicleDetails}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-roi-${controlId}`} className="text-lcd-text text-sm cursor-pointer uppercase">Region of Interest</Label>
+            <MatrixCheckbox
+              id={`toggle-roi-${controlId}`}
+              checked={showROI}
+              onCheckedChange={setShowROI}
             />
           </div>
         </div>

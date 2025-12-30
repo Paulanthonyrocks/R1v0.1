@@ -13,6 +13,12 @@ service cloud.firestore {
       return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
     }
 
+    // Rules for trafficData collection
+    match /trafficData/{trafficDataId} {
+      allow read: if isAuthenticated();
+      allow write: if hasRole('operator') || hasRole('admin');
+    }
+
     // Rules for traffic_data collection
     match /traffic_data/{trafficDataId} {
       allow read: if isAuthenticated(); // Authenticated users can read traffic data
@@ -43,6 +49,11 @@ service cloud.firestore {
     // Rules for feeds collection
     match /feeds/{feedId} {
       allow read: if isAuthenticated(); // Authenticated users can read feeds
+    }
+
+    // Rules for alerts collection
+    match /alerts/{alertId} {
+      allow read: if isAuthenticated(); // Authenticated users can read alerts
     }
   }
 }

@@ -222,6 +222,19 @@ class DatabaseManager:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
         )
+        cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
+                license_plate TEXT PRIMARY KEY,
+                vehicle_type TEXT,
+                make TEXT,
+                model TEXT,
+                color TEXT,
+                first_seen REAL,
+                last_seen REAL,
+                total_detections INTEGER DEFAULT 1,
+                flags TEXT)""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
+        )
         cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
@@ -261,6 +274,58 @@ class DatabaseManager:
         stop=stop_after_attempt(4),
         retry=retry_if_exception_type(sqlite3.OperationalError),
     )
+
+    @db_write_retry_decorator
+    def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> int:
+        """Saves a batch of vehicle tracking data in a single transaction."""
+        if not vehicle_data_list:
+            return 0
+        
+        sql = """INSERT OR REPLACE INTO vehicle_tracks (
+            feed_id, track_id, timestamp, class_id, confidence,
+            bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
+            speed, acceleration, lane, direction, license_plate, ocr_confidence, flags
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        
+        batch_params = []
+        for vd in vehicle_data_list:
+            bbox = vd.get("bbox", [None] * 4)
+            center = vd.get("centroid") or vd.get("center") or [None] * 2
+            flags_val = vd.get("flags", "")
+            if isinstance(flags_val, (set, list)):
+                flags_str = ",".join(sorted(list(flags_val)))
+            else:
+                flags_str = str(flags_val)
+
+            params = (
+                vd.get("feed_id", "unknown"),
+                vd.get("track_id") or vd.get("vehicle_id"),
+                vd.get("timestamp", time.time()),
+                vd.get("class_id"),
+                vd.get("confidence"),
+                bbox[0], bbox[1], bbox[2], bbox[3],
+                center[0], center[1],
+                vd.get("speed"),
+                vd.get("acceleration"),
+                vd.get("lane"),
+                vd.get("direction"),
+                vd.get("license_plate"),
+                vd.get("ocr_confidence"),
+                flags_str,
+            )
+            batch_params.append(params)
+
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, batch_params)
+                    conn.commit()
+            return len(batch_params)
+        except Exception as e:
+            logger.error(f"DB batch save failed: {e}")
+            if isinstance(e, sqlite3.OperationalError):
+                raise
+            return 0
 
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:
@@ -308,6 +373,46 @@ class DatabaseManager:
                 raise  # Re-raise to be caught by tenacity
             else:
                 raise DatabaseError(f"Failed save vehicle: {e}") from e
+
+    @db_write_retry_decorator
+    def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
+        """Upserts a vehicle identification record based on license plate."""
+        sql = """
+        INSERT INTO identified_vehicles (
+            license_plate, vehicle_type, make, model, color, first_seen, last_seen, total_detections, flags
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+        ON CONFLICT(license_plate) DO UPDATE SET
+            vehicle_type = COALESCE(excluded.vehicle_type, identified_vehicles.vehicle_type),
+            make = COALESCE(excluded.make, identified_vehicles.make),
+            model = COALESCE(excluded.model, identified_vehicles.model),
+            color = COALESCE(excluded.color, identified_vehicles.color),
+            last_seen = excluded.last_seen,
+            total_detections = identified_vehicles.total_detections + 1,
+            flags = COALESCE(excluded.flags, identified_vehicles.flags)
+        """
+        try:
+            lp = vehicle_data.get("license_plate")
+            if not lp or lp == "Unknown":
+                return False
+                
+            now = vehicle_data.get("timestamp", time.time())
+            params = (
+                lp,
+                vehicle_data.get("vehicle_type"),
+                vehicle_data.get("make"),
+                vehicle_data.get("model"),
+                vehicle_data.get("color"),
+                now, # first_seen (if insert)
+                now, # last_seen
+                vehicle_data.get("flags")
+            )
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(sql, params)
+            return True
+        except Exception as e:
+            logger.error(f"Error upserting identified vehicle {vehicle_data.get('license_plate')}: {e}")
+            return False
 
     async def save_alert(self, alert: Alert):
         """
@@ -418,6 +523,32 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error during _execute_save_alert: {e}", exc_info=True)
             raise
+    async def get_identified_vehicles(self, limit: int = 100, offset: int = 0) -> List[Dict]:
+        """Returns a list of identified vehicles."""
+        query = "SELECT * FROM identified_vehicles ORDER BY last_seen DESC LIMIT ? OFFSET ?"
+        try:
+            return await asyncio.to_thread(self._execute_query, query, (limit, offset))
+        except Exception as e:
+            logger.error(f"Error querying identified vehicles: {e}")
+            return []
+
+    async def get_vehicle_by_plate(self, license_plate: str) -> Optional[Dict]:
+        """Returns a single vehicle record by license plate."""
+        query = "SELECT * FROM identified_vehicles WHERE license_plate = ?"
+        try:
+            results = await asyncio.to_thread(self._execute_query, query, (license_plate,))
+            return results[0] if results else None
+        except Exception as e:
+            logger.error(f"Error querying vehicle by plate {license_plate}: {e}")
+            return None
+
+    def _execute_query(self, query: str, params: tuple) -> List[Dict]:
+        """Helper for synchronous query execution."""
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
     async def close(self):
         logger.info("DatabaseManager close called.")
         if self.async_engine:

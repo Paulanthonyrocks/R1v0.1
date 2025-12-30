@@ -19,7 +19,7 @@ interface VehicleFrontendData {
 
 const useVideoSocket = (streamId: string, token: string | null) => {
   const client = useWebSocket();
-  const [frameData, setFrameData] = useState<Uint8Array | null>(null);
+  const frameRef = useRef<{ bytes: Uint8Array, index: number } | null>(null);
   const [metrics, setMetrics] = useState<SurveillanceFeedMessage | null>(null);
   const [vehicles, setVehicles] = useState<VehicleFrontendData[] | null>(null);
   const [isConnected, setIsConnected] = useState(client.isConnected());
@@ -27,9 +27,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const [frameRate, setFrameRate] = useState<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
   const smoothedFrameTimeRef = useRef<number>(0);
+  const lastFpsUpdateRef = useRef<number>(0);
   const FPS_EMA_ALPHA = 0.1;
 
   const frameCountRef = useRef<number>(0);
+  const lastDrawnIndexRef = useRef<number>(-1);
 
   const subscribeToFeed = useCallback(() => {
     if (client.isConnected() && streamId) {
@@ -42,7 +44,14 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   }, [client, streamId]);
 
   useEffect(() => {
-    if (!streamId || !token) return;
+    if (!streamId) {
+        frameRef.current = null;
+        setMetrics(null);
+        setVehicles(null);
+        setError(null);
+        return;
+    }
+    if (!token) return;
 
     if (client.isConnected()) {
       subscribeToFeed();
@@ -96,7 +105,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         console.warn('[useVideoSocket] Unknown frame data type received');
         return;
     }
-    setFrameData(byteArray);
+    
+    // UPDATE REF instead of State
+    frameRef.current = { bytes: byteArray, index: data.frame_index || 0 };
 
     const now = performance.now();
     if (lastFrameTimeRef.current > 0) {
@@ -106,20 +117,29 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         } else {
             smoothedFrameTimeRef.current = (FPS_EMA_ALPHA * frameTime) + ((1 - FPS_EMA_ALPHA) * smoothedFrameTimeRef.current);
         }
-        if (smoothedFrameTimeRef.current > 0) {
+        
+        // Throttle FPS updates to avoid excessive re-renders (e.g., every 500ms)
+        if (now - lastFpsUpdateRef.current > 500 && smoothedFrameTimeRef.current > 0) {
             setFrameRate(1000 / smoothedFrameTimeRef.current);
+            lastFpsUpdateRef.current = now;
         }
     }
     lastFrameTimeRef.current = now;
   }, [streamId]);
 
-  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frame: Uint8Array, currentVehicles: VehicleFrontendData[] | null, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
+  const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frameDataObj: { bytes: Uint8Array, index: number }, currentVehicles: VehicleFrontendData[] | null, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean } = {}) => {
     // console.log(`[useVideoSocket] drawFrame called. Frame size: ${frame.length}`);
+    const { bytes: frame, index } = frameDataObj;
     const { showBoundingBoxes = true, showVehicleDetails = true } = options;
     const blob = new Blob([frame as unknown as BlobPart], { type: 'image/jpeg' });
 
     const drawToCanvas = (imageSource: ImageBitmap | HTMLImageElement) => {
-        // console.log(`[useVideoSocket] Drawing to canvas. Image dims: ${imageSource.width}x${imageSource.height}`);
+        // Skip if a newer frame has already been drawn
+        if (index < lastDrawnIndexRef.current) {
+            if (imageSource instanceof ImageBitmap) imageSource.close();
+            return;
+        }
+        lastDrawnIndexRef.current = index;
         const canvasWidth = ctx.canvas.width;
         const canvasHeight = ctx.canvas.height;
         const imgWidth = imageSource.width;
@@ -232,7 +252,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   useEffect(() => {
     if (!streamId || !token) return;
 
-    const unsubscribeFrame = client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame);
+    const unsubscribeFrame = client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame, streamId);
 
     const unsubscribeStatus = client.onStatusChange((status, message) => {
         const connected = status === 'connected';
@@ -251,7 +271,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     };
   }, [client, streamId, token, handleFrame, subscribeToFeed]);
 
-  return { frameData, metrics, vehicles, isConnected, error, drawFrame, frameRate };
+  return { lastFrameRef: frameRef, metrics, vehicles, isConnected, error, drawFrame, frameRate };
 };
 
 export default useVideoSocket;

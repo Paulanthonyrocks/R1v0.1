@@ -56,8 +56,7 @@ const CustomTooltipComponent = ({ active, payload, label, timeRange }: CustomToo
           <p className="label text-muted-foreground">{`Time: ${formatXAxis(label, timeRange)}`}</p>
           {payload.map((entry: { name: string; value: number; color: string; dataKey: string }, index: number) => (
              <p key={`item-${index}`} style={{ color: entry.color }} className="font-medium">
-                {/* Adjust formatting and units as needed */}
-                {`${entry.name}: ${entry.value?.toFixed(1)} ${entry.dataKey === 'avg_speed' ? 'mph' : ''}`}
+                {`${entry.name}: ${entry.value?.toFixed(1)} ${entry.dataKey === 'avg_speed' ? 'km/h' : entry.dataKey === 'congestion_index' ? '%' : ''}`}
              </p>
           ))}
         </div>
@@ -66,10 +65,8 @@ const CustomTooltipComponent = ({ active, payload, label, timeRange }: CustomToo
     return null;
 };
 
-
-
 const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProps) => {
-    // --- Data Aggregation ---
+    // --- Data Aggregation ---\
     const aggregateData = (data: TrendDataPoint[], timeRange: 'day' | 'week' | 'month') => {
       if (timeRange === 'day') return data; // No aggregation for daily data
 
@@ -93,11 +90,13 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
         const group = groups[key];
         const totalVehiclesSum = group.reduce((sum, item) => sum + (item.total_vehicles ?? 0), 0);
         const avgSpeedSum = group.reduce((sum, item) => sum + (item.avg_speed ?? 0), 0);
+        const congestionIndexSum = group.reduce((sum, item) => sum + (item.congestion_index ?? 0), 0);
 
         aggregatedData.push({
           timestamp: new Date(key + (interval === 'hour' ? ':00' : '')).toISOString(),
           total_vehicles: totalVehiclesSum / group.length,
           avg_speed: avgSpeedSum / group.length,
+          congestion_index: congestionIndexSum / group.length,
         });
       }
 
@@ -106,19 +105,12 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
 
     const aggregatedData = aggregateData(data, timeRange);
 
+    const primaryColor = 'var(--lcd-text)'; 
+    const secondaryColor = '#166534'; // dark green
+    const tertiaryColor = '#f59e0b'; // amber-500, for congestion
+    const mutedColor = 'rgba(0, 0, 0, 0.4)'; 
+    const gridColor = 'rgba(0, 0, 0, 0.1)'; 
 
-
-
-
-
-
-    // Assuming CSS variables are defined globally
-    const primaryColor = 'hsl(var(--primary))';
-    const secondaryColor = 'hsl(var(--secondary-foreground))';
-    const mutedColor = 'hsl(var(--muted-foreground))';
-    const gridColor = 'hsla(var(--border), 0.3)'; // Use border color with alpha
-
-   // Handle loading state
    if (isLoading) {
      return (
        <div className="flex items-center justify-center h-full text-muted-foreground animate-pulse text-sm">
@@ -127,7 +119,6 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
      );
    }
 
-   // Handle empty data state
    if (!data || data.length === 0) {
         return (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -140,25 +131,22 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
     <ResponsiveContainer width="100%" height="100%">
       <LineChart
         data={aggregatedData}
-
-
-        margin={{ top: 10, right: 25, left: -10, bottom: 0 }} // Fine-tuned margins
-        aria-label={`Flow analysis chart showing vehicle count and average speed over the last ${timeRange}`}
+        margin={{ top: 10, right: 25, left: -10, bottom: 0 }}
+        aria-label={`Flow analysis chart showing vehicle count, average speed, and congestion index over the last ${timeRange}`}
       >
         <CartesianGrid strokeDasharray="3 3" stroke={gridColor} horizontal={true} vertical={false} />
 
         <XAxis
-          dataKey="formattedTimestamp"
+          dataKey="timestamp"
           stroke={mutedColor}
           fontSize={10}
           tickLine={false}
           axisLine={{ stroke: gridColor }}
-          dy={5} // Offset labels slightly down
-          // interval="preserveStartEnd" // Consider if needed based on data density
-          minTickGap={20} // Prevent label overlap
+          dy={5} 
+          tickFormatter={(tick) => formatXAxis(tick, timeRange)}
+          minTickGap={20} 
         />
 
-        {/* Left Y Axis - Vehicle Count */}
         <YAxis
           yAxisId="left"
           dataKey="total_vehicles"
@@ -166,12 +154,11 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           fontSize={10}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(value) => `${value}`} // Simple integer format
-          width={35} // Slightly more width for labels
-          domain={['auto', (dataMax: number) => Math.max(10, Math.ceil(dataMax * 1.1))]} // Ensure min height, add padding
+          tickFormatter={(value) => `${value}`}
+          width={35}
+          domain={['auto', (dataMax: number) => Math.max(10, Math.ceil(dataMax * 1.1))]}
         />
 
-        {/* Right Y Axis - Average Speed */}
         <YAxis
           yAxisId="right"
           orientation="right"
@@ -180,25 +167,24 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           fontSize={10}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(value) => `${value.toFixed(0)}`} // Integer mph
-          width={35} // Slightly more width for labels
-          domain={['auto', 'auto']} // Auto domain usually works well
+          tickFormatter={(value) => `${value.toFixed(0)}`}
+          width={35}
+          domain={[0, 'dataMax + 10']}
         />
 
         <Tooltip
-            content={<CustomTooltipComponent timeRange={timeRange} />} // Pass timeRange to tooltip
+            content={<CustomTooltipComponent timeRange={timeRange} />}
             cursor={{ stroke: mutedColor, strokeWidth: 1, strokeDasharray: "3 3" }}
-            wrapperStyle={{ outline: 'none' }} // Remove potential focus outline from wrapper
+            wrapperStyle={{ outline: 'none' }}
         />
 
         <Legend
             iconSize={10}
             wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }}
-            verticalAlign="top" // Position legend at the top
-            align="right" // Align to the right
+            verticalAlign="top"
+            align="right"
         />
 
-        {/* Line for Vehicle Count - Added Animation Props */}
         <Line
           yAxisId="left"
           type="monotone"
@@ -208,23 +194,36 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 5, strokeWidth: 1, fill: secondaryColor }}
-          isAnimationActive={true} // Enable animation
-          animationDuration={1000} // Duration in ms
-          animationEasing="ease-out" // Animation style
+          isAnimationActive={true}
+          animationDuration={1000}
+          animationEasing="ease-out"
         />
 
-        {/* Line for Average Speed - Added Animation Props */}
         <Line
           yAxisId="right"
           type="monotone"
           dataKey="avg_speed"
-          name="Avg Speed (mph)"
+          name="Avg Speed (km/h)"
           stroke={primaryColor}
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 5, strokeWidth: 1, fill: primaryColor }}
-          isAnimationActive={true} // Enable animation
-          animationDuration={1000} // Duration in ms
+          isAnimationActive={true}
+          animationDuration={1000}
+          animationEasing="ease-out"
+        />
+        
+        <Line
+          yAxisId="right"
+          type="monotone"
+          dataKey="congestion_index"
+          name="Congestion (%)"
+          stroke={tertiaryColor}
+          strokeWidth={2}
+          dot={false}
+          activeDot={{ r: 5, strokeWidth: 1, fill: tertiaryColor }}
+          isAnimationActive={true}
+          animationDuration={1000}
           animationEasing="ease-out"
         />
       </LineChart>
@@ -232,4 +231,4 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
   );
 };
 
-export default React.memo(FlowAnalysisChart); // Memoize the component
+export default React.memo(FlowAnalysisChart);

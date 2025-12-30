@@ -11,13 +11,21 @@ import StreamOverlayControls from './StreamOverlayControls';
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
-    const { startFeed, stopFeed, restartFeed, isConnected: isSocketConnected } = useRealtimeUpdates();
+    const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token } = useAuth();
-    const { frameData, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles } = useVideoSocket(feed_id, token);
+    
+    // Only subscribe if the feed is in an active state
+    const shouldSubscribe = status === 'running' || status === 'starting';
+    const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles } = useVideoSocket(
+        shouldSubscribe ? feed_id : "", 
+        token
+    );
+    
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
+    const [showROI, setShowROI] = useState<boolean>(false);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); 
     
     // ROI State
@@ -28,7 +36,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const containerRef = useRef<HTMLDivElement>(null);
     const toggleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    const isLive = isConnected && frameData !== null;
+    const isLive = isConnected && lastFrameRef.current !== null;
     const isLoading = !isConnected && !error;
 
     const component_name = feedName ?? `Feed ${feed_id}`;
@@ -90,61 +98,73 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     };
 
     useEffect(() => {
-        if (canvasRef.current && frameData) {
-            // console.log('[SurveillanceFeed] Triggering drawFrame');
-            const canvas = canvasRef.current;
-            const ctx = canvas.getContext('2d', { alpha: false });
-            if (ctx) {
-                const displayWidth = canvas.offsetWidth;
-                const displayHeight = canvas.offsetHeight;
-                
-                if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-                    canvas.width = displayWidth;
-                    canvas.height = displayHeight;
-                }
-                
-                // Draw Video
-                if (isLive) {
-                    drawFrame(ctx, frameData, vehicles, {
-                        showBoundingBoxes: showOverlays && showBoundingBoxes,
-                        showVehicleDetails: showOverlays && showVehicleDetails
-                    });
-                } else {
-                    // Clear canvas if not live
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                }
+        let animationFrameId: number;
 
-                // Draw ROI
-                if (roiPoints.length > 0 || roiMode) {
-                    ctx.save();
-                    ctx.strokeStyle = roiMode ? '#00ff00' : 'rgba(0, 255, 0, 0.5)';
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    roiPoints.forEach((p, i) => {
-                        const px = p.x * canvas.width;
-                        const py = p.y * canvas.height;
-                        if (i === 0) ctx.moveTo(px, py);
-                        else ctx.lineTo(px, py);
-                        
-                        // Draw anchor points in edit mode
-                        if (roiMode) {
-                            ctx.fillStyle = '#00ff00';
-                            ctx.fillRect(px - 3, py - 3, 6, 6);
+        const render = () => {
+            if (canvasRef.current) {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d', { alpha: false });
+                if (ctx) {
+                    const displayWidth = canvas.offsetWidth;
+                    const displayHeight = canvas.offsetHeight;
+                    
+                    if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                        canvas.width = displayWidth;
+                        canvas.height = displayHeight;
+                    }
+                    
+                    // Draw Video
+                    if (isLive && lastFrameRef.current) {
+                        drawFrame(ctx, lastFrameRef.current, vehicles, {
+                            showBoundingBoxes: showOverlays && showBoundingBoxes,
+                            showVehicleDetails: showOverlays && showVehicleDetails
+                        });
+                    } else {
+                        // Clear canvas if not live
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    }
+
+                    // Draw ROI
+                    if (roiMode || (showOverlays && showROI && roiPoints.length > 0)) {
+                        ctx.save();
+                        ctx.strokeStyle = roiMode ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
+                        ctx.lineWidth = 1; // Thinner line
+                        ctx.beginPath();
+                        roiPoints.forEach((p, i) => {
+                            const px = p.x * canvas.width;
+                            const py = p.y * canvas.height;
+                            if (i === 0) ctx.moveTo(px, py);
+                            else ctx.lineTo(px, py);
+                            
+                            // Draw anchor points in edit mode
+                            if (roiMode) {
+                                ctx.fillStyle = '#00ff00';
+                                ctx.fillRect(px - 2, py - 2, 4, 4); // Smaller anchors
+                            }
+                        });
+                        if (roiPoints.length > 2) {
+                            ctx.closePath();
                         }
-                    });
-                    if (roiPoints.length > 2) {
-                        ctx.closePath();
+                        ctx.stroke();
+                        if (roiPoints.length > 2) {
+                            ctx.fillStyle = 'rgba(0, 255, 0, 0.05)'; // More transparent fill
+                            ctx.fill();
+                        }
+                        ctx.restore();
                     }
-                    ctx.stroke();
-                    if (roiPoints.length > 2) {
-                        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
-                        ctx.fill();
-                    }
-                    ctx.restore();
                 }
             }
-        }
-    }, [frameData, isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, vehicles, feed_id, roiPoints, roiMode]);
+            animationFrameId = requestAnimationFrame(render);
+        };
+
+        render();
+
+        return () => {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+        };
+    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, vehicles, feed_id, roiPoints, roiMode, lastFrameRef]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -351,6 +371,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             setShowBoundingBoxes={setShowBoundingBoxes}
                             showVehicleDetails={showVehicleDetails}
                             setShowVehicleDetails={setShowVehicleDetails}
+                            showROI={showROI}
+                            setShowROI={setShowROI}
                             controlId={feed_id}
                         />
                     </div>

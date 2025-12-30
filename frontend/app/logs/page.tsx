@@ -1,59 +1,76 @@
 "use client";
 
+import React, { useState, useEffect, useMemo } from "react";
 import AuthGuard from "@/components/auth/AuthGuard";
-import MatrixCard from "@/components/MatrixCard";
-import { useState, useEffect } from "react";
-import { UserRole } from "@/lib/auth/roles"; // Import UserRole
-import MatrixButton from "@/components/MatrixButton";
-import { Signal, Clock, BatteryFull } from 'lucide-react';
+import { UserRole } from "@/lib/auth/roles";
+import { Clock, BatteryFull, Search, Terminal, ShieldAlert, Info, ArrowLeft, X } from 'lucide-react';
+import Link from 'next/link';
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+
+interface LogEntry {
+    id: number;
+    title: string;
+    description: string;
+    timestamp: string;
+    type: string;
+    severity: 'High' | 'Medium' | 'Low';
+    source: string;
+}
 
 const SystemLogsPage = () => {
   const [loading, setLoading] = useState<boolean>(true);
-  const [selectedLog, setSelectedLog] = useState<number | null>(null);
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [severityFilter, setSeverityFilter] = useState<'ALL' | 'High' | 'Medium' | 'Low'>('ALL');
 
   useEffect(() => {
-    // Simulate initial data loading
-    const timer = setTimeout(() => {
-      setLoading(false);
-    }, 1000);
-    
+    const timer = setTimeout(() => setLoading(false), 800);
     return () => clearTimeout(timer);
   }, []);
 
-  const handleLogClick = (index: number) => {
-    setSelectedLog(index);
-  };
+  const placeholderLogs: LogEntry[] = useMemo(() => {
+      return [...Array(20)].map((_, index) => ({
+        id: index,
+        title: `Kernel Event ${1024 + index}`,
+        description: `Subsystem ${["NETWORK", "AUTH", "STORAGE", "VISION"][index % 4]} reported a ${["synchronization", "validation", "allocation", "inference"][index % 4]} ${["exception", "timeout", "success", "notice"][index % 4]}. Internal trace hash: 0x${Math.random().toString(16).substring(2, 10).toUpperCase()}`,
+        timestamp: new Date(Date.now() - index * 1000 * 60 * 15).toISOString(),
+        type: ["Error", "Warning", "Info", "Audit"][index % 4],
+        severity: (["High", "Medium", "Low", "Low"][index % 4]) as 'High' | 'Medium' | 'Low',
+        source: ["edge-node-01", "central-hub", "firebase-bridge", "worker-cluster"][index % 4]
+      }));
+  }, []);
 
-  const closeLogDetails = () => {
-    setSelectedLog(null);
-  };
+  const filteredLogs = useMemo(() => {
+      return placeholderLogs.filter(log => {
+          const matchesSeverity = severityFilter === 'ALL' || log.severity === severityFilter;
+          const matchesSearch = log.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                               log.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                               log.source.toLowerCase().includes(searchQuery.toLowerCase());
+          return matchesSeverity && matchesSearch;
+      });
+  }, [placeholderLogs, severityFilter, searchQuery]);
 
-  const placeholderLogs = [...Array(5)].map((_, index) => ({
-    title: `Log Entry ${index + 1}`,
-    description: `This is a placeholder description for log entry ${
-      index + 1
-    }.`.repeat(2),
-    timestamp: new Date().toLocaleString(),
-    type: ["Error", "Warning", "Info"][index % 3],
-    severity: ["High", "Medium", "Low"][index % 3],
-  }));
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <h1 className="text-lcd-text text-4xl">Loading...</h1>
+  if (loading) return (
+      <div className="bg-lcd-bg text-lcd-text h-screen flex flex-col items-center justify-center font-lcd">
+          <Terminal className="animate-pulse mb-4" size={48} />
+          <h1 className="text-2xl font-bold uppercase tracking-[0.3em]">Accessing System Logs...</h1>
       </div>
-    );
-  }
+  );
 
   return (
     <AuthGuard requiredRole={UserRole.ADMIN}>
       <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
         {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-          <div className="flex items-center space-x-2">
-            <Signal size={20} />
-            <span className="font-lcd matrix-glow">SYSTEM LOGS</span>
+        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text sticky top-0 z-50 bg-lcd-bg">
+          <div className="flex items-center gap-4">
+              <Link href="/dashboard" className="hover:opacity-70 transition-opacity">
+                <ArrowLeft size={20} />
+              </Link>
+              <div className="flex items-center space-x-2">
+                <Terminal size={20} />
+                <span className="font-lcd matrix-glow uppercase font-bold">Kernel Audit Trail</span>
+              </div>
           </div>
           <div className="flex items-center space-x-2">
             <Clock size={20} />
@@ -61,81 +78,138 @@ const SystemLogsPage = () => {
             <BatteryFull size={20} />
           </div>
         </header>
-        <div className="p-4">
-          <h1 className="text-2xl font-bold mb-4 text-lcd-text flex items-center gap-4">
-            System Logs
-            <input
-              type="text"
-              placeholder="Search logs..."
-              className="bg-transparent border border-lcd-text p-2 rounded-md text-lcd-text"
-            />
-          </h1>
 
-          {/* Advanced Filters */}
-          <MatrixCard title="Filters" className="mb-4">
-            <div className="flex flex-wrap gap-2">
-              <MatrixButton>Type</MatrixButton>
-              <MatrixButton>Severity</MatrixButton>
-              <MatrixButton>Time</MatrixButton>
-            </div>
-          </MatrixCard>
-
-          {/* Log List */}
-          <div
-            className={`grid grid-cols-1 gap-4 ${
-              selectedLog !== null ? "pointer-events-none opacity-50" : ""
-            }`}
-          >
-            {placeholderLogs.map((log, index) => (
-              <div key={index} onClick={() => handleLogClick(index)}>
-                <MatrixCard
-                  title={log.title}
-                  className="bg-lcd-bg text-lcd-text cursor-pointer"
-                >
-                  <div className="flex flex-col">
-                    <p className="text-lcd-text text-sm line-clamp-3">
-                      Description: {log.description}
-                    </p>
-                    <p className="text-lcd-text text-xs mt-2">
-                      Timestamp: {log.timestamp}
-                    </p>
-                  </div>
-                </MatrixCard>
+        <main className="flex-1 p-6 max-w-[1400px] mx-auto w-full">
+          <div className="flex flex-col lg:flex-row justify-between items-end mb-8 gap-6">
+              <div className="flex-1">
+                  <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2">System Telemetry Logs</h1>
+                  <p className="text-lcd-text/60 max-w-2xl text-sm">
+                      Low-level audit records from the traffic management engine. 
+                      Monitoring real-time events across the distributed processing cluster.
+                  </p>
               </div>
-            ))}
+              
+              <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto">
+                  <div className="relative flex-1 sm:w-80 font-bold">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40" size={18} />
+                      <input
+                        type="text"
+                        placeholder="FILTER LOGS..."
+                        className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text rounded-none p-3 pl-10 w-full focus:outline-none focus:border-primary tracking-[0.1em] placeholder:text-lcd-text/30"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                  </div>
+                  <div className="flex bg-lcd-text/10 p-1 border border-lcd-text/20">
+                      {(['ALL', 'High', 'Medium', 'Low'] as const).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setSeverityFilter(s)}
+                            className={`px-4 py-1 text-[10px] uppercase transition-all font-bold ${severityFilter === s ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/20'}`}
+                          >
+                              {s}
+                          </button>
+                      ))}
+                  </div>
+              </div>
           </div>
 
-          {/* Log Details */}
-          {selectedLog !== null && (
-            <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-              <div className="bg-lcd-bg p-6 rounded-lg relative w-[80%] h-[80%]">
-                <MatrixButton
-                  onClick={closeLogDetails}
-                  className="absolute top-2 right-2"
-                >
-                  Close
-                </MatrixButton>
-                <h2 className="text-lg font-bold mb-4 text-lcd-text">
-                  {placeholderLogs[selectedLog].title} Details
-                </h2>
-                <div className="flex flex-col gap-2">
-                  <p className="text-lcd-text text-sm">
-                    Type: {placeholderLogs[selectedLog].type}
-                  </p>
-                  <p className="text-lcd-text text-sm">
-                    Severity: {placeholderLogs[selectedLog].severity}
-                  </p>
-                  <p className="text-lcd-text text-sm">
-                    Description: {placeholderLogs[selectedLog].description}
-                  </p>
-                  <p className="text-lcd-text text-xs">
-                    Timestamp: {placeholderLogs[selectedLog].timestamp}
-                  </p>
-                </div>
+          {/* Log List */}
+          <div className="matrix-card overflow-hidden">
+              <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                      <thead>
+                          <tr className="bg-lcd-text/10 text-primary border-b-2 border-lcd-text/20 uppercase text-[10px] font-bold tracking-widest">
+                              <th className="p-4 text-left">Level</th>
+                              <th className="p-4 text-left">Timestamp</th>
+                              <th className="p-4 text-left">Event</th>
+                              <th className="p-4 text-left">Source</th>
+                              <th className="p-4 text-right">Actions</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {filteredLogs.map((log) => (
+                              <tr key={log.id} className="border-b border-lcd-text/5 hover:bg-lcd-text/5 transition-colors group cursor-pointer" onClick={() => setSelectedLog(log)}>
+                                  <td className="p-4 whitespace-nowrap">
+                                      <span className={cn(
+                                          "px-2 py-0.5 text-[10px] font-bold uppercase",
+                                          log.severity === 'High' ? "bg-red-900 text-white" :
+                                          log.severity === 'Medium' ? "bg-yellow-900 text-white" :
+                                          "bg-green-900 text-white"
+                                      )}>
+                                          {log.severity}
+                                      </span>
+                                  </td>
+                                  <td className="p-4 whitespace-nowrap opacity-60 text-xs">
+                                      {new Date(log.timestamp).toLocaleString()}
+                                  </td>
+                                  <td className="p-4">
+                                      <div className="font-bold uppercase tracking-tight">{log.title}</div>
+                                      <div className="text-[10px] opacity-50 truncate max-w-md">{log.description}</div>
+                                  </td>
+                                  <td className="p-4 whitespace-nowrap">
+                                      <span className="text-[10px] bg-lcd-text/10 px-2 py-1 border border-lcd-text/20 uppercase font-bold">{log.source}</span>
+                                  </td>
+                                  <td className="p-4 text-right">
+                                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-primary hover:text-black">
+                                          <Info size={14} />
+                                      </Button>
+                                  </td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
               </div>
+          </div>
+        </main>
+
+        {/* Detail Modal Overlay */}
+        {selectedLog && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSelectedLog(null)}></div>
+                <div className="relative matrix-card max-w-2xl w-full p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+                    <button 
+                        onClick={() => setSelectedLog(null)}
+                        className="absolute top-4 right-4 text-lcd-text/40 hover:text-white"
+                    >
+                        <X size={24} />
+                    </button>
+                    
+                    <div className="flex items-center gap-4 mb-6 pb-4 border-b border-lcd-text/20">
+                        <Terminal size={32} className="text-primary" />
+                        <div>
+                            <h2 className="text-2xl font-bold uppercase tracking-tighter">{selectedLog.title}</h2>
+                            <p className="text-[10px] uppercase opacity-60">Log ID: 0x{selectedLog.id.toString(16).padStart(4, '0')} | Source: {selectedLog.source}</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="grid grid-cols-2 gap-8">
+                            <div>
+                                <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">Severity</label>
+                                <div className="text-xl font-bold uppercase">{selectedLog.severity} Level</div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">Classification</label>
+                                <div className="text-xl font-bold uppercase">{selectedLog.type}</div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">Detailed Payload</label>
+                            <div className="bg-black p-4 border border-lcd-text/20 font-mono text-sm leading-relaxed text-primary/80">
+                                {selectedLog.description}
+                            </div>
+                        </div>
+
+                        <div className="pt-4 flex justify-between items-center opacity-40">
+                            <div className="text-[10px] uppercase">Kernel Timestamp: {selectedLog.timestamp}</div>
+                            <ShieldAlert size={16} />
+                        </div>
+                    </div>
+                </div>
             </div>
-          )}
-        </div>
+        )}
       </div>
     </AuthGuard>
   );

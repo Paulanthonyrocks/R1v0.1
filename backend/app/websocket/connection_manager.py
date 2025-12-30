@@ -32,6 +32,7 @@ class ConnectionManager:
         self.topic_subscriptions: Dict[str, Set[str]] = {}
         self.client_id_to_topics: Dict[str, Set[str]] = {}
         self.feed_subscriptions: Dict[str, Set[str]] = {}
+        self.client_id_to_feeds: Dict[str, Set[str]] = {}
         self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
         
         # Output queues for backpressure management
@@ -82,6 +83,18 @@ class ConnectionManager:
             await websocket.close(code=4000, reason="Connection limit exceeded")
             return
 
+        # Handle reconnection: Close existing connection if present
+        if client_id in self.active_connections:
+            logger.info(f"Client {client_id} reconnecting. Closing old connection.")
+            old_ws = self.active_connections[client_id]
+            # Force disconnect the old socket structure
+            await self.disconnect(client_id, old_ws)
+            try:
+                # Ensure the old socket is actually closed
+                await old_ws.close(code=1000, reason="Reconnected")
+            except Exception:
+                pass
+
         await websocket.accept()
         self.active_connections[client_id] = websocket
         self.client_id_to_user_id[client_id] = user_id
@@ -90,6 +103,7 @@ class ConnectionManager:
             self.user_id_to_client_ids[user_id] = []
         self.user_id_to_client_ids[user_id].append(client_id)
         self.client_id_to_topics[client_id] = set()
+        self.client_id_to_feeds[client_id] = set()
         self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
         # Initialize sender queue and task
@@ -142,6 +156,15 @@ class ConnectionManager:
                 if client_id in self.client_id_to_topics:
                     del self.client_id_to_topics[client_id]
 
+            # Clean up feed subscriptions
+            if client_id in self.client_id_to_feeds:
+                feeds = list(self.client_id_to_feeds[client_id])
+                for feed_id in feeds:
+                    await self.unsubscribe_from_feed(client_id, feed_id)
+                
+                if client_id in self.client_id_to_feeds:
+                    del self.client_id_to_feeds[client_id]
+
             logger.info(
                 f"WebSocket connection closed: client_id={client_id}. "
                 f"Total connections: {len(self.active_connections)}"
@@ -182,8 +205,10 @@ class ConnectionManager:
         """
         if client_id in self.client_queues:
             try:
-                # Wait for slot in queue
-                await self.client_queues[client_id].put(message)
+                # Wait for slot in queue with timeout to avoid blocking forever
+                await asyncio.wait_for(self.client_queues[client_id].put(message), timeout=0.5)
+            except asyncio.TimeoutError:
+                 logger.warning(f"Client {client_id} queue full. Dropping reliable message to avoid blocking.")
             except Exception as e:
                  logger.error(f"Failed to enqueue message for {client_id}: {e}")
 
@@ -209,6 +234,11 @@ class ConnectionManager:
         for client_id in list(self.active_connections.keys()):
             await self.send_personal_message(message, client_id)
 
+    async def broadcast_realtime(self, message: str):
+        """Broadcast fire-and-forget message to all."""
+        for client_id in list(self.active_connections.keys()):
+            await self.send_realtime_message(message, client_id)
+
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
         for client_id in list(client_ids): 
@@ -228,10 +258,23 @@ class ConnectionManager:
         if feed_id not in self.feed_subscriptions:
             self.feed_subscriptions[feed_id] = set()
         self.feed_subscriptions[feed_id].add(client_id)
+        self.client_id_to_feeds.setdefault(client_id, set()).add(feed_id)
         logger.info(f"Client {client_id} subscribed to feed: {feed_id}")
 
-    def get_clients_for_feed(self, feed_id: str) -> Set[str]:
-        return self.feed_subscriptions.get(feed_id, set())
+    async def unsubscribe_from_feed(self, client_id: str, feed_id: str):
+        if feed_id in self.feed_subscriptions and client_id in self.feed_subscriptions[feed_id]:
+            self.feed_subscriptions[feed_id].remove(client_id)
+            if not self.feed_subscriptions[feed_id]:
+                del self.feed_subscriptions[feed_id]
+            logger.info(f"Client {client_id} unsubscribed from feed: {feed_id}")
+        
+        if client_id in self.client_id_to_feeds and feed_id in self.client_id_to_feeds[client_id]:
+            self.client_id_to_feeds[client_id].remove(feed_id)
+            if not self.client_id_to_feeds[client_id]:
+                del self.client_id_to_feeds[client_id]
+
+    def get_clients_for_feed(self, feed_id: str) -> List[str]:
+        return list(self.feed_subscriptions.get(feed_id, set()))
 
     async def unsubscribe_from_topic(self, client_id: str, topic: str):
         if topic in self.topic_subscriptions and client_id in self.topic_subscriptions[topic]:

@@ -14,6 +14,11 @@ const getOrCreateClientId = () => {
 
 type MessageListener<T> = (data: T) => void;
 
+interface ScopedListener {
+    scope: string;
+    listener: MessageListener<unknown>;
+}
+
 export enum WebSocketMessageType {
     METRICS_UPDATE = 'metrics_update',
     KPI_UPDATE = 'kpi_update',
@@ -70,7 +75,7 @@ enum ConnectionState {
 }
 
 export class WebSocketClient implements IWebSocketClient {
-    private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown>>> = new Map();
+    private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown> | ScopedListener>> = new Map();
     private ws: WebSocket | null = null;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 5;
@@ -94,28 +99,33 @@ export class WebSocketClient implements IWebSocketClient {
     private currentToken: string | null = null;
     private videoWorker: Worker | null = null;
     private requiresClientId: boolean;
+    private clientId: string | null = null;
 
     constructor(baseUrl: string, requiresClientId = true) {
-        console.log(`[WebSocketClient ${this.instanceId}] Created`);
         this.url = baseUrl;
         this.requiresClientId = requiresClientId;
         this.tokenManager = TokenManager.getInstance();
+        this.clientId = this.requiresClientId ? getOrCreateClientId() : null;
         
-        if (typeof window !== 'undefined' && this.requiresClientId) {
-            this.videoWorker = new Worker('/workers/video-worker.js');
-            this.videoWorker.onmessage = (e) => {
-                if (e.data.error) {
-                    console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
-                } else {
-                    const { feed_id, frame } = e.data;
-                    this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id, frame });
-                }
-            };
-        }
+        if (typeof window !== 'undefined') {
+            console.log(`[WebSocketClient ${this.instanceId}] Created. Client ID: ${this.clientId}`);
+            
+            if (this.requiresClientId) {
+                this.videoWorker = new Worker('/workers/video-worker.js');
+                this.videoWorker.onmessage = (e) => {
+                    if (e.data.error) {
+                        console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
+                    } else {
+                        const { feed_id, frame } = e.data;
+                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id, frame });
+                    }
+                };
+            }
 
-        this.unsubscribeTokenRefresh = this.tokenManager.onTokenRefresh((token) => {
-            this.handleTokenRefresh(token);
-        });
+            this.unsubscribeTokenRefresh = this.tokenManager.onTokenRefresh((token) => {
+                this.handleTokenRefresh(token);
+            });
+        }
     }
 
     private setState(state: ConnectionState, message?: string) {
@@ -201,7 +211,7 @@ export class WebSocketClient implements IWebSocketClient {
 
         return new Promise<void>((resolve, reject) => {
             try {
-                const clientId = this.requiresClientId ? getOrCreateClientId() : null;
+                const clientId = this.clientId;
                 const url = new URL(this.url);
 
                 if (clientId) {
@@ -359,6 +369,9 @@ export class WebSocketClient implements IWebSocketClient {
                 }
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     // console.log(`[WebSocketClient] Received VIDEO_FRAME. Data size: ${JSON.stringify(message.data).length}`);
+                    const frameData = message.data as { feed_id?: string };
+                    this.notifyListeners(message.type, message.data, frameData?.feed_id);
+                    return;
                 }
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
@@ -374,24 +387,55 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
-    private notifyListeners<T>(type: WebSocketMessageType, data: T): void {
-        this.listeners.get(type)?.forEach((listener: MessageListener<T>) => {
+    private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
+        const typeListeners = this.listeners.get(type);
+        if (!typeListeners) return;
+
+        typeListeners.forEach((entry: unknown) => {
             try {
-                listener(data);
+                // If it's a scoped listener (object with scope and listener properties)
+                if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
+                    const scopedEntry = entry as ScopedListener;
+                    // Only notify if scopes match OR if the message has no scope
+                    if (!scope || scopedEntry.scope === scope) {
+                        scopedEntry.listener(data);
+                    }
+                } else {
+                    // It's a regular listener function, notify always
+                    (entry as MessageListener<T>)(data);
+                }
             } catch (error) {
                 console.error(`[WebSocketClient ${this.instanceId}] Error in listener for message type ${type}:`, error);
             }
         });
     }
 
-    public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void {
+    public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (!this.listeners.has(messageType)) this.listeners.set(messageType, new Set());
-        this.listeners.get(messageType)?.add(listener as MessageListener<unknown>);
-        return () => this.unsubscribe(messageType, listener);
+        
+        if (scope) {
+            const scopedListener: ScopedListener = { scope, listener: listener as unknown as MessageListener<unknown> };
+            this.listeners.get(messageType)?.add(scopedListener);
+            return () => this.unsubscribe(messageType, listener, scope);
+        } else {
+            this.listeners.get(messageType)?.add(listener as unknown as MessageListener<unknown>);
+            return () => this.unsubscribe(messageType, listener);
+        }
     }
 
-    public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void {
-        this.listeners.get(messageType)?.delete(listener as MessageListener<unknown>);
+    public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void {
+        const typeListeners = this.listeners.get(messageType);
+        if (!typeListeners) return;
+
+        if (scope) {
+            typeListeners.forEach((entry: unknown) => {
+                if (typeof entry === 'object' && entry !== null && (entry as ScopedListener).scope === scope && (entry as ScopedListener).listener === listener) {
+                    typeListeners.delete(entry as ScopedListener);
+                }
+            });
+        } else {
+            typeListeners.delete(listener as MessageListener<unknown>);
+        }
     }
 
     public send(message: WebSocketMessage): void {

@@ -5,6 +5,7 @@ import logging
 import time
 import re
 import atexit
+import json
 
 from collections import deque
 from multiprocessing import (
@@ -91,6 +92,13 @@ class FeedManager:
 
         # Metrics aggregation window
         self._metrics_averaging_window = self.config.get("metrics_averaging_window_seconds", 10)
+        
+        # Persistence
+        self.persistence_path = Path("backend/data/feeds_config.json")
+
+        # Database processing
+        self._db_queue: Optional[MPQueue] = MPQueue(maxsize=5000)
+        self._db_reader_task: Optional[asyncio.Task] = None
 
         # Initialize shared values
         self.initialize_shared_values()
@@ -127,10 +135,60 @@ class FeedManager:
     def set_analytics_service(self, service: AnalyticsService):
         self._analytics_service = service
         self.logger.info("AnalyticsService set in FeedManager.")
+        if self._db_reader_task is None:
+            self._db_reader_task = asyncio.create_task(self._read_db_queue())
 
     def set_connection_manager(self, manager: ConnectionManager):
         self._connection_manager = manager
         logger.info("WebSocket ConnectionManager set in FeedManager.")
+
+    async def _read_db_queue(self):
+        """Task to process database write requests from all workers."""
+        logger.info("Database queue reader task started.")
+        while not self._stop_reader_flag:
+            try:
+                items = []
+                # Drain queue up to a limit for batching
+                try:
+                    for _ in range(500):
+                        items.append(self._db_queue.get_nowait())
+                except queue.Empty:
+                    pass
+
+                if not items:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if self._analytics_service and self._analytics_service._db_manager:
+                    db = self._analytics_service._db_manager
+                    
+                    # Separate items by type for appropriate processing
+                    tracking_batch = []
+                    identified_batch = []
+                    
+                    for item in items:
+                        msg_type = item.get("type", "vehicle_data")
+                        if msg_type == "vehicle_data":
+                            tracking_batch.append(item)
+                        elif msg_type == "identified_vehicle":
+                            identified_batch.append(item)
+
+                    # Execute tracking data as a batch
+                    if tracking_batch:
+                        await asyncio.to_thread(db.save_vehicle_data_batch, tracking_batch)
+                    
+                    # Identified vehicles (usually rarer, process one by one or add batch support later)
+                    if identified_batch:
+                        for iv in identified_batch:
+                            await asyncio.to_thread(db.upsert_identified_vehicle, iv)
+                else:
+                    logger.warning("DB manager not available for db_queue processing")
+
+                # Small sleep to yield, but fast enough for high throughput
+                await asyncio.sleep(0.005)
+            except Exception as e:
+                logger.error(f"Error in db_queue reader: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
 
     def initialize_shared_values(self):
         import multiprocessing
@@ -169,7 +227,7 @@ class FeedManager:
             self.logger.info("Prediction scheduler stopped.")
 
     def _initialize_available_feeds(self):
-        logger.info("Automatic sample feed initialization is disabled.")
+        self._load_persisted_feeds()
 
     def _generate_feed_id(self, source: str, name_hint: Optional[str] = None) -> str:
         if name_hint:
@@ -198,6 +256,102 @@ class FeedManager:
             message = WebSocketMessage(type=message_type, data=data)
             await self._connection_manager.broadcast(message.model_dump_json())
 
+    # --- Persistence ---
+
+    def _save_persisted_feeds(self):
+        """Saves current feeds configuration to disk."""
+        try:
+            feeds_data = {}
+            for feed_id, entry in self.process_registry.items():
+                config_info = entry.get("config_info")
+                if config_info:
+                    # We also need to persist 'is_looped' as it's not in FeedConfigInfo
+                    data = config_info.model_dump()
+                    data["_is_looped_feed"] = entry.get("is_looped_feed", True)
+                    feeds_data[feed_id] = data
+            
+            self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.persistence_path, 'w') as f:
+                json.dump(feeds_data, f, indent=2)
+            logger.info(f"Saved {len(feeds_data)} feeds to {self.persistence_path}")
+        except Exception as e:
+            logger.error(f"Failed to save feeds persistence: {e}")
+
+    def _load_persisted_feeds(self):
+        """Loads feeds configuration from disk."""
+        if not self.persistence_path.exists():
+            return
+
+        try:
+            with open(self.persistence_path, 'r') as f:
+                feeds_data = json.load(f)
+            
+            loaded_count = 0
+            for feed_id, feed_data in feeds_data.items():
+                try:
+                    # Extract extra metadata
+                    is_looped = feed_data.pop("_is_looped_feed", True)
+                    
+                    # Create FeedConfigInfo object
+                    config_info = FeedConfigInfo(**feed_data)
+                    
+                    # Add to registry (STOPPED state)
+                    self.process_registry[feed_id] = {
+                        "process": None,
+                        "result_queue": None,
+                        "command_queue": None,
+                        "stop_event": None,
+                        "reduce_fps_event": None,
+                        "status": FeedOperationalStatusEnum.STOPPED,
+                        "source": config_info.source_identifier,
+                        "start_time": None,
+                        "error_message": None,
+                        "latest_metrics": None,
+                        "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
+                        "timer": FrameTimer(),
+                        "is_sample_feed": False,
+                        "is_looped_feed": is_looped,
+                        "config_info": config_info,
+                        "last_broadcast_time": 0.0,
+                    }
+                    
+                    # Update ID counter
+                    parts = feed_id.split('_')
+                    if len(parts) >= 2 and parts[1].isdigit():
+                         num = int(parts[1])
+                         if num >= self._feed_id_counter:
+                             self._feed_id_counter = num + 1
+                    
+                    loaded_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to load feed {feed_id}: {e}")
+            
+            logger.info(f"Loaded {loaded_count} feeds from {self.persistence_path}")
+        except Exception as e:
+            logger.error(f"Failed to load feeds persistence: {e}")
+
+    async def remove_feed(self, feed_id: str) -> bool:
+        """Removes a feed from the registry and persistence."""
+        async with self._lock:
+            if feed_id not in self.process_registry:
+                return False
+            
+            # Stop it first
+            try:
+                resources = self._detach_resources(feed_id)
+                if resources:
+                    await self._terminate_resources(resources)
+            except Exception as e:
+                logger.error(f"Error stopping feed {feed_id} during removal: {e}")
+            
+            # Remove from registry
+            del self.process_registry[feed_id]
+            
+            # Save persistence
+            self._save_persisted_feeds()
+            
+        return True
+
     # --- Feed Management ---
 
     async def update_feed_config(self, feed_id: str, updates: Dict[str, Any]):
@@ -218,6 +372,8 @@ class FeedManager:
                 
                 updated_config = current_config.model_copy(update=update_data)
                 entry["config_info"] = updated_config
+                
+                self._save_persisted_feeds()
                 
                 # If the feed is running, signal the worker via command_queue
                 if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
@@ -244,57 +400,73 @@ class FeedManager:
         name_hint: Optional[str] = None,
         is_looped: bool = True,
     ) -> Dict[str, Any]:
+        existing_feed_id = None
+        
         async with self._lock:
-            self._check_resources()
+            # Check for existing feed with same source
+            for fid, entry in self.process_registry.items():
+                if entry["source"] == source:
+                    existing_feed_id = fid
+                    break
+            
+            if not existing_feed_id:
+                self._check_resources()
 
-            feed_id = self._generate_feed_id(source, name_hint)
-            logger.info(f"Adding new feed: {feed_id}")
+                feed_id = self._generate_feed_id(source, name_hint)
+                logger.info(f"Adding new feed: {feed_id}")
 
-            feed_config = FeedConfigInfo(
-                name=name_hint or Path(source).name,
-                source_type="video_file" if Path(source).suffix else "webcam",
-                source_identifier=source,
-                latitude=latitude,
-                longitude=longitude,
-            )
+                feed_config = FeedConfigInfo(
+                    name=name_hint or Path(source).name,
+                    source_type="video_file" if Path(source).suffix else "webcam",
+                    source_identifier=source,
+                    latitude=latitude,
+                    longitude=longitude,
+                )
 
-            self.process_registry[feed_id] = {
-                "process": None,
-                "result_queue": None,
-                "command_queue": None,
-                "stop_event": None,
-                "reduce_fps_event": None,
-                "status": FeedOperationalStatusEnum.STOPPED,
-                "source": source,
-                "start_time": None,
-                "error_message": None,
-                "latest_metrics": None,
-                "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
-                "timer": FrameTimer(),
-                "is_sample_feed": False,
-                "is_looped_feed": is_looped,
-                "config_info": feed_config,
-                "last_broadcast_time": 0.0,
-            }
+                self.process_registry[feed_id] = {
+                    "process": None,
+                    "result_queue": None,
+                    "command_queue": None,
+                    "stop_event": None,
+                    "reduce_fps_event": None,
+                    "status": FeedOperationalStatusEnum.STOPPED,
+                    "source": source,
+                    "start_time": None,
+                    "error_message": None,
+                    "latest_metrics": None,
+                    "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
+                    "timer": FrameTimer(),
+                    "is_sample_feed": False,
+                    "is_looped_feed": is_looped,
+                    "config_info": feed_config,
+                    "last_broadcast_time": 0.0,
+                }
+                
+                self._save_persisted_feeds()
+                target_feed_id = feed_id
+            else:
+                target_feed_id = existing_feed_id
+                logger.info(f"Reusing existing feed {target_feed_id} for source {source}")
 
-        await self._broadcast_feed_update(feed_id)
+        if not existing_feed_id:
+            await self._broadcast_feed_update(target_feed_id)
 
         try:
-            await self.start_feed(feed_id)
+            await self.start_feed(target_feed_id)
             async with self._lock:
                 return {
-                    "feed_id": feed_id,
-                    "status": self.process_registry[feed_id]["status"].value,
-                    "error": self.process_registry[feed_id]["error_message"],
+                    "feed_id": target_feed_id,
+                    "status": self.process_registry[target_feed_id]["status"].value,
+                    "error": self.process_registry[target_feed_id]["error_message"],
                 }
         except Exception as e:
-            logger.error(f"Failed to start feed {feed_id}: {e}")
+            logger.error(f"Failed to start feed {target_feed_id}: {e}")
             async with self._lock:
-                self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.ERROR
-                self.process_registry[feed_id]["error_message"] = str(e)
-            await self._broadcast_feed_update(feed_id)
+                self.process_registry[target_feed_id]["status"] = FeedOperationalStatusEnum.ERROR
+                self.process_registry[target_feed_id]["error_message"] = str(e)
+            await self._broadcast_feed_update(target_feed_id)
             return {
-                "feed_id": feed_id,
+                "feed_id": target_feed_id,
                 "status": FeedOperationalStatusEnum.ERROR.value,
                 "error": str(e),
             }
@@ -455,7 +627,7 @@ class FeedManager:
             vis_options,
             entry["reduce_fps_event"],
             self._global_fps,
-            None, # db_queue (handled via result queue)
+            self._db_queue, # Pass the global DB queue
             None, # error_queue
             entry.get("config_info"),
             entry.get("video_writer_queue"),
@@ -918,7 +1090,7 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.KPI_UPDATE,
             data=kpi_data.model_dump()
         )
-        await self._connection_manager.broadcast(message.model_dump_json())
+        await self._connection_manager.broadcast_realtime(message.model_dump_json())
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:

@@ -5,13 +5,14 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { gsap } from 'gsap';
 import { useRouter } from 'next/navigation';
 import type { FeedStatusData } from '@/lib/types';
-import { db } from '@/lib/firebase'; // Assuming db is a Firestore instance from Firebase v9+
-import { collection, onSnapshot } from 'firebase/firestore'; // Firebase v9+ imports
+import { db } from '@/lib/firebase'; 
+import { collection, onSnapshot } from 'firebase/firestore'; 
+import { useUser } from '@/lib/auth/UserContext';
 
 // Define Constants
 const GLOBE_RADIUS = 50;
-const MARKER_ALTITUDE = 0.5;
-const ALERT_ALTITUDE = 2;
+const MARKER_ALTITUDE = 3.0; // Higher altitude
+const ALERT_ALTITUDE = 5.0; // Higher altitude
 const CAMERA_INITIAL_DISTANCE = 120;
 const CAMERA_MIN_DISTANCE = 60;
 const CAMERA_MAX_DISTANCE = 300;
@@ -68,6 +69,7 @@ interface SceneRefs {
 
 
 const ThreeGrid: React.FC = () => {
+    const { user } = useUser();
     const containerRef = useRef<HTMLDivElement>(null);
     const [feedMarkers, setFeedMarkers] = useState<Record<string, FeedMarker>>({});
     const [alertMarkers, setAlertMarkers] = useState<Record<string, AlertMarker>>({}); // New state for alert markers
@@ -76,6 +78,7 @@ const ThreeGrid: React.FC = () => {
     const router = useRouter();
     const sceneRef = useRef<SceneRefs | null>(null);
     const globeRef = useRef<THREE.Mesh | null>(null);
+    const [sceneReady, setSceneReady] = useState(false);
     const feedMarkersRef = useRef(feedMarkers);
     const alertMarkersRef = useRef(alertMarkers); // Ref for alert markers
 
@@ -123,7 +126,7 @@ const ThreeGrid: React.FC = () => {
 
     // Helper to create feed meshes
     const createFeedMesh = useCallback((position: THREE.Vector3, status: FeedMarker['status']): THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial> => {
-        const geometry = new THREE.ConeGeometry(0.5, 2, 8); // Cone shape
+        const geometry = new THREE.ConeGeometry(0.8, 3, 8); // Slightly larger
         const material = new THREE.MeshBasicMaterial({ color: (() => {
             switch (status) {
                 case 'running': return 0x00FF00;
@@ -132,16 +135,21 @@ const ThreeGrid: React.FC = () => {
                 case 'error': return 0xFF0000;
                 default: return 0x00FF00;
             }
-        })(), transparent: true, opacity: 0.9 });
+        })(), transparent: true, opacity: 0.9, depthTest: false });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(position);
+        
+        // Orient cone to point outwards from center
+        const up = new THREE.Vector3(0, 1, 0);
+        mesh.quaternion.setFromUnitVectors(up, position.clone().normalize());
+        
         mesh.userData = { isFeed: true, status: status };
         return mesh;
     }, []);
 
     // Helper to create alert meshes
     const createAlertMesh = useCallback((position: THREE.Vector3, severity: AlertMarker['severity']): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> => {
-        const geometry = new THREE.SphereGeometry(0.7, 16, 16); // Small sphere
+        const geometry = new THREE.SphereGeometry(1.2, 16, 16); // Larger sphere
         const material = new THREE.MeshBasicMaterial({ color: (() => {
             switch (severity) {
                 case 'Critical': return 0xFF0000;
@@ -151,7 +159,7 @@ const ThreeGrid: React.FC = () => {
                 case 'Anomaly': return 0xFF00FF;
                 default: return 0x00FF00;
             }
-        })(), transparent: true, opacity: 0.9 });
+        })(), transparent: true, opacity: 0.9, depthTest: false });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.copy(position);
         mesh.userData = { isAlert: true, severity: severity };
@@ -269,7 +277,7 @@ const ThreeGrid: React.FC = () => {
         renderer.setPixelRatio(window.devicePixelRatio);
         currentContainer.appendChild(renderer.domElement);
 
-        const globeGeometry = new THREE.SphereGeometry(GLOBE_RADIUS, 16, 16);
+        const globeGeometry = new THREE.SphereGeometry(GLOBE_RADIUS, 64, 64);
         const globeMaterial = new THREE.MeshBasicMaterial({
             color: 0x003300, wireframe: true, opacity: 0.5, transparent: true,
         });
@@ -291,6 +299,7 @@ const ThreeGrid: React.FC = () => {
         controls.update();
 
         sceneRef.current = { scene, camera, renderer, controls, animationId: null };
+        setSceneReady(true);
 
         const animateScene = () => {
             if (!sceneRef.current) return;
@@ -422,157 +431,167 @@ const ThreeGrid: React.FC = () => {
 
     useEffect(() => {
         const currentSceneRefs = sceneRef.current;
-        if (!currentSceneRefs) return;
+        if (!currentSceneRefs || !user || !sceneReady) return;
         const { scene } = currentSceneRefs;
 
         const feedsCollection = collection(db!, 'feeds'); // Assert db is non-null
-        const unsubscribe = onSnapshot(feedsCollection, (querySnapshot) => {
-            const fetchedFeeds: FeedStatusData[] = [];
-            querySnapshot.forEach((doc) => {
-                fetchedFeeds.push({ feed_id: doc.id, ...doc.data() } as FeedStatusData);
-            });
+        const unsubscribe = onSnapshot(feedsCollection, 
+            (querySnapshot) => {
+                const fetchedFeeds: FeedStatusData[] = [];
+                querySnapshot.forEach((doc) => {
+                    fetchedFeeds.push({ feed_id: doc.id, ...doc.data() } as FeedStatusData);
+                });
 
-            setFeedMarkers(prevFeedMarkers => {
-                const updatedFeedMarkers: Record<string, FeedMarker> = { ...prevFeedMarkers };
-                const incomingFeedIds = new Set(fetchedFeeds.map(f => f.feed_id));
-                const existingFeedIds = new Set(Object.keys(prevFeedMarkers));
+                setFeedMarkers(prevFeedMarkers => {
+                    const updatedFeedMarkers: Record<string, FeedMarker> = { ...prevFeedMarkers };
+                    const incomingFeedIds = new Set(fetchedFeeds.map(f => f.feed_id));
+                    const existingFeedIds = new Set(Object.keys(prevFeedMarkers));
 
-                fetchedFeeds.forEach(feed => {
-                    if (feed.latitude === undefined || feed.longitude === undefined) {
-                        console.warn("Skipping feed due to missing coordinates:", feed);
-                        return;
-                    }
-                    const existingFeedMarker = updatedFeedMarkers[feed.feed_id];
-                    const position = latLonAltToVector3(feed.latitude, feed.longitude, MARKER_ALTITUDE, GLOBE_RADIUS);
+                    fetchedFeeds.forEach(feed => {
+                        if (feed.latitude === undefined || feed.longitude === undefined) {
+                            console.warn("Skipping feed due to missing coordinates:", feed);
+                            return;
+                        }
+                        const existingFeedMarker = updatedFeedMarkers[feed.feed_id];
+                        const position = latLonAltToVector3(feed.latitude, feed.longitude, MARKER_ALTITUDE, GLOBE_RADIUS);
 
-                    if (existingFeedMarker) {
-                        // Update existing feed marker
-                        existingFeedMarker.position.copy(position);
-                        existingFeedMarker.status = feed.status;
-                        existingFeedMarker.latest_metrics = feed.latest_metrics as FeedMarker['latest_metrics'];
-                        if (existingFeedMarker.mesh) {
-                            switch (feed.status) {
-                                case 'running': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00); break;
-                                case 'starting': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
-                                case 'stopped': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x808080); break;
-                                case 'error': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
-                                default: (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
+                        if (existingFeedMarker) {
+                            // Update existing feed marker
+                            existingFeedMarker.position.copy(position);
+                            existingFeedMarker.status = feed.status;
+                            existingFeedMarker.latest_metrics = feed.latest_metrics as FeedMarker['latest_metrics'];
+                            if (existingFeedMarker.mesh) {
+                                switch (feed.status) {
+                                    case 'running': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00); break;
+                                    case 'starting': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
+                                    case 'stopped': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x808080); break;
+                                    case 'error': (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
+                                    default: (existingFeedMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
+                                }
+                                existingFeedMarker.mesh.position.copy(position);
                             }
-                            existingFeedMarker.mesh.position.copy(position);
-                        }
-                    } else {
-                        // Create new feed marker
-                        const newFeedMarker: FeedMarker = {
-                            feed_id: feed.feed_id,
-                            name: feed.name ?? 'Unknown Feed', // Provide a default if name is undefined
-                            position: position,
-                            status: feed.status,
-                            latest_metrics: feed.latest_metrics as FeedMarker['latest_metrics'],
-                        };
-                        const mesh = createFeedMesh(position, feed.status);
-                        mesh.userData.id = feed.feed_id; // Store ID for raycasting
-                        newFeedMarker.mesh = mesh;
-                        scene.add(mesh);
+                        } else {
+                            // Create new feed marker
+                            const newFeedMarker: FeedMarker = {
+                                feed_id: feed.feed_id,
+                                name: feed.name ?? 'Unknown Feed',
+                                position: position,
+                                status: feed.status,
+                                latest_metrics: feed.latest_metrics as FeedMarker['latest_metrics'],
+                            };
+                            const mesh = createFeedMesh(position, feed.status);
+                            mesh.userData.id = feed.feed_id;
+                            newFeedMarker.mesh = mesh;
+                            scene.add(mesh);
 
-                        updatedFeedMarkers[feed.feed_id] = newFeedMarker;
-                    }
-                });
-
-                // Remove feeds that are no longer present
-                existingFeedIds.forEach(feedId => {
-                    if (!incomingFeedIds.has(feedId)) {
-                        const markerToRemove = updatedFeedMarkers[feedId];
-                        if (markerToRemove.mesh) {
-                            scene.remove(markerToRemove.mesh);
-                            markerToRemove.mesh.geometry.dispose();
-                            (markerToRemove.mesh.material as THREE.Material).dispose();
+                            updatedFeedMarkers[feed.feed_id] = newFeedMarker;
                         }
-                        delete updatedFeedMarkers[feedId];
-                    }
+                    });
+
+                    // Remove feeds that are no longer present
+                    existingFeedIds.forEach(feedId => {
+                        if (!incomingFeedIds.has(feedId)) {
+                            const markerToRemove = updatedFeedMarkers[feedId];
+                            if (markerToRemove.mesh) {
+                                scene.remove(markerToRemove.mesh);
+                                markerToRemove.mesh.geometry.dispose();
+                                (markerToRemove.mesh.material as THREE.Material).dispose();
+                            }
+                            delete updatedFeedMarkers[feedId];
+                        }
+                    });
+                    return updatedFeedMarkers;
                 });
-                return updatedFeedMarkers;
-            });
-        });
+            },
+            (error) => {
+                console.error("[CesiumGlobe] Firestore error listening to feeds:", error);
+            }
+        );
 
         return () => unsubscribe();
-    }, [latLonAltToVector3, createFeedMesh]);
+    }, [latLonAltToVector3, createFeedMesh, user, sceneReady]);
 
     useEffect(() => {
         const currentSceneRefs = sceneRef.current;
-        if (!currentSceneRefs) return;
+        if (!currentSceneRefs || !user || !sceneReady) return;
         const { scene } = currentSceneRefs;
 
         const alertsCollection = collection(db!, 'alerts'); // Assert db is non-null
-        const unsubscribe = onSnapshot(alertsCollection, (querySnapshot) => {
-            const fetchedAlerts: AlertData[] = [];
-            querySnapshot.forEach((doc) => {
-                fetchedAlerts.push({ id: doc.id, ...doc.data() } as AlertData);
-            });
+        const unsubscribe = onSnapshot(alertsCollection, 
+            (querySnapshot) => {
+                const fetchedAlerts: AlertData[] = [];
+                querySnapshot.forEach((doc) => {
+                    fetchedAlerts.push({ id: doc.id, ...doc.data() } as AlertData);
+                });
 
-            setAlertMarkers(prevAlertMarkers => {
-                const updatedAlertMarkers: Record<string, AlertMarker> = { ...prevAlertMarkers };
-                const incomingAlertIds = new Set(fetchedAlerts.map(a => a.id?.toString()));
-                const existingAlertIds = new Set(Object.keys(prevAlertMarkers));
+                setAlertMarkers(prevAlertMarkers => {
+                    const updatedAlertMarkers: Record<string, AlertMarker> = { ...prevAlertMarkers };
+                    const incomingAlertIds = new Set(fetchedAlerts.map(a => a.id?.toString()));
+                    const existingAlertIds = new Set(Object.keys(prevAlertMarkers));
 
-                fetchedAlerts.forEach(alert => {
-                    if (alert.id === undefined || alert.latitude === undefined || alert.longitude === undefined) {
-                        console.warn("Skipping alert due to missing ID or coordinates:", alert);
-                        return;
-                    }
-                    const alertId = alert.id.toString();
-                    const existingAlertMarker = updatedAlertMarkers[alertId];
+                    fetchedAlerts.forEach(alert => {
+                        if (alert.id === undefined || alert.latitude === undefined || alert.longitude === undefined) {
+                            console.warn("Skipping alert due to missing ID or coordinates:", alert);
+                            return;
+                        }
+                        const alertId = alert.id.toString();
+                        const existingAlertMarker = updatedAlertMarkers[alertId];
 
-                    const position = latLonAltToVector3(alert.latitude, alert.longitude, ALERT_ALTITUDE, GLOBE_RADIUS);
+                        const position = latLonAltToVector3(alert.latitude, alert.longitude, ALERT_ALTITUDE, GLOBE_RADIUS);
 
-                    if (existingAlertMarker) {
-                        // Update existing alert marker
-                        existingAlertMarker.position.copy(position);
-                        existingAlertMarker.severity = alert.severity;
-                        if (existingAlertMarker.mesh) {
-                            switch (alert.severity) {
-                                case 'Critical': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
-                                case 'Warning': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
-                                case 'INFO': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FFFF); break;
-                                case 'ERROR': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x8B0000); break;
-                                case 'Anomaly': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF00FF); break;
-                                default: (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
+                        if (existingAlertMarker) {
+                            // Update existing alert marker
+                            existingAlertMarker.position.copy(position);
+                            existingAlertMarker.severity = alert.severity;
+                            if (existingAlertMarker.mesh) {
+                                switch (alert.severity) {
+                                    case 'Critical': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF0000); break;
+                                    case 'Warning': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFFA500); break;
+                                    case 'INFO': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FFFF); break;
+                                    case 'ERROR': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x8B0000); break;
+                                    case 'Anomaly': (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xFF00FF); break;
+                                    default: (existingAlertMarker.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x00FF00);
+                                }
+                                existingAlertMarker.mesh.position.copy(position);
                             }
-                            existingAlertMarker.mesh.position.copy(position);
-                        }
-                    } else {
-                        // Create new alert marker
-                        const newAlertMarker: AlertMarker = {
-                            id: alertId,
-                            position: position,
-                            severity: alert.severity,
-                        };
-                        const mesh = createAlertMesh(position, alert.severity);
-                        mesh.userData.id = alertId; // Store ID for raycasting
-                        newAlertMarker.mesh = mesh;
-                        scene.add(mesh);
+                        } else {
+                            // Create new alert marker
+                            const newAlertMarker: AlertMarker = {
+                                id: alertId,
+                                position: position,
+                                severity: alert.severity,
+                            };
+                            const mesh = createAlertMesh(position, alert.severity);
+                            mesh.userData.id = alertId; // Store ID for raycasting
+                            newAlertMarker.mesh = mesh;
+                            scene.add(mesh);
 
-                        updatedAlertMarkers[alertId] = newAlertMarker;
-                    }
-                });
-
-                // Remove alerts that are no longer present
-                existingAlertIds.forEach(alertId => {
-                    if (!incomingAlertIds.has(alertId)) {
-                        const markerToRemove = updatedAlertMarkers[alertId];
-                        if (markerToRemove.mesh) {
-                            scene.remove(markerToRemove.mesh);
-                            markerToRemove.mesh.geometry.dispose();
-                            (markerToRemove.mesh.material as THREE.Material).dispose();
+                            updatedAlertMarkers[alertId] = newAlertMarker;
                         }
-                        delete updatedAlertMarkers[alertId];
-                    }
+                    });
+
+                    // Remove alerts that are no longer present
+                    existingAlertIds.forEach(alertId => {
+                        if (!incomingAlertIds.has(alertId)) {
+                            const markerToRemove = updatedAlertMarkers[alertId];
+                            if (markerToRemove.mesh) {
+                                scene.remove(markerToRemove.mesh);
+                                markerToRemove.mesh.geometry.dispose();
+                                (markerToRemove.mesh.material as THREE.Material).dispose();
+                            }
+                            delete updatedAlertMarkers[alertId];
+                        }
+                    });
+                    return updatedAlertMarkers;
                 });
-                return updatedAlertMarkers;
-            });
-        });
+            },
+            (error) => {
+                console.error("[CesiumGlobe] Firestore error listening to alerts:", error);
+            }
+        );
 
         return () => unsubscribe();
-    }, [latLonAltToVector3, createAlertMesh]);
+    }, [latLonAltToVector3, createAlertMesh, user, sceneReady]);
 
 
     const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -627,31 +646,31 @@ const ThreeGrid: React.FC = () => {
     };
 
     return (
-        <div className="relative w-full h-[600px] overflow-hidden cursor-grab active:cursor-grabbing">
+        <div className="relative w-full h-[600px] overflow-hidden cursor-grab active:cursor-grabbing font-lcd">
             <div ref={containerRef} className="absolute inset-0 w-full h-full" />
-            {Object.values(feedLabels).map(label => (
+            {Object.entries(feedLabels).map(([id, label]) => (
                 <div
-                    key={label.text} // Using text as key, assuming unique for simplicity
-                    className="absolute text-xs font-bold text-black bg-green-400/70 p-1 rounded-sm pointer-events-none whitespace-pre"
+                    key={`feed-label-${id}`}
+                    className="absolute text-[10px] font-bold text-black bg-green-400/80 p-1 px-2 border border-black pointer-events-none whitespace-pre z-20"
                     style={{
                         left: `${label.screenPosition.x}px`,
                         top: `${label.screenPosition.y}px`,
-                        transform: 'translate(-50%, -100%)',
-                        display: label.screenPosition.x === 0 && label.screenPosition.y === 0 ? 'none' : 'block', // Hide if not calculated yet
+                        transform: 'translate(-50%, -120%)',
+                        display: label.screenPosition.x === 0 && label.screenPosition.y === 0 ? 'none' : 'block',
                     }}
                 >
                     {label.text}
                 </div>
             ))}
-            {Object.values(alertLabels).map(label => (
+            {Object.entries(alertLabels).map(([id, label]) => (
                 <div
-                    key={label.text} // Using text as key, assuming unique for simplicity
-                    className="absolute text-xs font-bold text-black bg-red-400/70 p-1 rounded-sm pointer-events-none whitespace-pre"
+                    key={`alert-label-${id}`}
+                    className="absolute text-[10px] font-bold text-white bg-red-600/80 p-1 px-2 border border-white pointer-events-none whitespace-pre z-20 animate-pulse"
                     style={{
                         left: `${label.screenPosition.x}px`,
                         top: `${label.screenPosition.y}px`,
-                        transform: 'translate(-50%, -100%)',
-                        display: label.screenPosition.x === 0 && label.screenPosition.y === 0 ? 'none' : 'block', // Hide if not calculated yet
+                        transform: 'translate(-50%, 120%)',
+                        display: label.screenPosition.x === 0 && label.screenPosition.y === 0 ? 'none' : 'block',
                     }}
                 >
                     {label.text}

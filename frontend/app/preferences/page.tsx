@@ -1,25 +1,17 @@
+"use client";
+
 import React from 'react';
-import UserPreferencesPanel from '../../components/UserPreferencesPanel';
-import { Signal, Clock, BatteryFull } from 'lucide-react';
+import UserPreferencesPanel from '@/components/UserPreferencesPanel';
+import DashboardShell from '@/components/dashboard/DashboardShell';
+import AuthGuard from '@/components/auth/AuthGuard';
+import { UserRole } from '@/lib/auth/roles';
 
 const PreferencesPage: React.FC = () => (
-  <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-    {/* Status Bar */}
-    <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-      <div className="flex items-center space-x-2">
-        <Signal size={20} />
-        <span className="font-lcd matrix-glow">PREFERENCES</span>
-      </div>
-      <div className="flex items-center space-x-2">
-        <Clock size={20} />
-        <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-        <BatteryFull size={20} />
-      </div>
-    </header>
-    <main className="flex-1 p-8">
-      <UserPreferencesPanel />
-    </main>
-  </div>
+  <AuthGuard requiredRole={UserRole.VIEWER}>
+      <DashboardShell>
+        <UserPreferencesPanel />
+      </DashboardShell>
+  </AuthGuard>
 );
 
 export default PreferencesPage;

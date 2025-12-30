@@ -3,15 +3,6 @@ import { AlertData, FeedStatusData } from '@/lib/types';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
-interface VehicleData {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    id: string;
-    speed: number;
-}
-
 interface KPIData {
     timestamp?: string | Date; // Matches backend GlobalRealtimeMetrics
     metrics_source?: string; // Matches backend GlobalRealtimeMetrics
