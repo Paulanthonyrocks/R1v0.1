@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.database import get_database_manager
 from app.utils.database import DatabaseManager
 from pydantic import BaseModel
@@ -18,27 +18,138 @@ class IdentifiedVehicleResponse(BaseModel):
     total_detections: int
     flags: Optional[str] = None
 
+class VehicleTrackResponse(BaseModel):
+    feed_id: str
+    track_id: str  # Note: In DB it's defined as integer in schema but often treated as str in code. Schema says INTEGER.
+                   # Let's check schema: "track_id INTEGER NOT NULL".
+                   # However, core_module generates "vehicle_X" which is a string.
+                   # Wait, core_module generates "vehicle_{counter}".
+                   # The DB schema says `track_id INTEGER`.
+                   # Core module uses `vehicle_id = f"vehicle_{self.vehicle_id_counter}"`.
+                   # This is a schema mismatch if track_id is strictly integer.
+                   # Let's look at `save_vehicle_data` in database.py.
+                   # `vd.get("track_id") or vd.get("vehicle_id")`
+                   # If it's "vehicle_1", inserting into INTEGER column might fail or default to 0 in strict mode, 
+                   # or works if SQLite is lenient (it is).
+                   # But for safety, response model should probably be Union[str, int] or just str (as SQLite allows).
+                   # I'll stick to str for robustness.
+    timestamp: float
+    class_id: Optional[int] = None
+    confidence: Optional[float] = None
+    bbox_x1: Optional[float] = None
+    bbox_y1: Optional[float] = None
+    bbox_x2: Optional[float] = None
+    bbox_y2: Optional[float] = None
+    speed: Optional[float] = None
+    license_plate: Optional[str] = None
+    lane: Optional[int] = None
+    direction: Optional[str] = None
+
 @router.get("/", response_model=List[IdentifiedVehicleResponse])
 async def list_identified_vehicles(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    vehicle_type: Optional[str] = None,
+    make: Optional[str] = None,
+    model: Optional[str] = None,
     db: DatabaseManager = Depends(get_database_manager)
 ):
     """
-    Returns a list of identified vehicles (by license plate).
+    Returns a list of identified vehicles (by license plate) with optional filtering.
     """
-    vehicles = await db.get_identified_vehicles(limit=limit, offset=offset)
+    filters = {
+        "vehicle_type": vehicle_type,
+        "make": make,
+        "model": model
+    }
+    # Remove None values
+    filters = {k: v for k, v in filters.items() if v is not None}
+    
+    vehicles = await db.get_identified_vehicles(limit=limit, offset=offset, filters=filters)
     return vehicles
 
-@router.get("/{license_plate}", response_model=IdentifiedVehicleResponse)
-async def get_vehicle(
-    license_plate: str,
+@router.get("/tracks", response_model=List[VehicleTrackResponse])
+async def list_vehicle_tracks(
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    feed_id: Optional[str] = None,
+    license_plate: Optional[str] = None,
+    class_id: Optional[int] = None,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
     db: DatabaseManager = Depends(get_database_manager)
 ):
     """
-    Returns details for a specific vehicle identified by license plate.
+    Returns raw vehicle tracking data for historical analysis.
     """
+    filters = {
+        "feed_id": feed_id,
+        "license_plate": license_plate,
+        "class_id": class_id,
+        "start_time": start_time,
+        "end_time": end_time
+    }
+    filters = {k: v for k, v in filters.items() if v is not None}
+    
+    tracks = await db.get_vehicle_tracks(limit=limit, offset=offset, filters=filters)
+    return tracks
+
+@router.get("/{license_plate}", response_model=IdentifiedVehicleResponse)
+
+async def get_vehicle(
+
+    license_plate: str,
+
+    db: DatabaseManager = Depends(get_database_manager)
+
+):
+
+    """
+
+    Returns details for a specific vehicle identified by license plate.
+
+    """
+
     vehicle = await db.get_vehicle_by_plate(license_plate)
+
     if not vehicle:
+
         raise HTTPException(status_code=404, detail="Vehicle not found")
+
     return vehicle
+
+
+
+@router.get("/global/list", response_model=List[Dict[str, Any]])
+async def list_global_vehicles(
+    limit: int = Query(100, ge=1, le=1000),
+    db: DatabaseManager = Depends(get_database_manager)
+):
+    """
+    Returns a list of recently seen unique global vehicle IDs.
+    """
+    return await db.list_global_vehicles(limit=limit)
+
+@router.get("/global/{global_id}/history", response_model=List[VehicleTrackResponse])
+
+async def get_vehicle_global_history(
+
+    global_id: str,
+
+    db: DatabaseManager = Depends(get_database_manager)
+
+):
+
+    """
+
+    Returns the historical path of a vehicle across all feeds using its ReID Global ID.
+
+    """
+
+    history = await db.get_vehicle_global_history(global_id)
+
+    if not history:
+
+        raise HTTPException(status_code=404, detail="No history found for this global ID")
+
+    return history

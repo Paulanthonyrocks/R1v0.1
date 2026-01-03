@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 class VideoWriter:
     def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'XVID'): # Changed default codec to XVID
         self.feed_id = feed_id
-        # Changed output extension to .avi for wider compatibility as a diagnostic step
-        self.output_path = os.path.join(output_dir, f"{feed_id}.avi") 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_path = os.path.join(output_dir, f"{feed_id}_{timestamp}.avi") 
         base, ext = os.path.splitext(self.output_path)
         self._tmp_output_path = f"{base}.tmp{ext}"
         self.fps = fps

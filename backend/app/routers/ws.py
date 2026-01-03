@@ -1,6 +1,6 @@
 import logging
 import json
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
@@ -15,9 +15,9 @@ from app.models.websocket import (
     UnsubscribeData,
     AuthenticateData,
     AuthSuccessData,
-    AuthFailureData
+    AuthFailureData,
+    UpdateFeedConfigData
 )
-from app.dependencies.auth import get_current_user_ws
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,13 @@ async def message_receiver(
                             client_id
                         )
 
+                elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
+                    try:
+                        update_data = UpdateFeedConfigData(**data)
+                        await feed_manager.update_feed_config(update_data.feed_id, update_data.updates)
+                    except Exception as e:
+                        logger.error(f"Error updating feed config: {e}")
+
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
                         sub_data = SubscribeData(**data)
@@ -174,21 +181,59 @@ async def websocket_endpoint(
     client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
-    user: User = Depends(get_current_user_ws),
+    token: str | None = Query(None),
 ):
-    if not user:
-        # Auth failed (usually caught by dependency, but safe double check)
-        await websocket.close(code=1008)
-        return
-
-    await connection_manager.connect(websocket, client_id, user.username)
+    """
+    WebSocket endpoint that accepts connection immediately to handle auth errors gracefully.
+    """
+    await websocket.accept()
 
     try:
-        # Run the receiver loop directly.
-        # The ConnectionManager handles keepalives (ping/pong) independently.
-        await message_receiver(websocket, client_id, connection_manager, feed_manager)
+        if not token:
+            logger.warning(f"WebSocket connection attempt without token from {client_id}")
+            raise Exception("Token is missing")
+
+        try:
+            decoded_token = await verify_firebase_token(token)
+            username = decoded_token.get("uid") or decoded_token.get("sub")
+            if not username:
+                raise Exception("Invalid token claims: missing uid/sub")
+            
+            user = User(
+                username=username,
+                email=decoded_token.get("email", ""),
+                full_name=decoded_token.get("name", username),
+                role=decoded_token.get("role", "user"),
+            )
+        except Exception as e:
+            logger.warning(f"WebSocket auth failed for {client_id}: {e}")
+            # Send explicit AUTH_FAILURE message before closing
+            await websocket.send_text(
+                WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                    data=AuthFailureData(message=str(e)).model_dump()
+                ).model_dump_json()
+            )
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
+
+        # Proceed with connection
+        await connection_manager.connect(websocket, client_id, user.username)
+
+        try:
+            # Run the receiver loop directly.
+            # The ConnectionManager handles keepalives (ping/pong) independently.
+            await message_receiver(websocket, client_id, connection_manager, feed_manager)
+
+        except Exception as e:
+            logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
+        finally:
+            await connection_manager.disconnect(client_id, websocket)
 
     except Exception as e:
-        logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
-    finally:
-        await connection_manager.disconnect(client_id, websocket)
+        # Catch-all for connection setup errors
+        logger.error(f"Error in websocket_endpoint for {client_id}: {e}", exc_info=True)
+        try:
+            await websocket.close(code=1011) # Internal Error
+        except:
+            pass

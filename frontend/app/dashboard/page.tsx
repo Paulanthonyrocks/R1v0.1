@@ -78,9 +78,9 @@ const DashboardPage: React.FC = () => {
   };
   const getCongestionStatusColor = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
-    if (val > 70) return "text-red-500";
-    if (val > 40) return "text-yellow-500";
-    return "text-green-500";
+    if (val > 70) return "text-destructive";
+    if (val > 40) return "text-warning";
+    return undefined;
   };
 
   const getSpeedStatusIcon = (val: number | undefined) => {
@@ -91,9 +91,9 @@ const DashboardPage: React.FC = () => {
   };
   const getSpeedStatusColor = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
-    if (val < 20) return "text-red-500";
-    if (val < 40) return "text-yellow-500";
-    return "text-green-500";
+    if (val < 20) return "text-destructive";
+    if (val < 40) return "text-warning";
+    return undefined;
   };
 
   const getIncidentStatusIcon = (val: number | undefined) => {
@@ -103,8 +103,8 @@ const DashboardPage: React.FC = () => {
   };
   const getIncidentStatusColor = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
-    if (val > 0) return "text-red-500";
-    return "text-green-500";
+    if (val > 0) return "text-destructive";
+    return undefined;
   };
 
   // Type guard for location object
@@ -127,23 +127,26 @@ const DashboardPage: React.FC = () => {
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
       <DashboardShell>
-          <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-              <h1 className="text-3xl font-bold uppercase tracking-[0.2em] text-center md:text-left font-lcd matrix-glow text-lcd-bg">SYSTEM OVERVIEW</h1>
-              <div className="flex items-center gap-4 bg-lcd-bg text-lcd-text p-2 px-4 rounded-sm border border-lcd-text/20">
-                  <div className="flex flex-col items-center">
-                      <span className="text-[10px] opacity-60">ACTIVE FEEDS</span>
-                      <span className="text-xl font-bold">{runningFeeds}/{feeds.length}</span>
+          <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4 border-b-2 border-lcd-text/20 pb-4">
+              <div>
+                  <h1 className="text-4xl font-bold uppercase tracking-[0.2em] font-lcd matrix-glow text-lcd-text/90 mb-2">SYSTEM OVERVIEW</h1>
+                  <p className="text-sm text-lcd-text/60 font-lcd tracking-widest">REAL-TIME TRAFFIC MONITORING HUB</p>
+              </div>
+              <div className="flex items-center gap-6">
+                  <div className="flex flex-col items-end">
+                      <span className="text-[10px] uppercase tracking-wider opacity-60">Active Feeds</span>
+                      <span className="text-2xl font-bold font-lcd matrix-glow">{runningFeeds}/{feeds.length}</span>
                   </div>
-                  <div className="w-px h-8 bg-lcd-text/20"></div>
-                  <div className="flex flex-col items-center">
-                      <span className="text-[10px] opacity-60">UPTIME</span>
-                      <span className="text-xl font-bold">99.9%</span>
+                  <div className="w-px h-10 bg-lcd-text/20"></div>
+                  <div className="flex flex-col items-end">
+                      <span className="text-[10px] uppercase tracking-wider opacity-60">System Status</span>
+                      <span className="text-2xl font-bold font-lcd matrix-glow text-primary">ONLINE</span>
                   </div>
               </div>
           </div>
 
           {/* Real-time Analytics Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <StatCard
               title="Congestion Index"
               value={`${typeof congestionIndex === 'number' ? congestionIndex : '--'}%`}
@@ -182,48 +185,66 @@ const DashboardPage: React.FC = () => {
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
             {/* Trend Chart */}
-            <div className="xl:col-span-2 matrix-card p-4 h-[400px]">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold tracking-normal font-lcd matrix-glow text-lcd-text">REAL-TIME FLOW ANALYSIS</h2>
-                <Link href="/dashboard/analytics" className="text-[10px] flex items-center gap-1 hover:underline">
-                    VIEW DETAILS <ChevronRight size={12} />
+            <div className="xl:col-span-2 matrix-card p-6 h-[450px] flex flex-col">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold tracking-widest font-lcd matrix-glow text-lcd-text">REAL-TIME FLOW ANALYSIS</h2>
+                <Link href="/dashboard/analytics" className="text-xs flex items-center gap-2 hover:text-lcd-text/80 transition-colors uppercase tracking-wider">
+                    Full Report <ChevronRight size={14} />
                 </Link>
               </div>
-              <div className="h-[320px] w-full">
+              <div className="flex-1 w-full min-h-0">
                 <FlowAnalysisChart data={kpiHistory} timeRange="day" isLoading={!isReady && kpiHistory.length === 0} />
               </div>
             </div>
 
             {/* Side Panel: Quick Status & Alerts */}
-            <div className="flex flex-col gap-6">
-                <div className="matrix-card p-4 flex-1">
-                    <div className="flex justify-between items-center mb-3">
-                        <h2 className="text-xl font-semibold tracking-normal font-lcd matrix-glow text-lcd-text">SYSTEM ALERTS</h2>
-                        <span className="text-[10px] bg-red-900 text-white px-2 py-0.5 rounded-full">{alerts.length} NEW</span>
+            <div className="flex flex-col h-[450px]">
+                <div className="matrix-card p-6 h-full flex flex-col">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-bold tracking-widest font-lcd matrix-glow text-lcd-text">SYSTEM ALERTS</h2>
+                        <span className="text-[10px] bg-destructive text-destructive-foreground px-2 py-0.5 font-bold tracking-wider">{alerts.length} NEW</span>
                     </div>
-                    {!isReady && <p className="text-lcd-text text-sm animate-pulse">CONNECTING...</p>}
-                    {isReady && alerts.length === 0 && <p className="text-lcd-text text-xs opacity-60">SYSTEM STATUS NOMINAL. NO ALERTS.</p>}
-                    <div className="space-y-3 max-h-[280px] overflow-y-auto pr-2 custom-scrollbar">
-                        {alerts.slice(-5).reverse().map((alert) => (
-                        <AnomalyItem
-                            key={alert.id || new Date(alert.timestamp).toISOString() + Math.random()}
-                            timestamp={new Date(alert.timestamp).toLocaleTimeString()}
-                            severity={alert.severity || 'info'}
-                            message={alert.message}
-                            onSelect={handleAnomalySelect}
-                            location={
-                            alert.details && typeof alert.details === 'object' && isLatLng(alert.details.location)
-                                ? `Lat: ${alert.details.location.latitude.toFixed(3)}, Lon: ${alert.details.location.longitude.toFixed(3)}`
-                                : 'N/A'
-                            }
-                            details={typeof alert.details === 'object' ? alert.details : undefined}
-                        />
-                        ))}
+                    
+                    <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar -mr-2">
+                        {!isReady && (
+                            <div className="h-full flex flex-col items-center justify-center text-lcd-text/50 gap-2">
+                                <Loader2 className="animate-spin" />
+                                <span className="text-xs tracking-widest">SYNCING...</span>
+                            </div>
+                        )}
+                        
+                        {isReady && alerts.length === 0 && (
+                            <div className="h-full flex flex-col items-center justify-center text-lcd-text/50 gap-2">
+                                <ShieldCheck size={32} />
+                                <span className="text-xs tracking-widest text-center">SYSTEM NOMINAL<br/>NO ACTIVE ALERTS</span>
+                            </div>
+                        )}
+                        
+                        <div className="space-y-3">
+                            {alerts.slice().reverse().map((alert) => (
+                            <AnomalyItem
+                                key={alert.id || new Date(alert.timestamp).toISOString() + Math.random()}
+                                timestamp={new Date(alert.timestamp).toLocaleTimeString()}
+                                severity={alert.severity || 'info'}
+                                message={alert.message}
+                                onSelect={handleAnomalySelect}
+                                location={
+                                alert.details && typeof alert.details === 'object' && isLatLng(alert.details.location)
+                                    ? `Lat: ${alert.details.location.latitude.toFixed(3)}, Lon: ${alert.details.location.longitude.toFixed(3)}`
+                                    : 'N/A'
+                                }
+                                details={typeof alert.details === 'object' ? alert.details : undefined}
+                            />
+                            ))}
+                        </div>
                     </div>
-                    {alerts.length > 5 && (
-                        <Link href="/anomalies" className="block text-center text-[10px] mt-4 hover:underline text-lcd-text/70">
-                            VIEW ALL ALERTS
-                        </Link>
+                    
+                    {alerts.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-lcd-text/10">
+                            <Link href="/anomalies" className="flex items-center justify-center gap-2 text-xs hover:underline text-lcd-text/70 uppercase tracking-widest">
+                                View All Alerts <ChevronRight size={12} />
+                            </Link>
+                        </div>
                     )}
                 </div>
             </div>
@@ -231,13 +252,15 @@ const DashboardPage: React.FC = () => {
 
           {/* Video Feeds Section */}
           <div className="mb-8">
-            <div className="flex justify-between items-center mb-4 px-1">
-                <h2 className="text-2xl font-bold tracking-widest font-lcd matrix-glow text-lcd-bg">ACTIVE SURVEILLANCE</h2>
+            <div className="flex justify-between items-end mb-6 border-b border-lcd-text/10 pb-2">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-[0.2em] font-lcd matrix-glow text-lcd-text">ACTIVE SURVEILLANCE</h2>
+                    <p className="text-xs text-lcd-text/50 tracking-widest mt-1">LIVE VIDEO FEEDS</p>
+                </div>
                 <div className="flex items-center gap-4">
-                    <span className="text-xs text-lcd-bg/70 uppercase">Available Feeds: {feeds.length}</span>
                     <Link href="/surveillance">
-                        <Button variant="outline" size="sm" className="bg-lcd-bg text-lcd-text border-lcd-text hover:bg-lcd-text hover:text-lcd-bg text-[10px] h-7">
-                            MANAGE ALL
+                        <Button variant="outline" size="sm" className="bg-transparent border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg text-xs h-8 uppercase tracking-widest rounded-none">
+                            Manage Feeds
                         </Button>
                     </Link>
                 </div>
@@ -251,23 +274,35 @@ const DashboardPage: React.FC = () => {
                   </div>
                 ))
               ) : (
-                <div className="col-span-full py-12 matrix-card flex flex-col items-center justify-center opacity-50">
+                <div className="col-span-full py-20 matrix-card flex flex-col items-center justify-center text-lcd-text/40 border-dashed">
                    {!isConnected ? (
                        <>
-                        <Loader2 className="animate-spin mb-4" />
-                        <p className="tracking-[0.2em] font-lcd">ESTABLISHING UPLINK...</p>
+                        <Loader2 className="animate-spin mb-4 h-8 w-8" />
+                        <p className="tracking-[0.2em] font-lcd text-lg">ESTABLISHING UPLINK...</p>
                        </>
                    ) : (
-                       <p className="tracking-[0.2em] font-lcd">NO ACTIVE FEEDS DETECTED</p>
+                       <>
+                        <div className="mb-4 relative">
+                            <div className="absolute inset-0 bg-lcd-text/10 blur-xl rounded-full"></div>
+                            <Activity className="h-12 w-12 relative z-10" />
+                        </div>
+                        <p className="tracking-[0.2em] font-lcd text-xl font-bold mb-2">NO ACTIVE FEEDS</p>
+                        <p className="text-sm opacity-60 max-w-md text-center mb-6">No surveillance feeds are currently active. Start a feed to begin monitoring.</p>
+                        <Link href="/surveillance">
+                            <Button className="bg-lcd-text text-lcd-bg hover:bg-lcd-text/90 rounded-none uppercase tracking-widest font-bold">
+                                Configure Feeds
+                            </Button>
+                        </Link>
+                       </>
                    )}
                 </div>
               )}
             </div>
             
             {feeds.length > 8 && (
-                <div className="mt-6 text-center">
-                    <Link href="/surveillance" className="inline-flex items-center gap-2 px-6 py-2 bg-lcd-bg text-lcd-text border-2 border-lcd-text hover:bg-lcd-text hover:text-lcd-bg transition-all font-bold tracking-widest text-sm">
-                        VIEW ALL {feeds.length} FEEDS <ChevronRight size={18} />
+                <div className="mt-8 text-center">
+                    <Link href="/surveillance" className="inline-flex items-center gap-2 px-8 py-3 bg-transparent text-lcd-text border border-lcd-text hover:bg-lcd-text hover:text-lcd-bg transition-all font-bold tracking-[0.2em] text-sm uppercase">
+                        View All {feeds.length} Feeds <ChevronRight size={18} />
                     </Link>
                 </div>
             )}

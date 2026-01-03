@@ -29,6 +29,7 @@ from app.exceptions import (
     Forbidden,
 )
 from app.middleware.logging_middleware import LoggingMiddleware
+from app.middleware.rate_limit_middleware import RateLimitMiddleware
 
 # --- Application Modules ---
 from app.routers import (
@@ -53,6 +54,7 @@ from app.routers import (
 from app.config import initialize_config
 from app.database import initialize_database, close_database
 from app.services import initialize_services, get_analytics_service, get_feed_manager
+from app.services.health_service import SystemHealthService
 from app.websocket.connection_manager import ConnectionManager
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.utils.file_watcher import FileSystemWatcher
@@ -133,7 +135,12 @@ async def lifespan(app: FastAPI):
                 await fm.start_processing()
                 logger.info("Prediction Scheduler started.")
 
-    # 5. File Watcher
+    # 5. Health Monitoring
+    health_service = SystemHealthService(loaded_config, fm, connection_manager)
+    health_service.start()
+    app.state.health_service = health_service
+
+    # 6. File Watcher
     app.state.file_watcher = None
     if loaded_config.get("file_watcher", {}).get("enabled", False):
         try:
@@ -186,23 +193,10 @@ async def lifespan(app: FastAPI):
     yield # --- Application Runs Here ---
 
     # --- SHUTDOWN ---
-    logger.info("--- Shutting down Route One Backend ---")
+    logger.info("--- Stopping Route One Backend ---")
     
-    if hasattr(app.state, "connection_manager") and app.state.connection_manager:
-        await app.state.connection_manager.shutdown()
-        logger.info("WebSocket Manager shutdown.")
-    
-    if get_feed_manager():
-        await get_feed_manager().shutdown()
-        logger.info("FeedManager shutdown.")
-        
-    if get_analytics_service():
-        await get_analytics_service().stop_background_tasks()
-        logger.info("Analytics background tasks stopped.")
-        
-    if app.state.file_watcher:
-        app.state.file_watcher.stop()
-        logger.info("File Watcher stopped.")
+    if hasattr(app.state, "health_service"):
+        await app.state.health_service.stop()
         
     await close_database()
     logger.info("Database connection closed.")
@@ -295,6 +289,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, limit=60, window=60)
+
+from fastapi.staticfiles import StaticFiles
+import os
 
 # --- Routers ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
@@ -312,6 +310,11 @@ app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"]
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(video_ws.router, prefix="/api/v1", tags=["VideoWebSocket"])
 app.include_router(routes.router, prefix="/api/v1", tags=["General"])
+
+# --- Static Files (Snapshots) ---
+SNAPSHOT_DIR = "backend/data/snapshots"
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
 
 # --- Utility Endpoints ---
 @app.get("/health")

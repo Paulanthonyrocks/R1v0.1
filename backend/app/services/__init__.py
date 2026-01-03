@@ -13,6 +13,7 @@ from .services import (
     get_weather_service,
     get_event_service,
     get_analytics_service,
+    get_advanced_analytics_service,
     feed_manager_instance,  # Expose instance if needed directly (less common)
 )
 # Optional: Import specific classes if they are needed elsewhere directly
@@ -33,6 +34,7 @@ __all__ = [
     "get_weather_service",
     "get_event_service",
     "get_analytics_service",
+    "get_advanced_analytics_service",
     "feed_manager_instance",
     # Add class names here if you want them included in '*' import
     # "FeedManager",

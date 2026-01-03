@@ -10,6 +10,7 @@ from .services.services import (
     get_feed_manager,
     get_traffic_signal_service,
     get_analytics_service,
+    get_advanced_analytics_service,
     get_route_optimization_service,
     get_weather_service,
     get_event_service,
@@ -21,6 +22,7 @@ from .services.route_optimization_service import RouteOptimizationService
 from .services.weather_service import WeatherService
 from .services.event_service import EventService
 from .services.analytics_service import AnalyticsService
+from .services.analytics_service_pro import AdvancedAnalyticsService
 from .services.personalized_routing_service import PersonalizedRoutingService
 from .models.user import User
 
@@ -63,6 +65,11 @@ async def get_as() -> AnalyticsService:
     """Dependency to get the AnalyticsService instance."""
     analytics_svc = get_analytics_service()
     return analytics_svc
+
+
+async def get_aas() -> AdvancedAnalyticsService:
+    """Dependency to get the AdvancedAnalyticsService (Pro) instance."""
+    return get_advanced_analytics_service()
 
 
 async def get_ros() -> RouteOptimizationService:

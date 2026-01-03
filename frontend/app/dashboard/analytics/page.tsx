@@ -3,12 +3,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
-import { BarChart3, TrendingUp, TrendingDown, Users, Zap, Activity } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, Users, Zap, Activity, ArrowRightLeft, Map as MapIcon, Camera } from 'lucide-react';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import FlowAnalysisChart from '@/components/dashboard/FlowAnalysisChart';
 import { TrendDataPoint } from '@/lib/types';
 import StatCard from '@/components/dashboard/StatCard';
 import DashboardShell from '@/components/dashboard/DashboardShell';
+import { OriginDestinationMatrix } from '@/components/dashboard/OriginDestinationMatrix';
+import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
+import { SystemHealthMonitor } from '@/components/dashboard/SystemHealthMonitor';
 
 const AnalyticsPage = () => {
   const { kpis, feeds, isConnected, isReady } = useRealtimeUpdates();
@@ -45,18 +48,18 @@ const AnalyticsPage = () => {
       <DashboardShell>
           <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4">
               <div>
-                  <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2 text-lcd-bg matrix-glow">Traffic Flow Analysis</h1>
-                  <p className="text-lcd-bg/60 max-w-2xl">
+                  <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2 text-lcd-text matrix-glow">Traffic Flow Analysis</h1>
+                  <p className="text-lcd-text/60 max-w-2xl">
                       Real-time trend analysis aggregated from {feeds.length} active surveillance nodes. 
                       Data is processed using YOLOv8 computer vision models.
                   </p>
               </div>
-              <div className="flex bg-lcd-bg/10 p-1 rounded border border-lcd-bg/20">
+              <div className="flex bg-lcd-text/10 p-1 rounded border border-lcd-text/20">
                   {(['day', 'week', 'month'] as const).map((r) => (
                       <button
                         key={r}
                         onClick={() => setTimeRange(r)}
-                        className={`px-4 py-1 text-xs uppercase transition-all ${timeRange === r ? 'bg-lcd-bg text-lcd-text font-bold' : 'text-lcd-bg hover:bg-lcd-bg/20'}`}
+                        className={`px-4 py-1 text-xs uppercase transition-all ${timeRange === r ? 'bg-lcd-text text-lcd-bg font-bold' : 'text-lcd-text hover:bg-lcd-text/20'}`}
                       >
                           {r}
                       </button>
@@ -112,7 +115,33 @@ const AnalyticsPage = () => {
               </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              {/* O-D Matrix */}
+              <div className="matrix-card p-6">
+                  <div className="flex justify-between items-center mb-6">
+                      <h2 className="text-xl font-bold uppercase flex items-center gap-2 text-lcd-text">
+                          <ArrowRightLeft size={24} className="text-primary" />
+                          Network Topology (O-D Matrix)
+                      </h2>
+                      <span className="text-[10px] opacity-40 uppercase tracking-widest font-lcd">ReID Persistence Active</span>
+                  </div>
+                  <OriginDestinationMatrix hours={timeRange === 'day' ? 1 : 24} />
+              </div>
+
+              {/* Heatmap */}
+              <div className="matrix-card p-6">
+                  <div className="flex justify-between items-center mb-6">
+                      <h2 className="text-xl font-bold uppercase flex items-center gap-2 text-lcd-text">
+                          <MapIcon size={24} className="text-primary" />
+                          Spatial Density (Global)
+                      </h2>
+                      <span className="text-[10px] opacity-40 uppercase tracking-widest font-lcd">KDE Analysis LIVE</span>
+                  </div>
+                  <TrafficHeatmap hours={timeRange === 'day' ? 1 : 24} />
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               <div className="matrix-card p-6">
                   <h3 className="text-lg font-bold uppercase mb-4 border-b border-lcd-text/20 pb-2 text-lcd-text">Insights</h3>
                   <ul className="space-y-4 text-sm text-lcd-text">
@@ -149,6 +178,7 @@ const AnalyticsPage = () => {
                       </div>
                   </div>
               </div>
+              <SystemHealthMonitor />
           </div>
       </DashboardShell>
     </AuthGuard>

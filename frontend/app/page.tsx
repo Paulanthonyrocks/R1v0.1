@@ -11,7 +11,8 @@ import {
   Signal,
   BatteryFull,
   Clock,
-  LayoutDashboard
+  LayoutDashboard,
+  Info
 } from 'lucide-react';
 import { getAuth, signOut } from 'firebase/auth';
 import RetroModal from '@/components/ui/RetroModal';
@@ -23,7 +24,7 @@ const menuItems = [
   { href: '/logs', label: 'SYSTEM LOGS', icon: <Book size={48} /> },
   { href: '/anomalies', label: 'ANOMALIES', icon: <AlertTriangle size={48} /> },
   { href: '/dashboard/analytics', label: 'ANALYTICS', icon: <BarChart2 size={48} /> },
-  { href: '/preferences', label: 'PREFERENCES', icon: <Settings size={48} /> },
+  { href: '/landing', label: 'ABOUT', icon: <Info size={48} /> },
 ];
 
 const NokiaHomeScreen = () => {

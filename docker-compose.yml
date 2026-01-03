@@ -28,3 +28,18 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=traffic_hub
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+
+volumes:
+  mongo_data:
+  timescaledb_data:

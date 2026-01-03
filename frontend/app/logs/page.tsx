@@ -170,13 +170,13 @@ const SystemLogsPage = () => {
                 <div className="relative matrix-card max-w-2xl w-full p-8 shadow-2xl animate-in zoom-in-95 duration-200">
                     <button 
                         onClick={() => setSelectedLog(null)}
-                        className="absolute top-4 right-4 text-lcd-text/40 hover:text-white"
+                        className="absolute top-4 right-4 text-lcd-text/40 hover:text-lcd-text transition-colors"
                     >
                         <X size={24} />
                     </button>
                     
                     <div className="flex items-center gap-4 mb-6 pb-4 border-b border-lcd-text/20">
-                        <Terminal size={32} className="text-primary" />
+                        <Terminal size={32} className="text-lcd-text" />
                         <div>
                             <h2 className="text-2xl font-bold uppercase tracking-tighter">{selectedLog.title}</h2>
                             <p className="text-[10px] uppercase opacity-60">Log ID: 0x{selectedLog.id.toString(16).padStart(4, '0')} | Source: {selectedLog.source}</p>
@@ -197,7 +197,7 @@ const SystemLogsPage = () => {
 
                         <div>
                             <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">Detailed Payload</label>
-                            <div className="bg-black p-4 border border-lcd-text/20 font-mono text-sm leading-relaxed text-primary/80">
+                            <div className="bg-lcd-text p-4 border border-lcd-text/20 font-mono text-sm leading-relaxed text-lcd-bg">
                                 {selectedLog.description}
                             </div>
                         </div>

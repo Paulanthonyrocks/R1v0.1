@@ -308,6 +308,39 @@ def process_video(
                                     cm_update["roi_processing"]["enabled"] = False
                             
                             core_module.update_config(cm_update)
+                        
+                        # Update Skip Interval (Adaptive FPS)
+                        if "skip_frames" in data:
+                            try:
+                                new_skip = int(data["skip_frames"])
+                                skip_interval = max(1, new_skip)
+                                logger.info(f"[{feed_id}] Updated skip_interval to {skip_interval} frames.")
+                            except (ValueError, TypeError):
+                                logger.warning(f"[{feed_id}] Invalid skip_frames value in config update.")
+
+                    elif cmd.get("type") == "save_snapshot":
+                        # Save a high-res snapshot of the current frame
+                        try:
+                            inc_id = cmd.get("incident_id", "unknown")
+                            snapshot_dir = config.get("storage", {}).get("snapshot_output_dir", "backend/data/snapshots")
+                            os.makedirs(snapshot_dir, exist_ok=True)
+                            
+                            filename = f"snapshot_{feed_id}_{inc_id}_{int(time.time())}.jpg"
+                            filepath = os.path.join(snapshot_dir, filename)
+                            
+                            # Draw visualizations if core_module exists to give context to snapshot
+                            snap_frame = frame.copy()
+                            if core_module and traffic_monitor:
+                                snap_frame = visualize_data(snap_frame, tracked_vehicles, metrics, vis_options, config, feed_id)
+                            
+                            cv2.imwrite(filepath, snap_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                            
+                            # Send back the snapshot path via the frame_queue but as a special type
+                            # We'll use the 'extra' field (last element of the tuple) for this
+                            frame_queue.put_nowait((feed_id, frame_index, None, {}, [], {"type": "snapshot", "incident_id": inc_id, "path": filepath}))
+                            logger.info(f"[{feed_id}] Snapshot saved: {filepath}")
+                        except Exception as e:
+                            logger.error(f"[{feed_id}] Failed to save snapshot: {e}")
 
                 except queue.Empty:
                     pass

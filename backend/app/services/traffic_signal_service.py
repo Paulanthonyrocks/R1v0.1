@@ -192,13 +192,8 @@ class TrafficSignalService:
 
         try:
             response = await self._client.post(f"/{signal_id}/set_phase", json=command_payload)
-            response.raise_for_status()  # Raise an exception for bad status codes
+            response.raise_for_status()
             api_response_data = response.json()
-            # Mocking success for now
-            api_response_data = {
-                "status": "accepted",
-                "message": "Phase change command accepted by controller.",
-            }
 
             if api_response_data.get("status") == "accepted":
                 current_signal_state = self._signal_states[signal_id]

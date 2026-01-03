@@ -9,7 +9,7 @@ import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
 import StreamOverlayControls from './StreamOverlayControls';
 
-const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed }, ref) => {
+const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token } = useAuth();
@@ -114,8 +114,9 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     }
                     
                     // Draw Video
-                    if (isLive && lastFrameRef.current) {
-                        drawFrame(ctx, lastFrameRef.current, vehicles, {
+                    const currentFrame = lastFrameRef.current;
+                    if (isLive && currentFrame && currentFrame.image) {
+                        drawFrame(ctx, currentFrame, {
                             showBoundingBoxes: showOverlays && showBoundingBoxes,
                             showVehicleDetails: showOverlays && showVehicleDetails
                         });
@@ -301,14 +302,14 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     {isLive ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
 
-                {metrics && isLive && !isToggling && !isLoading && !error && (
+                {metrics && isLive && !isToggling && !isLoading && !error && !minimalControls && (
                     <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow flex flex-col items-end z-20">
                         <span>VEH: {metrics.total_vehicles_cumulative ?? metrics.total_vehicles ?? '--'}</span>
                         <span>AVG SPEED: {metrics.session_average_speed_kmh ? metrics.session_average_speed_kmh.toFixed(1) : (metrics.average_speed_kmh ? metrics.average_speed_kmh.toFixed(1) : '--')} KM/H</span>
                     </div>
                 )}
 
-                {!isToggling && !isLoading && (
+                {!isToggling && !isLoading && !minimalControls && (
                     <div className="absolute bottom-1.5 left-1.5 flex gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button
                             onClick={(e) => { e.stopPropagation(); handleRestartFeed(); }}
@@ -343,7 +344,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     </div>
                 )}
 
-                {!isToggling && !isLoading && !error && (
+                {!isToggling && !isLoading && !error && !minimalControls && (
                     <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button
                             className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"

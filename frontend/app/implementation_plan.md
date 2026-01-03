@@ -70,6 +70,7 @@ This document outlines the comprehensive implementation plan for the Traffic Man
 - Real-time stream processing using Apache Kafka/Pulsar.
 - Time-series databases for historical pattern analysis.
 - GPU clusters for intensive computer vision workloads.
+- **Adaptive Stream Quality:** Dynamic adjustment of video stream resolution and framerate based on client demand and system load.
 
 ## 5. Privacy & Ethics
 
@@ -79,19 +80,60 @@ This document outlines the comprehensive implementation plan for the Traffic Man
 - Automatic PII blurring and anonymization.
 - Configurable data retention policies.
 
-## 6. The "Brother Eye" Enhancement
+## 6. The "Brother Eye" Enhancement (Multi-Feed Grid)
 
-To achieve that comprehensive surveillance system feel, I'd add:
+### Surveillance Matrix
+- **Customizable Grid Layout:** Drag-and-drop interface for arranging multiple video feeds.
+- **Focus Mode:** Ability to expand a single feed for detailed inspection while maintaining background monitoring of others.
+- **Global & Per-Feed Controls:** centralized control for overlays, recording, and snapshots.
+- **Snapshot Gallery:** Retro-themed gallery for reviewing saved incidents.
 
-### City-Wide Coordination
-- Cross-jurisdictional data sharing and standardization.
-- Integration with public transit, parking, and emergency systems.
-- Predictive modeling for city-wide event management.
-- Real-time economic impact analysis of traffic patterns.
+### Adaptive Streaming Control
+- **Dynamic Quality Switching:** Backend support for changing processing parameters (FPS, Resolution) on the fly to save bandwidth when feeds are small/minimized.
+- **Client-Side Command Interface:** WebSocket protocol extensions to request quality changes.
 
-### Advanced Pattern Recognition
-- Anomaly detection for unusual vehicle or pedestrian behavior.
-- Social event prediction based on traffic convergence patterns.
-- Long-term urban planning insights from traffic evolution analysis.
+## 7. Future Enhancements & Roadmap (Feature Demo Phase)
 
-The key to making this truly state-of-the-art would be the fusion of multiple AI techniques - computer vision, time series prediction, graph neural networks for road topology, and reinforcement learning for optimization. The system would need to be both reactive (responding to current conditions) and proactive (predicting and preventing issues).
+### Architecture & Scalability
+- **Time-Series Database Migration:** Transition from SQLite `vehicle_tracks` to TimescaleDB or InfluxDB for high-throughput writing and efficient range queries.
+- **Decoupled Processing:** (Completed) Migrated to a producer-consumer architecture using central queues to separate Video Ingestion from AI Processing Pool.
+
+### AI & Computer Vision Enhancements
+- **Multi-Camera Re-Identification (ReID):** (Completed) Implemented visual embeddings (MobileNetV3) and a global ReID manager to track vehicles across different feeds.
+- **Identity Tracker:** (Completed) Created a dedicated trajectory view to visualize a vehicle's history across distributed camera nodes.
+- **Local OCR Integration:** (Completed) Integrated EasyOCR to remove dependency on external API keys and reduce latency for license plate recognition.
+- **Anomaly Detection Model:** (Completed) Implemented LSTM Autoencoder and statistical Z-score detector for automatic traffic anomaly flagging.
+
+### Traffic Management Features
+- **Smart Signal Control Simulation:** Use real-time congestion metrics to simulate and recommend traffic light timing adjustments.
+- **Incident Management Workflow:** (In Progress)
+    - **Backend:** Create `Incident` models and API endpoints for reporting, acknowledging, and resolving incidents.
+    - **Frontend:** Implement an Incident Dashboard for operators to review AI-flagged anomalies and dispatch resources.
+    - **Notification:** Integrate SMS/Chat alerts for critical incidents.
+
+### Data Analytics
+- **Predictive Traffic Modelling:** (Completed) Implemented historical "Forecasted vs Actual" comparison with model accuracy tracking.
+- **Origin-Destination Matrices:** (Completed) Implemented O-D matrix estimation using global ReID vehicle tracking across feeds.
+- **Heatmaps:** (Completed) Generated spatial density heatmaps with support for global entity trajectory visualization.
+- **Travel Time Analysis:** (Completed) Calculated average travel times between specific surveillance nodes.
+
+### UI/UX & Retro Dashboard
+- **Snapshot Gallery:** (Completed) Dedicated archive for reviewing visual evidence of incidents.
+- **Backend Snapshot Support:** (Completed) Logic to save high-res JPEG snapshots when incidents are detected.
+- **Incident Command Integration:** (Completed) Snapshot previews integrated into the incident management workflow.
+- **Retro Aesthetic Enhancements:** Add matrix-style terminal loading effects and CRT scanline overlays.
+
+### DevOps & Reliability
+- **Watchdog System:** (Completed) Automated health checks to restart hung video workers.
+- **Video Retention Policy:** (Completed) Automated rotation and deletion of old video recordings.
+- **System Health Monitoring:** (Completed) Real-time telemetry for CPU, Memory, and Worker status.
+- **API Rate Limiting:** (Completed) Implemented middleware to prevent resource exhaustion and ensure stability.
+
+## 8. Next Steps (Immediate)
+- [x] **Backend:** Implement `Incident` model and API router (`/incidents`).
+- [x] **Backend:** Update `FeedManager` to auto-generate incidents from high-severity alerts.
+- [x] **Frontend:** Create `IncidentDashboard` component for operator workflow.
+- [x] **Infrastructure:** Implement a **Watchdog System** to monitor and restart hung video workers.
+- [x] **Data Management:** Implement a **Video Retention Policy** to manage storage by rotating/deleting old recordings.
+- [x] **Integration:** Implement **External Alerts** (e.g., Slack/Discord webhooks) for critical incident notifications.
+- [ ] **Optimization:** Transition to **Decoupled Processing** using Redis Streams for better scalability.

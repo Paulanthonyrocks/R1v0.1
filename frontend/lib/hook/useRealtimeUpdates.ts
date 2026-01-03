@@ -71,6 +71,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
 
         const updateConnectionState = () => {
             const connected = client.isConnected();
+            console.log(`[useRealtimeUpdates] updateConnectionState: connected=${connected}`);
             setIsConnected(connected);
             setIsReady(connected);
             return connected;
@@ -79,21 +80,21 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         const connected = updateConnectionState();
         
         if (connected && !hasRequestedInitialFeeds.current) {
-            console.log("WebSocket already connected, requesting initial feed statuses.");
+            console.log("[useRealtimeUpdates] WebSocket already connected on mount, requesting initial feed statuses.");
             client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
             hasRequestedInitialFeeds.current = true;
         }
 
-        console.log('Setting up WebSocket subscriptions in useRealtimeUpdates.');
+        console.log(`[useRealtimeUpdates] Setting up WebSocket subscriptions. Client instance: ${client.getInstanceId()}`);
 
         subscriptions.push(client.onStatusChange((status, message) => {
-            console.log(`WebSocket status: ${status}`, message);
+            console.log(`[useRealtimeUpdates] WebSocket status change: ${status}`, message);
             const isNowConnected = status === 'connected';
             setIsConnected(isNowConnected);
             setIsReady(isNowConnected);
 
-            if (isNowConnected) {
-                console.log("WebSocket connected (event), requesting initial feed statuses.");
+            if (isNowConnected && !hasRequestedInitialFeeds.current) {
+                console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses.");
                 client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
                 hasRequestedInitialFeeds.current = true;
             }

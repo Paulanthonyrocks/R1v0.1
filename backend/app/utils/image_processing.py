@@ -223,79 +223,47 @@ class LicensePlatePreprocessor:
             logger.debug("Received empty ROI for OCR.")
             return ""
 
-        # --- Attempt Tesseract OCR first if configured ---
-        if self.use_tesseract:
-            logger.debug("Attempting OCR using Tesseract...")
-            processed_roi_for_tesseract = self._preprocess_for_tesseract(roi)
-
-            if processed_roi_for_tesseract is not None:
-                try:
-                    # Standard Tesseract config for license plates
-                    custom_config = r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                    # Add a timeout to Tesseract call to prevent indefinite blocking
-                    text = pytesseract.image_to_string(
-                        processed_roi_for_tesseract, config=custom_config, timeout=5
-                    )
-
-                    ocr_result = "".join(
-                        filter(str.isalnum, text)
-                    ).upper()  # Clean and format
-                    if ocr_result:
-                        logger.info(
-                            f"Tesseract OCR Raw: '{text.strip()}', Processed: '{ocr_result}'"
-                        )
-                    else:
-                        logger.debug(
-                            "Tesseract OCR: No text found or empty result after processing."
-                        )
-                except (
-                    RuntimeError
-                ) as e:  # Catches Tesseract not found, timeout, or other runtime issues
-                    logger.error(f"Tesseract runtime error: {e}", exc_info=False)
-                    ocr_result = ""
-                except Exception as e:  # Catch any other unexpected Tesseract error
-                    logger.error(f"Tesseract OCR unexpected error: {e}", exc_info=True)
-                    ocr_result = ""
-            else:
-                logger.warning(
-                    "Preprocessing for Tesseract failed or yielded None, cannot perform Tesseract OCR."
-                )
-                ocr_result = ""  # Ensure it's empty if preprocessing fails
-
-            if ocr_result:  # If Tesseract found something, return it.
-                logger.info(f"Tesseract OCR successful, result: '{ocr_result}'")
-                return ocr_result
-            else:  # Tesseract failed or found nothing, fall through to Gemini if enabled.
-                logger.info(
-                    "Tesseract OCR did not yield a result or failed. Falling back to Gemini if available."
-                )
-
-        # --- Attempt Gemini OCR if available and configured ---
+        # --- Attempt Gemini OCR first if available and configured (Higher accuracy) ---
         if self.model and self.gemini_api_key and self.use_gemini_ocr:
             logger.debug("Attempting OCR using Gemini...")
             try:
-                ocr_result = self._call_gemini_ocr(
-                    roi
-                )  # This method is wrapped with @retry
-            except RetryError as e:  # Tenacity: All retries failed for _call_gemini_ocr
-                logger.error(
-                    f"Gemini OCR failed after all retries. Last error: {e.last_attempt.exception()}. ROI shape: {roi.shape}"
-                )
+                ocr_result = self._call_gemini_ocr(roi)
+            except RetryError as e:
+                logger.error(f"Gemini OCR failed after all retries. ROI shape: {roi.shape}")
                 ocr_result = ""
-            except (
-                Exception
-            ) as e:  # Catch any other unexpected error from _call_gemini_ocr
-                logger.error(
-                    f"Unexpected error during Gemini OCR attempt sequence: {e}",
-                    exc_info=True,
-                )
+            except Exception as e:
+                logger.error(f"Unexpected error during Gemini OCR: {e}")
                 ocr_result = ""
 
-            if ocr_result:  # If Gemini found something, return it.
-                logger.info(f"Gemini OCR successful, result: '{ocr_result}'")
+            if ocr_result:
+                logger.info(f"Gemini OCR successful: '{ocr_result}'")
                 return ocr_result
             else:
-                logger.info("Gemini OCR did not yield a result or failed.")
+                logger.info("Gemini OCR did not yield a result. Falling back to local Tesseract.")
 
-        # If neither Tesseract nor Gemini yielded a result
+        # --- Fallback to Tesseract OCR (Local) ---
+        # We always attempt Tesseract as a fallback if Gemini fails or is disabled
+        logger.debug("Attempting local OCR using Tesseract...")
+        processed_roi_for_tesseract = self._preprocess_for_tesseract(roi)
+
+        if processed_roi_for_tesseract is not None:
+            try:
+                # Standard Tesseract config for license plates
+                custom_config = r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                text = pytesseract.image_to_string(
+                    processed_roi_for_tesseract, config=custom_config, timeout=5
+                )
+
+                ocr_result = "".join(filter(str.isalnum, text)).upper()
+                if ocr_result:
+                    logger.info(f"Tesseract OCR successful: '{ocr_result}'")
+                else:
+                    logger.debug("Tesseract OCR: No text found.")
+            except Exception as e:
+                logger.error(f"Tesseract OCR error: {e}")
+                ocr_result = ""
+        else:
+            logger.warning("Preprocessing for Tesseract failed.")
+            ocr_result = ""
+
         return ocr_result

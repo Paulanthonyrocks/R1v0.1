@@ -85,7 +85,7 @@ class ConnectionManager:
 
         # Handle reconnection: Close existing connection if present
         if client_id in self.active_connections:
-            logger.info(f"Client {client_id} reconnecting. Closing old connection.")
+            logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
             old_ws = self.active_connections[client_id]
             # Force disconnect the old socket structure
             await self.disconnect(client_id, old_ws)
@@ -95,15 +95,18 @@ class ConnectionManager:
             except Exception:
                 pass
 
-        await websocket.accept()
+        # websocket.accept() is now handled by the endpoint router before calling connect
         self.active_connections[client_id] = websocket
         self.client_id_to_user_id[client_id] = user_id
 
         if user_id not in self.user_id_to_client_ids:
             self.user_id_to_client_ids[user_id] = []
-        self.user_id_to_client_ids[user_id].append(client_id)
-        self.client_id_to_topics[client_id] = set()
-        self.client_id_to_feeds[client_id] = set()
+        
+        if client_id not in self.user_id_to_client_ids[user_id]:
+            self.user_id_to_client_ids[user_id].append(client_id)
+            
+        self.client_id_to_topics.setdefault(client_id, set())
+        self.client_id_to_feeds.setdefault(client_id, set())
         self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
         # Initialize sender queue and task
@@ -122,22 +125,32 @@ class ConnectionManager:
                 logger.info(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
                 return
 
-            # Cancel sender task
-            if client_id in self.client_tasks:
-                self.client_tasks[client_id].cancel()
-                try:
-                    await self.client_tasks[client_id]
-                except asyncio.CancelledError:
-                    pass
-                del self.client_tasks[client_id]
+            # 1. Handle Task Cancellation (Safely)
+            task = self.client_tasks.pop(client_id, None)
+            if task:
+                if task != asyncio.current_task():
+                    task.cancel()
+                    try:
+                        # Awaiting task might yield control
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                else:
+                    logger.debug(f"Task {client_id} disconnecting itself. Skipping cancel/await.")
             
-            # Remove queue
-            if client_id in self.client_queues:
-                del self.client_queues[client_id]
+            # 2. Remove queue (Idempotent)
+            self.client_queues.pop(client_id, None)
 
-            # Remove from active connections first to prevent further sends
+            # 3. Remove from active connections (Idempotent)
+            # Check again because control might have been yielded during task await
+            if client_id not in self.active_connections:
+                return
+                
+            if websocket and self.active_connections[client_id] != websocket:
+                return
+
             del self.active_connections[client_id]
-            self.last_pong_received_time.pop(client_id, None) # New: remove pong tracking
+            self.last_pong_received_time.pop(client_id, None)
             
             user_id = self.client_id_to_user_id.pop(client_id, None)
 
@@ -147,23 +160,16 @@ class ConnectionManager:
                 if not self.user_id_to_client_ids[user_id]:
                     del self.user_id_to_client_ids[user_id]
             
-            # Clean up subscriptions
-            if client_id in self.client_id_to_topics:
-                topics = list(self.client_id_to_topics[client_id])
-                for topic in topics:
+            # 4. Clean up subscriptions (Check presence before iterating)
+            topics_set = self.client_id_to_topics.pop(client_id, None)
+            if topics_set:
+                for topic in list(topics_set):
                     await self.unsubscribe_from_topic(client_id, topic)
-                
-                if client_id in self.client_id_to_topics:
-                    del self.client_id_to_topics[client_id]
 
-            # Clean up feed subscriptions
-            if client_id in self.client_id_to_feeds:
-                feeds = list(self.client_id_to_feeds[client_id])
-                for feed_id in feeds:
+            feeds_set = self.client_id_to_feeds.pop(client_id, None)
+            if feeds_set:
+                for feed_id in list(feeds_set):
                     await self.unsubscribe_from_feed(client_id, feed_id)
-                
-                if client_id in self.client_id_to_feeds:
-                    del self.client_id_to_feeds[client_id]
 
             logger.info(
                 f"WebSocket connection closed: client_id={client_id}. "
@@ -339,8 +345,13 @@ class ConnectionManager:
         self._shutdown_event.set()
         
         # Cancel all sender tasks
-        for task in self.client_tasks.values():
+        tasks = list(self.client_tasks.values())
+        for task in tasks:
             task.cancel()
+        
+        if tasks:
+            # Wait for all tasks to cancel to avoid "Task destroyed but pending"
+            await asyncio.gather(*tasks, return_exceptions=True)
         
         for ws in self.active_connections.values():
             try:

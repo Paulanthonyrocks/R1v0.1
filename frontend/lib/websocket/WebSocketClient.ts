@@ -7,9 +7,19 @@ interface WebSocketErrorEvent extends Event {
 
 const getOrCreateClientId = () => {
     if (typeof window === 'undefined') return '';
-    // Always generate a new unique Client ID for each session/tab/instance
-    // This prevents collisions where multiple tabs/reloads fight for the same backend socket slot
-    return crypto.randomUUID();
+    
+    try {
+        const storedId = sessionStorage.getItem('ws_client_id');
+        if (storedId) {
+            return storedId;
+        }
+        const newId = crypto.randomUUID();
+        sessionStorage.setItem('ws_client_id', newId);
+        return newId;
+    } catch (e) {
+        console.warn('Failed to access sessionStorage:', e);
+        return crypto.randomUUID();
+    }
 };
 
 type MessageListener<T> = (data: T) => void;
@@ -42,10 +52,12 @@ export enum WebSocketMessageType {
     PING = 'ping',
     SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
     UNSUBSCRIBE_FROM_FEED = 'unsubscribe_from_feed',
+    UPDATE_FEED_CONFIG = 'update_feed_config',
     GET_INITIAL_FEED_STATUSES = 'get_initial_feed_statuses',
     START_FEED = 'start_feed',
     STOP_FEED = 'stop_feed',
     RESTART_FEED = 'restart_feed',
+    SNAPSHOT_READY = 'snapshot_ready',
     INTERNAL_PONG = '__internal_pong'
 }
 
@@ -58,6 +70,7 @@ export interface WebSocketMessage<T = unknown> {
 }
 
 export interface IWebSocketClient {
+    activate(): void;
     connect(token: string): Promise<void>;
     disconnect(): void;
     send<T>(data: WebSocketMessage<T>): void;
@@ -73,6 +86,10 @@ enum ConnectionState {
     RECONNECTING = 'reconnecting',
     ERROR = 'error'
 }
+
+// Global tracking to ensure only the latest instance in a tab is active
+// This prevents infinite loops if multiple instances are created (e.g. during HMR or React Strict Mode)
+let lastActiveInstanceId: string | null = null;
 
 export class WebSocketClient implements IWebSocketClient {
     private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown> | ScopedListener>> = new Map();
@@ -108,24 +125,54 @@ export class WebSocketClient implements IWebSocketClient {
         this.clientId = this.requiresClientId ? getOrCreateClientId() : null;
         
         if (typeof window !== 'undefined') {
-            console.log(`[WebSocketClient ${this.instanceId}] Created. Client ID: ${this.clientId}`);
-            
-            if (this.requiresClientId) {
-                this.videoWorker = new Worker('/workers/video-worker.js');
-                this.videoWorker.onmessage = (e) => {
-                    if (e.data.error) {
-                        console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
-                    } else {
-                        const { feed_id, frame } = e.data;
-                        this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { feed_id, frame });
-                    }
-                };
-            }
+            console.debug(`[WebSocketClient ${this.instanceId}] Instantiated. Client ID: ${this.clientId}`);
+        }
+    }
 
+    /**
+     * Activates the client, claiming it as the primary active instance in this tab.
+     * This should be called when the client is mounted in the UI.
+     */
+    public activate(): void {
+        if (typeof window === 'undefined') return;
+        
+        if (this.isInstanceActive()) {
+            console.debug(`[WebSocketClient ${this.instanceId}] Already active.`);
+            return;
+        }
+
+        lastActiveInstanceId = this.instanceId;
+        console.log(`[WebSocketClient ${this.instanceId}] Activated. Client ID: ${this.clientId}`);
+        
+        // Setup Worker if needed
+        if (this.requiresClientId && !this.videoWorker) {
+            this.videoWorker = new Worker('/workers/video-worker.js');
+            this.videoWorker.onmessage = (e) => {
+                if (e.data.error) {
+                    console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
+                } else {
+                    // e.data contains feed_id, frame (ArrayBuffer), metrics, vehicles, etc.
+                    this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, e.data, e.data.feed_id);
+                }
+            };
+        }
+
+        // Setup Token Refresh listener
+        if (!this.unsubscribeTokenRefresh) {
             this.unsubscribeTokenRefresh = this.tokenManager.onTokenRefresh((token) => {
-                this.handleTokenRefresh(token);
+                this.handleTokenRefresh(token).catch(e => {
+                    console.error(`[WebSocketClient ${this.instanceId}] Error in handleTokenRefresh:`, e);
+                });
             });
         }
+    }
+
+    public getInstanceId(): string {
+        return this.instanceId;
+    }
+
+    private isInstanceActive(): boolean {
+        return lastActiveInstanceId === this.instanceId;
     }
 
     private setState(state: ConnectionState, message?: string) {
@@ -147,22 +194,39 @@ export class WebSocketClient implements IWebSocketClient {
 
     public onStatusChange(listener: (status: string, message?: string) => void): () => void {
         this.statusListeners.add(listener);
+        // Immediately notify the listener of the current state
+        try {
+            listener(this.connectionState, "Initial state on subscription");
+        } catch (error) {
+            console.error(`[WebSocketClient ${this.instanceId}] Error in initial status notification:`, error);
+        }
         return () => this.statusListeners.delete(listener);
     }
 
     private async handleTokenRefresh(token: string): Promise<void> {
         this.currentToken = token;
         
+        if (!this.isInstanceActive()) {
+            console.debug(`[WebSocketClient ${this.instanceId}] Instance dormant. Ignoring token refresh.`);
+            return;
+        }
+
         if (this.isConnected()) {
-            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is connected. Sending authentication message with new token.`);
+            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is connected. Sending re-authentication.`);
             this.send({ type: WebSocketMessageType.AUTHENTICATE, data: { token } });
-        } else if (this.connectionState === ConnectionState.DISCONNECTED) {
-            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is disconnected. Reconnecting with new token.`);
-            await this.reconnectWithNewToken(token);
+        } else if (this.connectionState === ConnectionState.DISCONNECTED || this.connectionState === ConnectionState.ERROR) {
+            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is ${this.connectionState}. Reconnecting with new token.`);
+            try {
+                await this.reconnectWithNewToken(token);
+            } catch (e) {
+                console.error(`[WebSocketClient ${this.instanceId}] Reconnection with new token failed:`, e);
+            }
         }
     }
 
     public async reconnectWithNewToken(token: string): Promise<void> {
+        if (!this.isInstanceActive()) return;
+
         this.cancelPendingOperations();
         if (this.ws) {
             this.ws.close();
@@ -182,6 +246,10 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public async connect(token: string | null): Promise<void> {
+        if (!this.isInstanceActive()) {
+            console.warn(`[WebSocketClient ${this.instanceId}] Attempted to connect from dormant instance. Aborting.`);
+            return;
+        }
         if (this.connectionPromise) return this.connectionPromise;
         this.shouldReconnect = true;
         this.connectionPromise = this.performConnection(token);
@@ -197,6 +265,8 @@ export class WebSocketClient implements IWebSocketClient {
             return;
         }
 
+        if (!this.isInstanceActive()) return;
+
         this.setState(ConnectionState.CONNECTING, 'Attempting to connect...');
 
         if (!token) token = this.currentToken || this.tokenManager.getCurrentToken();
@@ -211,6 +281,11 @@ export class WebSocketClient implements IWebSocketClient {
 
         return new Promise<void>((resolve, reject) => {
             try {
+                if (!this.isInstanceActive()) {
+                    reject(new Error('Instance became dormant during connection setup'));
+                    return;
+                }
+
                 const clientId = this.clientId;
                 const url = new URL(this.url);
 
@@ -238,8 +313,8 @@ export class WebSocketClient implements IWebSocketClient {
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
                     
-                    if (!this.shouldReconnect) {
-                        console.debug(`[WebSocketClient ${this.instanceId}] Connection opened but client is destroyed/disconnecting. Closing.`);
+                    if (!this.shouldReconnect || !this.isInstanceActive()) {
+                        console.debug(`[WebSocketClient ${this.instanceId}] Connection opened but instance is dormant or destroying. Closing.`);
                         this.ws?.close();
                         return;
                     }
@@ -265,14 +340,16 @@ export class WebSocketClient implements IWebSocketClient {
                     }
                     
                     this.setState(ConnectionState.DISCONNECTED, reason);
-                    if (this.shouldReconnect && !wasClean) this.attemptReconnect(reason);
+                    if (this.shouldReconnect && !wasClean && this.isInstanceActive()) {
+                        this.attemptReconnect(reason);
+                    }
                 };
 
                 this.ws.onerror = (event: Event) => {
                     clearTimeout(connectionTimeout);
                     const error = event as WebSocketErrorEvent;
                     const errorMessage = error?.message || 'Unknown WebSocket Error';
-                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error: "${errorMessage}". This is often a generic error. For more details, check your browser's developer console for a failed WebSocket "Upgrade" request in the Network tab. The response headers or console logs from the server on initial connection might provide more insight.`, error);
+                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error: "${errorMessage}".`, error);
                     this.setState(ConnectionState.ERROR, errorMessage);
                     this.notifyError('connection_error', errorMessage);
                     if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
@@ -289,18 +366,31 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private attemptReconnect(reason: string): void {
+        if (!this.isInstanceActive()) return;
+
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.setState(ConnectionState.ERROR, 'Maximum reconnection attempts reached');
-            this.notifyError('max_reconnect_attempts', `Maximum reconnection attempts (${this.maxReconnectAttempts}) reached. Please refresh the page.`);
+            this.notifyError('max_reconnect_attempts', `Maximum reconnection attempts reached. Please refresh the page.`);
             return;
         }
 
         this.reconnectAttempts++;
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+        // Add exponential backoff with jitter (±20%)
+        const jitter = 0.8 + Math.random() * 0.4;
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 30000);
+        
+        console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
+        
         this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`);
-        this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Attempting to reconnect in ${this.reconnectDelay / 1000} seconds...`);
+        this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Reconnecting...`);
 
-        this.reconnectTimeout = setTimeout(() => this.performConnection(this.currentToken), this.reconnectDelay);
+        this.reconnectTimeout = setTimeout(() => {
+            if (this.isInstanceActive()) {
+                this.performConnection(this.currentToken).catch(e => {
+                    console.error(`[WebSocketClient ${this.instanceId}] Reconnect performConnection failed:`, e);
+                });
+            }
+        }, this.reconnectDelay);
     }
 
     private flushMessageQueue(): void {
@@ -349,16 +439,15 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private handleMessage(event: MessageEvent): void {
-        if (typeof event.data === 'string') {
-            // Update activity timestamp on ANY message received
-            this.lastPongTime = Date.now();
+        // Update activity timestamp on ANY message received
+        this.lastPongTime = Date.now();
 
+        if (typeof event.data === 'string') {
             try {
                 const message = JSON.parse(event.data) as WebSocketMessage<unknown>;
 
                 if (message.type === WebSocketMessageType.PING) {
                     console.debug(`[WebSocketClient ${this.instanceId}] Received PING, sending PONG`);
-                    // Server sent a PING, respond with a PONG
                     this.send({ type: WebSocketMessageType.PONG, correlation_id: message.correlation_id });
                     return;
                 }
@@ -367,22 +456,40 @@ export class WebSocketClient implements IWebSocketClient {
                     console.debug(`[WebSocketClient ${this.instanceId}] Received PONG`);
                     return;
                 }
+
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
-                    // console.log(`[WebSocketClient] Received VIDEO_FRAME. Data size: ${JSON.stringify(message.data).length}`);
-                    const frameData = message.data as { feed_id?: string };
-                    this.notifyListeners(message.type, message.data, frameData?.feed_id);
+                    const frameData = message.data as { feed_id?: string, frame?: string };
+                    
+                    // If we have a worker and frame is a string (base64), use the worker
+                    if (this.videoWorker && typeof frameData?.frame === 'string') {
+                        this.videoWorker.postMessage({ 
+                            frameData: frameData.frame,
+                            feed_id: frameData.feed_id,
+                            originalData: message.data // Pass through other metrics/vehicles
+                        });
+                    } else {
+                        // Fallback to direct notification if no worker
+                        this.notifyListeners(message.type, message.data, frameData?.feed_id);
+                    }
                     return;
                 }
+
+                if (message.type === WebSocketMessageType.AUTH_FAILURE) {
+                    console.warn(`[WebSocketClient ${this.instanceId}] Authentication failed:`, message.data);
+                    this.currentToken = null;
+                    this.tokenManager.refreshToken().catch(e => console.error(`[WebSocketClient ${this.instanceId}] Token refresh failed:`, e));
+                }
+
+                if (message.type === WebSocketMessageType.INITIAL_FEED_STATUSES) {
+                    console.log(`[WebSocketClient ${this.instanceId}] Received INITIAL_FEED_STATUSES. Feeds:`, (message.data as any)?.feeds?.length);
+                }
+
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
-                console.error(`[WebSocketClient ${this.instanceId}] Error handling WebSocket message (might not be JSON):`, error, event.data);
-                // Fallback for non-JSON messages if necessary, or just ignore
-                if (event.data === 'pong') { // Still handle old 'pong' string if it exists for backward compatibility during transition
-                    this.lastPongTime = Date.now();
-                }
+                console.error(`[WebSocketClient ${this.instanceId}] Error handling WebSocket message:`, error, event.data);
             }
         } else if (event.data instanceof ArrayBuffer) {
-            // Handle binary frame data (for video feeds that don't use workers)
+            // Handle binary frame data
             this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { frame: event.data });
         }
     }
@@ -393,19 +500,16 @@ export class WebSocketClient implements IWebSocketClient {
 
         typeListeners.forEach((entry: unknown) => {
             try {
-                // If it's a scoped listener (object with scope and listener properties)
                 if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
                     const scopedEntry = entry as ScopedListener;
-                    // Only notify if scopes match OR if the message has no scope
                     if (!scope || scopedEntry.scope === scope) {
                         scopedEntry.listener(data);
                     }
                 } else {
-                    // It's a regular listener function, notify always
                     (entry as MessageListener<T>)(data);
                 }
             } catch (error) {
-                console.error(`[WebSocketClient ${this.instanceId}] Error in listener for message type ${type}:`, error);
+                console.error(`[WebSocketClient ${this.instanceId}] Error in listener for ${type}:`, error);
             }
         });
     }

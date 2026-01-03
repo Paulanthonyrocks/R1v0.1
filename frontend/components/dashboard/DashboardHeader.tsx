@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home } from 'lucide-react';
+import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home, AlertTriangle, Camera } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { cn } from '@/lib/utils';
@@ -25,6 +25,10 @@ const DashboardHeader: React.FC = () => {
         { href: '/dashboard/map', label: 'MAP', icon: MapIcon },
         { href: '/dashboard/analytics', label: 'ANALYTICS', icon: BarChart3 },
         { href: '/surveillance', label: 'FEEDS', icon: LayoutGrid },
+        { href: '/incidents', label: 'INCIDENTS', icon: AlertTriangle },
+        { href: '/dashboard/gallery', label: 'GALLERY', icon: Camera },
+        { href: '/dashboard/tracking', label: 'TRACKING', icon: Navigation },
+        { href: '/dashboard/predictive', label: 'FORECASTS', icon: TrendingUp },
     ];
 
     return (
@@ -58,8 +62,8 @@ const DashboardHeader: React.FC = () => {
                         key={item.href} 
                         href={item.href} 
                         className={cn(
-                            "flex items-center gap-1 transition-colors hover:text-white",
-                            pathname === item.href ? "text-white underline decoration-2 underline-offset-4" : "opacity-80"
+                            "flex items-center gap-1 transition-colors hover:text-lcd-text",
+                            pathname === item.href ? "text-lcd-text font-bold underline decoration-2 underline-offset-4" : "opacity-60 hover:opacity-100"
                         )}
                     >
                         <item.icon size={16} /> 

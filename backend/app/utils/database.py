@@ -16,6 +16,7 @@ from tenacity import (
 )
 from contextlib import asynccontextmanager, contextmanager
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from pymongo import MongoClient
@@ -45,6 +46,7 @@ class DatabaseError(Exception):
 class DatabaseManager:
     def __init__(self, config: Dict):
         self.sqlite_db_path: Optional[Path] = None
+        self.timescale_url: Optional[str] = None
         self.mongo_uri: Optional[str] = None
         self.mongo_db_name: Optional[str] = None
         self.raw_traffic_collection_name: str = (
@@ -54,18 +56,21 @@ class DatabaseManager:
         self.mongo_db: Optional[MongoDatabase] = None
         self.async_engine = None  # Corrected attribute name
         self.async_session_factory = None  # Corrected attribute name
+        self.timescale_engine = None
+        self.timescale_session_factory = None
 
         # Initialize database connections
-        self._init_from_config(config)  # This might raise ConfigError or ValueError
-        self.lock = (
-            threading.Lock()
-        )  # Lock for thread-safe operations on SQLite connection
+        self._init_from_config(config)
+        self.lock = threading.Lock()
 
         # Initialize databases
         if self.sqlite_db_path:
-            self._initialize_sqlite_database()  # Renamed for clarity
+            self._initialize_sqlite_database()
 
-        if self.mongo_uri and self.mongo_db_name:  # Ensure both are set
+        if self.timescale_url:
+            self._initialize_timescale_database()
+
+        if self.mongo_uri and self.mongo_db_name:
             self._initialize_mongodb()
 
         # Async SQLAlchemy setup (only if sqlite_db_path is valid)
@@ -111,9 +116,22 @@ class DatabaseManager:
 
             logger.info(f"SQLite database path configured to: {self.sqlite_db_path}")
 
+            timescale_config = config.get("timescaledb", {})
+            if timescale_config.get("enabled", False):
+                self.timescale_url = timescale_config.get("url", "postgresql+asyncpg://postgres:password@localhost:5432/traffic_hub")
+                logger.info("TimescaleDB (PostgreSQL) configured.")
+            else:
+                self.timescale_url = None
+
             mongo_config = config.get("mongodb", {})
             if mongo_config.get("uri") and mongo_config.get("database_name"):
                 self.mongo_uri = mongo_config["uri"]
+                
+                # Auto-adjust if in Docker and uri points to localhost
+                if Path("/.dockerenv").exists() and "localhost" in self.mongo_uri:
+                    logger.info("Docker environment detected. Adjusting MongoDB URI from localhost to mongodb service name.")
+                    self.mongo_uri = self.mongo_uri.replace("localhost", "mongodb")
+
                 self.mongo_db_name = mongo_config["database_name"]
                 self.raw_traffic_collection_name = mongo_config.get(
                     "raw_traffic_collection", "raw_traffic_data"
@@ -181,6 +199,54 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def _initialize_timescale_database(self):
+        """Initializes the TimescaleDB (PostgreSQL) engine and creates hypertables."""
+        logger.info("Initializing TimescaleDB...")
+        try:
+            self.timescale_engine = create_async_engine(self.timescale_url)
+            self.timescale_session_factory = sessionmaker(
+                self.timescale_engine, class_=AsyncSession, expire_on_commit=False
+            )
+            # Create hypertables (synchronously for schema setup)
+            asyncio.create_task(self._create_timescale_hypertables())
+        except Exception as e:
+            logger.error(f"Failed to initialize TimescaleDB: {e}")
+
+    async def _create_timescale_hypertables(self):
+        """Sets up the schema and hypertables in TimescaleDB."""
+        # We use a raw connection for TimescaleDB specific commands
+        try:
+            async with self.timescale_engine.begin() as conn:
+                # 1. Create standard table if not exists
+                # Note: We use TIMESTAMPTZ for TimescaleDB
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS vehicle_tracks (
+                        feed_id TEXT NOT NULL,
+                        track_id TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        global_vehicle_id TEXT,
+                        class_id INTEGER,
+                        confidence FLOAT,
+                        center_x FLOAT,
+                        center_y FLOAT,
+                        speed FLOAT,
+                        lane INTEGER,
+                        direction TEXT,
+                        license_plate TEXT
+                    );
+                """))
+                
+                # 2. Convert to hypertable (this will fail if already a hypertable, so we check)
+                try:
+                    await conn.execute(text("SELECT create_hypertable('vehicle_tracks', 'timestamp', if_not_exists => TRUE);"))
+                    logger.info("TimescaleDB 'vehicle_tracks' hypertable verified/created.")
+                except Exception as e:
+                    # 'already a hypertable' is fine
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error creating TimescaleDB hypertables: {e}")
+
     def _get_sqlite_connection(self) -> sqlite3.Connection:
         if not self.sqlite_db_path:
             raise DatabaseError("SQLite database path not configured.")
@@ -208,6 +274,10 @@ class DatabaseManager:
             with self._get_sqlite_connection() as conn:
                 self._create_sqlite_tables(conn.cursor())
             logger.info("SQLite DB schema initialization check complete.")
+            
+            # Auto-prune on startup
+            self.prune_old_data()
+            
         except (sqlite3.Error, DatabaseError) as e:
             logger.error(f"DB init error: {e}", exc_info=True)
             raise DatabaseError(f"DB schema init fail: {e}") from e
@@ -215,12 +285,16 @@ class DatabaseManager:
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
         # ... (This method remains unchanged)
         cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
-                feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, class_id INTEGER, confidence REAL,
+                feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
+                global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
                 bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
                 acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, flags TEXT,
                 PRIMARY KEY (feed_id, track_id, timestamp))""")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
         )
         cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
                 license_plate TEXT PRIMARY KEY,
@@ -242,32 +316,180 @@ class DatabaseManager:
                 feed_id TEXT, -- Allow NULL for system alerts
                 
                 message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
+        
+        cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
+                id TEXT PRIMARY KEY,
+                feed_id TEXT,
+                type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                snapshot_path TEXT,
+                assigned_to TEXT,
+                resolution_notes TEXT
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
+
         # ... and other table creation statements ...
         logger.debug("SQLite DB table creation check finished.")
 
     def _initialize_mongodb(self):
-        # ... (This method remains unchanged)
+        """Initializes the MongoDB connection with a retry mechanism."""
         if not self.mongo_uri or not self.mongo_db_name:
-            logger.error(
+            logger.info(
                 "MongoDB URI or database name not configured. Skipping MongoDB initialization."
             )
             return
+
+        @retry(
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            stop=stop_after_attempt(3),
+            retry=retry_if_exception_type((ConnectionFailure, MongoConfigurationError)),
+            reraise=False,
+        )
+        def connect_with_retry():
+            logger.info(f"Attempting to connect to MongoDB at {self.mongo_uri}...")
+            client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=5000)
+            # The 'ismaster' command is a cheap way to verify the connection
+            client.admin.command("ismaster")
+            return client
+
         try:
-            self.mongo_client = MongoClient(
-                self.mongo_uri, serverSelectionTimeoutMS=5000
-            )
-            self.mongo_client.admin.command("ismaster")
-            self.mongo_db = self.mongo_client[self.mongo_db_name]
-            logger.info(
-                f"Successfully connected to MongoDB server. Database: '{self.mongo_db_name}'"
-            )
-        except (ConnectionFailure, MongoConfigurationError) as e:
+            self.mongo_client = connect_with_retry()
+            if self.mongo_client:
+                self.mongo_db = self.mongo_client[self.mongo_db_name]
+                logger.info(
+                    f"Successfully connected to MongoDB server. Database: '{self.mongo_db_name}'"
+                )
+            else:
+                logger.warning("MongoDB connection failed after retries. MongoDB features will be disabled.")
+                self.mongo_client = None
+                self.mongo_db = None
+        except Exception as e:
             logger.error(
-                f"MongoDB connection or configuration failed for {self.mongo_uri}: {e}",
+                f"Unexpected error during MongoDB initialization: {e}",
                 exc_info=True,
             )
             self.mongo_client = None
             self.mongo_db = None
+
+    def prune_old_data(self, retention_days: int = 7) -> int:
+        """Prunes vehicle tracks older than the specified number of days."""
+        cutoff_time = time.time() - (retention_days * 24 * 3600)
+        sql = "DELETE FROM vehicle_tracks WHERE timestamp < ?"
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (cutoff_time,))
+                    deleted_count = cursor.rowcount
+                    conn.commit()
+            if deleted_count > 0:
+                logger.info(f"Pruned {deleted_count} old records from vehicle_tracks (older than {retention_days} days).")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Error pruning old data: {e}")
+            return 0
+
+    # --- Incident Management ---
+    
+    async def create_incident(self, incident_data: Dict) -> bool:
+        """Creates a new incident record."""
+        sql = """
+        INSERT INTO incidents (
+            id, feed_id, type, severity, description, status, timestamp, 
+            created_at, updated_at, latitude, longitude, snapshot_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        try:
+            params = (
+                incident_data["id"],
+                incident_data.get("feed_id"),
+                incident_data["type"],
+                incident_data["severity"],
+                incident_data["description"],
+                incident_data["status"],
+                incident_data["timestamp"],
+                incident_data["created_at"].isoformat(),
+                incident_data["updated_at"].isoformat(),
+                incident_data.get("latitude"),
+                incident_data.get("longitude"),
+                incident_data.get("snapshot_path")
+            )
+            await asyncio.to_thread(self._execute_write, sql, params)
+            return True
+        except Exception as e:
+            logger.error(f"Error creating incident: {e}")
+            return False
+
+    async def update_incident(self, incident_id: str, updates: Dict) -> bool:
+        """Updates an existing incident."""
+        if not updates:
+            return True
+            
+        set_clauses = []
+        params = []
+        
+        for key, value in updates.items():
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+            
+        params.append(incident_id)
+        sql = f"UPDATE incidents SET {', '.join(set_clauses)} WHERE id = ?"
+        
+        try:
+            await asyncio.to_thread(self._execute_write, sql, tuple(params))
+            return True
+        except Exception as e:
+            logger.error(f"Error updating incident {incident_id}: {e}")
+            return False
+
+    async def get_incidents(self, limit: int = 100, offset: int = 0, filters: Dict = None) -> List[Dict]:
+        """Retrieves a list of incidents with optional filtering."""
+        base_query = "SELECT * FROM incidents WHERE 1=1"
+        params = []
+        
+        if filters:
+            if filters.get("status"):
+                base_query += " AND status = ?"
+                params.append(filters["status"])
+            if filters.get("severity"):
+                base_query += " AND severity = ?"
+                params.append(filters["severity"])
+            if filters.get("type"):
+                base_query += " AND type = ?"
+                params.append(filters["type"])
+                
+        query = f"{base_query} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        try:
+            return await asyncio.to_thread(self._execute_query, query, tuple(params))
+        except Exception as e:
+            logger.error(f"Error getting incidents: {e}")
+            return []
+
+    async def get_incident_by_id(self, incident_id: str) -> Optional[Dict]:
+        query = "SELECT * FROM incidents WHERE id = ?"
+        try:
+            results = await asyncio.to_thread(self._execute_query, query, (incident_id,))
+            return results[0] if results else None
+        except Exception as e:
+            logger.error(f"Error getting incident {incident_id}: {e}")
+            return None
+
+    def _execute_write(self, sql: str, params: tuple):
+        """Helper for synchronous write operations."""
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                conn.execute(sql, params)
+                conn.commit()
 
     db_write_retry_decorator = retry(
         wait=wait_exponential(multiplier=0.2, min=0.2, max=3),
@@ -282,10 +504,10 @@ class DatabaseManager:
             return 0
         
         sql = """INSERT OR REPLACE INTO vehicle_tracks (
-            feed_id, track_id, timestamp, class_id, confidence,
+            feed_id, track_id, timestamp, global_vehicle_id, class_id, confidence,
             bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
             speed, acceleration, lane, direction, license_plate, ocr_confidence, flags
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         
         batch_params = []
         for vd in vehicle_data_list:
@@ -301,6 +523,7 @@ class DatabaseManager:
                 vd.get("feed_id", "unknown"),
                 vd.get("track_id") or vd.get("vehicle_id"),
                 vd.get("timestamp", time.time()),
+                vd.get("global_vehicle_id"),
                 vd.get("class_id"),
                 vd.get("confidence"),
                 bbox[0], bbox[1], bbox[2], bbox[3],
@@ -320,12 +543,58 @@ class DatabaseManager:
                 with self._get_sqlite_connection() as conn:
                     conn.executemany(sql, batch_params)
                     conn.commit()
+            
+            # --- DUAL WRITE TO TIMESCALEDB ---
+            if self.timescale_engine:
+                asyncio.create_task(self._save_to_timescale_batch(vehicle_data_list))
+                
             return len(batch_params)
         except Exception as e:
             logger.error(f"DB batch save failed: {e}")
             if isinstance(e, sqlite3.OperationalError):
                 raise
             return 0
+
+    async def _save_to_timescale_batch(self, vehicle_data_list: List[Dict]):
+        """Asynchronously saves a batch of data to TimescaleDB."""
+        if not self.timescale_engine:
+            return
+
+        sql = text("""
+            INSERT INTO vehicle_tracks (
+                feed_id, track_id, timestamp, global_vehicle_id, class_id, 
+                confidence, center_x, center_y, speed, lane, direction, license_plate
+            ) VALUES (
+                :feed_id, :track_id, :timestamp, :global_vehicle_id, :class_id,
+                :confidence, :center_x, :center_y, :speed, :lane, :direction, :license_plate
+            )
+        """)
+        
+        try:
+            async with self.timescale_engine.begin() as conn:
+                params = []
+                for vd in vehicle_data_list:
+                    center = vd.get("centroid") or vd.get("center") or [None, None]
+                    ts = datetime.fromtimestamp(vd.get("timestamp", time.time()), tz=timezone.utc)
+                    
+                    params.append({
+                        "feed_id": vd.get("feed_id", "unknown"),
+                        "track_id": str(vd.get("track_id") or vd.get("vehicle_id")),
+                        "timestamp": ts,
+                        "global_vehicle_id": vd.get("global_vehicle_id"),
+                        "class_id": vd.get("class_id"),
+                        "confidence": vd.get("confidence"),
+                        "center_x": center[0],
+                        "center_y": center[1],
+                        "speed": vd.get("speed"),
+                        "lane": vd.get("lane"),
+                        "direction": vd.get("direction"),
+                        "license_plate": vd.get("license_plate")
+                    })
+                
+                await conn.execute(sql, params)
+        except Exception as e:
+            logger.error(f"TimescaleDB batch save failed: {e}")
 
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:
@@ -523,11 +792,59 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error during _execute_save_alert: {e}", exc_info=True)
             raise
-    async def get_identified_vehicles(self, limit: int = 100, offset: int = 0) -> List[Dict]:
-        """Returns a list of identified vehicles."""
-        query = "SELECT * FROM identified_vehicles ORDER BY last_seen DESC LIMIT ? OFFSET ?"
+
+    async def get_vehicle_tracks(self, limit: int = 500, offset: int = 0, filters: Dict = None) -> List[Dict]:
+        """Returns raw vehicle tracking data with optional filtering."""
+        base_query = "SELECT * FROM vehicle_tracks WHERE 1=1"
+        params = []
+        
+        if filters:
+            if filters.get("feed_id"):
+                base_query += " AND feed_id = ?"
+                params.append(filters["feed_id"])
+            if filters.get("license_plate"):
+                base_query += " AND license_plate = ?"
+                params.append(filters["license_plate"])
+            if filters.get("class_id"):
+                base_query += " AND class_id = ?"
+                params.append(filters["class_id"])
+            if filters.get("start_time"):
+                base_query += " AND timestamp >= ?"
+                params.append(filters["start_time"])
+            if filters.get("end_time"):
+                base_query += " AND timestamp <= ?"
+                params.append(filters["end_time"])
+
+        query = f"{base_query} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
         try:
-            return await asyncio.to_thread(self._execute_query, query, (limit, offset))
+            return await asyncio.to_thread(self._execute_query, query, tuple(params))
+        except Exception as e:
+            logger.error(f"Error querying vehicle tracks: {e}")
+            return []
+
+    async def get_identified_vehicles(self, limit: int = 100, offset: int = 0, filters: Dict = None) -> List[Dict]:
+        """Returns a list of identified vehicles with optional filtering."""
+        base_query = "SELECT * FROM identified_vehicles WHERE 1=1"
+        params = []
+        
+        if filters:
+            if filters.get("make"):
+                base_query += " AND make = ?"
+                params.append(filters["make"])
+            if filters.get("model"):
+                base_query += " AND model = ?"
+                params.append(filters["model"])
+            if filters.get("vehicle_type"):
+                base_query += " AND vehicle_type = ?"
+                params.append(filters["vehicle_type"])
+        
+        query = f"{base_query} ORDER BY last_seen DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        try:
+            return await asyncio.to_thread(self._execute_query, query, tuple(params))
         except Exception as e:
             logger.error(f"Error querying identified vehicles: {e}")
             return []
@@ -541,6 +858,91 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error querying vehicle by plate {license_plate}: {e}")
             return None
+
+    async def get_vehicle_global_history(self, global_id: str) -> List[Dict]:
+        """Returns the history of a vehicle across all feeds using its global ID."""
+        query = """
+        SELECT feed_id, track_id, timestamp, class_id, confidence, speed, lane, direction, license_plate
+        FROM vehicle_tracks 
+        WHERE global_vehicle_id = ?
+        ORDER BY timestamp ASC
+        """
+        try:
+            return await asyncio.to_thread(self._execute_query, query, (global_id,))
+        except Exception as e:
+            logger.error(f"Error querying vehicle global history {global_id}: {e}")
+            return []
+
+    async def list_global_vehicles(self, limit: int = 100) -> List[Dict]:
+        """Returns a list of unique global vehicle IDs seen recently."""
+        query = """
+        SELECT global_vehicle_id, MAX(timestamp) as last_seen, COUNT(DISTINCT feed_id) as feeds_count
+        FROM vehicle_tracks
+        WHERE global_vehicle_id IS NOT NULL
+        GROUP BY global_vehicle_id
+        ORDER BY last_seen DESC
+        LIMIT ?
+        """
+        try:
+            return await asyncio.to_thread(self._execute_query, query, (limit,))
+        except Exception as e:
+            logger.error(f"Error listing global vehicles: {e}")
+            return []
+
+    async def record_prediction_log(self, log_data: Dict) -> Optional[str]:
+        """Records a new prediction log entry."""
+        import uuid
+        log_id = str(uuid.uuid4())
+        sql = """
+        INSERT INTO prediction_logs (
+            id, prediction_made_at, location_name, location_latitude, location_longitude,
+            predicted_event_start_time, predicted_event_end_time, prediction_type,
+            predicted_value, source_of_prediction, outcome_verified
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        """
+        try:
+            params = (
+                log_id,
+                datetime.now(timezone.utc).isoformat(),
+                log_data.get("location_name"),
+                log_data["location_latitude"],
+                log_data["location_longitude"],
+                log_data["predicted_event_start_time"].isoformat(),
+                log_data["predicted_event_end_time"].isoformat(),
+                log_data["prediction_type"],
+                json.dumps(log_data["predicted_value"]),
+                log_data["source_of_prediction"]
+            )
+            await asyncio.to_thread(self._execute_write, sql, params)
+            return log_id
+        except Exception as e:
+            logger.error(f"Error recording prediction log: {e}")
+            return None
+
+    async def update_prediction_log(self, log_id: str, updates: Dict) -> bool:
+        """Updates an existing prediction log entry (e.g. with outcomes)."""
+        if not updates: return True
+        
+        set_clauses = []
+        params = []
+        for key, value in updates.items():
+            set_clauses.append(f"{key} = ?")
+            if isinstance(value, (dict, list)):
+                params.append(json.dumps(value))
+            elif isinstance(value, datetime):
+                params.append(value.isoformat())
+            else:
+                params.append(value)
+        
+        params.append(log_id)
+        sql = f"UPDATE prediction_logs SET {', '.join(set_clauses)} WHERE id = ?"
+        
+        try:
+            await asyncio.to_thread(self._execute_write, sql, tuple(params))
+            return True
+        except Exception as e:
+            logger.error(f"Error updating prediction log {log_id}: {e}")
+            return False
 
     def _execute_query(self, query: str, params: tuple) -> List[Dict]:
         """Helper for synchronous query execution."""

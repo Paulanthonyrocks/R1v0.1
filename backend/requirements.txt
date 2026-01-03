@@ -42,9 +42,12 @@ torchvision>=0.15.0  # If not already included
 pillow>=9.0.0
 pytesseract>=0.3.10
 google-generativeai>=0.3.0
+easyocr>=1.7.0
 
 # Database
 sqlalchemy
+asyncpg
+psycopg2-binary
 
 pymongo>=4.0.0 # For MongoDB support
 kafka-python>=2.0.0 # For Kafka messaging support

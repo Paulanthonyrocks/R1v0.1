@@ -28,9 +28,11 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, []);
 
     useEffect(() => {
+        webSocketClient.activate();
+        console.log(`[WebSocketProvider] Mounted. Initial client instance: ${webSocketClient.getInstanceId()}`);
         // Cleanup on unmount - this is crucial
         return () => {
-            console.log("WebSocketProvider unmounting, destroying WebSocket client");
+            console.log(`[WebSocketProvider] Unmounting. Destroying client instance: ${webSocketClient.getInstanceId()}`);
             webSocketClient.destroy();
         };
     }, [webSocketClient]);

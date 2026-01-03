@@ -1,13 +1,15 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.models import traffic # Import the traffic module
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 import pandas as pd
+import time
 
-from app.dependency_injection import get_analytics_service, get_as, get_current_active_user, get_db
+from app.dependency_injection import get_analytics_service, get_as, get_aas, get_current_active_user, get_db
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
+from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.models.analysis import (
  AnomalyDetectionRequest,
  AllNodesCongestionResponse,
@@ -389,3 +391,89 @@ async def calculate_rolling_averages_endpoint(
     except Exception as e:
         logger.error(f"Error calculating rolling averages: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to calculate rolling averages: {e}")
+
+# --- Advanced Analytics (Pro) Endpoints ---
+
+@router.get(
+    "/od-matrix",
+    summary="Get Origin-Destination Matrix",
+    description="Calculates O-D matrix based on vehicles tracked across multiple feeds.",
+    dependencies=[Depends(get_current_active_user)],
+)
+async def get_od_matrix(
+    hours: int = Query(1, ge=1, le=24),
+    aas: AdvancedAnalyticsService = Depends(get_aas)
+):
+    end_time = time.time()
+    start_time = end_time - (hours * 3600)
+    return await aas.get_origin_destination_matrix(start_time, end_time)
+
+@router.get(
+    "/travel-times",
+    summary="Get Average Travel Times",
+    description="Calculates average travel time between feed pairs.",
+    dependencies=[Depends(get_current_active_user)],
+)
+async def get_travel_times(
+    hours: int = Query(1, ge=1, le=24),
+    aas: AdvancedAnalyticsService = Depends(get_aas)
+):
+    end_time = time.time()
+    start_time = end_time - (hours * 3600)
+    return await aas.get_average_travel_times(start_time, end_time)
+
+@router.get(
+
+    "/heatmap",
+
+    summary="Get Heatmap Data",
+
+    description="Returns raw points for heatmap generation.",
+
+    dependencies=[Depends(get_current_active_user)],
+
+)
+
+async def get_heatmap(
+
+    feed_id: Optional[str] = Query(None),
+
+    global_id: Optional[str] = Query(None),
+
+    hours: int = Query(1, ge=1, le=24),
+
+    aas: AdvancedAnalyticsService = Depends(get_aas)
+
+):
+
+    return await aas.get_heatmap_data(feed_id, global_id, hours)
+
+
+
+@router.get(
+
+    "/forecast-vs-actual",
+
+    summary="Get Forecast vs Actual Comparison",
+
+    description="Returns time-series data comparing past predictions with actual outcomes.",
+
+    dependencies=[Depends(get_current_active_user)],
+
+)
+
+async def get_forecast_vs_actual(
+
+    lat: float = Query(...),
+
+    lon: float = Query(...),
+
+    hours: int = Query(24, ge=1, le=168),
+
+    as_svc: AnalyticsService = Depends(get_as)
+
+):
+
+    return await as_svc.get_forecast_vs_actual_data(lat, lon, hours)
+
+

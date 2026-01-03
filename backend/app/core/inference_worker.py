@@ -1,0 +1,139 @@
+import os
+import cv2
+import logging
+import time
+import numpy as np
+import queue
+from typing import Dict, Any, List, Optional
+from multiprocessing import Queue as MPQueue, Event
+
+from ..core.core_module import CoreModule
+from ..utils.monitoring import TrafficMonitor
+
+logger = logging.getLogger("Inference")
+
+def _make_serializable(obj):
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: float = 1.0, scale_y: float = 1.0) -> List[Dict[str, Any]]:
+    serialized_list = []
+    v_map = CoreModule.vehicle_type_map if CoreModule else {}
+    
+    for vehicle_id, data in tracked_vehicles.items():
+        try:
+            c_id = data.get("class_id", -1)
+            c_name = v_map.get(c_id, "unknown")
+            bbox = data.get("bbox")
+            scaled_bbox = []
+            if bbox and len(bbox) == 4:
+                scaled_bbox = [bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y]
+
+            serialized_list.append({
+                "vehicle_id": str(vehicle_id),
+                "bbox": [_make_serializable(x) for x in scaled_bbox],
+                "speed": _make_serializable(data.get("speed", 0)),
+                "license_plate": str(data.get("license_plate", "Unknown")),
+                "class_id": int(c_id),
+                "class_name": c_name,
+                "behavior": str(data.get("behavior", "unknown")),
+                "confidence": _make_serializable(data.get("confidence", 0)),
+                "lane": int(data.get("lane", -1)),
+                "status": str(data.get("status", "unknown")),
+            })
+        except Exception:
+            continue
+    return serialized_list
+
+def inference_worker(
+    worker_id: int,
+    central_input_queue: MPQueue,
+    central_output_queue: MPQueue,
+    stop_event: Event,
+    config: Dict[str, Any],
+    db_queue: Optional[MPQueue] = None
+):
+    """
+    Heavyweight AI process that processes frames from the central queue.
+    Can handle frames from multiple feeds interleaved.
+    """
+    pid = os.getpid()
+    logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+    
+    # Per-feed CoreModules and Monitors (lazy initialized)
+    core_modules: Dict[str, CoreModule] = {}
+    traffic_monitors: Dict[str, TrafficMonitor] = {}
+    
+    # Pre-extract shared config
+    vehicle_det_cfg = config.get("vehicle_detection", {})
+    target_fps = config.get("video_processing", {}).get("target_fps", 15)
+    ocr_cfg = config.get("ocr_engine", {})
+    stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+
+    try:
+        while not stop_event.is_set():
+            try:
+                # 1. Get a frame task from the queue
+                # Format: (feed_id, frame_index, frame_bytes, timestamp)
+                task = central_input_queue.get(timeout=0.5)
+                if task is None: continue
+                
+                feed_id, frame_index, frame_bytes, _ts = task
+                
+                # 2. Decode frame
+                nparr = np.frombuffer(frame_bytes, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is None: continue
+                
+                # 3. Lazy initialize feed logic
+                if feed_id not in core_modules:
+                    logger.info(f"[Worker {worker_id}] Initializing core for feed {feed_id}")
+                    core_modules[feed_id] = CoreModule(
+                        feed_id=feed_id,
+                        model_path=vehicle_det_cfg.get("model_path"),
+                        config=config,
+                        fps=target_fps,
+                        db_queue=db_queue,
+                        gemini_api_key=ocr_cfg.get("gemini_api_key"),
+                        model_type=vehicle_det_cfg.get("model_type", "yolo")
+                    )
+                    traffic_monitors[feed_id] = TrafficMonitor(config)
+                
+                core = core_modules[feed_id]
+                monitor = traffic_monitors[feed_id]
+                
+                # 4. Process AI
+                # (Simplified detection logic for example, full track logic stays in CoreModule)
+                tracked_vehicles = core.detect_and_track(
+                    frame, frame_index
+                )
+                
+                monitor.update_vehicles(tracked_vehicles)
+                metrics = monitor.get_metrics()
+                
+                # 5. Serialize and push results
+                # Scale factors are 1.0 since ingestion already resized to stream_res
+                serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles, 1.0, 1.0)
+                
+                try:
+                    # Format: (feed_id, frame_index, frame_bytes, metrics, vehicles, extra)
+                    central_output_queue.put_nowait((
+                        feed_id, frame_index, frame_bytes, metrics, serialized_vehicles, {}
+                    ))
+                except queue.Full:
+                    pass
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
+
+    finally:
+        for cm in core_modules.values():
+            cm.cleanup()
+        logger.info(f"Inference process {pid} terminated.")

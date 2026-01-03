@@ -223,44 +223,30 @@ class PredictionScheduler:
                 prediction_time=prediction_time,
             )
 
-            # If high likelihood, determine actions and notify
-            # Also log this significant prediction
+            # --- ALWAYS log the prediction for historical accuracy analysis ---
+            log_data = {
+                "location_name": location.name,
+                "location_latitude": location.latitude,
+                "location_longitude": location.longitude,
+                "predicted_event_start_time": prediction_time,
+                "predicted_event_end_time": prediction_time + timedelta(hours=1),
+                "prediction_type": "incident_likelihood",
+                "predicted_value": prediction,
+                "source_of_prediction": "PredictionScheduler_Routine",
+            }
+            try:
+                await self.analytics_service.record_prediction_log(log_data)
+            except Exception as e_log:
+                self.logger.error(f"Error logging prediction: {e_log}")
+
+            # --- If high likelihood, notify via WebSockets ---
             likelihood_threshold = self.config.get(
                 "likelihood_threshold", 70
             )  # Configurable threshold
             if prediction.get("likelihood_score_percent", 0) > likelihood_threshold:
                 action_taken = self.determine_autonomous_actions(prediction, location)
-
-                # Log the prediction
-                log_data = {
-                    "location_name": location.name,
-                    "location_latitude": location.latitude,
-                    "location_longitude": location.longitude,
-                    "predicted_event_start_time": prediction_time,  # This is when the predicted event window starts
-                    "predicted_event_end_time": prediction_time
-                    + timedelta(hours=1),  # Assuming a 1-hour prediction window
-                    "prediction_type": "incident_likelihood",
-                    "predicted_value": prediction,  # Store the full prediction dictionary
-                    "source_of_prediction": "PredictionScheduler_HighLikelihood",
-                    "kpi_snapshot_at_prediction": None,  # Placeholder for now
-                    # outcome_verified and related fields will be updated later by a different process
-                }
-                try:
-                    log_id = await self.analytics_service.record_prediction_log(
-                        log_data
-                    )
-                    if log_id:
-                        self.logger.info(
-                            f"Successfully recorded high-likelihood prediction (ID: {log_id}) for location {location.name or (location.latitude, location.longitude)}."
-                        )
-                    else:
-                        self.logger.warning(
-                            f"Failed to record high-likelihood prediction for location {location.name or (location.latitude, location.longitude)}."
-                        )
-                except Exception as e_log:
-                    self.logger.error(
-                        f"Error calling record_prediction_log: {e_log}", exc_info=True
-                    )
+                
+                # ... (rest of notification logic)
 
                 notification = GeneralNotification(
                     message_type="traffic_prediction",  # Add required message_type

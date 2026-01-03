@@ -37,10 +37,13 @@ from app.models.websocket import (
 
 # Import core worker and utilities
 from app.core.processing_worker import process_video
+from app.core.ingestion_worker import ingestion_worker
+from app.core.inference_worker import inference_worker
 from app.utils.monitoring import check_system_resources
 from app.utils.video import FrameTimer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
+from app.services.reid_manager import GlobalReIDManager
 from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.video_writer import VideoWriter
 
@@ -74,6 +77,7 @@ class FeedManager:
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
+        self._reid_manager = GlobalReIDManager(config)
         self._is_processing_active: bool = False
         
         self._last_kpi_broadcast_time = 0.0
@@ -97,8 +101,16 @@ class FeedManager:
         self.persistence_path = Path("backend/data/feeds_config.json")
 
         # Database processing
-        self._db_queue: Optional[MPQueue] = MPQueue(maxsize=5000)
+        self._db_queue: Optional[MPQueue] = MPQueue(maxsize=100000)
         self._db_reader_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+
+        # Decoupled Processing Pool
+        self._central_input_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+        self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+        self._inference_pool: List[Process] = []
+        self._inference_stop_event = Event()
+        self._start_inference_pool()
 
         # Initialize shared values
         self.initialize_shared_values()
@@ -108,9 +120,10 @@ class FeedManager:
         # Register cleanup on exit
         atexit.register(self._atexit_cleanup)
 
-        # Start background reader
+        # Start background reader and watchdog
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
-        self.logger.info("FeedManager initialized and result reader task started.")
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        self.logger.info("FeedManager initialized. Reader and Watchdog tasks started.")
 
 
 
@@ -150,13 +163,14 @@ class FeedManager:
                 items = []
                 # Drain queue up to a limit for batching
                 try:
-                    for _ in range(500):
+                    # Increase batch size for higher throughput
+                    for _ in range(5000):
                         items.append(self._db_queue.get_nowait())
                 except queue.Empty:
                     pass
 
                 if not items:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.05)
                     continue
 
                 if self._analytics_service and self._analytics_service._db_manager:
@@ -169,6 +183,23 @@ class FeedManager:
                     for item in items:
                         msg_type = item.get("type", "vehicle_data")
                         if msg_type == "vehicle_data":
+                            # Handle ReID mapping if embedding present
+                            embedding = item.get("embedding")
+                            if embedding:
+                                import numpy as np
+                                # Convert back to numpy array for matching
+                                emb_np = np.array(embedding, dtype=np.float32)
+                                global_id = self._reid_manager.match_or_register(
+                                    feed_id=item.get("feed_id", "unknown"),
+                                    local_id=item.get("vehicle_id", "unknown"),
+                                    embedding=emb_np,
+                                    metadata={"class_name": item.get("class_name")}
+                                )
+                                item["global_vehicle_id"] = global_id
+                                # We don't want to save the large embedding to SQLite usually
+                                # unless needed for specific research.
+                                # del item["embedding"] 
+                            
                             tracking_batch.append(item)
                         elif msg_type == "identified_vehicle":
                             identified_batch.append(item)
@@ -182,10 +213,18 @@ class FeedManager:
                         for iv in identified_batch:
                             await asyncio.to_thread(db.upsert_identified_vehicle, iv)
                 else:
-                    logger.warning("DB manager not available for db_queue processing")
+                    # If DB manager is not ready, we must drop the items to prevent queue overflow
+                    # or re-queue them if critical. For vehicle tracking, dropping is often acceptable 
+                    # during startup/shutdown race conditions.
+                    if len(items) > 100:
+                        logger.warning(f"DB manager not available. Dropped {len(items)} items from db_queue.")
 
-                # Small sleep to yield, but fast enough for high throughput
-                await asyncio.sleep(0.005)
+                # If we processed a full batch, yield briefly but don't sleep long
+                if len(items) >= 5000:
+                    await asyncio.sleep(0.001)
+                else:
+                    await asyncio.sleep(0.005)
+
             except Exception as e:
                 logger.error(f"Error in db_queue reader: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
@@ -225,6 +264,51 @@ class FeedManager:
         if self._prediction_scheduler:
             await self._prediction_scheduler.stop()
             self.logger.info("Prediction scheduler stopped.")
+
+    def _start_inference_pool(self):
+        pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        logger.info(f"Starting Inference Pool with {pool_size} workers.")
+        for i in range(pool_size):
+            p = Process(
+                target=inference_worker,
+                args=(
+                    i,
+                    self._central_input_queue,
+                    self._central_output_queue,
+                    self._inference_stop_event,
+                    self.config,
+                    self._db_queue
+                ),
+                daemon=True,
+                name=f"InferenceWorker-{i}"
+            )
+            p.start()
+            self._inference_pool.append(p)
+
+    async def _stop_inference_pool(self):
+        logger.info("Stopping Inference Pool...")
+        self._inference_stop_event.set()
+        
+        # Give them time to finish current task
+        for _ in range(50):
+            try:
+                # Drain output queue to unblock workers
+                self._central_output_queue.get_nowait()
+            except: pass
+            
+            if all(not p.is_alive() for p in self._inference_pool):
+                break
+            await asyncio.sleep(0.1)
+
+        for p in self._inference_pool:
+            if p.is_alive():
+                logger.warning(f"Forcing termination of Inference Worker {p.name}")
+                p.terminate()
+                await asyncio.sleep(0.1)
+                if p.is_alive():
+                    p.kill()
+        
+        self._inference_pool = []
 
     def _initialize_available_feeds(self):
         self._load_persisted_feeds()
@@ -509,6 +593,7 @@ class FeedManager:
             entry["reduce_fps_event"] = Event()
             entry["status"] = FeedOperationalStatusEnum.STARTING
             entry["start_time"] = time.time()
+            entry["last_frame_time"] = time.time()
             entry["error_message"] = None
             entry["latest_metrics"] = None
             entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
@@ -604,47 +689,50 @@ class FeedManager:
 
         await self._broadcast_kpi_update()
 
+    async def request_snapshot(self, feed_id: str, incident_id: str):
+        """Sends a command to the worker to save a high-res snapshot."""
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry or not entry.get("command_queue"):
+                logger.warning(f"Cannot request snapshot for {feed_id}: Feed not running or no command queue.")
+                return
+            
+            try:
+                entry["command_queue"].put_nowait({
+                    "type": "save_snapshot",
+                    "incident_id": incident_id
+                })
+                logger.info(f"Requested snapshot for feed {feed_id}, incident {incident_id}")
+            except Exception as e:
+                logger.error(f"Failed to put snapshot command for {feed_id}: {e}")
+
     # --- Internal Process & Resource Management ---
 
     def _launch_worker(self, feed_id: str, source: str):
-        """Internal synchronous method to spawn the process."""
+        """Internal synchronous method to spawn the ingestion process."""
         entry = self.process_registry.get(feed_id)
         if not entry:
             return
 
-        vis_options = self.config.get("vis_options_default", {"Tracked Vehicles"})
-        
         worker_args = (
             source,
-            entry["result_queue"],
-            entry["stop_event"],
-            None, # alerts_queue (handled via result queue)
-            self.config,
             feed_id,
-            self.config["vehicle_detection"]["confidence_threshold"],
-            self.config["vehicle_detection"]["proximity_threshold"],
-            self.config["vehicle_detection"]["track_timeout"],
-            vis_options,
-            entry["reduce_fps_event"],
-            self._global_fps,
-            self._db_queue, # Pass the global DB queue
-            None, # error_queue
-            entry.get("config_info"),
-            entry.get("video_writer_queue"),
+            self._central_input_queue,
+            entry["stop_event"],
+            self.config,
             entry.get("is_looped_feed", False),
-            entry.get("command_queue"),
         )
 
         process = Process(
-            target=process_video,
+            target=ingestion_worker,
             args=worker_args,
             daemon=True,
-            name=f"Worker-{feed_id}",
+            name=f"Ingestion-{feed_id}",
         )
         process.start()
         entry["process"] = process
         entry["start_time"] = time.time()
-        logger.info(f"Launched process PID {process.pid} for '{feed_id}'")
+        logger.info(f"Launched ingestion PID {process.pid} for '{feed_id}'")
 
     def _detach_resources(self, feed_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -660,8 +748,6 @@ class FeedManager:
             "feed_id": feed_id,
             "process": entry.get("process"),
             "stop_event": entry.get("stop_event"),
-            "result_queue": entry.get("result_queue"),
-            "command_queue": entry.get("command_queue"),
             "video_writer_queue": entry.get("video_writer_queue"),
             "video_writer": self.video_writers.pop(feed_id, None)
         }
@@ -672,8 +758,6 @@ class FeedManager:
             "error_message": None,
             "process": None,
             "stop_event": None,
-            "result_queue": None,
-            "command_queue": None,
             "video_writer_queue": None,
             "timer": None
         })
@@ -690,13 +774,9 @@ class FeedManager:
         feed_id = resources.get("feed_id", "unknown")
         process = resources.get("process")
         stop_event = resources.get("stop_event")
-        result_queue = resources.get("result_queue")
-        command_queue = resources.get("command_queue")
         writer_queue = resources.get("video_writer_queue")
         video_writer = resources.get("video_writer")
         
-        queues = [q for q in [result_queue, command_queue, writer_queue] if q]
-
         # 1. Signal Stop
         if stop_event:
             stop_event.set()
@@ -708,27 +788,7 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error stopping video writer for {feed_id}: {e}")
 
-        # 3. Aggressively drain queues to unblock the worker's put() calls
-        # If the worker is stuck on q.put(), it won't check stop_event until the put succeeds.
-        start_wait = time.time()
-        while process and process.is_alive() and (time.time() - start_wait < PROCESS_JOIN_TIMEOUT):
-            drained_any = False
-            for q in queues:
-                try:
-                    # Drain in chunks
-                    while True:
-                        q.get_nowait()
-                        drained_any = True
-                except (queue.Empty, OSError, ValueError):
-                    pass
-            
-            if not drained_any:
-                await asyncio.sleep(0.1)
-            else:
-                # If we drained something, give the process a tiny bit of CPU time to advance
-                await asyncio.sleep(0.01)
-
-        # 4. Join or Kill
+        # 3. Join or Kill
         if process and process.is_alive():
             try:
                 loop = asyncio.get_running_loop()
@@ -737,75 +797,186 @@ class FeedManager:
                 if process.is_alive():
                     logger.warning(f"Process {process.pid} for {feed_id} hung. Terminating.")
                     process.terminate()
-                    # Wait briefly for termination to take effect
                     await asyncio.sleep(0.5) 
                     
                     if process.is_alive():
-                        logger.error(f"Process {process.pid} failed to terminate. Killing.")
                         process.kill()
             except Exception as e:
                 logger.error(f"Error joining process for {feed_id}: {e}")
 
-        # 5. Close Queues
-        for q in queues:
+        # 4. Close Queues
+        if writer_queue:
             try:
-                q.close()
-                q.cancel_join_thread() # Important: Don't wait for background thread to flush
+                writer_queue.close()
+                writer_queue.cancel_join_thread()
             except Exception:
                 pass
 
     # --- Background Reader ---
 
     async def _read_result_queues(self):
-        logger.info("Result reader task started.")
+        logger.info("Result reader task started (Decoupled Mode).")
         while not self._stop_reader_flag:
             try:
-                # Snapshot active queues to avoid holding lock during processing
-                active_queues = await self._get_active_queues_snapshot()
+                items_buffer = []
+                # Drain Central Output Queue
+                try:
+                    for _ in range(QUEUE_DRAIN_LIMIT):
+                        items_buffer.append(self._central_output_queue.get_nowait())
+                except queue.Empty:
+                    pass
 
-                if not active_queues:
-                    await asyncio.sleep(0.1)
+                if not items_buffer:
+                    # Adaptive sleep when idle
+                    await asyncio.sleep(0.01)
+                    # Still need to handle periodic tasks
+                    await self._handle_periodic_tasks()
                     continue
 
-                processed_any = False
                 feed_ids_to_update = set()
                 
-                # Iterate over snapshot
-                for feed_id, result_q in active_queues:
-                    processed = await self._process_single_queue(feed_id, result_q, feed_ids_to_update)
-                    if processed:
-                        processed_any = True
+                # Process the items
+                async with self._lock:
+                    for item in items_buffer:
+                        feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
+                        
+                        entry = self.process_registry.get(feed_id)
+                        if not entry: continue
 
-                # Broadcast updates if status changed
-                if feed_ids_to_update:
-                    for fid in feed_ids_to_update:
-                        await self._broadcast_feed_update(fid)
-                    await self._broadcast_kpi_update()
+                        if entry["status"] == FeedOperationalStatusEnum.STARTING:
+                            entry["status"] = FeedOperationalStatusEnum.RUNNING
+                            feed_ids_to_update.add(feed_id)
+                            if feed_id in self._feed_running_events:
+                                self._feed_running_events[feed_id].set()
 
-                # Periodic KPI Broadcast
-                now = time.time()
-                if now - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval:
-                    await self._broadcast_kpi_update()
-                    self._last_kpi_broadcast_time = now
+                        # Update Metrics
+                        now = time.time()
+                        metrics["timestamp"] = datetime.now(timezone.utc)
+                        
+                        # Add location data from config
+                        if entry.get("config_info"):
+                            metrics["latitude"] = entry["config_info"].latitude
+                            metrics["longitude"] = entry["config_info"].longitude
+                            metrics["location_name"] = entry["config_info"].name
 
-                # Periodic Resource Check (every 30s)
-                now = time.time()
-                if now - self._last_queue_log_time >= 30.0:
-                    self._last_queue_log_time = now
-                    try:
-                        self._check_resources()
-                    except ResourceLimitError as e:
-                        logger.error(f"Resource limit exceeded during operation: {e}")
+                        entry["latest_metrics"] = metrics
+                        entry["last_frame_time"] = now
+                        if entry.get("timer"):
+                            entry["timer"].tick()
 
-                # Adaptive sleep
-                if processed_any:
-                    await asyncio.sleep(0.001) # Minimal yield
-                else:
-                    await asyncio.sleep(0.01) # Save CPU when idle
+                        # Update History
+                        if "metrics_history" not in entry or not isinstance(entry["metrics_history"], deque):
+                            entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
+                        entry["metrics_history"].append((now, metrics.copy()))
+                        
+                        while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
+                            entry["metrics_history"].popleft()
+
+                        # Distribute Frames to Subscribers (Internal)
+                        if feed_id in self.frame_subscriber_queues:
+                            for sub_q in self.frame_subscriber_queues[feed_id]:
+                                try:
+                                    sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
+                                except asyncio.QueueFull:
+                                    pass
+
+                        # Analytics and Broadcast Throttling
+                        target_fps = self.config.get("video_output", {}).get("fps", 10)
+                        min_interval = 1.0 / target_fps
+                        last_broadcast = entry.get("last_broadcast_time", 0.0)
+                        
+                        if now - last_broadcast >= min_interval:
+                            entry["last_broadcast_time"] = now
+                            # Logic for broadcasting VIDEO_FRAME moved here or handled per item
+                            asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles))
+
+                        # Analytics hook
+                        if self._analytics_service:
+                            asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics))
+
+                # Handle broadcasts and periodic tasks
+                await self._perform_broadcasts(feed_ids_to_update, False, False)
+                await self._handle_periodic_tasks()
+
+                await asyncio.sleep(0.001)
 
             except Exception as e:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
+
+    async def _handle_periodic_tasks(self):
+        now = time.time()
+        # Periodic KPI Broadcast
+        if now - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval:
+            await self._broadcast_kpi_update()
+            self._last_kpi_broadcast_time = now
+
+        # Periodic Resource Check (every 30s)
+        if now - self._last_queue_log_time >= 30.0:
+            self._last_queue_log_time = now
+            try:
+                self._check_resources()
+            except ResourceLimitError as e:
+                logger.error(f"Resource limit exceeded during operation: {e}")
+
+    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles):
+        if not self._connection_manager or not frame_bytes: return
+        
+        loop = asyncio.get_running_loop()
+        try:
+            b64_frame = await loop.run_in_executor(self._cpu_executor, self._encode_frame, frame_bytes)
+            vid_msg = VideoFrameData(
+                feed_id=feed_id, frame_index=frame_idx,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                frame=b64_frame, metrics=metrics, vehicles=vehicles
+            )
+            msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
+            subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
+            for client_id in subscribed_client_ids:
+                await self._connection_manager.send_realtime_message(msg_json, client_id)
+        except Exception as e:
+            logger.error(f"Broadcast error for {feed_id}: {e}")
+
+    async def _watchdog_loop(self):
+        """Periodically checks if processing workers are alive and responsive."""
+        logger.info("Watchdog task started.")
+        # Load intervals from config with sensible defaults
+        check_interval = self.config.get("watchdog", {}).get("check_interval_seconds", 30)
+        hang_threshold = self.config.get("watchdog", {}).get("hang_threshold_seconds", 60)
+        
+        while not self._stop_reader_flag:
+            try:
+                await asyncio.sleep(check_interval)
+                
+                feeds_to_restart = []
+                async with self._lock:
+                    for feed_id, entry in self.process_registry.items():
+                        # We only monitor feeds that are supposed to be running
+                        if entry["status"] == FeedOperationalStatusEnum.RUNNING:
+                            process = entry.get("process")
+                            last_frame_time = entry.get("last_frame_time", 0)
+                            now = time.time()
+                            
+                            # Check 1: Is process alive?
+                            if process and not process.is_alive():
+                                logger.warning(f"Watchdog: Feed '{feed_id}' process (PID {process.pid}) is dead. Queuing restart.")
+                                feeds_to_restart.append(feed_id)
+                            
+                            # Check 2: Is it hung? (Alive but not producing results)
+                            elif last_frame_time > 0 and (now - last_frame_time) > hang_threshold:
+                                logger.warning(f"Watchdog: Feed '{feed_id}' is hung (no frames for {now - last_frame_time:.1f}s). Queuing restart.")
+                                feeds_to_restart.append(feed_id)
+
+                for feed_id in feeds_to_restart:
+                    try:
+                        logger.info(f"Watchdog: Restarting feed '{feed_id}'...")
+                        # start_feed will handle cleanup of existing resources via _detach_resources
+                        await self.start_feed(feed_id)
+                    except Exception as e:
+                        logger.error(f"Watchdog: Failed to restart feed '{feed_id}': {e}")
+                        
+            except Exception as e:
+                logger.error(f"Error in watchdog loop: {e}", exc_info=True)
 
     async def _get_active_queues_snapshot(self):
         """Get list of (feed_id, queue) without holding lock long-term."""
@@ -849,14 +1020,30 @@ class FeedManager:
                     self._feed_running_events[feed_id].set()
 
             for item in items_buffer:
-                _fid, frame_idx, frame_bytes, metrics, vehicles, _ = item
+                _fid, frame_idx, frame_bytes, metrics, vehicles, extra = item
 
+                # Handle Special Message Types from Worker
+                if extra and extra.get("type") == "snapshot":
+                    inc_id = extra.get("incident_id")
+                    path = extra.get("path")
+                    # Update the incident in DB with the snapshot path
+                    if self._analytics_service and inc_id:
+                        asyncio.create_task(self._analytics_service.update_incident_snapshot(inc_id, path))
+                    continue
 
                 processed = True
                 
                 # Update Metrics
                 metrics["timestamp"] = datetime.now(timezone.utc)
+                
+                # Add location data from config
+                if entry.get("config_info"):
+                    metrics["latitude"] = entry["config_info"].latitude
+                    metrics["longitude"] = entry["config_info"].longitude
+                    metrics["location_name"] = entry["config_info"].name
+
                 entry["latest_metrics"] = metrics
+                entry["last_frame_time"] = time.time()
                 if entry.get("timer"):
                     entry["timer"].tick()
 
@@ -881,6 +1068,42 @@ class FeedManager:
                 # Analytics hook (for every frame)
                 if self._analytics_service:
                     asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics))
+                    
+                    # Auto-generate incidents from anomalies
+                    if metrics.get("is_congested") or metrics.get("stopped_vehicles", 0) > 5:
+                        from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum
+                        
+                        inc_type = IncidentTypeEnum.CONGESTION if metrics.get("is_congested") else IncidentTypeEnum.STOPPED_VEHICLE
+                        severity = IncidentSeverityEnum.MEDIUM
+                        
+                        # Escalate severity based on metrics
+                        if metrics.get("congestion_score", 0) > 80 or metrics.get("stopped_vehicles", 0) > 10:
+                            severity = IncidentSeverityEnum.HIGH
+                        
+                        description = f"Automated {inc_type.value} detection on {feed_id}. "
+                        if inc_type == IncidentTypeEnum.CONGESTION:
+                            description += f"Congestion score: {metrics.get('congestion_score')}%."
+                        else:
+                            description += f"{metrics.get('stopped_vehicles')} stopped vehicles detected."
+
+                        location = {
+                            "latitude": metrics.get("latitude"),
+                            "longitude": metrics.get("longitude"),
+                            "name": metrics.get("location_name")
+                        }
+                        
+                        # We use a simple throttling mechanism to avoid spamming incidents for the same feed
+                        last_inc_time = entry.get("last_incident_time", 0)
+                        if now - last_inc_time > 300: # 5 minute cooldown per feed
+                            entry["last_incident_time"] = now
+                            asyncio.create_task(self._analytics_service._create_and_save_incident(
+                                location=location,
+                                incident_type=inc_type,
+                                severity=severity,
+                                description=description,
+                                source_feed_id=feed_id,
+                                details=metrics
+                            ))
 
                 last_item = item
 
@@ -925,7 +1148,8 @@ class FeedManager:
                     # Get subscribers for this specific feed
                     subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
                     if subscribed_client_ids:
-                        logger.info(f"Broadcasting VIDEO_FRAME for {feed_id} to {len(subscribed_client_ids)} clients. Frame: {frame_idx}")
+                        # logger.debug(f"Broadcasting VIDEO_FRAME for {feed_id} to {len(subscribed_client_ids)} clients. Frame: {frame_idx}")
+                        pass
                     
                     # Use send_realtime_message (fire-and-forget / drop-if-full) for video frames
                     # to prevent slow clients from blocking the feed manager.
@@ -1124,11 +1348,17 @@ class FeedManager:
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
         
-
-
         await self.stop_all_feeds()
+        await self._stop_inference_pool()
+        
+        tasks = []
         if self._result_reader_task:
-            await asyncio.wait([self._result_reader_task], timeout=5.0)
+            tasks.append(self._result_reader_task)
+        if self._watchdog_task:
+            tasks.append(self._watchdog_task)
+            
+        if tasks:
+            await asyncio.wait(tasks, timeout=5.0)
 
     # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
 

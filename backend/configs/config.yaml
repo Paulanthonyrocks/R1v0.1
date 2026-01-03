@@ -305,6 +305,10 @@ database:
     confidence: REAL
     car_model: TEXT
     car_color: TEXT
+mongodb:
+  # Use 'mongodb://mongodb:27017/' when running in Docker with the mongodb service
+  uri: "mongodb://localhost:27017/"
+  database_name: "traffic_hub"
 feed_manager:
   max_concurrent_feeds: 10
   db_write_interval: 0.5

@@ -16,12 +16,16 @@ from concurrent.futures import ThreadPoolExecutor
 try:
     from ..utils.image_processing import LicensePlatePreprocessor
     from ..utils.lane_detection import process_frame_for_lanes, get_lane_boundaries_from_lines
+    from ..utils.local_ocr import LocalOCR
+    from ..ml.reid_model import ReIDEmbedder
     # from ..ml.segmentation.edgetam import EdgeTAMSegmenter
 except ImportError:
     print("Error importing utils for CoreModule. Ensure utils.py is accessible.")
     LicensePlatePreprocessor = None
     process_frame_for_lanes = None
     get_lane_boundaries_from_lines = None
+    LocalOCR = None
+    ReIDEmbedder = None
     # EdgeTAMSegmenter = None
 
 # Logging setup
@@ -139,6 +143,9 @@ class CoreModule:
         
         # Initialize OCR executor as instance attribute
         self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+        self.ocr_results_queue = queue.Queue()
+        self.local_ocr = None
+        self.reid_embedder = None
 
         # Configuration parameters from config
         self.vehicle_class_ids = config["vehicle_detection"].get(
@@ -191,15 +198,35 @@ class CoreModule:
         self.last_lane_detection_frame = -1
         self.cached_lane_boundaries = None
 
-        # Initialize OCR Preprocessor
-        if self.ocr_cfg.get("enabled", False) and self.gemini_api_key:
+        # Initialize OCR Preprocessor (Gemini)
+        if self.ocr_cfg.get("enabled", False) and self.gemini_api_key and self.ocr_cfg.get("use_gemini_ocr", False):
             try:
                 self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
             except Exception as e:
                 logger.error(f"Failed to initialize LicensePlatePreprocessor: {e}")
                 self.preprocessor = None
-        else:
-            logger.info("OCR engine disabled or Gemini API key not provided.")
+        
+        # Initialize Local OCR (EasyOCR)
+        if self.ocr_cfg.get("enabled", False) and (self.ocr_cfg.get("use_local", True) or not self.gemini_api_key):
+            try:
+                if LocalOCR:
+                    self.local_ocr = LocalOCR(self.config)
+                else:
+                    logger.warning("LocalOCR class not found, skipping local OCR initialization.")
+            except Exception as e:
+                logger.error(f"Failed to initialize LocalOCR: {e}")
+                self.local_ocr = None
+
+        if not self.preprocessor and not self.local_ocr:
+            logger.info("No OCR engine (Gemini or Local) enabled or initialized.")
+
+        # Initialize ReID Embedder
+        if self.config.get("vehicle_detection", {}).get("reid_enabled", True):
+            try:
+                self.reid_embedder = ReIDEmbedder(self.config)
+            except Exception as e:
+                logger.error(f"Failed to initialize ReIDEmbedder: {e}")
+                self.reid_embedder = None
 
         # Load Model
         try:
@@ -325,6 +352,9 @@ class CoreModule:
         )
         current_time = time.time()
         
+        # Process asynchronous OCR results from previous frames
+        self._process_ocr_results()
+
         # Use a low threshold for detection to allow ByteTrack-like association (matching low-conf detections to existing tracks)
         LOW_CONF_THRESHOLD = 0.1
 
@@ -704,6 +734,7 @@ class CoreModule:
                         "estimated_pixels_per_meter": data.get("estimated_pixels_per_meter"),
                         "direction": data.get("direction", "N/A"),
                         "acceleration": data.get("acceleration"),
+                        "embedding": data.get("embedding"),
                     })
                     
                     # Persistent Identification
@@ -857,6 +888,19 @@ class CoreModule:
         # Behavior analysis (stopped, speeding, accelerating, changing lane)
         self._analyze_behavior(track)  # Classify based on new speed/state
 
+        # ReID Embeddings
+        reid_interval = self.config.get("vehicle_detection", {}).get("reid_interval_frames", 60)
+        if self.reid_embedder and (track.get("embedding") is None or frame_index % reid_interval == 0):
+            x1, y1, x2, y2 = map(int, bbox)
+            h, w = frame.shape[:2]
+            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            if crop.size > 0:
+                # We'll run embedding extraction in the main worker thread for now
+                # but could offload to pool if too slow
+                embedding = self.reid_embedder.get_embedding(crop)
+                if embedding is not None:
+                    track["embedding"] = embedding.tolist() # Make serializable
+
         # OCR for license plates
         ocr_interval_frames = self.ocr_cfg.get("interval_frames", 30)
         max_ocr_attempts = self.ocr_cfg.get("max_attempts", 3)
@@ -914,22 +958,16 @@ class CoreModule:
     def _run_ocr(self, frame: np.ndarray, track_id: str, bbox: List[int]):
         """
         Modified signature: Pass track_id and bbox copy, not the whole track dict.
+        Runs in a background thread. Puts results into a queue for the main thread.
         """
-        plate_text = self._ocr_license_plate(frame, bbox)
-        
-        # Filter out error messages
-        if plate_text and not plate_text.startswith("Unknown"):
-            # Thread Safety: Check if track still exists before updating
-            if track_id in self.vehicle_data:
-                self.vehicle_data[track_id]["license_plate"] = plate_text
-                self.vehicle_data[track_id]["plate_attempts"] = self.vehicle_data[track_id].get("plate_attempts", 0) + 1
-                logger.info(f"OCR Success for {track_id}: {plate_text}")
-            else:
-                logger.debug(f"OCR finished for {track_id} but track is gone.")
-        else:
-            # Increment attempts even on failure if track exists
-            if track_id in self.vehicle_data:
-                self.vehicle_data[track_id]["plate_attempts"] = self.vehicle_data[track_id].get("plate_attempts", 0) + 1
+        try:
+            plate_text = self._ocr_license_plate(frame, bbox)
+            self.ocr_results_queue.put({
+                "track_id": track_id,
+                "plate_text": plate_text
+            })
+        except Exception as e:
+            logger.error(f"Error in _run_ocr thread for {track_id}: {e}")
 
     def _get_dynamic_pixels_per_meter(self, y_pixel: float) -> float:
         # Placeholder for dynamic PPM logic (e.g., using perspective transform)
@@ -958,6 +996,32 @@ class CoreModule:
         #     behavior = "changing lane"
             
         track["behavior"] = behavior
+
+    def _process_ocr_results(self):
+        """
+        Drains the OCR results queue and updates vehicle data in the main thread.
+        This prevents race conditions on self.vehicle_data.
+        """
+        try:
+            while True:
+                result = self.ocr_results_queue.get_nowait()
+                track_id = result["track_id"]
+                plate_text = result["plate_text"]
+                
+                if track_id in self.vehicle_data:
+                    track = self.vehicle_data[track_id]
+                    
+                    if plate_text and not plate_text.startswith("Unknown"):
+                        track["license_plate"] = plate_text
+                        track["plate_attempts"] = track.get("plate_attempts", 0) + 1
+                        logger.info(f"OCR Success for {track_id}: {plate_text}")
+                    else:
+                        track["plate_attempts"] = track.get("plate_attempts", 0) + 1
+                else:
+                    logger.debug(f"OCR result received for expired track {track_id}")
+                    
+        except queue.Empty:
+            pass
 
     def _get_lane_for_vehicle(self, centroid: Tuple[float, float], lane_boundaries: List[Tuple]) -> int:
         cx, _ = centroid
@@ -989,6 +1053,16 @@ class CoreModule:
             logger.warning(f"Empty plate image for OCR: {bbox}")
             return "Unknown (Empty Image)"
 
+        # Prefer Local OCR if enabled
+        if self.local_ocr:
+            try:
+                result = self.local_ocr.read_plate(plate_image)
+                if result:
+                    return result
+            except Exception as e:
+                logger.error(f"Local OCR failed: {e}")
+
+        # Fallback to Gemini if configured
         if self.preprocessor:
             try:
                 # The preprocessor expects RGB, but the frame passed is already RGB because of _preprocess_frame
@@ -999,8 +1073,9 @@ class CoreModule:
                 ocr_result = self.preprocessor.process_image(plate_image_rgb)
                 return ocr_result
             except Exception as e:
-                logger.error(f"OCR failed for bbox {bbox}: {e}")
+                logger.error(f"Gemini OCR failed for bbox {bbox}: {e}")
                 return f"Unknown (OCR Error: {e})"
+        
         return "Unknown (No Preprocessor)"
 
     def _is_roi_optimal_for_ocr(self, bbox: List[int]) -> bool:

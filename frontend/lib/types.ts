@@ -114,6 +114,7 @@ export interface CongestionNodeProps {
 
 export interface SurveillanceFeedProps {
   feed: FeedStatusData; // Primary prop is now the feed object
+  minimalControls?: boolean;
 }
 export interface LegendItemProps { color: string; text: string; }
 export interface PageLayoutProps { title?: string; children: React.ReactNode; className?: string; }

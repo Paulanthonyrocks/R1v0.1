@@ -70,26 +70,35 @@ class AggregatedTrafficTrend(BaseModel):
 
 
 class IncidentTypeEnum(str, enum.Enum):
-    CONGESTION = "congestion"
-    ACCIDENT = "accident"
-    STOPPED_VEHICLE = "stopped_vehicle"
-    ROAD_WORK = "road_work"
-    WEATHER_HAZARD = "weather_hazard"
-    OTHER = "other"
+    ACCIDENT = "ACCIDENT"
+    STALLED_VEHICLE = "STALLED_VEHICLE"
+    STOPPED_VEHICLE = "STOPPED_VEHICLE" # Keep for backward compatibility with my recent change
+    DEBRIS = "DEBRIS"
+    ILLEGAL_PARKING = "ILLEGAL_PARKING"
+    WRONG_WAY = "WRONG_WAY"
+    PEDESTRIAN_HAZARD = "PEDESTRIAN_HAZARD"
+    TRAFFIC_JAM = "TRAFFIC_JAM"
+    CONGESTION = "CONGESTION"
+    ROAD_WORK = "ROAD_WORK"
+    WEATHER_HAZARD = "WEATHER_HAZARD"
+    OTHER = "OTHER"
 
 
 class IncidentSeverityEnum(str, enum.Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 
 class IncidentStatusEnum(str, enum.Enum):
-    ACTIVE = "active"
-    CLEARED = "cleared"
-    INVESTIGATING = "investigating"
-    REPORTED = "reported"  # Initial status when first logged
+    NEW = "NEW"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    INVESTIGATING = "INVESTIGATING"
+    RESOLVED = "RESOLVED"
+    CLEARED = "CLEARED" # match old enum if needed
+    FALSE_ALARM = "FALSE_ALARM"
+    REPORTED = "REPORTED" # match old enum if needed
 
 
 class IncidentReport(BaseModel):

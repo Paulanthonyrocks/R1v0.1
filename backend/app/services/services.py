@@ -13,6 +13,9 @@ from app.services.weather_service import WeatherService
 from app.services.event_service import EventService
 from app.database import get_database_manager
 from app.services.analytics_service import AnalyticsService
+from app.services.analytics_service_pro import AdvancedAnalyticsService
+from app.services.retention import RetentionService
+from app.services.notification_service import NotificationService
 from app.ml.traffic_predictor import TrafficPredictor # Import TrafficPredictor
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,9 @@ _route_optimization_service_instance: Optional[RouteOptimizationService] = None
 _personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
 _weather_service_instance: Optional[WeatherService] = None
 _event_service_instance: Optional[EventService] = None
+_retention_service_instance: Optional[RetentionService] = None
+_notification_service_instance: Optional[NotificationService] = None
+_advanced_analytics_service_instance: Optional[AdvancedAnalyticsService] = None
 
 
 async def initialize_services(
@@ -42,6 +48,9 @@ async def initialize_services(
         _personalized_routing_service_instance, \
         _weather_service_instance, \
         _event_service_instance, \
+        _retention_service_instance, \
+        _notification_service_instance, \
+        _advanced_analytics_service_instance, \
         connection_manager_instance
 
     connection_manager_instance = connection_manager
@@ -59,6 +68,12 @@ async def initialize_services(
         config=config.get("traffic_signal_service", {}),
         connection_manager=connection_manager,
     )
+
+    # Initialize NotificationService
+    _notification_service_instance = NotificationService(
+        config=config.get("notifications", {})
+    )
+
     # Pass db_manager to AnalyticsService
     try:
         from app.services.analytics_service import AnalyticsService
@@ -81,6 +96,8 @@ async def initialize_services(
             connection_manager=connection_manager,
             database_manager=db_manager,
             traffic_predictor=loaded_traffic_predictor, # Pass the loaded predictor
+            traffic_signal_service=_traffic_signal_service_instance,
+            notification_service=_notification_service_instance,
         )
         logger.info("AnalyticsService initialized successfully in services.py.")
         print(
@@ -151,6 +168,20 @@ async def initialize_services(
         logger.error(f"Failed to initialize EventService: {e}")
         _event_service_instance = None
 
+    # Initialize and start RetentionService
+    try:
+        _retention_service_instance = RetentionService(config=config)
+        _retention_service_instance.start()
+        logger.info("RetentionService initialized and started successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize RetentionService: {e}")
+        _retention_service_instance = None
+
+    # Initialize Advanced Analytics Service (Pro)
+    if db_manager:
+        _advanced_analytics_service_instance = AdvancedAnalyticsService(db_manager=db_manager)
+        logger.info("AdvancedAnalyticsService (Pro) initialized successfully.")
+
     logger.info("Application services initialized.")
 
 
@@ -181,6 +212,13 @@ def get_analytics_service() -> AnalyticsService:  # New getter
         logger.error("AnalyticsService accessed before initialization!")
         raise RuntimeError("AnalyticsService not initialized.")
     return _analytics_service_instance
+
+
+def get_advanced_analytics_service() -> AdvancedAnalyticsService:
+    if _advanced_analytics_service_instance is None:
+        logger.error("AdvancedAnalyticsService accessed before initialization!")
+        raise RuntimeError("AdvancedAnalyticsService not initialized.")
+    return _advanced_analytics_service_instance
 
 
 def get_route_optimization_service() -> RouteOptimizationService:
@@ -240,6 +278,10 @@ async def shutdown_services():  # Make async for feed manager shutdown
         logger.info("Shutting down AnalyticsService background tasks...")
         await _analytics_service_instance.stop_background_tasks()
         _analytics_service_instance = None
+
+    if _notification_service_instance:
+        await _notification_service_instance.close()
+        _notification_service_instance = None
 
     # Clear route optimization service
     _route_optimization_service_instance = None

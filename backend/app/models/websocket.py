@@ -144,6 +144,10 @@ class VideoFrameData(BaseModel):
 class InitialFeedStatusesData(BaseModel):
     feeds: List[FeedStatusData]
 
+class UpdateFeedConfigData(BaseModel):
+    feed_id: str
+    updates: Dict[str, Any]
+
 # --- 5. WebSocket Message Wrapper ---
 
 class WebSocketMessageTypeEnum(str, enum.Enum):
@@ -176,6 +180,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     TOKEN_REFRESH_REQUEST = "token_refresh_request"
     
     # Feed Control (Incoming to Backend)
+    UPDATE_FEED_CONFIG = "update_feed_config"
     REFRESH_FEED = "refresh_feed"
     RESTART_FEED = "restart_feed"
     START_FEED = "start_feed"
@@ -183,6 +188,9 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
     UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
+    
+    # Snapshot / Incident Notifications
+    SNAPSHOT_READY = "snapshot_ready"
     
     # Internal
     INTERNAL_PING = "__internal_ping"
