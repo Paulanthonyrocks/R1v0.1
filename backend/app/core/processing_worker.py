@@ -28,6 +28,8 @@ except ImportError as e:
     logger.error(f"Error importing CoreModule in processing_worker: {e}")
     CoreModule = None
 
+from ..utils.process import start_parent_monitor
+
 # --- Helpers ---
 def _make_serializable(obj):
     if isinstance(obj, (np.integer, np.int64, np.int32)):
@@ -141,65 +143,7 @@ def process_video(
     logger.info(f"Process {pid} started for {feed_id}")
 
     # --- Parent Monitoring (Anti-Zombie) ---
-    def _monitor_parent(stop_evt, orig_ppid):
-        # Allow brief startup grace period
-        time.sleep(2.0)
-        
-        while not stop_evt.is_set():
-            try:
-                curr_ppid = os.getppid()
-                parent_dead = False
-                
-                if curr_ppid != orig_ppid:
-                    parent_dead = True
-                else:
-                    try:
-                         # Signal 0 checks if process exists and we can send signals
-                         os.kill(orig_ppid, 0)
-                    except OSError:
-                         parent_dead = True
-                
-                if parent_dead:
-                    # Parent is gone. We must die.
-                    stop_evt.set()
-                    
-                    # Log attempt (might fail if pipes broken)
-                    try:
-                        logger.warning(f"[{feed_id}] Parent {orig_ppid} gone (curr: {curr_ppid}). Initiating shutdown.")
-                    except:  # noqa: E722
-                        pass
-                    
-                    # Give the main loop a moment to see stop_evt and exit cleanly
-                    time.sleep(3.0)
-                    
-                    # If we are still here, force exit
-                    try:
-                        logger.warning(f"[{feed_id}] Force terminating self (parent gone).")
-                    except:  # noqa: E722
-                        pass
-                        
-                    # 1. Try SIGTERM first
-                    os.kill(os.getpid(), signal.SIGTERM)
-                    time.sleep(1.0)
-                    
-                    # 2. SIGKILL if still alive
-                    os.kill(os.getpid(), signal.SIGKILL)
-                    break
-                    
-            except (Exception) as e: # Catch all exceptions to prevent the monitor thread from crashing
-                # Should not happen, but if monitor fails, we default to safety
-                try:
-                    logger.error(f"[{feed_id}] Monitor thread error: {e}")
-                except:  # noqa: E722
-                    pass
-                # Don't kill immediately on glitch, but sleep and retry or exit?
-                # For safety, if monitoring is broken, maybe we should exit.
-                # But let's just log for now to avoid premature death on transient errors.
-                
-            time.sleep(1.0)
-
-    parent_monitor = threading.Thread(target=_monitor_parent, args=(stop_event, os.getppid()), daemon=True)
-    parent_monitor.start()
+    start_parent_monitor(stop_event, feed_id)
 
     # --- Config Extraction (Optimization) ---
     vehicle_det_cfg = config.get("vehicle_detection", {})

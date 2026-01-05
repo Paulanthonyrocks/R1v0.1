@@ -20,6 +20,15 @@ class GlobalReIDManager:
         self.local_to_global: Dict[str, Dict[str, str]] = {}
         
         self.global_counter = 1
+        self.last_cleanup_time = 0
+
+    def get_global_id(self, feed_id: str, local_id: str) -> Optional[str]:
+        """Fast lookup for an already mapped local ID."""
+        if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
+            gid = self.local_to_global[feed_id][local_id]
+            if gid in self.gallery:
+                return gid
+        return None
 
     def match_or_register(self, feed_id: str, local_id: str, embedding: np.ndarray, metadata: dict) -> str:
         """
@@ -43,7 +52,9 @@ class GlobalReIDManager:
         best_score = -1
         
         # Periodic cleanup of gallery
-        self._cleanup()
+        if now - self.last_cleanup_time > 60:
+            self._cleanup()
+            self.last_cleanup_time = now
 
         for gid, entry in self.gallery.items():
             # Don't match against itself if it was recently seen in the same feed (handled by local tracking usually)

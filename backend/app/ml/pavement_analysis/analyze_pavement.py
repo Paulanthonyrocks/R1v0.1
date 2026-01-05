@@ -25,9 +25,6 @@ from .analysis_modules import (
 )
 
 # Initialize logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(module)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 # Initialize thread pool for CPU-intensive operations
@@ -37,27 +34,38 @@ thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
 CALIBRATION_FILE_PATH = "./calibration_params.npz"
 # -------------------
 
-# Load ML model once at module level
-ml_model = load_ml_model()
+# Module-level variables to hold loaded models and parameters
+_ml_model = None
+_calibration_params: Optional[Dict[str, Any]] = None
+_params_initialized = False
 
-# Load camera calibration parameters once at module level
-calibration_params: Optional[Dict[str, Any]] = None
-if os.path.exists(CALIBRATION_FILE_PATH):
-    try:
-        calibration_params = load_calibration_params(CALIBRATION_FILE_PATH)
-        logger.info(
-            f"Successfully loaded camera calibration parameters from {CALIBRATION_FILE_PATH}"
-        )
-    except Exception as e:
-        logger.error(
-            f"Failed to load camera calibration parameters from {CALIBRATION_FILE_PATH}: {e}",
-            exc_info=True,
-        )
-        calibration_params = None
-else:
-    logger.warning(
-        f"Camera calibration file not found at {CALIBRATION_FILE_PATH}. Proceeding without specific calibration."
-    )
+def get_ml_model():
+    global _ml_model
+    if _ml_model is None:
+        _ml_model = load_ml_model()
+    return _ml_model
+
+def get_calibration_params():
+    global _calibration_params, _params_initialized
+    if not _params_initialized:
+        if os.path.exists(CALIBRATION_FILE_PATH):
+            try:
+                _calibration_params = load_calibration_params(CALIBRATION_FILE_PATH)
+                logger.info(
+                    f"Successfully loaded camera calibration parameters from {CALIBRATION_FILE_PATH}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to load camera calibration parameters from {CALIBRATION_FILE_PATH}: {e}",
+                    exc_info=True,
+                )
+                _calibration_params = None
+        else:
+            logger.warning(
+                f"Camera calibration file not found at {CALIBRATION_FILE_PATH}. Proceeding without specific calibration."
+            )
+        _params_initialized = True
+    return _calibration_params
 
 
 async def _run_in_executor(func, *args):
@@ -89,6 +97,10 @@ async def analyze_pavement_image(
 
         img_height, img_width = original_image.shape[:2]
         logger.debug(f"Image dimensions: {img_width}x{img_height}")
+
+        # Lazy load calibration and model
+        calibration_params = get_calibration_params()
+        ml_model = get_ml_model()
 
         # Define storage paths
         config = {

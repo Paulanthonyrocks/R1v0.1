@@ -5,6 +5,8 @@ import uuid
 import multiprocessing
 from contextlib import asynccontextmanager
 from pathlib import Path
+import os
+from fastapi.staticfiles import StaticFiles
 
 # Ensure spawn method for multiprocessing compatibility
 try:
@@ -197,6 +199,14 @@ async def lifespan(app: FastAPI):
     
     if hasattr(app.state, "health_service"):
         await app.state.health_service.stop()
+    
+    # Use centralized shutdown for all services
+    try:
+        from app.services import shutdown_services
+        await shutdown_services()
+        logger.info("Application services shut down successfully.")
+    except Exception as e:
+        logger.error(f"Error during services shutdown: {e}")
         
     await close_database()
     logger.info("Database connection closed.")
@@ -291,9 +301,6 @@ app.add_middleware(
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(RateLimitMiddleware, limit=60, window=60)
 
-from fastapi.staticfiles import StaticFiles
-import os
-
 # --- Routers ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
 app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
@@ -317,6 +324,14 @@ os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
 
 # --- Utility Endpoints ---
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to Route One Traffic Management Hub API",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "Route One Backend"}

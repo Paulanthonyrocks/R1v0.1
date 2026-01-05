@@ -7,7 +7,6 @@ from pymongo.collection import Collection
 import pandas as pd
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def get_average_traffic_data(db_collection: Collection, sensor_ids: List[str], start_time: datetime, end_time: datetime) -> Dict[str, Optional[float]]:

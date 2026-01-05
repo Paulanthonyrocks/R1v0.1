@@ -257,6 +257,61 @@ class TestCoreModule(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("lost_1", self.core_module.vehicle_data)
         self.assertNotIn("lost_2", self.core_module.vehicle_data)
 
+    async def test_reid_rate_limiting(self):
+        # Setup
+        self.core_module.max_reid_per_frame = 1
+        self.core_module.reid_embedder = MagicMock()
+        self.core_module.reid_embedder.get_embedding.return_value = np.zeros(128)
+        
+        # Create 2 tracks that need ReID update (embedding is None)
+        track1 = {
+            "vehicle_id": "vehicle_1",
+            "bbox": [0,0,10,10],
+            "centroid": (5,5),
+            "kalman_filter": MagicMock(x=np.array([[5],[5],[0],[0]]), predict=MagicMock(), update=MagicMock()),
+            "status": "active",
+            "last_seen": time.time(),
+            "embedding": None
+        }
+        track2 = {
+            "vehicle_id": "vehicle_2",
+            "bbox": [20,20,30,30],
+            "centroid": (25,25),
+            "kalman_filter": MagicMock(x=np.array([[25],[25],[0],[0]]), predict=MagicMock(), update=MagicMock()),
+            "status": "active",
+            "last_seen": time.time(),
+            "embedding": None
+        }
+        self.core_module.vehicle_data = {
+            "vehicle_1": track1,
+            "vehicle_2": track2
+        }
+
+        detections = [
+            ([0,0,10,10], 0.9, 2), # Matches vehicle_1
+            ([20,20,30,30], 0.9, 2) # Matches vehicle_2
+        ]
+        current_time = time.time()
+        
+        self.core_module._reid_updates_this_frame = 0
+        
+        # Mock cost matrix to ensure simple association 0->0, 1->1
+        # Cost matrix: rows=detections, cols=tracks
+        # det0->track0 (cost 0), det1->track1 (cost 0)
+        cost_matrix = np.array([
+            [0.1, 100.0],
+            [100.0, 0.1]
+        ])
+        
+        with patch.object(self.core_module, '_calculate_cost_matrix', return_value=cost_matrix):
+             self.core_module._update_tracks(self.dummy_frame, detections, 100, current_time, 0, 0.4)
+             
+        # Verify
+        self.assertEqual(self.core_module.reid_embedder.get_embedding.call_count, 1)
+        # One should have embedding, one should not
+        embeddings_count = sum(1 for t in self.core_module.vehicle_data.values() if t.get("embedding") is not None)
+        self.assertEqual(embeddings_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ from app.utils.database import DatabaseManager
 from pydantic import BaseModel
 from datetime import datetime
 
-router = APIRouter(prefix="/vehicles", tags=["Vehicles"])
+router = APIRouter(tags=["Vehicles"])
 
 class IdentifiedVehicleResponse(BaseModel):
     license_plate: str

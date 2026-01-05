@@ -109,6 +109,7 @@ class FeedManager:
         self._central_input_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
         self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
         self._inference_pool: List[Process] = []
+        self._inference_command_queues: List[MPQueue] = []
         self._inference_stop_event = Event()
         self._start_inference_pool()
 
@@ -130,14 +131,25 @@ class FeedManager:
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
         logger.info("FeedManager executing atexit cleanup...")
+        
+        # 1. Cleanup Registry (Ingestion Workers)
         for feed_id, entry in list(self.process_registry.items()):
             process = entry.get("process")
             if process and process.is_alive():
-                logger.info(f"Terminating process {process.pid} for {feed_id} in atexit")
+                logger.info(f"Terminating ingestion process {process.pid} for {feed_id} in atexit")
                 process.terminate()
                 process.join(timeout=0.5)
                 if process.is_alive():
                     process.kill()
+
+        # 2. Cleanup Inference Pool
+        for p in self._inference_pool:
+            if p.is_alive():
+                logger.info(f"Terminating inference process {p.pid} in atexit")
+                p.terminate()
+                p.join(timeout=0.5)
+                if p.is_alive():
+                    p.kill()
 
 
 
@@ -158,6 +170,8 @@ class FeedManager:
     async def _read_db_queue(self):
         """Task to process database write requests from all workers."""
         logger.info("Database queue reader task started.")
+        import numpy as np # Move import out of loop
+        
         while not self._stop_reader_flag:
             try:
                 items = []
@@ -183,22 +197,26 @@ class FeedManager:
                     for item in items:
                         msg_type = item.get("type", "vehicle_data")
                         if msg_type == "vehicle_data":
-                            # Handle ReID mapping if embedding present
+                            # Handle ReID mapping
+                            feed_id = item.get("feed_id", "unknown")
+                            local_id = item.get("vehicle_id", "unknown")
                             embedding = item.get("embedding")
+                            
                             if embedding:
-                                import numpy as np
                                 # Convert back to numpy array for matching
                                 emb_np = np.array(embedding, dtype=np.float32)
                                 global_id = self._reid_manager.match_or_register(
-                                    feed_id=item.get("feed_id", "unknown"),
-                                    local_id=item.get("vehicle_id", "unknown"),
+                                    feed_id=feed_id,
+                                    local_id=local_id,
                                     embedding=emb_np,
                                     metadata={"class_name": item.get("class_name")}
                                 )
                                 item["global_vehicle_id"] = global_id
-                                # We don't want to save the large embedding to SQLite usually
-                                # unless needed for specific research.
-                                # del item["embedding"] 
+                            else:
+                                # Try fast lookup for already mapped tracks
+                                global_id = self._reid_manager.get_global_id(feed_id, local_id)
+                                if global_id:
+                                    item["global_vehicle_id"] = global_id
                             
                             tracking_batch.append(item)
                         elif msg_type == "identified_vehicle":
@@ -268,13 +286,19 @@ class FeedManager:
     def _start_inference_pool(self):
         pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         logger.info(f"Starting Inference Pool with {pool_size} workers.")
+        self._inference_command_queues = [MPQueue(maxsize=100) for _ in range(pool_size)]
         for i in range(pool_size):
+            print(f"DEBUG: Starting InferenceWorker-{i}")
+            print(f"DEBUG: type(self.config)={type(self.config)}")
+            print(f"DEBUG: type(self._inference_stop_event)={type(self._inference_stop_event)}")
+            print(f"DEBUG: type(self._inference_command_queues[i])={type(self._inference_command_queues[i])}")
             p = Process(
                 target=inference_worker,
                 args=(
                     i,
                     self._central_input_queue,
                     self._central_output_queue,
+                    self._inference_command_queues[i],
                     self._inference_stop_event,
                     self.config,
                     self._db_queue
@@ -309,6 +333,7 @@ class FeedManager:
                     p.kill()
         
         self._inference_pool = []
+        self._inference_command_queues = []
 
     def _initialize_available_feeds(self):
         self._load_persisted_feeds()
@@ -459,22 +484,30 @@ class FeedManager:
                 
                 self._save_persisted_feeds()
                 
-                # If the feed is running, signal the worker via command_queue
+                # If the feed is running, signal the inference workers via command queues (broadcast)
                 if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
-                    command_queue = entry.get("command_queue")
-                    if command_queue:
-                        try:
-                            command_queue.put_nowait({
-                                "type": "config_update", 
-                                "data": update_data
-                            })
-                            logger.info(f"Sent config update to worker for feed {feed_id}")
-                        except queue.Full:
-                            logger.warning(f"Command queue full for feed {feed_id}, skipping config update.")
-                        except Exception as e:
-                            logger.error(f"Failed to send config update to worker {feed_id}: {e}")
+                    await self._send_config_to_workers(feed_id, update_data)
 
         await self._broadcast_feed_update(feed_id)
+
+    async def _send_config_to_workers(self, feed_id: str, config_data: Dict[str, Any]):
+        """Helper to send config update to inference pool via broadcast command queues."""
+        cmd = {
+            "type": "config_update",
+            "feed_id": feed_id,
+            "data": config_data
+        }
+        sent_count = 0
+        for i, q in enumerate(self._inference_command_queues):
+            try:
+                q.put_nowait(cmd)
+                sent_count += 1
+            except queue.Full:
+                logger.warning(f"Inference command queue {i} full, config update might be delayed.")
+            except Exception as e:
+                logger.error(f"Failed to send config update to worker {i}: {e}")
+        
+        logger.info(f"Broadcasted config update for feed {feed_id} to {sent_count} inference workers.")
 
     async def add_and_start_feed(
         self,
@@ -633,6 +666,12 @@ class FeedManager:
             await self._terminate_resources(failed_resources_to_cleanup)
             await self._broadcast_feed_update(feed_id)
             raise FeedOperationError(f"Failed to launch worker for '{feed_id}'")
+
+        # Send initial config to workers (ROI, etc.)
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if entry and entry.get("config_info"):
+                await self._send_config_to_workers(feed_id, entry["config_info"].model_dump(exclude_unset=True))
 
         # Broadcast updates
         await self._broadcast_feed_update(feed_id)

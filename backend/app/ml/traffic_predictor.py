@@ -508,7 +508,6 @@ class TrafficPredictor:
 # Example usage block (only runs if the script is executed directly)
 # Modified to use relative paths that should work from project root
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.INFO) # Ensure logger level is set for the predictor
 
     # Example usage:

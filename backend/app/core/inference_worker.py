@@ -9,6 +9,7 @@ from multiprocessing import Queue as MPQueue, Event
 
 from ..core.core_module import CoreModule
 from ..utils.monitoring import TrafficMonitor
+from ..utils.process import start_parent_monitor
 
 logger = logging.getLogger("Inference")
 
@@ -54,6 +55,7 @@ def inference_worker(
     worker_id: int,
     central_input_queue: MPQueue,
     central_output_queue: MPQueue,
+    command_queue: MPQueue,
     stop_event: Event,
     config: Dict[str, Any],
     db_queue: Optional[MPQueue] = None
@@ -63,11 +65,19 @@ def inference_worker(
     Can handle frames from multiple feeds interleaved.
     """
     pid = os.getpid()
+    print(f"DEBUG: Inference process {pid} (Worker {worker_id}) started.")
+    print(f"DEBUG: type(config)={type(config)}")
+    print(f"DEBUG: type(stop_event)={type(stop_event)}")
+    print(f"DEBUG: type(command_queue)={type(command_queue)}")
     logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+    
+    # Start parent monitor to avoid zombies
+    start_parent_monitor(stop_event, f"Inference-{worker_id}")
     
     # Per-feed CoreModules and Monitors (lazy initialized)
     core_modules: Dict[str, CoreModule] = {}
     traffic_monitors: Dict[str, TrafficMonitor] = {}
+    pending_configs: Dict[str, Dict] = {}
     
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
@@ -75,16 +85,70 @@ def inference_worker(
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
 
+    def handle_command(cmd):
+        if not cmd: return
+        feed_id = cmd.get("feed_id")
+        if not feed_id: return
+
+        if cmd.get("type") == "config_update":
+            logger.info(f"[Worker {worker_id}] Received config update command for {feed_id}")
+            
+            data = cmd.get("data", {})
+            cm_update = data.copy()
+            
+            # Transform ROI for CoreModule
+            if "roi" in data:
+                if "roi_processing" not in cm_update:
+                    cm_update["roi_processing"] = {}
+                
+                roi = data["roi"]
+                if roi and isinstance(roi, list) and len(roi) >= 3:
+                    # Pass as list of [x, y] floats
+                    try:
+                        normalized_points = [[p['x'], p['y']] for p in roi]
+                        cm_update["roi_processing"]["roi_points_normalized"] = normalized_points
+                        cm_update["roi_processing"]["enabled"] = True
+                        logger.info(f"[Worker {worker_id}] Parsed ROI update for {feed_id}")
+                    except Exception as e:
+                        logger.error(f"[Worker {worker_id}] Failed to parse ROI: {e}")
+                else:
+                    cm_update["roi_processing"]["roi_points_normalized"] = None
+                    cm_update["roi_processing"]["enabled"] = False
+                    logger.info(f"[Worker {worker_id}] ROI disabled in update for {feed_id}")
+
+            if feed_id in core_modules:
+                core_modules[feed_id].update_config(cm_update)
+                logger.info(f"[Worker {worker_id}] Applied config update to active CoreModule for {feed_id}")
+            else:
+                # Store in pending to be applied upon initialization
+                if feed_id not in pending_configs:
+                    pending_configs[feed_id] = {}
+                pending_configs[feed_id].update(cm_update)
+                logger.info(f"[Worker {worker_id}] Stored pending config update for {feed_id}")
+
     try:
         while not stop_event.is_set():
+            # 0. Check for commands first (broadcast channel)
+            try:
+                while True:
+                    cmd = command_queue.get_nowait()
+                    handle_command(cmd)
+            except queue.Empty:
+                pass
+
             try:
                 # 1. Get a frame task from the queue
-                # Format: (feed_id, frame_index, frame_bytes, timestamp)
-                task = central_input_queue.get(timeout=0.5)
+                # Format: (feed_id, frame_index, frame_bytes, timestamp_or_payload)
+                task = central_input_queue.get(timeout=0.1) # Shorter timeout to check commands more often
                 if task is None: continue
                 
-                feed_id, frame_index, frame_bytes, _ts = task
-                
+                feed_id, frame_index, frame_bytes, extra_payload = task
+
+                # --- OLD CONTROL MESSAGE HANDLING REMOVED ---
+                if frame_index == -1:
+                    continue
+                # --------------------------------
+
                 # 2. Decode frame
                 nparr = np.frombuffer(frame_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -103,6 +167,11 @@ def inference_worker(
                         model_type=vehicle_det_cfg.get("model_type", "yolo")
                     )
                     traffic_monitors[feed_id] = TrafficMonitor(config)
+                    
+                    # Apply any pending configs
+                    if feed_id in pending_configs:
+                        logger.info(f"[Worker {worker_id}] Applying pending config to new CoreModule for {feed_id}")
+                        core_modules[feed_id].update_config(pending_configs.pop(feed_id))
                 
                 core = core_modules[feed_id]
                 monitor = traffic_monitors[feed_id]

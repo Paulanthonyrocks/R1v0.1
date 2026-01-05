@@ -131,7 +131,9 @@ class CoreModule:
         self.feed_id = feed_id
 
         self.model_path = Path(config["project_root_dir"]) / model_path
-        self.config = config
+        # Use deep copy to avoid shared state between instances
+        import copy
+        self.config = copy.deepcopy(config)
         self.fps = fps
         self.db_queue = db_queue
         self.gemini_api_key = gemini_api_key
@@ -162,6 +164,9 @@ class CoreModule:
         self.max_active_tracks = config["vehicle_detection"].get(
             "max_active_tracks", 50
         )
+        self.max_reid_per_frame = config["vehicle_detection"].get(
+            "max_reid_per_frame", 2
+        )
         self.yolo_imgsz = config["vehicle_detection"].get("yolo_imgsz", 640)
         self.num_lanes = config["lane_detection"].get("num_lanes", 4)
         self.lane_width_pixels = (
@@ -170,6 +175,7 @@ class CoreModule:
         self.perspective_matrix = None  # Initialize as None, load if needed
         self.roi_polygon_points = config["roi_processing"].get("polygon_points", None)
         self.roi_points_normalized = None # Store normalized points for resolution-independent scaling
+        self.roi_polygon_points_pixel = None # Cached pixel points for pointPolygonTest
         
         # --- Optimization: Cache ROI Mask ---
         self.roi_mask = None
@@ -249,7 +255,10 @@ class CoreModule:
              points_np = np.array(self.roi_polygon_points, dtype=np.int32)
              
         if points_np is not None:
+            self.roi_polygon_points_pixel = points_np # Cache for pointPolygonTest
             cv2.fillPoly(self.roi_mask, [points_np], 255)
+        else:
+            self.roi_polygon_points_pixel = None
 
     def _load_model(self, use_gpu: bool):
         # if self.model_type == "edgetam":
@@ -354,6 +363,9 @@ class CoreModule:
         
         # Process asynchronous OCR results from previous frames
         self._process_ocr_results()
+        
+        # Reset ReID budget for this frame
+        self._reid_updates_this_frame = 0
 
         # Use a low threshold for detection to allow ByteTrack-like association (matching low-conf detections to existing tracks)
         LOW_CONF_THRESHOLD = 0.1
@@ -414,10 +426,14 @@ class CoreModule:
             
             # fast bitwise AND
             processed_frame = cv2.bitwise_and(frame, frame, mask=self.roi_mask)
+            # If we are masking, the frame coordinates remain unchanged.
+            x1_crop, y1_crop = 0, 0
         elif roi_enabled and not self.roi_polygon_points:
             processed_frame = frame[y1_crop:y2_crop, x1_crop:x2_crop]
         else:
             processed_frame = frame.copy() # Copy only if no slicing occurred
+            # Ensure crops are 0 if no ROI/crop applied
+            x1_crop, y1_crop = 0, 0
 
         # 2. CRITICAL FIX: Convert BGR to RGB for Inference
         # YOLO/ONNX models are trained on RGB. OpenCV gives BGR.
@@ -575,6 +591,11 @@ class CoreModule:
 
         return predicted_tracks
 
+    def _is_point_in_roi(self, x: float, y: float) -> bool:
+        if self.roi_polygon_points_pixel is None or not self.config.get("roi_processing", {}).get("enabled", False):
+            return True
+        return cv2.pointPolygonTest(self.roi_polygon_points_pixel, (int(x), int(y)), False) >= 0
+
     def _update_tracks(
         self,
         frame: np.ndarray,
@@ -600,6 +621,8 @@ class CoreModule:
                     x - width_orig / 2, y - height_orig / 2,
                     x + width_orig / 2, y + height_orig / 2
                 )
+                # Update centroid with prediction as well (for ROI check in unmatched)
+                track["centroid"] = (float(x), float(y))
         
         # 2. Hungarian Algorithm for Association
         cost_matrix = self._calculate_cost_matrix(detections, self.vehicle_data)
@@ -621,8 +644,14 @@ class CoreModule:
             if cost_matrix[i, j] < proximity_threshold:
                 # Update existing track
                 self._update_track(track, (detection_bbox, detection_conf, detection_cls), current_time, frame, frame_index)
-                new_or_updated_tracks[track_id] = track
-                matched_detections.add(i)
+                
+                # Ensure updated track is still in ROI
+                cx, cy = track["centroid"]
+                if self._is_point_in_roi(cx, cy):
+                    new_or_updated_tracks[track_id] = track
+                    matched_detections.add(i)
+                else:
+                    logger.debug(f"Matched track {track_id} moved out of ROI at ({cx}, {cy}). Dropping.")
             else:
                 # Treat as unmatched (too high cost)
                 pass # Will be handled by unmatched_tracks or unmatched_detections
@@ -630,23 +659,29 @@ class CoreModule:
         # Process unmatched tracks (no detection in current frame)
         for j, track_id in enumerate(self.vehicle_data.keys()):
             if j not in col_ind or cost_matrix[row_ind[np.where(col_ind == j)[0][0]], j] >= proximity_threshold:
+                track = self.vehicle_data[track_id]
                 # Check for re-identification candidates
                 # If a track has been lost but is seen again with a low confidence
                 # it could be re-identified.
-                if track_id in self.vehicle_data and (current_time - self.vehicle_data[track_id]["last_seen"]) < self.reid_timeout:
-                    if self.vehicle_data[track_id].get("confidence", 0) < self.occlusion_confidence_threshold:
-                        self.vehicle_data[track_id]["is_occluded"] = True
+                if (current_time - track["last_seen"]) < self.reid_timeout:
+                    if track.get("confidence", 0) < self.occlusion_confidence_threshold:
+                        track["is_occluded"] = True
                     else:
-                        self.vehicle_data[track_id]["is_occluded"] = False
+                        track["is_occluded"] = False
                 
                 # Keep track if within timeout or was just occluded
-                if (current_time - self.vehicle_data[track_id]["last_seen"]) < self.track_timeout:
+                if (current_time - track["last_seen"]) < self.track_timeout:
                     # Update speed based on prediction (no measurement update)
-                    prev_time = self.vehicle_data[track_id].get("last_speed_update_time", current_time - (1.0/self.fps))
-                    self.vehicle_data[track_id]["speed"] = self._estimate_speed_kalman(self.vehicle_data[track_id], current_time, prev_time)
-                    self.vehicle_data[track_id]["last_speed_update_time"] = current_time
+                    prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps))
+                    track["speed"] = self._estimate_speed_kalman(track, current_time, prev_time)
+                    track["last_speed_update_time"] = current_time
 
-                    new_or_updated_tracks[track_id] = self.vehicle_data[track_id]
+                    # Ensure predicted position is still in ROI
+                    cx, cy = track["centroid"]
+                    if self._is_point_in_roi(cx, cy):
+                        new_or_updated_tracks[track_id] = track
+                    else:
+                        logger.debug(f"Predicted track {track_id} moved out of ROI at ({cx}, {cy}). Dropping.")
 
 
         # Process unmatched detections (new vehicles)
@@ -734,8 +769,9 @@ class CoreModule:
                         "estimated_pixels_per_meter": data.get("estimated_pixels_per_meter"),
                         "direction": data.get("direction", "N/A"),
                         "acceleration": data.get("acceleration"),
-                        "embedding": data.get("embedding"),
+                        "embedding": data.get("embedding") if data.get("new_embedding") else None,
                     })
+                    data["new_embedding"] = False # Clear the flag after putting in queue
                     
                     # Persistent Identification
                     lp = data.get("license_plate")
@@ -768,12 +804,12 @@ class CoreModule:
         if self.vehicle_class_ids and cls not in self.vehicle_class_ids:
             return None
 
-        # Check if the detection is within the ROI (if a polygon is defined and not enabled via crop_rect)
-        if self.roi_polygon_points and self.config.get("roi_processing", {}).get("enabled", False):
+        # Check if the detection is within the ROI (if a polygon is defined)
+        if self.roi_polygon_points_pixel is not None and self.config.get("roi_processing", {}).get("enabled", False):
             # Check if centroid of bbox is inside the polygon
             centroid_x = int((x1 + x2) / 2)
             centroid_y = int((y1 + y2) / 2)
-            if cv2.pointPolygonTest(np.array(self.roi_polygon_points, dtype=np.int32), (centroid_x, centroid_y), False) < 0:
+            if cv2.pointPolygonTest(self.roi_polygon_points_pixel, (centroid_x, centroid_y), False) < 0:
                 return None # Not in ROI
 
         # Initialize Kalman Filter for the new track
@@ -819,6 +855,7 @@ class CoreModule:
         self.vehicle_id_counter += 1 # Increment counter for next vehicle
 
         self.vehicle_data[vehicle_id] = {
+            "vehicle_id": vehicle_id,
             "bbox": bbox,
             "centroid": (kf.x[0][0], kf.x[1][0]),
             "class_id": cls,
@@ -838,6 +875,7 @@ class CoreModule:
             "direction": "N/A",
             "acceleration": 0.0,
             "estimated_pixels_per_meter": self.pixels_per_meter, # Default, can be updated
+            "new_embedding": False, # Flag to signal that a new ReID embedding is available
         }
         logger.debug(f"Initialized new track {vehicle_id} at {bbox}")
         return vehicle_id
@@ -888,9 +926,29 @@ class CoreModule:
         # Behavior analysis (stopped, speeding, accelerating, changing lane)
         self._analyze_behavior(track)  # Classify based on new speed/state
 
-        # ReID Embeddings
+        # ReID Embeddings - Optimized with Staggering and Rate Limiting
         reid_interval = self.config.get("vehicle_detection", {}).get("reid_interval_frames", 60)
-        if self.reid_embedder and (track.get("embedding") is None or frame_index % reid_interval == 0):
+        
+        should_update_reid = False
+        if self.reid_embedder:
+            # Determine offset based on vehicle_id to stagger updates
+            try:
+                # Assumes format "vehicle_123"
+                vid_parts = track.get("vehicle_id", "").split('_')
+                track_id_offset = int(vid_parts[-1]) if len(vid_parts) > 1 else hash(track.get("vehicle_id", ""))
+            except (ValueError, IndexError):
+                track_id_offset = hash(track.get("vehicle_id", str(time.time())))
+
+            # Always prioritize tracks without embedding (newly detected)
+            if track.get("embedding") is None:
+                 if self._reid_updates_this_frame < self.max_reid_per_frame:
+                     should_update_reid = True
+            # Periodic update with staggering and budget check
+            elif (frame_index + track_id_offset) % reid_interval == 0:
+                 if self._reid_updates_this_frame < self.max_reid_per_frame:
+                     should_update_reid = True
+
+        if should_update_reid:
             x1, y1, x2, y2 = map(int, bbox)
             h, w = frame.shape[:2]
             crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
@@ -900,6 +958,8 @@ class CoreModule:
                 embedding = self.reid_embedder.get_embedding(crop)
                 if embedding is not None:
                     track["embedding"] = embedding.tolist() # Make serializable
+                    track["new_embedding"] = True # Mark as new for sending to db_queue
+                    self._reid_updates_this_frame += 1
 
         # OCR for license plates
         ocr_interval_frames = self.ocr_cfg.get("interval_frames", 30)

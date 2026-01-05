@@ -16,9 +16,6 @@ import numpy as np  # Used in __main__ for dummy image creation & np.zeros
 # pymongo, sqlalchemy components, contextlib components will be removed if not used by retained code.
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 # ----- System Resources -----

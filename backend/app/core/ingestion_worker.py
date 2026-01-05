@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from multiprocessing import Queue as MPQueue, Event
 
 from ..utils.video import FrameReader
+from ..utils.process import start_parent_monitor
 
 logger = logging.getLogger("Ingestion")
 
@@ -24,6 +25,9 @@ def ingestion_worker(
     """
     pid = os.getpid()
     logger.info(f"Ingestion process {pid} started for {feed_id}")
+    
+    # Start parent monitor to avoid zombies
+    start_parent_monitor(stop_event, f"Ingestion-{feed_id}")
     
     # Pre-extract config
     video_processing_cfg = config.get("video_processing", {})

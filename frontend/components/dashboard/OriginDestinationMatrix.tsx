@@ -4,22 +4,29 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ArrowRight, ArrowRightLeft, Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import useAuth from '@/lib/hook/useAuth';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = "";
 
 interface ODMatrixProps {
     hours?: number;
 }
 
 export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) => {
+    const { token } = useAuth();
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const fetchData = async () => {
+            if (!token) return;
             setLoading(true);
             try {
-                const res = await fetch(`${API_BASE_URL}/api/v1/analysis/od-matrix?hours=${hours}`);
+                const res = await fetch(`${API_BASE_URL}/api/v1/analytics/od-matrix?hours=${hours}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
                 if (res.ok) {
                     const json = await res.json();
                     setData(json);
@@ -30,10 +37,17 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
                 setLoading(false);
             }
         };
-        fetchData();
-        const interval = setInterval(fetchData, 30000);
+        
+        if (token) {
+            fetchData();
+        }
+        
+        const interval = setInterval(() => {
+            if (token) fetchData();
+        }, 30000);
+        
         return () => clearInterval(interval);
-    }, [hours]);
+    }, [hours, token]);
 
     if (loading && !data) return <div className="h-64 flex items-center justify-center font-lcd opacity-50">CALCULATING MATRIX...</div>;
     if (!data || !data.matrix) return <div className="h-64 flex items-center justify-center font-lcd opacity-50 border border-dashed border-lcd-text/20">NO CROSS-FEED DATA AVAILABLE</div>;

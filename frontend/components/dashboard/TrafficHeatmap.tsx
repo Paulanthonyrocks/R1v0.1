@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = "";
 
 interface HeatmapProps {
     feed_id?: string;
@@ -21,7 +21,7 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
         const fetchData = async () => {
             setLoading(true);
             try {
-                let url = `${API_BASE_URL}/api/v1/analysis/heatmap?hours=${hours}`;
+                let url = `${API_BASE_URL}/api/v1/analytics/heatmap?hours=${hours}`;
                 if (feed_id) url += `&feed_id=${feed_id}`;
                 if (global_id) url += `&global_id=${global_id}`;
                 

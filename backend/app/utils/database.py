@@ -23,7 +23,9 @@ from pymongo import MongoClient
 from pymongo.database import Database as MongoDatabase
 from pymongo.errors import (
     ConnectionFailure,
-    ConfigurationError as MongoConfigurationError,)
+    ConfigurationError as MongoConfigurationError,
+    ServerSelectionTimeoutError,
+)
 from app.models.alerts import Alert  # Import the Alert model
 import json  # Import json for serializing details
 import math
@@ -123,7 +125,7 @@ class DatabaseManager:
             else:
                 self.timescale_url = None
 
-            mongo_config = config.get("mongodb", {})
+            mongo_config = config.get("mongodb") or {}
             if mongo_config.get("uri") and mongo_config.get("database_name"):
                 self.mongo_uri = mongo_config["uri"]
                 
@@ -350,8 +352,8 @@ class DatabaseManager:
         @retry(
             wait=wait_exponential(multiplier=1, min=2, max=10),
             stop=stop_after_attempt(3),
-            retry=retry_if_exception_type((ConnectionFailure, MongoConfigurationError)),
-            reraise=False,
+            retry=retry_if_exception_type((ConnectionFailure, MongoConfigurationError, ServerSelectionTimeoutError)),
+            reraise=True, # Reraise so we can catch it in the outer try-except
         )
         def connect_with_retry():
             logger.info(f"Attempting to connect to MongoDB at {self.mongo_uri}...")
@@ -367,10 +369,11 @@ class DatabaseManager:
                 logger.info(
                     f"Successfully connected to MongoDB server. Database: '{self.mongo_db_name}'"
                 )
-            else:
-                logger.warning("MongoDB connection failed after retries. MongoDB features will be disabled.")
-                self.mongo_client = None
-                self.mongo_db = None
+        except (RetryError, ConnectionFailure, ServerSelectionTimeoutError) as e:
+            logger.warning(f"MongoDB connection failed (it may be down or unreachable): {e}")
+            logger.info("MongoDB features will be disabled for this session.")
+            self.mongo_client = None
+            self.mongo_db = None
         except Exception as e:
             logger.error(
                 f"Unexpected error during MongoDB initialization: {e}",

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = "";
 
 export default function PredictivePage() {
     const { feeds } = useRealtimeUpdates();
@@ -26,7 +26,7 @@ export default function PredictivePage() {
     useEffect(() => {
         if (selectedFeed) {
             const feed = feeds.find(f => f.feed_id === selectedFeed);
-            if (feed && feed.config.latitude) {
+            if (feed && feed.config && feed.config.latitude) {
                 fetchComparisonData(feed.config.latitude, feed.config.longitude);
             }
         }
@@ -34,10 +34,9 @@ export default function PredictivePage() {
 
     const fetchComparisonData = async (lat: number, lon: number) => {
         setLoading(true);
-        try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/analysis/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`);
-            if (res.ok) {
-                const data = await res.json();
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/v1/analytics/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`);
+                        if (res.ok) {                const data = await res.json();
                 setComparisonData(data);
             }
         } catch (e) {
