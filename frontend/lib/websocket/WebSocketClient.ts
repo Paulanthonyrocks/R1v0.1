@@ -565,6 +565,9 @@ export class WebSocketClient implements IWebSocketClient {
 
     public destroy(): void {
         console.log(`[WebSocketClient ${this.instanceId}] Destroying WebSocket client...`);
+        if (lastActiveInstanceId === this.instanceId) {
+            lastActiveInstanceId = null;
+        }
         this.disconnect();
         this.listeners.clear();
         this.errorListeners.clear();

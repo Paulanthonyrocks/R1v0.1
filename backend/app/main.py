@@ -146,9 +146,11 @@ async def lifespan(app: FastAPI):
     app.state.file_watcher = None
     if loaded_config.get("file_watcher", {}).get("enabled", False):
         try:
-            watch_dir = Path(loaded_config["file_watcher"]["watch_directory"])
+            watch_dir_str = loaded_config["file_watcher"]["watch_directory"]
+            watch_dir = Path(watch_dir_str)
             if not watch_dir.is_absolute():
-                watch_dir = BASE_DIR / watch_dir
+                # BASE_DIR is backend/, so BASE_DIR.parent is the project root
+                watch_dir = BASE_DIR.parent / watch_dir_str
             watch_dir.mkdir(parents=True, exist_ok=True)
 
             def on_new_video(path_str):

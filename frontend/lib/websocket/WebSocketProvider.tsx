@@ -44,19 +44,27 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             return;
         }
 
-        if (token) {
-            // Only connect if there's a token and we are not already connected/connecting
-            if (!webSocketClient.isConnected() && webSocketClient.getConnectionState() !== 'connecting') {
-                console.log("Token available and not connected, connecting WebSocket");
-                webSocketClient.connect(token).catch(error => {
-                    console.error("WebSocket connection error on connect:", error);
-                });
+        // Use a small delay to debounce connection attempts
+        // This prevents rapid connect/disconnect cycles during login/token refresh
+        const debounceTimeout = setTimeout(() => {
+            if (token) {
+                // Only connect if there's a token and we are not already connected/connecting
+                if (!webSocketClient.isConnected() && webSocketClient.getConnectionState() !== 'connecting') {
+                    console.log(`[WebSocketProvider] Token available. Connecting instance: ${webSocketClient.getInstanceId()}`);
+                    webSocketClient.connect(token).catch(error => {
+                        console.error("WebSocket connection error on connect:", error);
+                    });
+                }
+            } else {
+                // Disconnect if there is no token (e.g., user logs out)
+                if (webSocketClient.getConnectionState() !== 'disconnected') {
+                    console.log(`[WebSocketProvider] No token. Disconnecting instance: ${webSocketClient.getInstanceId()}`);
+                    webSocketClient.disconnect();
+                }
             }
-        } else {
-            // Disconnect if there is no token (e.g., user logs out)
-            console.log("No token, disconnecting WebSocket");
-            webSocketClient.disconnect();
-        }
+        }, 500); // 500ms debounce
+
+        return () => clearTimeout(debounceTimeout);
     }, [token, loading, webSocketClient]); // Add loading to dependency array
 
     return (

@@ -24,6 +24,7 @@ from app.models.feeds import (
     FeedCreateResponse,
     StandardResponse,
     FeedConfigRequest,
+    FeedStatusData,
 )
 from app.models.user import User
 
@@ -63,14 +64,14 @@ async def update_feed_config(
 
 @router.get(
     "/",
-    response_model=APIResponse[List[FeedStatus]],
+    response_model=APIResponse[List[FeedStatusData]],
     summary="Get Status of All Feeds",
     description="Retrieves the current status, source, FPS, and potential errors for all known feeds.",
 )
 async def get_all_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
     current_user: Optional[User] = Depends(get_current_active_user_optional),
-) -> APIResponse[List[FeedStatus]]:
+) -> APIResponse[List[FeedStatusData]]:
     """
     Endpoint to get the status of all registered feeds.
     """
@@ -171,7 +172,7 @@ async def add_and_start_feed(
 
 @router.post(
     "/{feed_id}/start",
-    response_model=APIResponse[FeedStatus],
+    response_model=APIResponse[FeedStatusData],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start an Existing Stopped Feed",
 )
@@ -179,7 +180,7 @@ async def start_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: User = Depends(get_current_active_user),
-) -> APIResponse[FeedStatus]:
+) -> APIResponse[FeedStatusData]:
     logger.info(
         f"POST /feeds/{feed_id}/start endpoint called by user: {current_user.username}"
     )
@@ -190,21 +191,15 @@ async def start_feed(
         f"User {current_user.username} attempting to start feed: {feed_id}"
     )
     try:
-        success = await fm.start_feed(feed_id)
-        if not success:
-            current_status = await fm.get_feed_status(feed_id)
-            error_msg = (
-                current_status.error_details
-                if current_status
-                else "Unknown error during start."
-            )
-            raise OperationFailed(detail=f"Failed to start feed {feed_id}: {error_msg}")
-
-        updated_status = await fm.get_feed_status(feed_id)
-        if not updated_status:
+        await fm.start_feed(feed_id)
+        
+        entry = fm.process_registry.get(feed_id)
+        if not entry:
             raise ResourceNotFound(
                 detail=f"Feed {feed_id} not found after start attempt."
             )
+        
+        updated_status = fm._entry_to_status_data(feed_id, entry)
         return APIResponse.success(
             data=updated_status, message=f"Feed {feed_id} started successfully."
         )
@@ -221,14 +216,14 @@ async def start_feed(
 
 @router.post(
     "/{feed_id}/stop",
-    response_model=APIResponse[FeedStatus],
+    response_model=APIResponse[FeedStatusData],
     summary="Stop a Running Feed",
 )
 async def stop_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: User = Depends(get_current_active_user),
-) -> APIResponse[FeedStatus]:
+) -> APIResponse[FeedStatusData]:
     logger.info(
         f"POST /feeds/{feed_id}/stop endpoint called by user: {current_user.username}"
     )
@@ -239,21 +234,15 @@ async def stop_feed(
         f"User {current_user.username} attempting to stop feed: {feed_id}"
     )
     try:
-        success = await fm.stop_feed(feed_id)
-        if not success:
-            current_status = await fm.get_feed_status(feed_id)
-            error_msg = (
-                current_status.error_details
-                if current_status
-                else "Unknown error during stop."
-            )
-            raise OperationFailed(detail=f"Failed to stop feed {feed_id}: {error_msg}")
-
-        updated_status = await fm.get_feed_status(feed_id)
-        if not updated_status:
+        await fm.stop_feed(feed_id)
+        
+        entry = fm.process_registry.get(feed_id)
+        if not entry:
             raise ResourceNotFound(
                 detail=f"Feed {feed_id} not found after stop attempt."
             )
+            
+        updated_status = fm._entry_to_status_data(feed_id, entry)
         return APIResponse.success(
             data=updated_status, message=f"Feed {feed_id} stopped successfully."
         )
@@ -362,14 +351,14 @@ async def delete_feed(
 
 @router.get(
     "/{feed_id}",
-    response_model=APIResponse[FeedStatus],
+    response_model=APIResponse[FeedStatusData],
     summary="Get Status of a Specific Feed",
 )
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
     current_user: Optional[User] = Depends(get_current_active_user_optional),
-) -> APIResponse[FeedStatus]:
+) -> APIResponse[FeedStatusData]:
     """Endpoint to get the current status of a specific feed."""
     if current_user:
         logger.info(
@@ -378,9 +367,11 @@ async def get_specific_feed_status(
     else:
         logger.info(f"Anonymous user requesting status for feed {feed_id}")
 
-    feed_status = await fm.get_feed_status(feed_id)
-    if not feed_status:
+    entry = fm.process_registry.get(feed_id)
+    if not entry:
         raise ResourceNotFound(detail=f"Feed with ID '{feed_id}' not found.")
+        
+    feed_status = fm._entry_to_status_data(feed_id, entry)
     return APIResponse.success(
         data=feed_status, message=f"Successfully retrieved status for feed {feed_id}."
     )
