@@ -22,8 +22,8 @@ class FeedDetails(FeedStatus):
 class FeedCreateRequest(BaseModel):
     source: str = Field(..., examples=["/path/to/video.mp4", "webcam:0"])
     name_hint: Optional[str] = None
-    latitude: float
-    longitude: float
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 class FeedCreateResponse(BaseModel):
@@ -42,8 +42,8 @@ class FeedConfigInfo(BaseModel):
     name: str
     source_type: str
     source_identifier: str
-    latitude: float
-    longitude: float
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     roi: Optional[List[Dict[str, float]]] = None
 
 

@@ -23,10 +23,19 @@ def ingestion_worker(
     """
     Lightweight process that only captures frames and pushes them to a central queue.
     """
+    # Initialize logging for the child process
+    import logging.config
+    try:
+        logging.config.dictConfig(config["logging"])
+    except Exception as e:
+        print(f"DEBUG: Ingestion {feed_id} failed to init logging: {e}")
+
     pid = os.getpid()
+    print(f"DEBUG: Ingestion process {pid} for {feed_id} entering initialization...")
     logger.info(f"Ingestion process {pid} started for {feed_id}")
     
     # Start parent monitor to avoid zombies
+    print(f"DEBUG: [{feed_id}] Starting parent monitor...")
     start_parent_monitor(stop_event, f"Ingestion-{feed_id}")
     
     # Pre-extract config
@@ -37,6 +46,8 @@ def ingestion_worker(
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+
+    print(f"DEBUG: [{feed_id}] Initializing FrameReader...")
 
     reader = None
     try:

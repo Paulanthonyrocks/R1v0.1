@@ -1,12 +1,18 @@
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler # Assuming StandardScaler is used for feature scaling
-import tensorflow as tf
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Attempt to import tensorflow gracefully
+try:
+    import tensorflow as tf
+except Exception as e:
+    tf = None
+    logger.error(f"Failed to import tensorflow. ML features will be disabled. Error: {e}")
 
 
 class TrafficPredictor:
@@ -35,6 +41,11 @@ class TrafficPredictor:
 
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""
+        if tf is None:
+            logger.error("TensorFlow is not available. Cannot initialize model.")
+            self.model = None
+            return
+
         try:
             # Check if model is already initialized to prevent re-initialization
             # This method is typically called when training data is available and no model is loaded
@@ -402,6 +413,10 @@ class TrafficPredictor:
 
     def train_model(self, filepath: str, epochs: int = 10, batch_size: int = 32):
         """Train the LSTM model with historical traffic data from a CSV file."""
+        if tf is None:
+            logger.error("TensorFlow is not available. Cannot train model.")
+            return
+
         if self.model is None:
             logger.error("Model not initialized, cannot train.")
             # Initialize model if not already
@@ -487,6 +502,10 @@ class TrafficPredictor:
 
     def load_model(self, path: str):
         """Load a trained model from a file"""
+        if tf is None:
+            logger.error("TensorFlow is not available. Cannot load model.")
+            return
+
         try:
             # Use tf.keras.models.load_model
             # If the scaler was saved separately, load it here as well.

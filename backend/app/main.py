@@ -73,6 +73,10 @@ async def lifespan(app: FastAPI):
     
     # 1. Configuration
     try:
+        import psutil
+        mem = psutil.virtual_memory()
+        logger.info(f"System Memory at Startup: {mem.percent}% used ({mem.used / (1024**3):.2f}GB / {mem.total / (1024**3):.2f}GB)")
+        
         config_path = BASE_DIR / "configs" / "config.yaml"
         if not config_path.exists():
             config_path = Path("/app/configs/config.yaml") # Docker fallback
@@ -155,15 +159,33 @@ async def lifespan(app: FastAPI):
 
             def on_new_video(path_str):
                 logger.info(f"New video detected: {path_str}")
+                # Use a default location (Los Angeles) for auto-discovered feeds to ensure they show on the map
+                # In a real system, you might parse this from metadata or use a geocoding service
+                default_lat = 34.0522
+                default_lon = -118.2437
+                
+                # Add a small random offset so they don't stack perfectly on top of each other
+                import random
+                offset_lat = (random.random() - 0.5) * 0.01
+                offset_lon = (random.random() - 0.5) * 0.01
+
                 asyncio.create_task(fm.add_and_start_feed(
                     source=path_str, is_looped=True, name_hint=Path(path_str).name,
-                    latitude=None, longitude=None
+                    latitude=default_lat + offset_lat, 
+                    longitude=default_lon + offset_lon
                 ))
 
             watcher = FileSystemWatcher(str(watch_dir), on_new_video)
             watcher.start()
             app.state.file_watcher = watcher
             logger.info(f"File Watcher started on {watch_dir}")
+
+            # Initial scan for existing files
+            for video_file in watch_dir.glob("*"):
+                if video_file.is_file() and watcher.event_handler._is_video_file(video_file):
+                    logger.info(f"Found existing video file in watch directory: {video_file}")
+                    on_new_video(str(video_file))
+                    await asyncio.sleep(2.0) # Reduce IO surge on Drive
         except Exception as e:
             logger.error(f"File Watcher Error: {e}")
 

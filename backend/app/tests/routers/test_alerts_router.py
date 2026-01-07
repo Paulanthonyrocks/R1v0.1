@@ -4,9 +4,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
 from app.main import app  # Assuming main app instance is here
-from app.dependency_injection import get_db, get_current_active_user
-from app.utils.service_getters import get_connection_manager
-
+from app.dependency_injection import get_db, get_current_active_user, get_connection_manager
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
 from app.models.websocket import (

@@ -308,6 +308,8 @@ class FeedManager:
             )
             p.start()
             self._inference_pool.append(p)
+            # Add delay to avoid RAM spike during spawn imports
+            time.sleep(5.0)
 
     async def _stop_inference_pool(self):
         logger.info("Stopping Inference Pool...")
@@ -512,8 +514,8 @@ class FeedManager:
     async def add_and_start_feed(
         self,
         source: str,
-        latitude: float,
-        longitude: float,
+        latitude: Optional[float],
+        longitude: Optional[float],
         name_hint: Optional[str] = None,
         is_looped: bool = True,
     ) -> Dict[str, Any]:
@@ -564,6 +566,13 @@ class FeedManager:
             else:
                 target_feed_id = existing_feed_id
                 logger.info(f"Reusing existing feed {target_feed_id} for source {source}")
+                # Update coordinates if provided and missing
+                if latitude is not None and longitude is not None:
+                    entry = self.process_registry[target_feed_id]
+                    if entry.get("config_info"):
+                        entry["config_info"].latitude = latitude
+                        entry["config_info"].longitude = longitude
+                        logger.info(f"Updated coordinates for {target_feed_id} to ({latitude}, {longitude})")
 
         if not existing_feed_id:
             await self._broadcast_feed_update(target_feed_id)

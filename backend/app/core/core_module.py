@@ -127,6 +127,7 @@ class CoreModule:
         db_queue: MPQueue,
         gemini_api_key: Optional[str] = None,
         model_type: str = "yolo",
+        preloaded_model: Optional[Any] = None,
     ):
         self.feed_id = feed_id
 
@@ -140,7 +141,7 @@ class CoreModule:
         self.model_type = model_type
 
         self.vehicle_data: Dict[str, Dict] = {}
-        self.model = None
+        self.model = preloaded_model
         self.preprocessor = None
         
         # Initialize OCR executor as instance attribute
@@ -249,10 +250,10 @@ class CoreModule:
         
         points_np = None
         if self.roi_points_normalized is not None and len(self.roi_points_normalized) >= 3:
-             # Scale normalized points to current resolution
-             points_np = (np.array(self.roi_points_normalized, dtype=np.float32) * [width, height]).astype(np.int32)
+            # Scale normalized points to current resolution
+            points_np = (np.array(self.roi_points_normalized, dtype=np.float32) * [width, height]).astype(np.int32)
         elif self.roi_polygon_points:
-             points_np = np.array(self.roi_polygon_points, dtype=np.int32)
+            points_np = np.array(self.roi_polygon_points, dtype=np.int32)
              
         if points_np is not None:
             self.roi_polygon_points_pixel = points_np # Cache for pointPolygonTest
@@ -260,14 +261,10 @@ class CoreModule:
         else:
             self.roi_polygon_points_pixel = None
 
-    def _load_model(self, use_gpu: bool):
-        # if self.model_type == "edgetam":
-        #     self.model = EdgeTAMSegmenter(model_path=self.model_path, use_gpu=use_gpu)
-        #     return
-
-        if not Path(self.model_path).exists():
-            logger.error(f"Model file not found at {self.model_path}")
-            raise FileNotFoundError(f"Model file not found at {self.model_path}")
+    def _load_model(self, use_gpu: bool = False):
+        if self.model is not None:
+            logger.info(f"Using preloaded model for feed {self.feed_id}")
+            return
 
         model_path_str = str(self.model_path)
         is_onnx = model_path_str.endswith(".onnx")

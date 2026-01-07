@@ -4,13 +4,10 @@ from fastapi import APIRouter, Query, HTTPException, status, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 
-from app.dependency_injection import get_db, get_current_admin, get_current_active_user
-from app.utils.service_getters import get_connection_manager  # Added get_connection_manager
+from app.dependency_injection import get_db, get_current_admin, get_current_active_user, get_connection_manager
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
-from app.websocket.connection_manager import (
-    ConnectionManager,
-)  # Added ConnectionManager
+from ..websocket.connection_manager import ConnectionManager
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,

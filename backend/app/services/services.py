@@ -79,15 +79,20 @@ async def initialize_services(
         from app.services.analytics_service import AnalyticsService
 
         # Load the TrafficPredictor model
-        traffic_predictor_model_path = config.get("analytics_service", {}).get("model_path")
+        analytics_cfg = config.get("analytics_service", {})
+        traffic_predictor_model_path = analytics_cfg.get("model_path")
+        prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
+        
         loaded_traffic_predictor = None
-        if traffic_predictor_model_path:
+        if traffic_predictor_model_path and prediction_enabled:
             try:
-                loaded_traffic_predictor = TrafficPredictor(config=config.get("analytics_service", {}))
+                loaded_traffic_predictor = TrafficPredictor(config=analytics_cfg)
                 loaded_traffic_predictor.load_model(traffic_predictor_model_path)
                 logger.info(f"TrafficPredictor model loaded from {traffic_predictor_model_path}")
             except Exception as e:
                 logger.error(f"Failed to load TrafficPredictor model from {traffic_predictor_model_path}: {e}", exc_info=True)
+        elif not prediction_enabled:
+            logger.info("Traffic prediction disabled in config. Skipping model load.")
         else:
             logger.warning("No model_path configured for TrafficPredictor. AnalyticsService will use a mock predictor.")
 
@@ -256,7 +261,8 @@ async def shutdown_services():  # Make async for feed manager shutdown
         feed_manager_instance, \
         _traffic_signal_service_instance, \
         _analytics_service_instance, \
-        _route_optimization_service_instance
+        _route_optimization_service_instance, \
+        _notification_service_instance
     logger.info("Shutting down application services...")
     
 

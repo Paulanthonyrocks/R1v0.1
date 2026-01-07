@@ -160,7 +160,7 @@ class AnalyticsService:
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)
         else:
             logger.warning(
-                f"Metrics for feed {feed_id} missing latitude or longitude. Cannot add to TrafficDataCache."
+                f"Metrics for feed {feed_id} missing latitude or longitude (Lat: {latitude}, Lon: {longitude}). Cannot add to TrafficDataCache."
             )
 
     async def save_vehicle_data(self, vehicle_data: Dict[str, Any]):

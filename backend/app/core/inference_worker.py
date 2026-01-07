@@ -4,6 +4,7 @@ import logging
 import time
 import numpy as np
 import queue
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
 
@@ -64,26 +65,50 @@ def inference_worker(
     Heavyweight AI process that processes frames from the central queue.
     Can handle frames from multiple feeds interleaved.
     """
+    # Initialize logging for the child process
+    import logging.config
+    try:
+        logging.config.dictConfig(config["logging"])
+    except Exception as e:
+        print(f"DEBUG: Worker {worker_id} failed to init logging: {e}")
+
     pid = os.getpid()
-    print(f"DEBUG: Inference process {pid} (Worker {worker_id}) started.")
-    print(f"DEBUG: type(config)={type(config)}")
-    print(f"DEBUG: type(stop_event)={type(stop_event)}")
-    print(f"DEBUG: type(command_queue)={type(command_queue)}")
+    print(f"DEBUG: Inference process {pid} (Worker {worker_id}) entering initialization...")
     logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
     
     # Start parent monitor to avoid zombies
+    print(f"DEBUG: [Worker {worker_id}] Starting parent monitor...")
     start_parent_monitor(stop_event, f"Inference-{worker_id}")
     
+    print(f"DEBUG: [Worker {worker_id}] Initializing state containers...")
     # Per-feed CoreModules and Monitors (lazy initialized)
     core_modules: Dict[str, CoreModule] = {}
     traffic_monitors: Dict[str, TrafficMonitor] = {}
     pending_configs: Dict[str, Dict] = {}
+    shared_model = None
     
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+
+    # Pre-load shared model if possible to save memory
+    model_path = vehicle_det_cfg.get("model_path")
+    if model_path:
+        print(f"DEBUG: [Worker {worker_id}] Pre-loading shared model: {model_path}")
+        from ultralytics import YOLO
+        try:
+            # Resolve path relative to project root
+            resolved_path = Path(config.get("project_root_dir", "")) / model_path
+            shared_model = YOLO(str(resolved_path))
+            # Move to CPU explicitly to save VRAM if present (or just use CPU)
+            shared_model.to("cpu")
+            print(f"DEBUG: [Worker {worker_id}] Shared model loaded successfully.")
+        except Exception as e:
+            print(f"DEBUG: [Worker {worker_id}] Failed to preload model: {e}")
+
+    print(f"DEBUG: [Worker {worker_id}] Entering main processing loop.")
 
     def handle_command(cmd):
         if not cmd: return
@@ -164,7 +189,8 @@ def inference_worker(
                         fps=target_fps,
                         db_queue=db_queue,
                         gemini_api_key=ocr_cfg.get("gemini_api_key"),
-                        model_type=vehicle_det_cfg.get("model_type", "yolo")
+                        model_type=vehicle_det_cfg.get("model_type", "yolo"),
+                        preloaded_model=shared_model
                     )
                     traffic_monitors[feed_id] = TrafficMonitor(config)
                     

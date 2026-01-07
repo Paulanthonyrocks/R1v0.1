@@ -1,12 +1,18 @@
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Attempt to import tensorflow gracefully
+try:
+    import tensorflow as tf
+except Exception as e:
+    tf = None
+    logger.error(f"Failed to import tensorflow in anomaly_detector. ML features will be disabled. Error: {e}")
 
 class TrafficAnomalyDetector:
     def __init__(self, config: Dict[str, Any]):
@@ -14,7 +20,7 @@ class TrafficAnomalyDetector:
         self.sequence_length = config.get("anomaly_detection", {}).get("sequence_length", 12) # e.g., last 12 intervals (1 hour if 5min intervals)
         self.threshold = config.get("anomaly_detection", {}).get("threshold", 0.5)
         self.scaler = StandardScaler()
-        self.model: Optional[tf.keras.Model] = None
+        self.model: Any = None
         
         model_path = config.get("anomaly_detection", {}).get("model_path")
         if model_path:
@@ -22,6 +28,10 @@ class TrafficAnomalyDetector:
 
     def _initialize_model(self, feature_count: int):
         """Initialize an LSTM Autoencoder for anomaly detection."""
+        if tf is None:
+            logger.error("TensorFlow is not available. Cannot initialize anomaly detection model.")
+            return
+
         try:
             self.model = tf.keras.Sequential([
                 # Encoder
@@ -129,6 +139,10 @@ class TrafficAnomalyDetector:
         }
 
     def load_model(self, path: str):
+        if tf is None:
+            logger.error("TensorFlow is not available. Cannot load anomaly detection model.")
+            return
+
         try:
             self.model = tf.keras.models.load_model(path)
             logger.info(f"Anomaly detector model loaded from {path}")
