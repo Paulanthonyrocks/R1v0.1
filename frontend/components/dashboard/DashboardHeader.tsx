@@ -36,7 +36,11 @@ const DashboardHeader: React.FC = () => {
             {/* Logo / Mobile Menu */}
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                    <div className="flex items-center space-x-2 cursor-pointer hover:opacity-80 transition-opacity">
+                    <div 
+                        id="mobile-menu-trigger"
+                        className="flex items-center space-x-2 cursor-pointer hover:opacity-80 transition-opacity"
+                        suppressHydrationWarning
+                    >
                         <Signal size={20} />
                         <span className="font-lcd matrix-glow text-lg font-bold">TRAFFIC HUB</span>
                     </div>

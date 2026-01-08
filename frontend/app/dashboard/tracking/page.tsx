@@ -16,7 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 interface GlobalVehicle {
     global_vehicle_id: string;

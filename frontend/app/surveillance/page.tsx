@@ -10,6 +10,7 @@ import { FeedStatusData } from '@/lib/types';
 import { Search, Play, Square, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DashboardShell from '@/components/dashboard/DashboardShell';
+import AddFeedDialog from '@/components/dashboard/AddFeedDialog';
 
 const SurveillancePage = () => {
   const { feeds, isConnected, isReady, startFeed, stopFeed } = useRealtimeUpdates();
@@ -92,6 +93,7 @@ const SurveillancePage = () => {
                       />
                   </div>
                   <div className="flex gap-2">
+                      <AddFeedDialog />
                       <Button 
                         onClick={handleStartAll}
                         variant="outline" 

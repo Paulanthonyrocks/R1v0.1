@@ -7,12 +7,13 @@ import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
+import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
-    const { token } = useAuth();
+    const { token, userRole } = useAuth();
     
     // Only subscribe if the feed is in an active state
     const shouldSubscribe = status === 'running' || status === 'starting';
@@ -38,16 +39,17 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     const isLive = isConnected && lastFrameRef.current !== null;
     const isLoading = !isConnected && !error;
+    const isAdmin = userRole === UserRole.ADMIN;
 
     const component_name = feedName ?? `Feed ${feed_id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
 
     // Load existing ROI if available
     useEffect(() => {
-        if (feed && feed.config && feed.config.roi) {
+        if (!roiMode && feed && feed.config && feed.config.roi) {
             setRoiPoints(feed.config.roi);
         }
-    }, [feed]);
+    }, [feed, roiMode]);
 
     useEffect(() => {
         if (status === 'running' || status === 'stopped' || status === 'error') {
@@ -86,7 +88,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 // Ideally show success toast
                 console.log("ROI Saved successfully");
             } else {
-                console.error("Failed to save ROI");
+                const errorText = await response.text();
+                console.error(`Failed to save ROI: ${response.status} ${response.statusText} - ${errorText}`);
             }
         } catch (error) {
             console.error("Error saving ROI:", error);
@@ -262,7 +265,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 )}
 
                 {/* ROI Controls */}
-                {roiMode && (
+                {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">Click to add points</span>
                         <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
@@ -334,13 +337,15 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         >
                             <Square className="h-4 w-4" />
                         </button>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); setRoiMode(!roiMode); }}
-                            title="Set Region of Interest"
-                            className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode && "bg-primary text-primary-foreground")}
-                        >
-                            <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
-                        </button>
+                        {isAdmin && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setRoiMode(!roiMode); }}
+                                title="Set Region of Interest"
+                                className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode && "bg-primary text-primary-foreground")}
+                            >
+                                <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
+                            </button>
+                        )}
                     </div>
                 )}
 
