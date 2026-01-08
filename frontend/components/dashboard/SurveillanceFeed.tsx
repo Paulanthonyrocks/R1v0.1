@@ -17,7 +17,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     
     // Only subscribe if the feed is in an active state
     const shouldSubscribe = status === 'running' || status === 'starting';
-    const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles } = useVideoSocket(
+    const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
         shouldSubscribe ? feed_id : "", 
         token
     );
@@ -74,25 +74,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const handleSaveROI = async () => {
         if (!feed_id) return;
         try {
-            const response = await fetch(`/api/v1/feeds/${feed_id}/config`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ roi: roiPoints })
-            });
-            
-            if (response.ok) {
-                setRoiMode(false);
-                // Ideally show success toast
-                console.log("ROI Saved successfully");
-            } else {
-                const errorText = await response.text();
-                console.error(`Failed to save ROI: ${response.status} ${response.statusText} - ${errorText}`);
-            }
+            // Using WebSocket for configuration updates to avoid tunnel timeouts
+            updateFeedConfig({ roi: roiPoints });
+            setRoiMode(false);
+            console.log("ROI Save command sent via WebSocket");
         } catch (error) {
-            console.error("Error saving ROI:", error);
+            console.error("Error sending ROI update:", error);
         }
     };
 

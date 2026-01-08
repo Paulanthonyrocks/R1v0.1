@@ -38,7 +38,11 @@ export default function IncidentsPage() {
             if (statusFilter !== "ALL") {
                 url.searchParams.append("status", statusFilter);
             }
-            const res = await fetch(url.toString());
+            const res = await fetch(url.toString(), {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setIncidents(data);
@@ -61,7 +65,10 @@ export default function IncidentsPage() {
         try {
             const res = await fetch(`${API_BASE_URL}/api/v1/incidents/${id}`, {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Bypass-Tunnel-Reminder': 'true'
+                },
                 body: JSON.stringify({ status: newStatus })
             });
             if (res.ok) {

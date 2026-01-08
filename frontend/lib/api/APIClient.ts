@@ -25,7 +25,8 @@ export class APIClient {
         this.baseURL = options.baseURL;
         this.timeout = options.timeout || 30000;
         this.headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Bypass-Tunnel-Reminder': 'true'
         };
         this.tokenManager = TokenManager.getInstance();
 

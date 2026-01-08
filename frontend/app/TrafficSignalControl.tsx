@@ -23,6 +23,7 @@ const TrafficSignalControl = () => {
         const response = await fetch('/api/v1/signals', {
           headers: {
             'Authorization': `Bearer ${token}`,
+            'Bypass-Tunnel-Reminder': 'true'
           },
         });
         const data = await response.json();
@@ -44,6 +45,7 @@ const TrafficSignalControl = () => {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
+          'Bypass-Tunnel-Reminder': 'true'
         },
         body: JSON.stringify({ phase }),
       });

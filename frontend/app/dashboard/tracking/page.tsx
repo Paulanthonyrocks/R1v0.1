@@ -47,7 +47,11 @@ export default function TrackingPage() {
     const fetchVehicles = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/list`);
+            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/list`, {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setVehicles(data);
@@ -63,7 +67,11 @@ export default function TrackingPage() {
         setHistoryLoading(true);
         setSelectedId(id);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/${id}/history`);
+            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/${id}/history`, {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setHistory(data);

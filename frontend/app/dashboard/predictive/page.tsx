@@ -8,6 +8,7 @@ import PredictiveFlowChart from '@/components/dashboard/PredictiveFlowChart';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 const API_BASE_URL = "";
 
@@ -34,9 +35,14 @@ export default function PredictivePage() {
 
     const fetchComparisonData = async (lat: number, lon: number) => {
         setLoading(true);
-                    try {
-                        const res = await fetch(`${API_BASE_URL}/api/v1/analytics/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`);
-                        if (res.ok) {                const data = await res.json();
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/v1/analytics/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`, {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
+                }
+            });
+            if (res.ok) {
+                const data = await res.json();
                 setComparisonData(data);
             }
         } catch (e) {
@@ -129,9 +135,4 @@ export default function PredictivePage() {
             </div>
         </DashboardShell>
     );
-}
-
-// Simple CN helper since I can't import easily sometimes in this env
-function cn(...classes: any[]) {
-    return classes.filter(Boolean).join(' ');
 }

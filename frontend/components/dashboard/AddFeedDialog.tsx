@@ -41,7 +41,8 @@ export default function AddFeedDialog() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${token}`,
+                    'Bypass-Tunnel-Reminder': 'true'
                 },
                 body: JSON.stringify(body)
             });

@@ -25,7 +25,11 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
                 if (feed_id) url += `&feed_id=${feed_id}`;
                 if (global_id) url += `&global_id=${global_id}`;
                 
-                const res = await fetch(url);
+                const res = await fetch(url, {
+                    headers: {
+                        'Bypass-Tunnel-Reminder': 'true'
+                    }
+                });
                 if (res.ok) {
                     const points = await res.json();
                     drawHeatmap(points);

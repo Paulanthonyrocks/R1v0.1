@@ -29,7 +29,11 @@ export default function GalleryPage() {
         setLoading(true);
         try {
             // Fetch all incidents that have snapshots
-            const res = await fetch(`${API_BASE_URL}/api/v1/incidents`);
+            const res = await fetch(`${API_BASE_URL}/api/v1/incidents`, {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
+                }
+            });
             if (res.ok) {
                 const data: Incident[] = await res.json();
                 // Filter incidents that have a snapshot path

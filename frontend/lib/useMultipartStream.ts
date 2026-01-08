@@ -44,7 +44,9 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
     const readStream = async () => {
       try {
-        const headers: HeadersInit = {};
+        const headers: HeadersInit = {
+            'Bypass-Tunnel-Reminder': 'true'
+        };
         // Only add Authorization header for relative URLs and if token is provided
         if (url && url.startsWith('/') && token) {
           headers['Authorization'] = `Bearer ${token}`;

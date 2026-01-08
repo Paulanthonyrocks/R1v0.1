@@ -31,7 +31,9 @@ const UserPreferencesPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/v1/user-preferences')
+    fetch('/api/v1/user-preferences', {
+      headers: { 'Bypass-Tunnel-Reminder': 'true' }
+    })
       .then(res => res.json())
       .then(setPrefs)
       .catch(() => setError('Failed to load preferences'))
@@ -68,7 +70,10 @@ const UserPreferencesPanel: React.FC = () => {
     try {
       await fetch('/api/v1/user-preferences', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true'
+        },
         body: JSON.stringify(prefs),
       });
     } catch {

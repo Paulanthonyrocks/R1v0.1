@@ -24,7 +24,8 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
             try {
                 const res = await fetch(`${API_BASE_URL}/api/v1/analytics/od-matrix?hours=${hours}`, {
                     headers: {
-                        'Authorization': `Bearer ${token}`
+                        'Authorization': `Bearer ${token}`,
+                        'Bypass-Tunnel-Reminder': 'true'
                     }
                 });
                 if (res.ok) {
