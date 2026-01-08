@@ -581,47 +581,74 @@ class CoreModule:
         Useful for maintaining high FPS when detection is skipped.
         """
         predicted_tracks = {}
-        to_remove = []
         current_time = time.time()
+        
+        # We use a shorter timeout for showing 'predicting' tracks to avoid ghosts
+        # Reduced from 1.0s to 0.4s for better responsiveness during frame skipping
+        PREDICT_TIMEOUT = self.config.get("vehicle_detection", {}).get("predict_timeout", 0.4)
+        
+        frame_res = self.config["vehicle_detection"]["frame_resolution"]
+        frame_w, frame_h = frame_res[0], frame_res[1]
 
         for vehicle_id, track in list(self.vehicle_data.items()):
             kf = track.get("kalman_filter")
+            
+            # Check if track is too old to even predict
+            if (current_time - track["last_seen"]) > self.track_timeout:
+                continue
+
             if kf:
                 kf.predict()
                 x, y = float(kf.x[0][0]), float(kf.x[1][0])
                 
                 # Update bbox based on predicted center and original dimensions
-                # Assuming bbox stored is (x1, y1, x2, y2)
                 x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
-                width_orig = x2_orig - x1_orig
-                height_orig = y2_orig - y1_orig
+                w = x2_orig - x1_orig
+                h = y2_orig - y1_orig
                 
-                new_x1 = int(x - width_orig / 2)
-                new_y1 = int(y - height_orig / 2)
-                new_x2 = int(x + width_orig / 2)
-                new_y2 = int(y + height_orig / 2)
+                new_x1 = int(x - w / 2)
+                new_y1 = int(y - h / 2)
+                new_x2 = int(x + w / 2)
+                new_y2 = int(y + h / 2)
+
+                # Boundary Check: Remove if it leaves the frame
+                if new_x2 < 0 or new_x1 > frame_w or new_y2 < 0 or new_y1 > frame_h:
+                    continue
+                
+                # ROI Check: Remove if centroid leaves ROI
+                if not self._is_point_in_roi(x, y):
+                    continue
 
                 track["bbox"] = (new_x1, new_y1, new_x2, new_y2)
                 track["centroid"] = (x, y)
-                # CRITICAL: Do NOT update last_seen here. 
-                # last_seen should only be updated on a successful detection match.
                 track["frame_index_last_seen"] = frame_index
-                track["status"] = "predicting"
+                
+                # Confidence Decay: reduce confidence as we predict more frames without detection
+                # Increased decay from 0.95 to 0.85 to clear ghosts faster
+                time_since_seen = current_time - track["last_seen"]
+                track["confidence"] *= 0.85 # Stronger decay per frame
+                
+                # Only keep in output if it's recently seen AND has enough confidence
+                if time_since_seen < PREDICT_TIMEOUT and track["confidence"] > 0.1:
+                    track["status"] = "predicting"
+                    predicted_tracks[vehicle_id] = track
+                else:
+                    # Still keep in vehicle_data for future matching, but don't return for rendering
+                    track["status"] = "occluded"
+                
                 # Update speed based on prediction
                 prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps))
                 track["speed"] = self._estimate_speed_kalman(track, current_time, prev_time)
                 track["last_speed_update_time"] = current_time
-                
-                predicted_tracks[vehicle_id] = track
             else:
-                to_remove.append(vehicle_id)
-        
-        for vehicle_id in to_remove:
-            self.vehicle_data.pop(vehicle_id, None)
+                self.vehicle_data.pop(vehicle_id, None)
 
         # Deduplicate to prevent overlapping ghost boxes
-        self.vehicle_data = self._deduplicate_tracks(predicted_tracks)
-        return self.vehicle_data
+        # We use a stricter IoU for predicting tracks
+        self.vehicle_data = self._deduplicate_tracks(self.vehicle_data, iou_threshold=0.6)
+        
+        # Return only the tracks we want to render/process this frame
+        return {vid: t for vid, t in predicted_tracks.items() if t["status"] == "predicting" and t["confidence"] > 0.15}
 
     def _deduplicate_tracks(self, tracks: Dict[str, Dict], iou_threshold: float = 0.7) -> Dict[str, Dict]:
         """
@@ -630,12 +657,13 @@ class CoreModule:
         if not tracks:
             return {}
         
-        # Sort by status (active first) and then by last_seen
-        sorted_ids = sorted(
-            tracks.keys(), 
-            key=lambda fid: (tracks[fid]["status"] == "active", tracks[fid]["last_seen"]), 
-            reverse=True
-        )
+        # Sort criteria: 1. Status (active > predicting > occluded) 2. Confidence 3. Last seen
+        def sort_key(fid):
+            t = tracks[fid]
+            status_rank = 3 if t["status"] == "active" else (2 if t["status"] == "predicting" else 1)
+            return (status_rank, t["confidence"], t["last_seen"])
+
+        sorted_ids = sorted(tracks.keys(), key=sort_key, reverse=True)
         
         kept_tracks = {}
         for fid in sorted_ids:
@@ -644,8 +672,12 @@ class CoreModule:
             
             is_duplicate = False
             for kept_id, kept_track in kept_tracks.items():
-                # If high IoU with an already kept track, it's a duplicate
-                if self._bbox_iou(bbox, kept_track["bbox"]) > iou_threshold:
+                # For predicting tracks, use a more sensitive IoU threshold
+                current_iou_thresh = iou_threshold
+                if track["status"] == "predicting" or kept_track["status"] == "predicting":
+                    current_iou_thresh = 0.4 # More aggressive deduplication for uncertain tracks (was 0.5)
+                
+                if self._bbox_iou(bbox, kept_track["bbox"]) > current_iou_thresh:
                     is_duplicate = True
                     break
             

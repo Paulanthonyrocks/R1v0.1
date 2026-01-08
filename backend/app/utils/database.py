@@ -100,7 +100,11 @@ class DatabaseManager:
 
             path_obj = Path(self.sqlite_db_path_str)
             if not path_obj.is_absolute():
-                project_root = Path(__file__).resolve().parent.parent.parent
+                # Correctly resolve project root: up 4 levels from backend/app/utils/database.py is project root
+                project_root = Path(__file__).resolve().parent.parent.parent.parent
+                
+                # Check if the path starts with 'backend/' or 'data/' and adjust accordingly
+                # If we are in /home/user/R1v0.1/backend/app/utils/database.py, project_root is R1v0.1
                 path_obj = project_root / self.sqlite_db_path_str
 
             self.sqlite_db_path = path_obj.resolve()
@@ -276,7 +280,10 @@ class DatabaseManager:
         logger.info(f"Initializing SQLite DB schema at {self.sqlite_db_path}...")
         try:
             with self._get_sqlite_connection() as conn:
-                self._create_sqlite_tables(conn.cursor())
+                cursor = conn.cursor()
+                self._create_sqlite_tables(cursor)
+                self._migrate_sqlite_database(cursor)
+                conn.commit()
             logger.info("SQLite DB schema initialization check complete.")
             
             # Auto-prune on startup
@@ -285,6 +292,26 @@ class DatabaseManager:
         except (sqlite3.Error, DatabaseError) as e:
             logger.error(f"DB init error: {e}", exc_info=True)
             raise DatabaseError(f"DB schema init fail: {e}") from e
+
+    def _migrate_sqlite_database(self, cursor: sqlite3.Cursor):
+        """Adds missing columns to existing tables if they don't exist."""
+        # Check vehicle_tracks columns
+        cursor.execute("PRAGMA table_info(vehicle_tracks)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        required_columns = [
+            ("car_model", "TEXT"),
+            ("car_model_confidence", "REAL"),
+            ("car_color", "TEXT")
+        ]
+        
+        for col_name, col_type in required_columns:
+            if col_name not in columns:
+                logger.info(f"Adding missing column '{col_name}' to vehicle_tracks table.")
+                try:
+                    cursor.execute(f"ALTER TABLE vehicle_tracks ADD COLUMN {col_name} {col_type}")
+                except sqlite3.Error as e:
+                    logger.error(f"Failed to add column {col_name}: {e}")
 
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
         # ... (This method remains unchanged)
