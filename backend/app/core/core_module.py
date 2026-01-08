@@ -1,6 +1,7 @@
 import cv2
 import logging
 import time
+import math
 import numpy as np
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
@@ -18,6 +19,7 @@ try:
     from ..utils.lane_detection import process_frame_for_lanes, get_lane_boundaries_from_lines
     from ..utils.local_ocr import LocalOCR
     from ..ml.reid_model import ReIDEmbedder
+    from ..ml.car_classifier import CarClassifier
     # from ..ml.segmentation.edgetam import EdgeTAMSegmenter
 except ImportError:
     print("Error importing utils for CoreModule. Ensure utils.py is accessible.")
@@ -26,6 +28,7 @@ except ImportError:
     get_lane_boundaries_from_lines = None
     LocalOCR = None
     ReIDEmbedder = None
+    CarClassifier = None
     # EdgeTAMSegmenter = None
 
 # Logging setup
@@ -234,6 +237,17 @@ class CoreModule:
             except Exception as e:
                 logger.error(f"Failed to initialize ReIDEmbedder: {e}")
                 self.reid_embedder = None
+
+        # Initialize Car Classifier
+        if self.config.get("vehicle_detection", {}).get("car_classification_enabled", True):
+            try:
+                if CarClassifier:
+                    self.car_classifier = CarClassifier(self.config)
+                else:
+                    logger.warning("CarClassifier class not found.")
+            except Exception as e:
+                logger.error(f"Failed to initialize CarClassifier: {e}")
+                self.car_classifier = None
 
         # Load Model
         try:
@@ -478,12 +492,17 @@ class CoreModule:
     def _postprocess_onnx_output(self, outputs: np.ndarray, confidence_threshold: float, original_shape: Tuple[int, int], resized_shape: Tuple[int, int], padding: Tuple[int, int], roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         detections = []
         output = outputs[0].T
+        
+        # YOLOv8 output: [x, y, w, h, class0, class1, ...]
         scores = np.max(output[:, 4:], axis=1)
         mask = scores > confidence_threshold
         output = output[mask]
         scores = scores[mask]
         class_ids = np.argmax(output[:, 4:], axis=1)
         boxes = output[:, :4]
+
+        if len(boxes) == 0:
+            return []
 
         # original_shape: (h_orig, w_orig)
         # resized_shape: (new_h, new_w) - the image size inside the padding
@@ -495,31 +514,51 @@ class CoreModule:
         scale_x = w_orig / new_w
         scale_y = h_orig / new_h
 
-        # Adjust bounding box coordinates (unpadding and unscaling)
-        # YOLO output is [x_center, y_center, width, height]
-        boxes_unpadded = np.copy(boxes)
-        boxes_unpadded[:, 0] = (boxes_unpadded[:, 0] - left_pad) * scale_x
-        boxes_unpadded[:, 1] = (boxes_unpadded[:, 1] - top_pad) * scale_y
-        boxes_unpadded[:, 2] *= scale_x
-        boxes_unpadded[:, 3] *= scale_y
+        # Convert YOLO format [x_center, y_center, w, h] to [x1, y1, w, h] for NMS
+        nms_boxes = []
+        nms_scores = []
+        nms_class_ids = []
 
-        for i in range(len(boxes_unpadded)):
-            x_center, y_center, width, height = boxes_unpadded[i]
-            x1 = int(x_center - width / 2)
-            y1 = int(y_center - height / 2)
-            x2 = int(x_center + width / 2)
-            y2 = int(y_center + height / 2)
-            conf = float(scores[i])
-            cls = int(class_ids[i])
+        for i in range(len(boxes)):
+            x_center, y_center, width, height = boxes[i]
+            
+            # Rescale to original frame
+            x_center = (x_center - left_pad) * scale_x
+            y_center = (y_center - top_pad) * scale_y
+            width *= scale_x
+            height *= scale_y
+            
+            x1 = x_center - width / 2
+            y1 = y_center - height / 2
+            
+            nms_boxes.append([int(x1), int(y1), int(width), int(height)])
+            nms_scores.append(float(scores[i]))
+            nms_class_ids.append(int(class_ids[i]))
 
-            # Adjust for ROI cropping if applied earlier
-            if roi_enabled:
-                x1 += x1_crop
-                y1 += y1_crop
-                x2 += x1_crop
-                y2 += y1_crop
+        # Apply Non-Maximum Suppression (NMS)
+        indices = cv2.dnn.NMSBoxes(nms_boxes, nms_scores, confidence_threshold, 0.45)
+        
+        if len(indices) > 0:
+            # Flatten indices if needed (depends on OpenCV version)
+            if isinstance(indices, np.ndarray):
+                indices = indices.flatten()
+            
+            for i in indices:
+                x1, y1, w, h = nms_boxes[i]
+                x2 = x1 + w
+                y2 = y1 + h
+                conf = nms_scores[i]
+                cls = nms_class_ids[i]
 
-            detections.append(((x1, y1, x2, y2), conf, cls))
+                # Adjust for ROI cropping if applied earlier
+                if roi_enabled:
+                    x1 += x1_crop
+                    y1 += y1_crop
+                    x2 += x1_crop
+                    y2 += y1_crop
+
+                detections.append(((x1, y1, x2, y2), conf, cls))
+        
         return detections
 
     def _postprocess_pytorch_output(self, results: List[Any], confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
@@ -564,7 +603,8 @@ class CoreModule:
 
                 track["bbox"] = (new_x1, new_y1, new_x2, new_y2)
                 track["centroid"] = (x, y)
-                track["last_seen"] = current_time
+                # CRITICAL: Do NOT update last_seen here. 
+                # last_seen should only be updated on a successful detection match.
                 track["frame_index_last_seen"] = frame_index
                 track["status"] = "predicting"
                 # Update speed based on prediction
@@ -579,7 +619,42 @@ class CoreModule:
         for vehicle_id in to_remove:
             self.vehicle_data.pop(vehicle_id, None)
 
-        return predicted_tracks
+        # Deduplicate to prevent overlapping ghost boxes
+        self.vehicle_data = self._deduplicate_tracks(predicted_tracks)
+        return self.vehicle_data
+
+    def _deduplicate_tracks(self, tracks: Dict[str, Dict], iou_threshold: float = 0.7) -> Dict[str, Dict]:
+        """
+        Removes overlapping tracks, keeping the most confident or recently seen ones.
+        """
+        if not tracks:
+            return {}
+        
+        # Sort by status (active first) and then by last_seen
+        sorted_ids = sorted(
+            tracks.keys(), 
+            key=lambda fid: (tracks[fid]["status"] == "active", tracks[fid]["last_seen"]), 
+            reverse=True
+        )
+        
+        kept_tracks = {}
+        for fid in sorted_ids:
+            track = tracks[fid]
+            bbox = track["bbox"]
+            
+            is_duplicate = False
+            for kept_id, kept_track in kept_tracks.items():
+                # If high IoU with an already kept track, it's a duplicate
+                if self._bbox_iou(bbox, kept_track["bbox"]) > iou_threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                kept_tracks[fid] = track
+            else:
+                logger.debug(f"Deduplicated track {fid} (overlaps with {kept_id})")
+        
+        return kept_tracks
 
     def _is_point_in_roi(self, x: float, y: float) -> bool:
         if self.roi_polygon_points_pixel is None or not self.config.get("roi_processing", {}).get("enabled", False):
@@ -597,13 +672,14 @@ class CoreModule:
     ) -> Dict[str, Dict]:
         new_or_updated_tracks = {}
         
-        # 1. Predict all existing tracks
+        # 1. Prepare existing tracks for association
         for vehicle_id, track in self.vehicle_data.items():
             kf = track.get("kalman_filter")
             if kf:
+                # CRITICAL: Always predict before association to get the prior state for current frame
                 kf.predict()
-                # Store predicted bbox as (x1, y1, x2, y2) for association
-                x, y, _vx, _vy = kf.x[0], kf.x[1], kf.x[2], kf.x[3]
+                
+                x, y = kf.x[0][0], kf.x[1][0]
                 x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
                 width_orig = x2_orig - x1_orig
                 height_orig = y2_orig - y1_orig
@@ -611,8 +687,6 @@ class CoreModule:
                     x - width_orig / 2, y - height_orig / 2,
                     x + width_orig / 2, y + height_orig / 2
                 )
-                # Update centroid with prediction as well (for ROI check in unmatched)
-                track["centroid"] = (float(x), float(y))
         
         # 2. Hungarian Algorithm for Association
         cost_matrix = self._calculate_cost_matrix(detections, self.vehicle_data)
@@ -623,66 +697,66 @@ class CoreModule:
             row_ind, col_ind = np.array([]), np.array([])
             
         matched_detections = set()
+        matched_tracks = set()
         
-        # Process matched tracks
-        for i, j in zip(row_ind, col_ind):
-            detection_bbox, detection_conf, detection_cls = detections[i]
-            track_id = list(self.vehicle_data.keys())[j]
-            track = self.vehicle_data[track_id]
+        # 3. Process matched tracks
+        # Relaxed threshold: Cost 1.5 allows for low IoU (e.g., 0.2) + class match
+        MATCHING_THRESHOLD = 1.5 
 
-            # Only associate if the cost is below a certain threshold
-            if cost_matrix[i, j] < proximity_threshold:
-                # Update existing track
+        for i, j in zip(row_ind, col_ind):
+            cost = cost_matrix[i, j]
+            if cost < MATCHING_THRESHOLD:
+                detection_bbox, detection_conf, detection_cls = detections[i]
+                track_id = list(self.vehicle_data.keys())[j]
+                track = self.vehicle_data[track_id]
+
                 self._update_track(track, (detection_bbox, detection_conf, detection_cls), current_time, frame, frame_index)
                 
-                # Ensure updated track is still in ROI
                 cx, cy = track["centroid"]
                 if self._is_point_in_roi(cx, cy):
                     new_or_updated_tracks[track_id] = track
                     matched_detections.add(i)
-                else:
-                    logger.debug(f"Matched track {track_id} moved out of ROI at ({cx}, {cy}). Dropping.")
-            else:
-                # Treat as unmatched (too high cost)
-                pass # Will be handled by unmatched_tracks or unmatched_detections
+                    matched_tracks.add(track_id)
 
-        # Process unmatched tracks (no detection in current frame)
-        for j, track_id in enumerate(self.vehicle_data.keys()):
-            if j not in col_ind or cost_matrix[row_ind[np.where(col_ind == j)[0][0]], j] >= proximity_threshold:
-                track = self.vehicle_data[track_id]
-                # Check for re-identification candidates
-                # If a track has been lost but is seen again with a low confidence
-                # it could be re-identified.
-                if (current_time - track["last_seen"]) < self.reid_timeout:
-                    if track.get("confidence", 0) < self.occlusion_confidence_threshold:
-                        track["is_occluded"] = True
-                    else:
-                        track["is_occluded"] = False
-                
-                # Keep track if within timeout or was just occluded
+        # 4. Process unmatched tracks (keep them alive if within timeout)
+        for track_id, track in self.vehicle_data.items():
+            if track_id not in matched_tracks:
+                # Keep track if within timeout
                 if (current_time - track["last_seen"]) < self.track_timeout:
-                    # Update speed based on prediction (no measurement update)
-                    prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps))
-                    track["speed"] = self._estimate_speed_kalman(track, current_time, prev_time)
-                    track["last_speed_update_time"] = current_time
-
-                    # Ensure predicted position is still in ROI
+                    track["status"] = "predicting"
                     cx, cy = track["centroid"]
                     if self._is_point_in_roi(cx, cy):
                         new_or_updated_tracks[track_id] = track
-                    else:
-                        logger.debug(f"Predicted track {track_id} moved out of ROI at ({cx}, {cy}). Dropping.")
 
-
-        # Process unmatched detections (new vehicles)
+        # 5. Process unmatched detections (new vehicles)
         for i, (detection_bbox, detection_conf, detection_cls) in enumerate(detections):
             if i not in matched_detections and detection_conf >= confidence_threshold:
-                new_track_id = self._initialize_new_track(frame, (detection_bbox, detection_conf, detection_cls), current_time, frame_index)
-                if new_track_id:
-                    new_or_updated_tracks[new_track_id] = self.vehicle_data[new_track_id]
+                # Extra check: ensure new detection isn't extremely close to an existing track
+                # to prevent 'phantom' overlapping boxes
+                is_duplicate = False
+                det_cx = (detection_bbox[0] + detection_bbox[2]) / 2
+                det_cy = (detection_bbox[1] + detection_bbox[3]) / 2
+                det_w = detection_bbox[2] - detection_bbox[0]
+                det_h = detection_bbox[3] - detection_bbox[1]
+                
+                # Dynamic threshold: 25% of box dimension or min 30px
+                dup_thresh = max(30, min(det_w, det_h) * 0.4)
+                
+                for existing_track in new_or_updated_tracks.values():
+                    ex_cx, ex_cy = existing_track["centroid"]
+                    dist = math.sqrt((det_cx - ex_cx)**2 + (det_cy - ex_cy)**2)
+                    if dist < dup_thresh: 
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    new_track_id = self._initialize_new_track(frame, (detection_bbox, detection_conf, detection_cls), current_time, frame_index)
+                    if new_track_id:
+                        new_or_updated_tracks[new_track_id] = self.vehicle_data[new_track_id]
         
-        self.vehicle_data = new_or_updated_tracks # Update master registry
-        return new_or_updated_tracks
+        # Deduplicate final tracks to ensure no overlaps
+        self.vehicle_data = self._deduplicate_tracks(new_or_updated_tracks)
+        return self.vehicle_data
 
     def _calculate_cost_matrix(self, detections: List[Tuple], tracks: Dict[str, Dict]) -> np.ndarray:
         if not detections or not tracks:
@@ -690,22 +764,32 @@ class CoreModule:
 
         num_detections = len(detections)
         num_tracks = len(tracks)
-        cost_matrix = np.full((num_detections, num_tracks), 10000.0)  # Large cost for non-matches
+        cost_matrix = np.full((num_detections, num_tracks), 10000.0)
 
         track_list = list(tracks.values())
 
         for d_idx, (det_bbox, det_conf, det_cls) in enumerate(detections):
+            det_cx = (det_bbox[0] + det_bbox[2]) / 2
+            det_cy = (det_bbox[1] + det_bbox[3]) / 2
+            
             for t_idx, track in enumerate(track_list):
                 if "predicted_bbox" in track:
-                    # Calculate IoU between detection and predicted track bbox
+                    # 1. IoU Cost (Standard)
                     iou = self._bbox_iou(det_bbox, track["predicted_bbox"])
+                    iou_cost = 1 - iou
                     
-                    # Consider class matching as well
-                    class_match_cost = 0 if det_cls == track["class_id"] else 0.5 # Small penalty for class mismatch
+                    # 2. Distance Cost (Fallback/Weight)
+                    tr_cx, tr_cy = track["centroid"]
+                    dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
+                    # Normalize distance cost (e.g., 100 pixels = 1.0 cost)
+                    dist_cost = dist / 100.0
+                    
+                    # 3. Class Match Penalty
+                    class_cost = 0 if det_cls == track["class_id"] else 0.8
 
-                    # Cost is 1 - IoU (lower is better), plus class mismatch penalty
-                    # Adjust cost based on confidence: lower confidence detections should have higher cost
-                    cost = (1 - iou) + class_match_cost + (1 - det_conf) 
+                    # Combined Cost (weighted)
+                    # We prioritize IoU, but allow Distance to help if overlap is low
+                    cost = min(iou_cost, dist_cost) + class_cost + (1 - det_conf) * 0.5
                     
                     cost_matrix[d_idx, t_idx] = cost
         return cost_matrix
@@ -760,6 +844,8 @@ class CoreModule:
                         "direction": data.get("direction", "N/A"),
                         "acceleration": data.get("acceleration"),
                         "embedding": data.get("embedding") if data.get("new_embedding") else None,
+                        "car_model": data.get("car_model"),
+                        "car_model_confidence": data.get("car_model_confidence"),
                     })
                     data["new_embedding"] = False # Clear the flag after putting in queue
                     
@@ -915,6 +1001,23 @@ class CoreModule:
 
         # Behavior analysis (stopped, speeding, accelerating, changing lane)
         self._analyze_behavior(track)  # Classify based on new speed/state
+
+        # Car Make/Model Classification
+        car_class_interval = self.config.get("vehicle_detection", {}).get("car_classification_interval_frames", 60)
+        if (
+            self.car_classifier
+            and track.get("car_model") is None
+            and frame_index % max(1, car_class_interval) == 0
+        ):
+            x1, y1, x2, y2 = map(int, bbox)
+            h, w = frame.shape[:2]
+            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            if crop.size > 0:
+                label, confidence = self.car_classifier.classify(crop)
+                if label:
+                    track["car_model"] = label
+                    track["car_model_confidence"] = confidence
+                    logger.info(f"Car classified for {track['vehicle_id']}: {label} ({confidence:.2f})")
 
         # ReID Embeddings - Optimized with Staggering and Rate Limiting
         reid_interval = self.config.get("vehicle_detection", {}).get("reid_interval_frames", 60)

@@ -292,7 +292,8 @@ class DatabaseManager:
                 feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
                 global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
                 bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
-                acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, flags TEXT,
+                acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, 
+                car_model TEXT, car_model_confidence REAL, car_color TEXT, flags TEXT,
                 PRIMARY KEY (feed_id, track_id, timestamp))""")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
@@ -511,8 +512,9 @@ class DatabaseManager:
         sql = """INSERT OR REPLACE INTO vehicle_tracks (
             feed_id, track_id, timestamp, global_vehicle_id, class_id, confidence,
             bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
-            speed, acceleration, lane, direction, license_plate, ocr_confidence, flags
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+            speed, acceleration, lane, direction, license_plate, ocr_confidence, 
+            car_model, car_model_confidence, car_color, flags
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         
         batch_params = []
         for vd in vehicle_data_list:
@@ -539,6 +541,9 @@ class DatabaseManager:
                 vd.get("direction"),
                 vd.get("license_plate"),
                 vd.get("ocr_confidence"),
+                vd.get("car_model"),
+                vd.get("car_model_confidence"),
+                vd.get("car_color"),
                 flags_str,
             )
             batch_params.append(params)
@@ -604,7 +609,10 @@ class DatabaseManager:
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:
         # ... (This method remains unchanged)
-        sql = """INSERT OR REPLACE INTO vehicle_tracks (feed_id,track_id,timestamp,class_id,confidence,bbox_x1,bbox_y1,bbox_x2,bbox_y2,center_x,center_y,speed,acceleration,lane,direction,license_plate,ocr_confidence,flags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        sql = """INSERT OR REPLACE INTO vehicle_tracks (
+            feed_id,track_id,timestamp,class_id,confidence,bbox_x1,bbox_y1,bbox_x2,bbox_y2,center_x,center_y,
+            speed,acceleration,lane,direction,license_plate,ocr_confidence, car_model, car_model_confidence, car_color, flags
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         try:
             bbox = vd.get("bbox", [None] * 4)
             center = vd.get("center", [None] * 2)
@@ -627,6 +635,9 @@ class DatabaseManager:
                 vd.get("direction"),
                 vd.get("license_plate"),
                 vd.get("ocr_confidence"),
+                vd.get("car_model"),
+                vd.get("car_model_confidence"),
+                vd.get("car_color"),
                 flags_str,
             )
             with self.lock:
@@ -867,7 +878,7 @@ class DatabaseManager:
     async def get_vehicle_global_history(self, global_id: str) -> List[Dict]:
         """Returns the history of a vehicle across all feeds using its global ID."""
         query = """
-        SELECT feed_id, track_id, timestamp, class_id, confidence, speed, lane, direction, license_plate
+        SELECT feed_id, track_id, timestamp, class_id, confidence, speed, lane, direction, license_plate, car_model
         FROM vehicle_tracks 
         WHERE global_vehicle_id = ?
         ORDER BY timestamp ASC

@@ -210,7 +210,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         if (lastDrawnIndexRef.current - index > 100) {
             console.log(`[useVideoSocket] Video loop detected for ${streamId}. Resetting frame tracker.`);
             lastDrawnIndexRef.current = -1;
-            smoothedVehiclesRef.current.clear();
         } else {
             // Minor jitter, just skip
             return;
@@ -230,7 +229,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         ctx.font = 'bold 10px Arial';
 
         vehiclesToDraw.forEach(v => {
-            if (v.status && v.status !== 'active') return;
+            if (v.status && v.status !== 'active' && v.status !== 'predicting') return;
 
             let [x1, y1, x2, y2] = v.bbox;
             
