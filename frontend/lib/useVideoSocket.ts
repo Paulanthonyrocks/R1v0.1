@@ -38,6 +38,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   const frameCountRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
+  const lastProcessedIndexRef = useRef<number>(-1);
 
   const subscribeToFeed = useCallback(() => {
     if (client.isConnected() && streamId) {
@@ -55,6 +56,14 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     if (data.feed_id && data.feed_id !== streamId) {
         return;
     }
+
+    // Drop late frames (out of order), but allow for loops
+    if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
+        if (lastProcessedIndexRef.current - data.frame_index < 100) {
+            return;
+        }
+    }
+    lastProcessedIndexRef.current = data.frame_index || 0;
 
     frameCountRef.current += 1;
     
@@ -101,6 +110,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     }
     
     if (decodedImage) {
+        // Guard against out-of-order execution: 
+        // Only update if this frame is newer than what's currently in the ref
+        if (data.frame_index !== undefined && frameRef.current && data.frame_index < frameRef.current.index) {
+            if (decodedImage instanceof ImageBitmap) decodedImage.close();
+            return;
+        }
+
         if (frameRef.current?.image instanceof ImageBitmap && frameRef.current.image !== decodedImage) {
             frameRef.current.image.close();
         }
@@ -194,6 +210,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         if (lastDrawnIndexRef.current - index > 100) {
             console.log(`[useVideoSocket] Video loop detected for ${streamId}. Resetting frame tracker.`);
             lastDrawnIndexRef.current = -1;
+            smoothedVehiclesRef.current.clear();
         } else {
             // Minor jitter, just skip
             return;
@@ -206,13 +223,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     ctx.drawImage(image, 0, 0, canvasWidth, canvasHeight);
     
-    if (currentVehicles && currentVehicles.length > 0) {
-        ctx.strokeStyle = 'red';
-        ctx.lineWidth = 1;
-        ctx.font = '10px Arial';
-        ctx.fillStyle = 'white';
+    const vehiclesToDraw = currentVehicles || [];
+    
+    if (vehiclesToDraw.length > 0) {
+        ctx.lineWidth = 2;
+        ctx.font = 'bold 10px Arial';
 
-        currentVehicles.forEach(v => {
+        vehiclesToDraw.forEach(v => {
             if (v.status && v.status !== 'active') return;
 
             let [x1, y1, x2, y2] = v.bbox;
@@ -221,60 +238,65 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 return;
             }
 
-            x1 *= scaleX;
-            y1 *= scaleY;
-            x2 *= scaleX;
-            y2 *= scaleY;
+            const sx1 = x1 * scaleX;
+            const sy1 = y1 * scaleY;
+            const sx2 = x2 * scaleX;
+            const sy2 = y2 * scaleY;
+            const sw = sx2 - sx1;
+            const sh = sy2 - sy1;
 
-            let color = 'red';
+            let color = '#FF0000';
             switch (v.behavior) {
-                case 'moving': color = 'lime'; break;
-                case 'stopped': color = 'red'; break;
-                case 'speeding': color = 'blue'; break;
-                case 'accelerating': color = 'yellow'; break;
-                case 'decelerating': color = 'cyan'; break;
-                case 'lane_changing': color = 'magenta'; break;
-                default: color = 'gray'; break;
+                case 'moving': color = '#00FF00'; break; // Bright lime
+                case 'stopped': color = '#FF0000'; break; // Red
+                case 'speeding': color = '#0000FF'; break; // Blue
+                case 'accelerating': color = '#FFFF00'; break; // Yellow
+                case 'decelerating': color = '#00FFFF'; break; // Cyan
+                case 'lane_changing': color = '#FF00FF'; break; // Magenta
+                default: color = '#888888'; break; // Gray
             }
             ctx.strokeStyle = color;
 
             if (showBoundingBoxes) {
-                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                ctx.strokeRect(sx1, sy1, sw, sh);
+                // Add a small inner glow/shadow effect
+                ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(sx1 + 1, sy1 + 1, sw - 2, sh - 2);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = color;
             }
             
             if (showVehicleDetails) {
                 const lines = [
-                    `ID: ${v.vehicle_id} (${v.class_name})`,
-                    `Spd: ${v.speed.toFixed(1)} km/h`
+                    `${v.vehicle_id.split('_').pop()}: ${v.class_name}`,
+                    `${v.speed.toFixed(0)} km/h`
                 ];
                 if (v.license_plate && v.license_plate !== "Unknown") {
-                    lines.push(`LP: ${v.license_plate}`);
+                    lines.push(v.license_plate);
                 }
 
-                const font = `10px Arial`; 
-                ctx.font = font;
+                const lineHeight = 12; 
+                let textY = sy1 - (lines.length * lineHeight) - 2;
 
-                const lineHeight = 14; 
-                let textY = y1 - 3;
-
-                if (textY < lines.length * lineHeight) {
-                    textY = y2 + lineHeight;
+                if (textY < 0) {
+                    textY = sy2 + 2;
                 }
 
                 lines.forEach((line, i) => {
                     const textWidth = ctx.measureText(line).width;
-                    const textX = x1 + (x2 - x1 - textWidth) / 2;
+                    const textX = sx1 + (sw - textWidth) / 2;
 
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-                    ctx.fillRect(textX - 2, textY + (i * lineHeight) - lineHeight + 2, textWidth + 4, lineHeight);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(textX - 2, textY + (i * lineHeight), textWidth + 4, lineHeight);
                     
-                    ctx.fillStyle = 'white';
-                    ctx.fillText(line, textX, textY + (i * lineHeight) + 2);
+                    ctx.fillStyle = color;
+                    ctx.fillText(line, textX, textY + (i * lineHeight) + 10);
                 });
             }
         });
     }
-  }, []);
+  }, [streamId]);
 
   const updateFeedConfig = useCallback((config: any) => {
       if (client.isConnected() && streamId) {

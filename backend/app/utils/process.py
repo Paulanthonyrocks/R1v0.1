@@ -14,6 +14,7 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
     it triggers the stop_event and forces termination if necessary.
     """
     orig_ppid = os.getppid()
+    pid = os.getpid()
     
     def _monitor():
         # Allow brief startup grace period
@@ -25,7 +26,7 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
                 parent_dead = False
                 
                 # On Linux, if parent dies, ppid becomes 1 (init) or a subreaper
-                if curr_ppid != orig_ppid:
+                if curr_ppid != orig_ppid or curr_ppid == 1:
                     parent_dead = True
                 else:
                     try:
@@ -35,15 +36,24 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
                          parent_dead = True
                 
                 if parent_dead:
-                    logger.warning(f"[{label}] Parent {orig_ppid} gone (curr: {curr_ppid}). Initiating shutdown.")
+                    msg = f"[{label}] Parent {orig_ppid} gone (curr: {curr_ppid}, self: {pid}). Initiating shutdown."
+                    try:
+                        logger.warning(msg)
+                        print(msg)
+                    except:
+                        pass
+                        
                     stop_event.set()
                     
                     # Give the main loop a moment to see stop_event and exit cleanly
-                    time.sleep(3.0)
+                    time.sleep(2.0)
                     
                     # Force exit if still alive
-                    logger.warning(f"[{label}] Force terminating self (parent gone).")
-                    os.kill(os.getpid(), signal.SIGKILL)
+                    try:
+                        logger.warning(f"[{label}] Force terminating self PID {pid} (parent gone).")
+                    except:
+                        pass
+                    os.kill(pid, signal.SIGKILL)
                     break
                     
             except Exception as e:

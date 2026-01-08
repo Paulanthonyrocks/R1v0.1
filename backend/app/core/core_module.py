@@ -262,7 +262,7 @@ class CoreModule:
             self.roi_polygon_points_pixel = None
 
     def _load_model(self, use_gpu: bool = False):
-        if self.model is not None:
+        if self.model is not None and not isinstance(self.model, str):
             logger.info(f"Using preloaded model for feed {self.feed_id}")
             return
 
@@ -462,7 +462,7 @@ class CoreModule:
         output_name = self.model.get_outputs()[0].name
         outputs = self.model.run([output_name], {input_name: input_tensor})[0]
 
-        return self._postprocess_onnx_output(outputs, confidence_threshold, (new_h, new_w), img_size, (top_pad, left_pad), roi_enabled, x1_crop, y1_crop)
+        return self._postprocess_onnx_output(outputs, confidence_threshold, (h, w), (new_h, new_w), (top_pad, left_pad), roi_enabled, x1_crop, y1_crop)
 
     def _run_pytorch_inference(self, processed_frame: np.ndarray, confidence_threshold: float, roi_enabled: bool, x1_crop: int, y1_crop: int) -> List[Tuple]:
         results = self.model.predict(
@@ -479,38 +479,32 @@ class CoreModule:
         detections = []
         output = outputs[0].T
         scores = np.max(output[:, 4:], axis=1)
-        output = output[scores > confidence_threshold]
-        scores = scores[scores > confidence_threshold]
+        mask = scores > confidence_threshold
+        output = output[mask]
+        scores = scores[mask]
         class_ids = np.argmax(output[:, 4:], axis=1)
         boxes = output[:, :4]
 
-        # Adjust for padding and scaling
-        input_w, input_h = resized_shape
-        pad_x, pad_y = padding
-        scale_x = original_shape[0] / input_w
-        scale_y = original_shape[1] / input_h
+        # original_shape: (h_orig, w_orig)
+        # resized_shape: (new_h, new_w) - the image size inside the padding
+        # padding: (top_pad, left_pad)
+        h_orig, w_orig = original_shape
+        new_h, new_w = resized_shape
+        top_pad, left_pad = padding
+
+        scale_x = w_orig / new_w
+        scale_y = h_orig / new_h
 
         # Adjust bounding box coordinates (unpadding and unscaling)
+        # YOLO output is [x_center, y_center, width, height]
         boxes_unpadded = np.copy(boxes)
-        boxes_unpadded[:, 0] -= pad_x
-        boxes_unpadded[:, 1] -= pad_y
-        boxes_unpadded[:, 2] -= pad_x
-        boxes_unpadded[:, 3] -= pad_y
-
-        # Scale coordinates back to original frame size
-        boxes_unpadded[:, 0] *= scale_x
-        boxes_unpadded[:, 1] *= scale_y
+        boxes_unpadded[:, 0] = (boxes_unpadded[:, 0] - left_pad) * scale_x
+        boxes_unpadded[:, 1] = (boxes_unpadded[:, 1] - top_pad) * scale_y
         boxes_unpadded[:, 2] *= scale_x
         boxes_unpadded[:, 3] *= scale_y
 
-        # Clip boxes to image boundaries and convert to int
-        boxes_unpadded[:, 0] = np.clip(boxes_unpadded[:, 0], 0, original_shape[0])
-        boxes_unpadded[:, 1] = np.clip(boxes_unpadded[:, 1], 0, original_shape[1])
-        boxes_unpadded[:, 2] = np.clip(boxes_unpadded[:, 2], 0, original_shape[0])
-        boxes_unpadded[:, 3] = np.clip(boxes_unpadded[:, 3], 0, original_shape[1])
-        
         for i in range(len(boxes_unpadded)):
-            x_center, y_center, width, height = boxes_unpadded[i].astype(int)
+            x_center, y_center, width, height = boxes_unpadded[i]
             x1 = int(x_center - width / 2)
             y1 = int(y_center - height / 2)
             x2 = int(x_center + width / 2)
@@ -555,8 +549,7 @@ class CoreModule:
             kf = track.get("kalman_filter")
             if kf:
                 kf.predict()
-                predicted_state = kf.x
-                x, y, _vx, _vy = predicted_state[0], predicted_state[1], predicted_state[2], predicted_state[3]
+                x, y = float(kf.x[0][0]), float(kf.x[1][0])
                 
                 # Update bbox based on predicted center and original dimensions
                 # Assuming bbox stored is (x1, y1, x2, y2)

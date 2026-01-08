@@ -92,18 +92,23 @@ def inference_worker(
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+    skip_frames = vehicle_det_cfg.get("skip_frames", 2)
 
     # Pre-load shared model if possible to save memory
     model_path = vehicle_det_cfg.get("model_path")
     if model_path:
         print(f"DEBUG: [Worker {worker_id}] Pre-loading shared model: {model_path}")
-        from ultralytics import YOLO
         try:
             # Resolve path relative to project root
             resolved_path = Path(config.get("project_root_dir", "")) / model_path
-            shared_model = YOLO(str(resolved_path))
-            # Move to CPU explicitly to save VRAM if present (or just use CPU)
-            shared_model.to("cpu")
+            if str(resolved_path).endswith(".onnx"):
+                import onnxruntime as ort
+                shared_model = ort.InferenceSession(str(resolved_path), providers=["CPUExecutionProvider"])
+            else:
+                from ultralytics import YOLO
+                shared_model = YOLO(str(resolved_path))
+                # Move to CPU explicitly to save VRAM if present (or just use CPU)
+                shared_model.to("cpu")
             print(f"DEBUG: [Worker {worker_id}] Shared model loaded successfully.")
         except Exception as e:
             print(f"DEBUG: [Worker {worker_id}] Failed to preload model: {e}")
@@ -111,14 +116,21 @@ def inference_worker(
     print(f"DEBUG: [Worker {worker_id}] Entering main processing loop.")
 
     def handle_command(cmd):
+        nonlocal skip_frames
         if not cmd: return
         feed_id = cmd.get("feed_id")
-        if not feed_id: return
-
+        
         if cmd.get("type") == "config_update":
+            data = cmd.get("data", {})
+            if "skip_frames" in data:
+                try:
+                    skip_frames = int(data["skip_frames"])
+                    logger.info(f"[Worker {worker_id}] Updated skip_frames to {skip_frames}")
+                except: pass
+            
+            if not feed_id: return
             logger.info(f"[Worker {worker_id}] Received config update command for {feed_id}")
             
-            data = cmd.get("data", {})
             cm_update = data.copy()
             
             # Transform ROI for CoreModule
@@ -174,11 +186,6 @@ def inference_worker(
                     continue
                 # --------------------------------
 
-                # 2. Decode frame
-                nparr = np.frombuffer(frame_bytes, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                if frame is None: continue
-                
                 # 3. Lazy initialize feed logic
                 if feed_id not in core_modules:
                     logger.info(f"[Worker {worker_id}] Initializing core for feed {feed_id}")
@@ -202,11 +209,23 @@ def inference_worker(
                 core = core_modules[feed_id]
                 monitor = traffic_monitors[feed_id]
                 
-                # 4. Process AI
-                # (Simplified detection logic for example, full track logic stays in CoreModule)
-                tracked_vehicles = core.detect_and_track(
-                    frame, frame_index
-                )
+                # 4. Process AI with Frame Skipping
+                # Logic: Detect every (skip_frames + 1) frames, predict on others.
+                # Always detect if no tracks exist.
+                should_detect = (frame_index % (skip_frames + 1) == 0) or (not core.vehicle_data)
+                
+                if should_detect:
+                    # 2. Decode frame only if we need to detect
+                    nparr = np.frombuffer(frame_bytes, np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    if frame is None: continue
+                    
+                    tracked_vehicles = core.detect_and_track(
+                        frame, frame_index
+                    )
+                else:
+                    # Skip detection, use Kalman Filter prediction
+                    tracked_vehicles = core.predict_only(frame_index)
                 
                 monitor.update_vehicles(tracked_vehicles)
                 metrics = monitor.get_metrics()

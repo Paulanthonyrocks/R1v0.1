@@ -996,6 +996,9 @@ class FeedManager:
             try:
                 await asyncio.sleep(check_interval)
                 
+                if self._stop_reader_flag:
+                    break
+                
                 feeds_to_restart = []
                 async with self._lock:
                     for feed_id, entry in self.process_registry.items():
@@ -1016,6 +1019,10 @@ class FeedManager:
                                 feeds_to_restart.append(feed_id)
 
                 for feed_id in feeds_to_restart:
+                    if self._stop_reader_flag:
+                        logger.info(f"Watchdog: Shutdown flag detected, aborting restart for {feed_id}.")
+                        break
+                        
                     try:
                         logger.info(f"Watchdog: Restarting feed '{feed_id}'...")
                         # start_feed will handle cleanup of existing resources via _detach_resources

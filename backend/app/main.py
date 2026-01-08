@@ -65,6 +65,38 @@ from app.utils.file_watcher import FileSystemWatcher
 logger = logging.getLogger("main")
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# --- Signal Handling for Child Process Cleanup ---
+def setup_signal_handlers():
+    """Registers signal handlers to ensure child processes are cleaned up."""
+    def handle_signal(sig, frame):
+        logger.info(f"Caught signal {sig}, initiating child process termination...")
+        
+        # 1. Signal FeedManager to stop internal loops (Watchdog, Result Reader)
+        try:
+            from app.services import get_feed_manager
+            fm = get_feed_manager()
+            fm._stop_reader_flag = True
+            logger.info("FeedManager shutdown flag set from signal handler.")
+        except Exception as e:
+            # FeedManager might not be initialized yet
+            logger.debug(f"Could not set FeedManager shutdown flag: {e}")
+
+        # 2. Terminate all active child processes
+        for process in multiprocessing.active_children():
+            logger.info(f"Terminating child process: {process.name} (PID: {process.pid})")
+            process.terminate()
+            process.join(timeout=0.5)
+            if process.is_alive():
+                process.kill()
+        # Note: We don't call sys.exit() here as uvicorn/fastapi will handle the actual exit sequence
+        # after this handler returns (if it's not a terminal signal).
+
+    import signal
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+setup_signal_handlers()
+
 # --- Lifespan Manager (Replaces startup/shutdown events) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -234,6 +266,17 @@ async def lifespan(app: FastAPI):
         
     await close_database()
     logger.info("Database connection closed.")
+    
+    # Final sweep for any remaining child processes
+    remaining_children = multiprocessing.active_children()
+    if remaining_children:
+        logger.info(f"Final sweep: Terminating {len(remaining_children)} remaining child processes...")
+        for process in remaining_children:
+            process.terminate()
+            process.join(timeout=0.2)
+            if process.is_alive():
+                process.kill()
+
     logger.info("Shutdown complete.")
 
 # --- App Instance ---
@@ -311,6 +354,7 @@ origins = [
     "http://localhost:3000",
     "http://localhost:5173",
     "https://*.ngrok-free.app",
+    "https://3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
 ]
 # If you need wildcard, you MUST set allow_credentials=False
 # If you need credentials, you MUST remove "*" from origins

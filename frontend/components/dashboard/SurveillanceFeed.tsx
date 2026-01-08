@@ -155,7 +155,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, vehicles, feed_id, roiPoints, roiMode, lastFrameRef]);
+    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, feed_id, roiPoints, roiMode, lastFrameRef]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
