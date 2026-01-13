@@ -30,6 +30,15 @@ def load_ml_model(model_path: str = None) -> YOLO:
 
         logger.info(f"Loading YOLOv8 model from {model_path}")
         model = YOLO(model_path)
+        
+        # Check for CUDA and move model
+        import torch
+        if torch.cuda.is_available():
+            logger.info("CUDA available. Moving pavement model to GPU.")
+            model.to("cuda")
+        else:
+            logger.info("CUDA not available. Using CPU for pavement model.")
+            
         return model
     except Exception as e:
         logger.error(f"Error loading YOLOv8 model: {str(e)}")

@@ -1,6 +1,11 @@
 # Operating System files
 .DS_Store
 Thumbs.db
+venv
+setup.sh
+=4.5.0
+ngrok.tgz
+ngrok
 
 # Node modules
 node_modules/
@@ -15,13 +20,15 @@ secrets.txt
 .env.local
 backend/configs/firebase/service-account-key.json
 backend/data
+backend/__pycache__/__init__.cpython-311.pyc
+backend/logs
 data
 .vscode
 .next
 .idx
 .cursor
 .firebase
-.gemini/
+.gemini
 
 # Python cache files
 backend/__pycache__/
@@ -31,18 +38,6 @@ __pycache__/
 
 # Large data files (consider Git LFS if necessary)
 *.dat"commit_message.txt" 
-venv
-setup.sh
-=4.5.0
-ngrok.tgz
-ngrok
-memory.md
-backend/__pycache__/__init__.cpython-311.pyc
-backend/logs
-backend/data/vehicle_data.db
-memory.md
-.gemini/memory.md
-.gemini/memory.md
+
+
 colab/r1v0.1.ipynb
-memory.md
-.gemini/memory.md

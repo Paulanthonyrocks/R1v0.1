@@ -20,7 +20,24 @@ class CarClassifier:
             return
 
         try:
-            self.interpreter = tf.lite.Interpreter(model_path=str(self.model_path))
+            # Check for GPU acceleration config
+            use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
+            delegates = []
+            
+            if use_gpu:
+                try:
+                    # Attempt to load the GPU delegate
+                    # This library name is standard for Linux/Colab environments with TF installed
+                    gpu_delegate = tf.lite.experimental.load_delegate('libtensorflowlite_gpu_delegate.so')
+                    delegates.append(gpu_delegate)
+                    logger.info("CarClassifier: GPU delegate loaded successfully.")
+                except Exception as e:
+                    logger.warning(f"CarClassifier: Failed to load GPU delegate, falling back to CPU. Error: {e}")
+
+            self.interpreter = tf.lite.Interpreter(
+                model_path=str(self.model_path),
+                experimental_delegates=delegates
+            )
             self.interpreter.allocate_tensors()
             
             self.input_details = self.interpreter.get_input_details()

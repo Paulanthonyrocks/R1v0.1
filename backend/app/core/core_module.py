@@ -3,6 +3,7 @@ import logging
 import time
 import math
 import numpy as np
+import uuid
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -201,7 +202,6 @@ class CoreModule:
         self.kf_params = config.get("kalman_filter_params", {})
         self.ewma_alpha = config["behavior_analysis"].get("ewma_alpha", 0.2) # New parameter for EWMA smoothing
         self.occlusion_confidence_threshold = config["vehicle_detection"].get("occlusion_confidence_threshold", 0.2) # New parameter for occlusion detection
-        self.vehicle_id_counter = 1 # Initialize instance-specific counter
 
         # Lane detection caching
         self.lane_detection_interval = config["lane_detection"].get("lane_detection_interval", 10)
@@ -626,7 +626,7 @@ class CoreModule:
                 # Confidence Decay: reduce confidence as we predict more frames without detection
                 # Increased decay from 0.95 to 0.85 to clear ghosts faster
                 time_since_seen = current_time - track["last_seen"]
-                track["confidence"] *= 0.85 # Stronger decay per frame
+                track["confidence"] *= 0.7 # Stronger decay per frame (was 0.85)
                 
                 # Only keep in output if it's recently seen AND has enough confidence
                 if time_since_seen < PREDICT_TIMEOUT and track["confidence"] > 0.1:
@@ -732,8 +732,8 @@ class CoreModule:
         matched_tracks = set()
         
         # 3. Process matched tracks
-        # Relaxed threshold: Cost 1.5 allows for low IoU (e.g., 0.2) + class match
-        MATCHING_THRESHOLD = 1.5 
+        # Stricter threshold: 0.8 ensures better association quality (IoU based)
+        MATCHING_THRESHOLD = 0.8 
 
         for i, j in zip(row_ind, col_ind):
             cost = cost_matrix[i, j]
@@ -799,6 +799,7 @@ class CoreModule:
         cost_matrix = np.full((num_detections, num_tracks), 10000.0)
 
         track_list = list(tracks.values())
+        proximity_thresh = float(self.proximity_threshold) if self.proximity_threshold > 0 else 100.0
 
         for d_idx, (det_bbox, det_conf, det_cls) in enumerate(detections):
             det_cx = (det_bbox[0] + det_bbox[2]) / 2
@@ -806,22 +807,30 @@ class CoreModule:
             
             for t_idx, track in enumerate(track_list):
                 if "predicted_bbox" in track:
-                    # 1. IoU Cost (Standard)
+                    # 1. IoU Cost (Primary)
                     iou = self._bbox_iou(det_bbox, track["predicted_bbox"])
-                    iou_cost = 1 - iou
+                    iou_cost = 1.0 - iou
                     
-                    # 2. Distance Cost (Fallback/Weight)
+                    # 2. Distance Cost (Secondary/Fallback)
                     tr_cx, tr_cy = track["centroid"]
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
-                    # Normalize distance cost (e.g., 100 pixels = 1.0 cost)
-                    dist_cost = dist / 100.0
+                    # Normalize distance cost using proximity threshold
+                    dist_cost = dist / proximity_thresh
                     
-                    # 3. Class Match Penalty
-                    class_cost = 0 if det_cls == track["class_id"] else 0.8
+                    # 3. Class Match Penalty (Reduced to allow some flexibility)
+                    class_penalty = 0 if det_cls == track["class_id"] else 0.8
 
-                    # Combined Cost (weighted)
-                    # We prioritize IoU, but allow Distance to help if overlap is low
-                    cost = min(iou_cost, dist_cost) + class_cost + (1 - det_conf) * 0.5
+                    # Combined Cost: Prioritize IoU if overlap exists, else use distance
+                    if iou > 0.1:
+                        cost = iou_cost + class_penalty * 0.4
+                    else:
+                        # For non-overlapping boxes, use distance but with a higher base cost
+                        # If class mismatch AND low overlap, punish severely
+                        extra_penalty = 1.0 if class_penalty > 0 else 0.0
+                        cost = 0.9 + dist_cost + class_penalty + extra_penalty
+
+                    # Add confidence factor: less confident detections are more expensive to match
+                    cost += (1.0 - det_conf) * 0.3
                     
                     cost_matrix[d_idx, t_idx] = cost
         return cost_matrix
@@ -959,14 +968,17 @@ class CoreModule:
         kf.P = np.diag([p_init_pos, p_init_pos, p_init_vel, p_init_vel]) ** 2
 
         # Assign a unique ID
-        vehicle_id = f"vehicle_{self.vehicle_id_counter}"
-        self.vehicle_id_counter += 1 # Increment counter for next vehicle
+        # Use UUID to prevent collisions across worker restarts and multiple feeds
+        # Shorten it for display purposes, but ensure uniqueness in DB
+        raw_uuid = str(uuid.uuid4())
+        vehicle_id = f"vehicle_{raw_uuid[:8]}" 
 
         self.vehicle_data[vehicle_id] = {
             "vehicle_id": vehicle_id,
             "bbox": bbox,
             "centroid": (kf.x[0][0], kf.x[1][0]),
             "class_id": cls,
+            "class_history": deque([cls], maxlen=10), # History for voting
             "confidence": conf,
             "kalman_filter": kf,
             "last_seen": current_time,
@@ -998,6 +1010,18 @@ class CoreModule:
         # Update track properties
         track["bbox"] = bbox
         track["centroid"] = (kf.x[0][0], kf.x[1][0])
+        
+        # Class Voting Mechanism
+        if "class_history" not in track:
+            track["class_history"] = deque([track["class_id"]], maxlen=10)
+        track["class_history"].append(cls)
+        
+        # Determine most frequent class
+        from collections import Counter
+        most_common = Counter(track["class_history"]).most_common(1)
+        if most_common:
+            track["class_id"] = most_common[0][0]
+
         track["confidence"] = conf
         track["last_seen"] = current_time
         track["frame_index_last_seen"] = frame_index

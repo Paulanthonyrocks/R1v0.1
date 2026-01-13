@@ -98,19 +98,37 @@ def inference_worker(
 
     # Pre-load shared model if possible to save memory
     model_path = vehicle_det_cfg.get("model_path")
+    gpu_enabled = config.get("performance", {}).get("gpu_acceleration", False)
+    
     if model_path:
-        print(f"DEBUG: [Worker {worker_id}] Pre-loading shared model: {model_path}")
+        print(f"DEBUG: [Worker {worker_id}] Pre-loading shared model: {model_path} (GPU: {gpu_enabled})")
         try:
             # Resolve path relative to project root
             resolved_path = Path(config.get("project_root_dir", "")) / model_path
-            if str(resolved_path).endswith(".onnx"):
+            
+            if str(resolved_path).endswith((".onnx", "_quant.onnx")):
                 import onnxruntime as ort
-                shared_model = ort.InferenceSession(str(resolved_path), providers=["CPUExecutionProvider"])
+                providers = ["CPUExecutionProvider"]
+                if gpu_enabled:
+                    if "CUDAExecutionProvider" in ort.get_available_providers():
+                        providers.insert(0, "CUDAExecutionProvider")
+                        print(f"DEBUG: [Worker {worker_id}] Enabled CUDA for ONNX shared model")
+                    else:
+                         print(f"DEBUG: [Worker {worker_id}] CUDA requested but not available for ONNX")
+                
+                shared_model = ort.InferenceSession(str(resolved_path), providers=providers)
             else:
                 from ultralytics import YOLO
+                import torch
                 shared_model = YOLO(str(resolved_path))
-                # Move to CPU explicitly to save VRAM if present (or just use CPU)
-                shared_model.to("cpu")
+                
+                target_device = "cpu"
+                if gpu_enabled and torch.cuda.is_available():
+                    target_device = "cuda"
+                    print(f"DEBUG: [Worker {worker_id}] Moving YOLO shared model to CUDA")
+                
+                shared_model.to(target_device)
+
             print(f"DEBUG: [Worker {worker_id}] Shared model loaded successfully.")
         except Exception as e:
             print(f"DEBUG: [Worker {worker_id}] Failed to preload model: {e}")

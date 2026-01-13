@@ -83,7 +83,8 @@ function AddFeedDialog() {
         <>
             <Button 
                 type="button"
-                variant="outline" 
+                variant="outline"
+                data-add-feed-trigger="true"
                 className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold"
                 onClick={handleOpen}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -98,7 +99,8 @@ function AddFeedDialog() {
                     onPointerDownOutside={(e) => {
                         // If the user clicks the trigger again while it's open, 
                         // prevent radix from closing it immediately so our button logic handles it
-                        if (e.target instanceof Element && e.target.closest('button')?.textContent?.includes('Add Feed')) {
+                        const target = e.target as Element;
+                        if (target && target.closest('[data-add-feed-trigger="true"]')) {
                             e.preventDefault();
                         }
                     }}

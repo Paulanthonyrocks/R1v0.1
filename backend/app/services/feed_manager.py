@@ -105,8 +105,11 @@ class FeedManager:
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
 
-        # Decoupled Processing Pool
-        self._central_input_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+        # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
+        self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        # We divide the QUEUE_MAX_SIZE among workers
+        per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
+        self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
         self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
@@ -284,19 +287,16 @@ class FeedManager:
             self.logger.info("Prediction scheduler stopped.")
 
     def _start_inference_pool(self):
-        pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
-        logger.info(f"Starting Inference Pool with {pool_size} workers.")
+        pool_size = self._inference_pool_size
+        logger.info(f"Starting Inference Pool with {pool_size} partitioned workers.")
         self._inference_command_queues = [MPQueue(maxsize=100) for _ in range(pool_size)]
         for i in range(pool_size):
             print(f"DEBUG: Starting InferenceWorker-{i}")
-            print(f"DEBUG: type(self.config)={type(self.config)}")
-            print(f"DEBUG: type(self._inference_stop_event)={type(self._inference_stop_event)}")
-            print(f"DEBUG: type(self._inference_command_queues[i])={type(self._inference_command_queues[i])}")
             p = Process(
                 target=inference_worker,
                 args=(
                     i,
-                    self._central_input_queue,
+                    self._inference_input_queues[i], # Pass the partitioned queue
                     self._central_output_queue,
                     self._inference_command_queues[i],
                     self._inference_stop_event,
@@ -762,10 +762,17 @@ class FeedManager:
         if not entry:
             return
 
+        # Partitioning logic: Route feed to a specific worker based on hash
+        import hashlib
+        worker_idx = int(hashlib.md5(feed_id.encode()).hexdigest(), 16) % self._inference_pool_size
+        target_queue = self._inference_input_queues[worker_idx]
+        
+        logger.info(f"Routing feed {feed_id} to InferenceWorker-{worker_idx}")
+
         worker_args = (
             source,
             feed_id,
-            self._central_input_queue,
+            target_queue,
             entry["stop_event"],
             self.config,
             entry.get("is_looped_feed", False),
