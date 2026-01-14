@@ -154,6 +154,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         }
         frameRef.current = null;
         setMetrics(null);
+        setVehicles(null);
         setError(null);
         return;
     }
@@ -255,6 +256,15 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 default: color = '#888888'; break; // Gray
             }
             ctx.strokeStyle = color;
+            
+            // Visual distinction for predicting (ghost) tracks
+            if (v.status === 'predicting') {
+                ctx.setLineDash([4, 4]);
+                ctx.globalAlpha = 0.6;
+            } else {
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1.0;
+            }
 
             if (showBoundingBoxes) {
                 ctx.strokeRect(sx1, sy1, sw, sh);
@@ -265,6 +275,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 ctx.lineWidth = 2;
                 ctx.strokeStyle = color;
             }
+            
+            // Reset styles
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1.0;
             
             if (showVehicleDetails) {
                 const lines = [
