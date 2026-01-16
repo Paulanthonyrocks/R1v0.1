@@ -1,6 +1,8 @@
 
 import asyncio
 import yaml
+import logging
+import logging.config
 from backend.app.utils.database import DatabaseManager
 from pathlib import Path
 
@@ -9,6 +11,12 @@ async def test_db_init():
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     
+    # Configure logging
+    if "logging" in config:
+        logging.config.dictConfig(config["logging"])
+    else:
+        logging.basicConfig(level=logging.INFO)
+        
     db = DatabaseManager(config)
     print("Database initialized.")
     

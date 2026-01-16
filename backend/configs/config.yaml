@@ -1,8 +1,8 @@
 project_root_dir: /home/user/R1v0.1
-fps: 15
+fps: 5
 speed_limit: 60
 video_processing:
-  target_fps: 15
+  target_fps: 5
 firebase_admin:
   service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
@@ -310,7 +310,7 @@ mongodb:
   uri: "mongodb://localhost:27017/"
   database_name: "traffic_hub"
 feed_manager:
-  max_concurrent_feeds: 10
+  max_concurrent_feeds: 2
   db_write_interval: 0.5
   error_check_interval: 5.0
 queue_log_interval: 120.0
@@ -333,7 +333,7 @@ video_output:
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
-  fps: 10
+  fps: 5
   frame_resolution:
   - 640
   - 480
@@ -343,7 +343,7 @@ video_output:
 vehicle_detection:
   enabled: true
   model_type: yolo
-  model_path: backend/models/yolov8n.pt
+  model_path: backend/models/yolov8n.onnx
   frame_resolution:
   - 640
   - 480
@@ -352,13 +352,18 @@ vehicle_detection:
   - 3
   - 5
   - 7
-  confidence_threshold: 0.4
-  proximity_threshold: 50
-  track_timeout: 20
-  reid_timeout: 30
-  max_active_tracks: 50
+  confidence_threshold: 0.3
+  proximity_threshold: 100
+  track_timeout: 5
+  reid_timeout: 10
+  max_active_tracks: 100
   yolo_imgsz: 640
-  skip_frames: 2
+  skip_frames: 1
+  reid_enabled: false
+  car_classification_enabled: true
+  car_classification_interval_frames: 30
+  car_classifier_model_path: backend/models/Car_Make_Model.tflite
+  car_classifier_labels_path: backend/models/car_labels.txt
 analytics_service:
   node_congestion_broadcast:
     enabled: false
@@ -466,6 +471,7 @@ perspective_calibration:
   matrix_path: backend/configs/perspective_matrix.npy
 performance:
   gpu_acceleration: false
+  inference_pool_size: 1
   memory_limit_percent: 95
   cpu_limit_percent: 90
   min_global_skip_factor: 1.0

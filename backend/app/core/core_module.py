@@ -751,11 +751,24 @@ class CoreModule:
                     matched_tracks.add(track_id)
 
         # 4. Process unmatched tracks (keep them alive if within timeout)
+        h, w = frame.shape[:2]
         for track_id, track in self.vehicle_data.items():
             if track_id not in matched_tracks:
                 # Keep track if within timeout
                 if (current_time - track["last_seen"]) < self.track_timeout:
                     track["status"] = "predicting"
+                    
+                    # Update position based on Kalman Filter prediction (Coasting)
+                    if "predicted_bbox" in track:
+                        track["bbox"] = track["predicted_bbox"]
+                        kf = track["kalman_filter"]
+                        track["centroid"] = (kf.x[0][0], kf.x[1][0])
+                    
+                    # Boundary check
+                    x1, y1, x2, y2 = track["bbox"]
+                    if x2 < 0 or x1 > w or y2 < 0 or y1 > h:
+                        continue
+
                     cx, cy = track["centroid"]
                     if self._is_point_in_roi(cx, cy):
                         new_or_updated_tracks[track_id] = track

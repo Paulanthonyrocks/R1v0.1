@@ -22,7 +22,7 @@ def main():
     try:
         model = YOLO(pytorch_model_path)
         print("Exporting to ONNX format...")
-        model.export(format="onnx", imgsz=320, opset=12) # Using the original imgsz for export
+        model.export(format="onnx", imgsz=640, opset=12) # Updated to 640 to match inference config
         print(f"Successfully exported model to: {onnx_model_path}")
     except Exception as e:
         print(f"ERROR during ONNX export: {e}")
