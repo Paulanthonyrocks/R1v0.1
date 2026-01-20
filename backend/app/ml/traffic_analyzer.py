@@ -1,6 +1,6 @@
 # backend/app/ml/traffic_analyzer.py
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Union
 
 from pymongo.collection import Collection
@@ -80,7 +80,7 @@ def identify_traffic_pattern(db_collection: Collection, sensor_id: str, time_ran
     # to define typical patterns.
     # For this example, we'll use a simplified approach assuming 'rush_hour' is
     # generally between 7-9 AM and 4-6 PM, and 'midnight' is 12-1 AM.
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     historical_windows = []
 
     if time_range == 'rush_hour':
@@ -334,7 +334,7 @@ if __name__ == "__main__":
         logger.info("Connected to MongoDB for example usage.")
 
         # --- Example 1: Get average traffic data for a specific time range and sensors ---
-        end_t = datetime.utcnow()
+        end_t = datetime.now(timezone.utc)
         start_t = end_t - timedelta(minutes=30)
         sensor_list = ["sensor_1", "sensor_2"]
 
@@ -363,8 +363,8 @@ if __name__ == "__main__":
 
         # --- Example 4: Get time series data and calculate rolling averages ---
         sensor_id_ts = "sensor_1"
-        start_ts = datetime.utcnow() - timedelta(hours=24) # Last 24 hours
-        end_ts = datetime.utcnow()
+        start_ts = datetime.now(timezone.utc) - timedelta(hours=24) # Last 24 hours
+        end_ts = datetime.now(timezone.utc)
 
         ts_data = get_time_series_data(processed_collection, sensor_id_ts, start_ts, end_ts)
         print(f"\nTime series data for {sensor_id_ts}:\n{ts_data.head()}")

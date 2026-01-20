@@ -106,7 +106,7 @@ class IncidentReport(BaseModel):
         default_factory=uuid.uuid4, description="Unique identifier for the incident"
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of when the incident was reported or detected (UTC)",
     )
     location: LocationModel

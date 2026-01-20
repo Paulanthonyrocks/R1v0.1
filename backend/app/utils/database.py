@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from tenacity import (
@@ -33,7 +34,7 @@ import math
 
 # Attempt to import TrafficMonitor from where it's planned to be
 
-from app.utils import ConfigError  # Use re-exported config symbols
+from app.utils.config import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,23 @@ class DatabaseManager:
             logger.warning(
                 "SQLite path not configured. Async SQLAlchemy engine not created."
             )
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Context manager for database transactions (Async SQLAlchemy)."""
+        if not self.async_session_factory:
+            raise DatabaseError("Async session factory not initialized.")
+            
+        async with self.async_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Transaction rolled back: {e}")
+                raise
+            finally:
+                await session.close()
 
     def _init_from_config(self, config: Dict[str, Any]):
         """Initialize database path and MongoDB URI from configuration."""
@@ -367,6 +385,18 @@ class DatabaseManager:
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
+        
+        cursor.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                details TEXT,
+                ip_address TEXT,
+                timestamp REAL NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
 
         # ... and other table creation statements ...
         logger.debug("SQLite DB table creation check finished.")
@@ -517,8 +547,18 @@ class DatabaseManager:
             logger.error(f"Error getting incident {incident_id}: {e}")
             return None
 
+    def _validate_query(self, query: str, params: tuple):
+        """Validates query for potential SQL injection risks."""
+        unsafe_keywords = ['DROP ', 'TRUNCATE ', 'DELETE FROM', 'ALTER TABLE']
+        upper_query = query.upper()
+        if any(keyword in upper_query for keyword in unsafe_keywords):
+            if not params:
+                logger.error(f"Potentially unsafe query without parameters: {query}")
+                raise ValueError("Unsafe query detected: potentially destructive command without parameters")
+
     def _execute_write(self, sql: str, params: tuple):
         """Helper for synchronous write operations."""
+        self._validate_query(sql, params)
         with self.lock:
             with self._get_sqlite_connection() as conn:
                 conn.execute(sql, params)
@@ -823,6 +863,7 @@ class DatabaseManager:
 
     def _execute_save_alert(self, sql: str, params: tuple):
         """Synchronous execution of saving an alert."""
+        self._validate_query(sql, params)
         try:
             with self.lock:
                 with self._get_sqlite_connection() as conn:
@@ -989,10 +1030,38 @@ class DatabaseManager:
 
     def _execute_query(self, query: str, params: tuple) -> List[Dict]:
         """Helper for synchronous query execution."""
+        self._validate_query(query, params)
         with self._get_sqlite_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
+
+    async def get_pool_stats(self) -> Dict[str, Any]:
+        """Returns statistics about the database connection pools."""
+        stats = {
+            "sqlite": {"size": 0, "checked_in": 0, "checked_out": 0, "overflow": 0},
+            "timescale": {"size": 0, "checked_in": 0, "checked_out": 0, "overflow": 0}
+        }
+        
+        if self.async_engine:
+            pool = self.async_engine.pool
+            stats["sqlite"] = {
+                "size": pool.size(),
+                "checked_in": pool.checkedin(),
+                "checked_out": pool.checkedout(),
+                "overflow": pool.overflow() if hasattr(pool, 'overflow') else 0
+            }
+            
+        if self.timescale_engine:
+            pool = self.timescale_engine.pool
+            stats["timescale"] = {
+                "size": pool.size(),
+                "checked_in": pool.checkedin(),
+                "checked_out": pool.checkedout(),
+                "overflow": pool.overflow() if hasattr(pool, 'overflow') else 0
+            }
+            
+        return stats
 
     async def close(self):
         logger.info("DatabaseManager close called.")

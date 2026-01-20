@@ -1,3 +1,7 @@
+import os
+# Suppress TensorFlow logs before importing anything else
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 from fastapi import APIRouter
 
 from .routers import (

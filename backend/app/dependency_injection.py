@@ -1,202 +1,203 @@
-# /content/drive/MyDrive/R1v0.1/backend/app/dependencies.py
-
-from __future__ import annotations
+import logging
 from typing import Dict, Any, Optional
-from fastapi import HTTPException, Depends, status, WebSocket
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from .database import get_database_manager
-from .utils.auth_utils import verify_firebase_token
-from .services.services import (
-    get_feed_manager,
-    get_traffic_signal_service,
-    get_analytics_service,
-    get_advanced_analytics_service,
-    get_route_optimization_service,
-    get_weather_service,
-    get_event_service,
-    get_personalized_routing_service,
-)
-from .config import get_current_config
-from .services.traffic_signal_service import TrafficSignalService
-from .services.route_optimization_service import RouteOptimizationService
-from .services.weather_service import WeatherService
-from .services.event_service import EventService
-from .services.analytics_service import AnalyticsService
-from .services.analytics_service_pro import AdvancedAnalyticsService
-from .services.personalized_routing_service import PersonalizedRoutingService
-from .models.user import User
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from app.websocket.connection_manager import ConnectionManager
+from app.services.feed_manager import FeedManager, initialize_feed_manager
+from app.database import get_database_manager
+from app.services.analytics_service import AnalyticsService
+from app.services.analytics_service_pro import AdvancedAnalyticsService
+from app.core.feature_flags import FeatureFlags
+from app.utils.auth_utils import verify_firebase_token
+from app.models.user import User
 
+logger = logging.getLogger(__name__)
 
-from .websocket.connection_manager import ConnectionManager
+class DependencyContainer:
+    """A lightweight dependency injection container."""
+    
+    def __init__(self):
+        self._services: Dict[str, Any] = {}
+        self._config: Dict[str, Any] = {}
 
+    def set_config(self, config: Any):
+        """Set the configuration for the container."""
+        if hasattr(config, "dict"):
+            self._config = config.dict()
+        else:
+            self._config = config
+
+    def register(self, name: str, service: Any):
+        """Register a service in the container."""
+        self._services[name] = service
+        logger.debug(f"Service registered: {name}")
+
+    def get(self, name: str) -> Any:
+        """Get a service from the container."""
+        service = self._services.get(name)
+        if service is None:
+            raise RuntimeError(f"Service not found: {name}")
+        return service
+
+    # Factory methods for core services
+    
+    async def get_connection_manager(self) -> ConnectionManager:
+        if "connection_manager" not in self._services:
+            manager = ConnectionManager()
+            # Initialize with default or config values
+            ws_cfg = self._config.get("websocket", {})
+            await manager.init(
+                max_connections=ws_cfg.get("max_connections", 1000),
+                token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
+                ping_interval=ws_cfg.get("ping_interval", 15),
+                pong_timeout=ws_cfg.get("pong_timeout", 60),
+            )
+            self._services["connection_manager"] = manager
+        return self._services["connection_manager"]
+
+    async def get_feed_manager(self) -> FeedManager:
+        if "feed_manager" not in self._services:
+            fm = await initialize_feed_manager(self._config)
+            self._services["feed_manager"] = fm
+        return self._services["feed_manager"]
+
+    def get_feature_flags(self) -> FeatureFlags:
+        if "feature_flags" not in self._services:
+            self._services["feature_flags"] = FeatureFlags(self._config)
+        return self._services["feature_flags"]
+
+    async def get_analytics_service(self) -> AnalyticsService:
+        if "analytics_service" not in self._services:
+            # We use the global getter from app.services to ensure we use the same instance
+            from app.services import get_analytics_service as get_as_global
+            self._services["analytics_service"] = get_as_global()
+        return self._services["analytics_service"]
+
+    async def get_advanced_analytics_service(self) -> AdvancedAnalyticsService:
+        if "advanced_analytics_service" not in self._services:
+            # We use the global getter from app.services
+            from app.services import get_advanced_analytics_service as get_aas_global
+            self._services["advanced_analytics_service"] = get_aas_global()
+        return self._services["advanced_analytics_service"]
+
+# Global container instance
+container = DependencyContainer()
+
+def get_container() -> DependencyContainer:
+    """Get the global dependency container."""
+    return container
+
+# --- FastAPI Dependencies ---
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 async def get_db():
-    """Dependency to get the database manager instance."""
-    # Note: If DatabaseManager methods become async, this might need changes
-    db = get_database_manager()
-    return db
-
-
-async def get_fm():
-    """Dependency to get the feed manager instance."""
-    fm = get_feed_manager()
-    return fm
-
+    """Dependency to get a database session."""
+    db_manager = get_database_manager()
+    async with db_manager.get_session() as session:
+        yield session
 
 async def get_connection_manager() -> ConnectionManager:
-    """Dependency to get the ConnectionManager instance."""
-    cm = ConnectionManager.get_instance()
-    return cm
+    """Dependency to get the connection manager from the container."""
+    # Assuming the container has been initialized/config set during startup
+    return await container.get_connection_manager()
 
+async def get_feed_manager() -> FeedManager:
+    """Dependency to get the feed manager from the container."""
+    return await container.get_feed_manager()
 
-async def get_config() -> Dict[str, Any]:
-    """Dependency to get the currently loaded configuration dictionary."""
-    config = get_current_config()
-    return config
+async def get_analytics_service() -> AnalyticsService:
+    """Dependency to get the analytics service from the container."""
+    return await container.get_analytics_service()
 
+async def get_advanced_analytics_service() -> AdvancedAnalyticsService:
+    """Dependency to get the advanced analytics service from the container."""
+    return await container.get_advanced_analytics_service()
 
-async def get_tss() -> TrafficSignalService:
-    """Dependency to get the TrafficSignalService instance."""
-    tss = get_traffic_signal_service()
-    return tss
+# Aliases used in analysis router
+get_as = get_analytics_service
+get_aas = get_advanced_analytics_service
 
-
-async def get_as() -> AnalyticsService:
-    """Dependency to get the AnalyticsService instance."""
-    analytics_svc = get_analytics_service()
-    return analytics_svc
-
-
-async def get_aas() -> AdvancedAnalyticsService:
-    """Dependency to get the AdvancedAnalyticsService (Pro) instance."""
-    return get_advanced_analytics_service()
-
-
-async def get_ros() -> RouteOptimizationService:
-    """Dependency to get the RouteOptimizationService instance."""
-    route_service = get_route_optimization_service()
-    return route_service
-
-
-async def get_weather_service_api() -> WeatherService:
-    """Dependency to get the WeatherService instance."""
-    weather_service = get_weather_service()
-    if weather_service is None:
-        raise RuntimeError("WeatherService not initialized")
-    return weather_service
-
-
-async def get_event_service_api() -> EventService:
-    """Dependency to get the EventService instance."""
-    event_service = get_event_service()
-    if event_service is None:
-        raise RuntimeError("EventService not initialized")
-    return event_service
-
-
-async def get_prs() -> PersonalizedRoutingService:
-    """Dependency to get the PersonalizedRoutingService instance."""
-    prs = get_personalized_routing_service()
-    if prs is None:
-        raise RuntimeError("PersonalizedRoutingService not initialized")
-    return prs
-
-
-# Initialize the authentication scheme
-auth_scheme = HTTPBearer(auto_error=False)
-
-# Role-based access control constants
-ADMIN_ROLE = "admin"
-USER_ROLE = "user"
-SUPER_ADMIN_ROLE = "super_admin"
-
+def get_config() -> Dict[str, Any]:
+    """Dependency to get the application configuration."""
+    return container._config
 
 def is_admin(user: User) -> bool:
-    """Check if the user has admin role."""
-    return user.role in [ADMIN_ROLE, SUPER_ADMIN_ROLE]
+    """Check if a user has admin role."""
+    return user.role == "admin"
 
+async def get_traffic_signal_service():
+    """Dependency to get the traffic signal service."""
+    from app.services import get_traffic_signal_service as get_tss_global
+    return get_tss_global()
 
-def is_super_admin(user: User) -> bool:
-    """Check if the user has super admin role."""
-    return user.role == SUPER_ADMIN_ROLE
+get_tss = get_traffic_signal_service
 
+async def get_event_service_api():
+    """Dependency to get the event service."""
+    from app.services import get_event_service as get_es_global
+    return get_es_global()
 
-async def get_current_user(
-    token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
-) -> Dict[str, Any]:
-    """Get the current authenticated user's data."""
-    if not token or not token.credentials:
+async def get_personalized_routing_service():
+    """Dependency to get the personalized routing service."""
+    from app.services import get_personalized_routing_service as get_prs_global
+    return get_prs_global()
+
+get_prs = get_personalized_routing_service
+
+async def get_weather_service_api():
+    """Dependency to get the weather service."""
+    from app.services import get_weather_service as get_ws_global
+    return get_ws_global()
+
+async def get_route_optimization_service():
+    """Dependency to get the route optimization service."""
+    from app.services import get_route_optimization_service as get_ros_global
+    return get_ros_global()
+
+async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> Optional[User]:
+    """Dependency to get the current active user from Firebase token."""
+    if not token:
+        # Allow unauthenticated access if needed, or raise 401
+        # For now, returning None allows endpoints to decide or use Depends(get_current_active_user) which might fail if typed strictly
+        return None
+        
+    try:
+        decoded_token = await verify_firebase_token(token)
+        username = decoded_token.get("uid") or decoded_token.get("sub")
+        return User(
+            username=username,
+            email=decoded_token.get("email", ""),
+            full_name=decoded_token.get("name", username),
+            role=decoded_token.get("role", "user"),
+        )
+    except Exception as e:
+        logger.warning(f"Auth failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return await verify_firebase_token(token.credentials)
-
-
-async def get_current_active_user(
-    user_data: dict = Depends(get_current_user),
-) -> User:
-    """Get the current authenticated user's data and verify account is active."""
-    if user_data.get("disabled", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is disabled",
-        )
-
-    return User(
-        username=user_data.get("uid") or user_data.get("sub"),
-        email=user_data.get("email", ""),
-        full_name=user_data.get("name", ""),
-        role=user_data.get("role", "user"),
-    )
-
-
-async def get_current_admin(
-    user: User = Depends(get_current_active_user),
-) -> User:
-    """Get the current authenticated admin user's data."""
-    if not is_admin(user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-    return user
-
-
-async def get_current_super_admin(
-    user: User = Depends(get_current_admin),
-) -> User:
-    """Get the current authenticated super admin user's data."""
-    if not is_super_admin(user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin privileges required",
-        )
-    return user
-
-
-async def get_current_active_user_optional(
-    token: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
-) -> Optional[User]:
-    """Optionally get the current authenticated user's data."""
-    if not token or not token.credentials:
+async def get_current_active_user_optional(token: str = Depends(oauth2_scheme)) -> Optional[User]:
+    """Dependency to get the current active user, but don't fail if token is missing or invalid."""
+    if not token:
         return None
-
     try:
-        user_data = await verify_firebase_token(token.credentials)
-        return User(
-            username=user_data.get("uid") or user_data.get("sub"),
-            email=user_data.get("email", ""),
-            full_name=user_data.get("name", ""),
-            role=user_data.get("role", "user"),
-        )
+        return await get_current_active_user(token)
     except HTTPException:
         return None
 
-
-async def get_token_from_query(websocket: WebSocket) -> Optional[str]:
-    """Dependency to get the token from the query parameter for WebSocket authentication."""
-    token = websocket.query_params.get("token")
-    return token
+async def get_current_admin(current_user: User = Depends(get_current_active_user)) -> User:
+    """Dependency to enforce admin privileges."""
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized",
+        )
+    return current_user

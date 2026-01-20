@@ -34,6 +34,16 @@ class RetentionService:
             self._cleanup_task = asyncio.create_task(self.run_cleanup_loop())
             logger.info("Retention service started.")
 
+    async def stop(self):
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+            logger.info("Retention service stopped.")
+
     async def run_cleanup_loop(self):
         logger.info(f"Retention cleanup loop active. Max age: {self.max_age_days} days, Max size: {self.max_size_gb} GB.")
         
@@ -56,6 +66,48 @@ class RetentionService:
             logger.info(f"Cleaning up directory: {full_path}")
             self._cleanup_by_age(full_path)
             self._cleanup_by_size(full_path)
+            
+        # Clean up database records
+        self._cleanup_database_records()
+
+    def _cleanup_database_records(self):
+        """Clean up old database records."""
+        # This requires access to database manager.
+        # Since RetentionService is initialized in ServiceRegistry which has db_manager access,
+        # we should ideally inject db_manager or get it globally.
+        # For simplicity in this structure, we'll try to get the global one.
+        
+        try:
+            from app.database import get_database_manager
+            db = get_database_manager()
+            
+            # Retention days
+            audit_days = self.retention_config.get("audit_days", 90)
+            analytics_days = self.retention_config.get("analytics_days", 30)
+            
+            cutoff_audit = time.time() - (audit_days * 86400)
+            cutoff_analytics = time.time() - (analytics_days * 86400)
+            
+            # Since perform_cleanup runs in a thread, we can call sync methods or run async in loop
+            # Here we use a helper to fire-and-forget or wait for async via run_coroutine_threadsafe if loop available
+            # But perform_cleanup is called via to_thread from an async loop.
+            
+            # We can't easily await here if perform_cleanup is synchronous.
+            # Best approach: Add specific cleanup tasks to the database manager 
+            # and call them. For now, we'll assume we can execute a simple SQL via private method or similar.
+            
+            # Using _execute_write directly (it uses a lock and is thread-safe-ish for SQLite)
+            
+            # Clean Audit Log
+            db._execute_write("DELETE FROM audit_log WHERE timestamp < ?", (cutoff_audit,))
+            
+            # Clean Analytics (assuming table exists, if not it will just fail/log error which is fine)
+            # db._execute_write("DELETE FROM analytics_events WHERE timestamp < ?", (cutoff_analytics,))
+            
+            logger.info(f"Database cleanup performed. Audit logs older than {audit_days} days removed.")
+            
+        except Exception as e:
+            logger.error(f"Database cleanup failed: {e}")
 
     def _cleanup_by_age(self, directory: Path):
         now = time.time()

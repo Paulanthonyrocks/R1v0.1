@@ -480,11 +480,11 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
     ) -> PredictionLogModel:
         entry_data = {
             "id": str(uuid.uuid4()),
-            "prediction_made_at": datetime.utcnow() - timedelta(days=1),
+            "prediction_made_at": datetime.now(timezone.utc) - timedelta(days=1),
             "location_latitude": 34.0522,
             "location_longitude": -118.2437,
-            "predicted_event_start_time": datetime.utcnow() - timedelta(hours=12),
-            "predicted_event_end_time": datetime.utcnow() - timedelta(hours=11),
+            "predicted_event_start_time": datetime.now(timezone.utc) - timedelta(hours=12),
+            "predicted_event_end_time": datetime.now(timezone.utc) - timedelta(hours=11),
             "prediction_type": "incident_likelihood",
             "predicted_value": {"likelihood_score_percent": 80},
             "source_of_prediction": "TestScheduler",
@@ -521,8 +521,8 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
         log_data = {
             "location_latitude": 34.0,
             "location_longitude": -118.0,
-            "predicted_event_start_time": datetime.utcnow() + timedelta(hours=1),
-            "predicted_event_end_time": datetime.utcnow() + timedelta(hours=2),
+            "predicted_event_start_time": datetime.now(timezone.utc) + timedelta(hours=1),
+            "predicted_event_end_time": datetime.now(timezone.utc) + timedelta(hours=2),
             "prediction_type": "congestion_spike",
             "predicted_value": {"intensity": "high"},
             "source_of_prediction": "TestSource",
@@ -546,9 +546,9 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
             pred1 = await self._add_prediction_log(
                 session,
                 outcome_verified=False,
-                predicted_event_start_time=datetime.utcnow()
+                predicted_event_start_time=datetime.now(timezone.utc)
                 - timedelta(hours=2),  # e.g., predicted for 10-11 AM
-                predicted_event_end_time=datetime.utcnow() - timedelta(hours=1),
+                predicted_event_end_time=datetime.now(timezone.utc) - timedelta(hours=1),
                 location_latitude=34.0522,
                 location_longitude=-118.2437,  # Specific location for call verification
             )
@@ -585,14 +585,14 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
     # 4. Test correlate_predictions_with_outcomes_with_incidents
     async def test_correlate_predictions_with_outcomes_with_incidents(self):
-        incident_time = datetime.utcnow() - timedelta(hours=1, minutes=30)
+        incident_time = datetime.now(timezone.utc) - timedelta(hours=1, minutes=30)
         async with self.mock_db_manager_for_new_tests.get_session() as session:
             pred1 = await self._add_prediction_log(
                 session,
                 outcome_verified=False,
-                predicted_event_start_time=datetime.utcnow()
+                predicted_event_start_time=datetime.now(timezone.utc)
                 - timedelta(hours=2),  # e.g. 10:00
-                predicted_event_end_time=datetime.utcnow()
+                predicted_event_end_time=datetime.now(timezone.utc)
                 - timedelta(hours=1),  # e.g. 11:00
                 location_latitude=34.0522,
                 location_longitude=-118.2437,
@@ -653,7 +653,7 @@ class TestAnalyticsServiceWithDb(unittest.IsolatedAsyncioTestCase):
             pred1 = await self._add_prediction_log(
                 session,
                 outcome_verified=False,
-                predicted_event_end_time=datetime.utcnow() + timedelta(hours=3),
+                predicted_event_end_time=datetime.now(timezone.utc) + timedelta(hours=3),
             )
 
         self.analytics_service_db_test._fetch_relevant_incidents = AsyncMock(

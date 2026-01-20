@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 from contextlib import asynccontextmanager
 import uuid  # For generating unique IDs
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import (
     sessionmaker,
     Session,
@@ -192,8 +192,8 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
             "user_id": USER_ID_DB_TEST_1,  # Default, can be overridden
             "start_location": {"latitude": 34.0, "longitude": -118.0, "name": "Start"},
             "end_location": {"latitude": 34.1, "longitude": -118.1, "name": "End"},
-            "start_time": datetime.utcnow() - timedelta(hours=1),
-            "end_time": datetime.utcnow(),
+            "start_time": datetime.now(timezone.utc) - timedelta(hours=1),
+            "end_time": datetime.now(timezone.utc),
             "route_preference_used": "fastest",
             "road_types_used": ["highway", "street"],
             "distance_km": 10.0,
@@ -213,7 +213,7 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
             "id": str(uuid.uuid4()),
             "suggestion_id": str(uuid.uuid4()),  # Default, can be overridden by kwargs
             "user_id": USER_ID_DB_TEST_1,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "suggestion_details": {
                 "type": "test_suggestion",
                 "destination_name": "Test Dest",
@@ -305,7 +305,7 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
                 },
                 interaction_status="rejected",
                 user_rating=1,
-                created_at=datetime.utcnow() - timedelta(days=1),
+                created_at=datetime.now(timezone.utc) - timedelta(days=1),
             )
 
         self.service._get_most_frequent_destination = MagicMock(
@@ -329,7 +329,7 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
                             == "suggested",
                             ProactiveSuggestionFeedbackLog.created_at
                             > (
-                                datetime.utcnow() - timedelta(minutes=1)
+                                datetime.now(timezone.utc) - timedelta(minutes=1)
                             ),  # Check for very recent entries
                         )
                     )
@@ -552,8 +552,8 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
             user_id=USER_ID_DB_TEST_1,
             start_location={"latitude": 30.0, "longitude": -120.0},
             end_location={"latitude": 30.1, "longitude": -120.1},
-            start_time=datetime.utcnow() - timedelta(minutes=30),
-            end_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc) - timedelta(minutes=30),
+            end_time=datetime.now(timezone.utc),
             route_preference_used="fastest",
             road_types_used=["highway"],
             distance_km=5.0,
@@ -578,7 +578,7 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
 
     # 7. Test get_user_common_travel_patterns
     async def test_get_user_common_travel_patterns(self):
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
         # Pattern 1: Home to Work, Morning Weekday (3 times)
         m_w_start_loc = {"latitude": 34.001, "longitude": -118.001, "name": "Home"}
         m_w_end_loc = {"latitude": 34.101, "longitude": -118.101, "name": "Work"}
@@ -690,14 +690,14 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
                 user_id=USER_ID_DB_TEST_2,
                 start_location=loc1_a,
                 end_location=loc2,
-                start_time=datetime.utcnow().replace(hour=8, minute=0),
+                start_time=datetime.now(timezone.utc).replace(hour=8, minute=0),
             )
             await self._add_route_history_entry(
                 session,
                 user_id=USER_ID_DB_TEST_2,
                 start_location=loc1_b,
                 end_location=loc2,
-                start_time=datetime.utcnow().replace(hour=8, minute=5),
+                start_time=datetime.now(timezone.utc).replace(hour=8, minute=5),
             )
 
         patterns = await self.service.get_user_common_travel_patterns(

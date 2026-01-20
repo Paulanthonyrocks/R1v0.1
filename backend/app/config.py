@@ -1,149 +1,129 @@
-# /content/drive/MyDrive/R1v0.1/backend/app/config.py
-
 import logging
-import logging.config  # Import logging.config
+import logging.config
+import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings
 
 # Assuming load_config is defined in utils.utils
-from app.utils import load_config, ConfigError
+from app.utils.config import load_config, ConfigError
+from app.utils.secrets_manager import secrets
 
-logger = logging.getLogger("app.config")  # Use specific logger name
+logger = logging.getLogger("app.config")
+
+class LoggingConfig(BaseModel):
+    version: int = 1
+    disable_existing_loggers: bool = False
+    formatters: Dict[str, Any] = {}
+    handlers: Dict[str, Any] = {}
+    loggers: Dict[str, Any] = {}
+
+class DatabaseConfig(BaseModel):
+    db_path: str = "backend/data/vehicle_data.db"
+    connection_timeout: int = 30
+    query_timeout: int = 60
+
+class PerformanceConfig(BaseModel):
+    inference_pool_size: int = 2
+    memory_limit_percent: int = 80
+    max_concurrent_feeds: int = 10
+
+class AppConfig(BaseSettings):
+    project_root_dir: str = str(Path(__file__).resolve().parent.parent.parent)
+    data_dir: str = os.getenv("DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
+    
+    logging: Dict[str, Any] = {}
+    database: DatabaseConfig = DatabaseConfig()
+    performance: PerformanceConfig = PerformanceConfig()
+    websocket: Dict[str, Any] = {"max_connections": 1000}
+    firebase_admin: Dict[str, Any] = {"auth_enabled": False}
+    video_input: Dict[str, Any] = {"sample_videos": []}
+    video_output: Dict[str, Any] = {"enabled": False, "output_directory": "recordings", "fps": 10}
+    reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "reid_gallery.pkl"}
+    prediction_scheduler: Dict[str, Any] = {"enabled": True}
+    auto_start_processing: bool = True
+    file_watcher: Dict[str, Any] = {"enabled": False}
+    post_startup_processing: Dict[str, Any] = {"enabled": False}
+    cors: Dict[str, Any] = {"allowed_origins": []}
+    
+    # New settings for dynamic paths
+    feeds_config_path: str = "feeds_config.json"
+    snapshots_dir: str = "snapshots"
+    
+    class Config:
+        env_file = ".env"
+        extra = "allow"
 
 # Module-level variable to hold the loaded configuration
-_config_instance: Optional[Dict[str, Any]] = None
+_config_instance: Optional[AppConfig] = None
 
-
-def initialize_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+def initialize_config(config_path: Optional[str] = None) -> AppConfig:
     """
-    Loads the configuration from the specified path or a default location.
-    Stores it in the module-level variable.
+    Loads and validates the configuration.
     """
     global _config_instance
     if _config_instance is not None:
-        logger.warning("Configuration already initialized. Skipping reload.")
         return _config_instance
+
+    # Load critical secrets from SecretsManager into environment
+    # This ensures BaseSettings or other components can access them via os.environ
+    for key in ["JWT_SECRET_KEY", "DATABASE_PASSWORD", "API_KEY", "FIREBASE_CREDENTIALS"]:
+        val = secrets.get_secret(key)
+        if val:
+            os.environ[key] = val
+            logger.info(f"Loaded secret '{key}' from SecretsManager.")
 
     if config_path is None:
         path_to_load = Path(__file__).parent.parent / "configs" / "config.yaml"
     else:
         path_to_load = Path(config_path)
 
-    logger.info(f"Initializing configuration from: {path_to_load}")
     try:
-        _config_instance = load_config(path_to_load)
-        logger.info("Configuration initialized successfully via app.config.")
-
-        # --- Reconfigure Logging Here (Centralized) ---
-        # It's good practice to configure logging as soon as config is loaded
-        print("Attempting to configure logging with dictConfig...")
-        try:
-            logging.config.dictConfig(_config_instance["logging"])
-            print("Logging configured successfully using dictConfig.")
-            logger.info("Logging configured successfully using dictConfig.")
-        except Exception as e:
-            print(f"Failed to configure logging with dictConfig: {e}")
-            logger.error(
-                f"Failed to configure logging with dictConfig: {e}", exc_info=True
-            )
-            # Fallback to basic config if dictConfig fails
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            )
-            print("Falling back to basic logging configuration.")
-            logger.warning("Falling back to basic logging configuration.")
-        # --- End Logging Reconfiguration ---
- 
-        # Resolve relative paths to absolute paths
-        project_root = Path(_config_instance.get("project_root_dir", Path.cwd()))
-
-        # Resolve sample_videos paths
-        sample_video_paths = _config_instance.get("video_input", {}).get(
-            "sample_videos"
-        )
-        if sample_video_paths and isinstance(sample_video_paths, list):
-            resolved_paths = []
-            project_root = Path(__file__).parent.parent.parent
-            for video_path_str in sample_video_paths:
-                resolved_path = Path(video_path_str)
-                if not resolved_path.is_absolute():
-                    resolved_path = (project_root / video_path_str).resolve()
-                else:
-                    resolved_path = resolved_path.resolve()
-                resolved_paths.append(str(resolved_path))
+        raw_config = load_config(path_to_load)
+        
+        # Configure logging
+        if "logging" in raw_config:
+            logging.config.dictConfig(raw_config["logging"])
+        
+        # Validate with Pydantic
+        _config_instance = AppConfig(**raw_config)
+        
+        # Resolve paths dynamically
+        data_path = Path(_config_instance.data_dir)
+        data_path.mkdir(parents=True, exist_ok=True)
+        
+        # Update db_path if it's relative
+        db_p = Path(_config_instance.database.db_path)
+        if not db_p.is_absolute():
+            _config_instance.database.db_path = str(data_path / db_p.name)
             
-            _config_instance["video_input"]["sample_videos"] = resolved_paths
-            logger.info(
-                f"Resolved sample_video paths to: {resolved_paths}"
-            )
-
-        # Resolve model_path for vehicle_detection
-        model_path_relative = _config_instance.get("vehicle_detection", {}).get(
-            "model_path"
-        )
-        if model_path_relative:
-            model_path_absolute = (project_root / model_path_relative).resolve()
-            _config_instance["vehicle_detection"]["model_path"] = str(
-                model_path_absolute
-            )
-            logger.info(
-                f"Resolved vehicle_detection model_path to: {_config_instance['vehicle_detection']['model_path']}"
-            )
-
-        # Resolve matrix_path for perspective_calibration
-        matrix_path_relative = _config_instance.get("perspective_calibration", {}).get(
-            "matrix_path"
-        )
-        if matrix_path_relative:
-            matrix_path_absolute = (project_root / matrix_path_relative).resolve()
-            _config_instance["perspective_calibration"]["matrix_path"] = str(
-                matrix_path_absolute
-            )
-            logger.info(
-                f"Resolved perspective_calibration matrix_path to: {_config_instance['perspective_calibration']['matrix_path']}"
-            )
-
-        # Resolve db_path for database
-        db_path_relative = _config_instance.get("database", {}).get("db_path")
-        if db_path_relative:
-            db_path_absolute = (project_root / db_path_relative).resolve()
-            _config_instance["database"]["db_path"] = str(db_path_absolute)
-            logger.info(
-                f"Resolved database db_path to: {_config_instance['database']['db_path']}"
-            )
-
-        # Resolve processed_video_dir for video_output
-        processed_video_dir_relative = _config_instance.get("video_output", {}).get("output_directory")
-        if processed_video_dir_relative:
-            processed_video_dir_absolute = (project_root / processed_video_dir_relative).resolve()
-            _config_instance["video_output"]["output_directory"] = str(processed_video_dir_absolute)
-            logger.info(
-                f"Resolved video_output output_directory to: {_config_instance['video_output']['output_directory']}"
-            )
-
+        # Update other paths
+        if not Path(_config_instance.video_output["output_directory"]).is_absolute():
+            rec_dir = data_path / _config_instance.video_output["output_directory"]
+            rec_dir.mkdir(parents=True, exist_ok=True)
+            _config_instance.video_output["output_directory"] = str(rec_dir)
+            
+        if not Path(_config_instance.reid["persistence_path"]).is_absolute():
+            _config_instance.reid["persistence_path"] = str(data_path / _config_instance.reid["persistence_path"])
+            
+        if not Path(_config_instance.feeds_config_path).is_absolute():
+            _config_instance.feeds_config_path = str(data_path / _config_instance.feeds_config_path)
+            
+        if not Path(_config_instance.snapshots_dir).is_absolute():
+            snap_dir = data_path / _config_instance.snapshots_dir
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            _config_instance.snapshots_dir = str(snap_dir)
+        
+        logger.info(f"Configuration initialized with data_dir: {data_path}")
         return _config_instance
-
- 
-
-
-    except ConfigError as e:
-        logger.error(f"Failed to load configuration from {path_to_load}: {e}", exc_info=True)
-        raise RuntimeError(f"Failed to load configuration: {e}") from e
     except Exception as e:
-        logger.error(f"An unexpected error occurred during configuration initialization: {e}", exc_info=True)
-        raise RuntimeError(f"An unexpected error occurred during configuration initialization: {e}") from e
+        logger.error(f"Config Init Failed: {e}")
+        raise RuntimeError(f"Config Init Failed: {e}")
 
-def get_current_config() -> Dict[str, Any]:
-    """
-    Returns the currently loaded configuration dictionary.
-    Raises RuntimeError if configuration has not been initialized.
-    """
+def get_current_config() -> AppConfig:
     if _config_instance is None:
-        logger.error("Configuration accessed before initialization!")
-        raise RuntimeError(
-            "Configuration has not been initialized. Call initialize_config first."
-        )
+        raise RuntimeError("Config not initialized")
     return _config_instance
 
 

@@ -1,6 +1,6 @@
 import cv2
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import logging
 from queue import Queue, Empty
@@ -12,20 +12,23 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 class VideoWriter:
-    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'XVID'): # Changed default codec to XVID
+    def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'avc1'):
         self.feed_id = feed_id
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_path = os.path.join(output_dir, f"{feed_id}_{timestamp}.avi") 
-        base, ext = os.path.splitext(self.output_path)
-        self._tmp_output_path = f"{base}.tmp{ext}"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        
+        # Use .mp4 for H.264/avc1 and mp4v, fallback to .avi for others if needed
+        ext = ".mp4" if codec in ['avc1', 'mp4v', 'H264'] else ".avi"
+        self.output_path = os.path.join(output_dir, f"{feed_id}_{timestamp}{ext}")
+        self._tmp_output_path = f"{os.path.splitext(self.output_path)[0]}.tmp{ext}"
+        
         self.fps = fps
         self.resolution = None
         self.frame_queue = frame_queue
         
-        # Prepare codec preference list with XVID prioritized for .avi
+        # Prepare codec preference list: prioritize H.264 for web compatibility
         self._codec_candidates = []
         seen = set()
-        for c in [codec, 'XVID', 'MJPG', 'mp4v', 'avc1', 'H264']:
+        for c in [codec, 'avc1', 'H264', 'mp4v', 'XVID', 'MJPG']:
             if c and c not in seen:
                 self._codec_candidates.append(c)
                 seen.add(c)

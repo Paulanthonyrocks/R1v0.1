@@ -11,7 +11,7 @@ from pathlib import Path  # Used in __main__ for config path
 import cv2  # Used in __main__ for dummy image creation
 import numpy as np  # Used in __main__ for dummy image creation & np.zeros
 # Unused imports like asyncio, sqlite3, queue, threading, re, yaml, io, collections.deque,
-# functools.lru_cache, tenacity, torch, PIL.Image, pytesseract, google.generativeai,
+# functools.lru_cache, tenacity, torch, PIL.Image, pytesseract, google.genai,
 # google.api_core.exceptions, multiprocessing.Queue, other typing hints (Dict, Any, etc.),
 # pymongo, sqlalchemy components, contextlib components will be removed if not used by retained code.
 

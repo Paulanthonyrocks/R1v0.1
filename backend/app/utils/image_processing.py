@@ -9,7 +9,8 @@ from typing import (
 )  # Ensure Any is imported if used, though not directly in LPP
 from PIL import Image
 import pytesseract
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from google.api_core import exceptions as google_api_exceptions
 from tenacity import (
     retry,
@@ -30,17 +31,17 @@ class LicensePlatePreprocessor:
         self.gemini_api_key = self.config.get("gemini_api_key")
         self.use_gemini_ocr = self.config.get("use_gemini_ocr", True) # Default to True for backward compatibility
         self.use_tesseract = self.config.get("use_tesseract", False) # Default to False
-        self.model = None
+        self.client = None
+        self.model_id = "gemini-1.5-flash"
         if self.gemini_api_key and self.use_gemini_ocr:
             try:
-                genai.configure(api_key=self.gemini_api_key)
-                self.model = genai.GenerativeModel("gemini-pro-vision")
-                logger.info("Gemini Pro Vision model initialized for OCR.")
+                self.client = genai.Client(api_key=self.gemini_api_key)
+                logger.info(f"Gemini {self.model_id} client initialized for OCR.")
             except Exception as e:
                 logger.error(
-                    f"Failed to initialize Gemini Pro Vision model: {e}", exc_info=True
+                    f"Failed to initialize Gemini client: {e}", exc_info=True
                 )
-                self.model = None
+                self.client = None
         elif self.use_gemini_ocr:
             logger.warning(
                 "Gemini API key not provided. Gemini OCR will not be available."
@@ -89,8 +90,8 @@ class LicensePlatePreprocessor:
         ),
     )
     def _call_gemini_ocr(self, image_roi: np.ndarray) -> str:
-        if not self.model:
-            logger.warning("Gemini model not available for _call_gemini_ocr.")
+        if not self.client:
+            logger.warning("Gemini client not available for _call_gemini_ocr.")
             return ""
 
         current_time = time.monotonic()
@@ -120,24 +121,19 @@ class LicensePlatePreprocessor:
             )  # Use high quality JPEG for OCR
             img_bytes = img_byte_arr.getvalue()
 
-            image_part = {"mime_type": "image/jpeg", "data": img_bytes}
-            prompt_parts = [
-                image_part,
-                "Identify and extract the license plate number from this image. Provide only the license plate characters (alphanumeric). Do not include any additional text, labels, or explanations. If multiple plates are visible, focus on the largest and clearest one. If no license plate is clearly visible or readable, respond with an empty string.",
-            ]
+            prompt = "Identify and extract the license plate number from this image. Provide only the license plate characters (alphanumeric). Do not include any additional text, labels, or explanations. If multiple plates are visible, focus on the largest and clearest one. If no license plate is clearly visible or readable, respond with an empty string."
 
-            response = self.model.generate_content(prompt_parts)
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=[
+                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                    prompt
+                ]
+            )
 
             ocr_text = ""
-            if response and hasattr(response, "text") and response.text:
+            if response and response.text:
                 ocr_text = response.text.strip()
-            elif (
-                response
-                and response.candidates
-                and response.candidates[0].content
-                and response.candidates[0].content.parts
-            ):
-                ocr_text = response.candidates[0].content.parts[0].text.strip()
 
             ocr_text = "".join(filter(str.isalnum, ocr_text)).upper()
 
@@ -151,32 +147,24 @@ class LicensePlatePreprocessor:
             self.last_api_error_time = 0
             return ocr_text
 
-        except (
-            genai.types.BlockedPromptException,
-            genai.types.StopCandidateException,
-        ) as safety_error:
-            logger.warning(f"Gemini content safety issue: {safety_error}")
-            self.last_api_error_time = time.monotonic()
-            return ""
-        except (
-            google_api_exceptions.PermissionDenied,
-            google_api_exceptions.ResourceExhausted,
-            google_api_exceptions.DeadlineExceeded,
-            google_api_exceptions.InternalServerError,
-            google_api_exceptions.ServiceUnavailable,
-            google_api_exceptions.Aborted,
-            google_api_exceptions.Unknown,
-            ConnectionError,
-            TimeoutError,
-        ) as retryable_error:
-            logger.warning(
-                f"Gemini API/network error (will be retried by tenacity): {type(retryable_error).__name__} - {retryable_error}"
-            )
-            self.last_api_error_time = time.monotonic()
-            raise
         except Exception as e:
-            logger.error(f"Unexpected error during Gemini OCR call: {e}", exc_info=True)
+            # Check for safety-related blocks if possible, otherwise generic error
+            logger.error(f"Error during Gemini OCR call: {e}", exc_info=True)
             self.last_api_error_time = time.monotonic()
+            
+            # Re-raise if it's one of the retryable exceptions handled by tenacity
+            if isinstance(e, (
+                google_api_exceptions.PermissionDenied,
+                google_api_exceptions.ResourceExhausted,
+                google_api_exceptions.DeadlineExceeded,
+                google_api_exceptions.InternalServerError,
+                google_api_exceptions.ServiceUnavailable,
+                google_api_exceptions.Aborted,
+                google_api_exceptions.Unknown,
+                ConnectionError,
+                TimeoutError,
+            )):
+                raise e
             return ""
 
     def _preprocess_for_tesseract(self, roi: np.ndarray) -> Optional[np.ndarray]:
@@ -224,7 +212,7 @@ class LicensePlatePreprocessor:
             return ""
 
         # --- Attempt Gemini OCR first if available and configured (Higher accuracy) ---
-        if self.model and self.gemini_api_key and self.use_gemini_ocr:
+        if self.client and self.gemini_api_key and self.use_gemini_ocr:
             logger.debug("Attempting OCR using Gemini...")
             try:
                 ocr_result = self._call_gemini_ocr(roi)

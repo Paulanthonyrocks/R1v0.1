@@ -44,7 +44,7 @@ class UserRoutePreferences(BaseModel):
     preferred_departure_times: Dict[str, datetime] = Field(default_factory=dict)
     avoid_intersections: List[Dict[str, float]] = Field(default_factory=list)
     favorite_routes: List[str] = Field(default_factory=list)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RouteHistoryEntry(BaseModel):

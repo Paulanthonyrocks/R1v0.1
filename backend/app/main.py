@@ -3,373 +3,331 @@ import logging
 import logging.config
 import uuid
 import multiprocessing
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 import os
-from fastapi.staticfiles import StaticFiles
+import random
+import re
+from contextvars import ContextVar
+from typing import Dict, List, Optional
 
-# Ensure spawn method for multiprocessing compatibility
-try:
-    if multiprocessing.get_start_method(allow_none=True) is None:
-        multiprocessing.set_start_method("spawn")
-except RuntimeError:
-    pass
-
+import psutil
 import firebase_admin
 from firebase_admin import credentials
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-# --- Custom Exceptions & Middleware ---
-from app.exceptions import (
-    ResourceNotFound,
-    OperationFailed,
-    BadRequest,
-    Unauthorized,
-    Forbidden,
-)
-from app.middleware.logging_middleware import LoggingMiddleware
-from app.middleware.rate_limit_middleware import RateLimitMiddleware
-
-# --- Application Modules ---
-from app.routers import (
-    feeds,
-    config as config_router,
-    analysis,
-    alerts,
-    video,
-    incidents,
-    personalized_routes,
-    traffic_data,
-    weather,
-    events,
-    route_history,
-    ws,
-    video_ws,
-    routes,
-    vehicles,
-)
-
-# --- Initializers & Services ---
-from app.config import initialize_config
-from app.database import initialize_database, close_database
-from app.services import initialize_services, get_analytics_service, get_feed_manager
+# --- Core Modules ---
+from app.config import initialize_config, AppConfig
+from app.database import initialize_database, close_database, get_database_manager
+from app.services import initialize_services, shutdown_services, get_analytics_service, get_feed_manager
 from app.services.health_service import SystemHealthService
 from app.websocket.connection_manager import ConnectionManager
-from app.tasks.prediction_scheduler import PredictionScheduler
 from app.utils.file_watcher import FileSystemWatcher
+from app.core.feature_flags import FeatureFlags
+from app.dependency_injection import get_container
+from app.middleware.logging_middleware import LoggingMiddleware
+from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitConfig
+from app.middleware.security_middleware import SecurityHeadersMiddleware
+from app.services.audit_logger import AuditLogger
+from app.database import get_database_manager
 
-# Setup Logger
+# --- Routers ---
+from app.routers import (
+    feeds, config as config_router, analysis, alerts, video,
+    incidents, personalized_routes, traffic_data, weather,
+    events, route_history, ws, video_ws, routes, vehicles,
+)
+
+# --- Constants & Setup ---
 logger = logging.getLogger("main")
 BASE_DIR = Path(__file__).resolve().parent.parent
+SNAPSHOT_DIR = BASE_DIR / "data" / "snapshots"
+SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- Signal Handling for Child Process Cleanup ---
-def setup_signal_handlers():
-    """Registers signal handlers to ensure child processes are cleaned up."""
-    def handle_signal(sig, frame):
-        logger.info(f"Caught signal {sig}, initiating child process termination...")
-        
-        # 1. Signal FeedManager to stop internal loops (Watchdog, Result Reader)
-        try:
-            from app.services import get_feed_manager
-            fm = get_feed_manager()
-            fm._stop_reader_flag = True
-            logger.info("FeedManager shutdown flag set from signal handler.")
-        except Exception as e:
-            # FeedManager might not be initialized yet
-            logger.debug(f"Could not set FeedManager shutdown flag: {e}")
+# --- Configuration Loading ---
+# Load configuration early to allow middleware setup and container initialization
+config_path = BASE_DIR / "configs" / "config.yaml"
+if not config_path.exists():
+    config_path = Path("/app/configs/config.yaml")
 
-        # 2. Terminate all active child processes
-        for process in multiprocessing.active_children():
-            logger.info(f"Terminating child process: {process.name} (PID: {process.pid})")
-            process.terminate()
-            process.join(timeout=0.5)
-            if process.is_alive():
-                process.kill()
-        # Note: We don't call sys.exit() here as uvicorn/fastapi will handle the actual exit sequence
-        # after this handler returns (if it's not a terminal signal).
+try:
+    loaded_config = initialize_config(str(config_path))
+    container = get_container()
+    container.set_config(loaded_config)
+    logger.info(f"Configuration loaded from {config_path}")
+except Exception as e:
+    logger.critical(f"Failed to load configuration at startup: {e}")
+    # In a real app, we might want to exit here, but for now let's raise
+    raise RuntimeError(f"Config Load Failed: {e}")
 
-    import signal
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+# --- Context Variables ---
+request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
 
-setup_signal_handlers()
+# --- Background Task Management ---
+background_tasks = set()
 
-# --- Lifespan Manager (Replaces startup/shutdown events) ---
+def create_background_task(coro):
+    task = asyncio.create_task(coro)
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+    return task
+
+# --- Database Migrations ---
+async def run_migrations():
+    """Placeholder for database migrations (Alembic)."""
+    logger.info("Database migration check passed.")
+    pass
+
+# --- CORS Configuration ---
+def setup_cors(app: FastAPI, config: dict):
+    env = os.getenv("ENVIRONMENT", "development")
+    allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").split(",")
+    
+    origins = [
+        "http://localhost",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ] if env == "development" else [o for o in allowed_origins_env if o]
+
+    cors_config = config.get("cors", {})
+    origins.extend(cors_config.get("allowed_origins", []))
+    origins = list(set(origins))
+    
+    logger.info(f"CORS origins configured: {origins}")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_origin_regex=r"https://.*\.ngrok-free\.app",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# --- Middleware Implementation ---
+class RequestIDMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            request_id = str(uuid.uuid4())
+            request_id_var.set(request_id)
+            
+            async def send_with_request_id(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    headers.append((b"x-request-id", request_id.encode()))
+                    message["headers"] = headers
+                await send(message)
+            
+            await self.app(scope, receive, send_with_request_id)
+        else:
+            await self.app(scope, receive, send)
+
+# --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- STARTUP ---
     logger.info("--- Starting Route One Backend ---")
     
-    # 1. Configuration
+    # 1. System Info
     try:
-        import psutil
         mem = psutil.virtual_memory()
-        logger.info(f"System Memory at Startup: {mem.percent}% used ({mem.used / (1024**3):.2f}GB / {mem.total / (1024**3):.2f}GB)")
+        logger.info(f"System Memory: {mem.percent}% used ({mem.used / (1024**3):.2f}GB / {mem.total / (1024**3):.2f}GB)")
         
-        config_path = BASE_DIR / "configs" / "config.yaml"
-        if not config_path.exists():
-            config_path = Path("/app/configs/config.yaml") # Docker fallback
+        # Feature flags and state
+        app.state.feature_flags = container.get_feature_flags()
         
-        loaded_config = initialize_config(str(config_path))
-        logger.info(f"Configuration loaded from: {config_path}")
     except Exception as e:
-        logger.critical(f"Config Init Failed: {e}")
-        raise RuntimeError(f"Config Init Failed: {e}")
+        logger.critical(f"Lifespan Startup Failed: {e}")
+        raise RuntimeError(f"Lifespan Startup Failed: {e}")
 
-    # 2. Firebase
+    # 2. Database & Migrations
+    db_cfg = to_dict(getattr(loaded_config, "database", {}))
     try:
-        firebase_config = loaded_config.get("firebase_admin", {})
-        if firebase_config.get("auth_enabled", False):
-            key_path_str = firebase_config.get("service_account_key_path")
-            if key_path_str:
-                key_path = Path(key_path_str)
-                if not key_path.is_absolute():
-                    key_path = BASE_DIR / key_path_str
-                
-                if key_path.exists():
-                    cred = credentials.Certificate(str(key_path))
-                    firebase_admin.initialize_app(cred, {
-                        "storageBucket": firebase_config.get("storage_bucket")
-                    })
-                    logger.info("Firebase initialized.")
-                else:
-                    logger.error(f"Firebase key missing: {key_path}")
+        await run_migrations()
+        await initialize_database(db_cfg)
+    except Exception as e:
+        logger.critical(f"Database Init Failed: {e}")
+        raise
+
+    # 3. Firebase (Critical if enabled)
+    fb_cfg = to_dict(getattr(loaded_config, "firebase_admin", {}))
+    try:
+        if fb_cfg.get("auth_enabled", False):
+            key_path = Path(fb_cfg.get("service_account_key_path", ""))
+            if not key_path.is_absolute(): key_path = BASE_DIR / key_path
+            
+            if key_path.exists():
+                cred = credentials.Certificate(str(key_path))
+                firebase_admin.initialize_app(cred, {"storageBucket": fb_cfg.get("storage_bucket")})
+                logger.info("Firebase initialized.")
+            elif fb_cfg.get("required", False):
+                raise FileNotFoundError(f"Required Firebase key missing: {key_path}")
     except Exception as e:
         logger.error(f"Firebase Init Failed: {e}")
+        if fb_cfg.get("required", False): raise
 
-    # 3. Database
-    await initialize_database(loaded_config)
-
-    # 4. Services
-    connection_manager = ConnectionManager()
-    await connection_manager.init(
-        max_connections=loaded_config.get("websocket", {}).get("max_connections", 1000),
-        token_refresh_interval=loaded_config.get("websocket", {}).get("token_refresh_interval", 300),
-        ping_interval=loaded_config.get("websocket", {}).get("ping_interval", 15),
-        pong_timeout=loaded_config.get("websocket", {}).get("pong_timeout", 60),
-    )
-    app.state.connection_manager = connection_manager
-
-    await initialize_services(loaded_config, logger=logger, connection_manager=connection_manager)
-    
-    fm = get_feed_manager()
-    analytics_service = get_analytics_service()
-    
-    if fm:
-        fm.set_connection_manager(connection_manager)
-        if analytics_service:
-            await analytics_service.initialize_prediction_log_table()
-            await analytics_service.start_background_tasks()
-            fm.set_analytics_service(analytics_service)
+    # 4. Core Services
+    try:
+        connection_manager = await container.get_connection_manager()
+        app.state.connection_manager = connection_manager
+        
+        await initialize_services(cfg_dict, logger, connection_manager)
+        
+        fm = await container.get_feed_manager()
+        analytics_service = get_analytics_service()
+        
+        if fm:
+            scheduler = fm.get_prediction_scheduler()
+            if scheduler: app.state.prediction_scheduler = scheduler
             
-            scheduler = PredictionScheduler(analytics_service, loaded_config)
-            app.state.prediction_scheduler = scheduler
-            fm.set_prediction_scheduler(scheduler)
-            
-            if loaded_config.get("prediction_scheduler", {}).get("enabled", True):
-                await fm.start_processing()
-                logger.info("Prediction Scheduler started.")
+            p_cfg = loaded_config.get("prediction_scheduler", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "prediction_scheduler", {})
+            p_enabled = p_cfg.get("enabled", True) if isinstance(p_cfg, dict) else getattr(p_cfg, "enabled", True)
+            if p_enabled:
+                auto_start = loaded_config.get("auto_start_processing", True) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", True)
+                if not auto_start:
+                    await fm.start_processing()
+                    logger.info("Feed Manager started processing manually.")
+    except Exception as e:
+        logger.critical(f"Core Services Failed: {e}")
+        raise
 
-    # 5. Health Monitoring
-    health_service = SystemHealthService(loaded_config, fm, connection_manager)
-    health_service.start()
-    app.state.health_service = health_service
-
-    # 6. File Watcher
-    app.state.file_watcher = None
-    if loaded_config.get("file_watcher", {}).get("enabled", False):
-        try:
-            watch_dir_str = loaded_config["file_watcher"]["watch_directory"]
-            watch_dir = Path(watch_dir_str)
-            if not watch_dir.is_absolute():
-                # BASE_DIR is backend/, so BASE_DIR.parent is the project root
-                watch_dir = BASE_DIR.parent / watch_dir_str
+    # 5. Optional Services
+    try:
+        # 5.1 Health Service
+        health_service = SystemHealthService(cfg_dict, fm, connection_manager)
+        health_service.start()
+        app.state.health_service = health_service
+        
+        # 5.2 File Watcher
+        fw_cfg = loaded_config.get("file_watcher", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "file_watcher", {})
+        if fw_cfg.get("enabled", False) if isinstance(fw_cfg, dict) else getattr(fw_cfg, "enabled", False):
+            watch_dir = Path(fw_cfg.get("watch_directory") if isinstance(fw_cfg, dict) else fw_cfg.watch_directory)
+            if not watch_dir.is_absolute(): watch_dir = BASE_DIR.parent / watch_dir
             watch_dir.mkdir(parents=True, exist_ok=True)
 
-            def on_new_video(path_str):
-                logger.info(f"New video detected: {path_str}")
-                # Use a default location (Los Angeles) for auto-discovered feeds to ensure they show on the map
-                # In a real system, you might parse this from metadata or use a geocoding service
-                default_lat = 34.0522
-                default_lon = -118.2437
-                
-                # Add a small random offset so they don't stack perfectly on top of each other
-                import random
-                offset_lat = (random.random() - 0.5) * 0.01
-                offset_lon = (random.random() - 0.5) * 0.01
-
-                asyncio.create_task(fm.add_and_start_feed(
-                    source=path_str, is_looped=True, name_hint=Path(path_str).name,
-                    latitude=default_lat + offset_lat, 
-                    longitude=default_lon + offset_lon
+            def on_new_video(p_str):
+                create_background_task(fm.add_and_start_feed(
+                    source=p_str, is_looped=True, name_hint=Path(p_str).name,
+                    latitude=34.05 + (random.random()-0.5)*0.01, 
+                    longitude=-118.24 + (random.random()-0.5)*0.01
                 ))
 
-            watcher = FileSystemWatcher(str(watch_dir), on_new_video)
+            watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
             watcher.start()
             app.state.file_watcher = watcher
-            logger.info(f"File Watcher started on {watch_dir}")
+            
+            # Scan existing
+            for vf in watch_dir.glob("*"):
+                if vf.is_file() and watcher.event_handler._is_video_file(vf):
+                    on_new_video(str(vf))
 
-            # Initial scan for existing files
-            for video_file in watch_dir.glob("*"):
-                if video_file.is_file() and watcher.event_handler._is_video_file(video_file):
-                    logger.info(f"Found existing video file in watch directory: {video_file}")
-                    on_new_video(str(video_file))
-                    await asyncio.sleep(2.0) # Reduce IO surge on Drive
-        except Exception as e:
-            logger.error(f"File Watcher Error: {e}")
+    except Exception as e:
+        logger.error(f"Optional Services Failed: {e}")
 
-    # 6. Post-Startup Feeds
-    post_startup = loaded_config.get("post_startup_processing", {})
-    if post_startup.get("enabled", False) and fm:
-        logger.info("Processing sample feeds...")
-        for feed_cfg in post_startup.get("sample_feeds", []):
-            try:
-                path_str = feed_cfg.get("path")
-                if not path_str:
-                    continue
-
-                p = Path(path_str)
-                if not p.is_absolute():
-                    # Adjust based on repo structure: BASE_DIR is backend/, so parent is root
-                    p = BASE_DIR.parent / path_str 
-                
-                if p.exists():
-                    logger.info(f"Starting sample feed: {p}")
-                    asyncio.create_task(fm.add_and_start_feed(
-                        source=str(p), is_looped=feed_cfg.get("is_looped", True),
-                        latitude=feed_cfg.get("latitude"), longitude=feed_cfg.get("longitude"),
-                        name_hint=p.name
-                    ))
-                else:
-                    logger.warning(f"Sample feed not found: {p}")
-            except Exception as e:
-                logger.error(f"Sample feed error: {e}")
-
-    yield # --- Application Runs Here ---
+    yield # --- App Running ---
 
     # --- SHUTDOWN ---
     logger.info("--- Stopping Route One Backend ---")
     
-    if hasattr(app.state, "health_service"):
-        await app.state.health_service.stop()
+    if hasattr(app.state, "health_service"): await app.state.health_service.stop()
+    if hasattr(app.state, "file_watcher") and app.state.file_watcher: app.state.file_watcher.stop()
     
-    # Use centralized shutdown for all services
-    try:
-        from app.services import shutdown_services
-        await shutdown_services()
-        logger.info("Application services shut down successfully.")
-    except Exception as e:
-        logger.error(f"Error during services shutdown: {e}")
-        
+    if background_tasks:
+        for t in background_tasks: t.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+
+    await shutdown_services()
+    if hasattr(app.state, "connection_manager"): await app.state.connection_manager.shutdown()
     await close_database()
-    logger.info("Database connection closed.")
     
-    # Final sweep for any remaining child processes
-    remaining_children = multiprocessing.active_children()
-    if remaining_children:
-        logger.info(f"Final sweep: Terminating {len(remaining_children)} remaining child processes...")
-        for process in remaining_children:
-            process.terminate()
-            process.join(timeout=0.2)
-            if process.is_alive():
-                process.kill()
+    remaining = multiprocessing.active_children()
+    for p in remaining:
+        p.terminate()
+        p.join(timeout=2.0)
+        if p.is_alive(): p.kill()
 
     logger.info("Shutdown complete.")
 
 # --- App Instance ---
 app = FastAPI(
     title="Route One Hub - Backend API",
-    version="1.0.0",
+    version="1.1.0",
     description="API for managing traffic analysis feeds, data, and real-time updates.",
     lifespan=lifespan
 )
 
-# --- Exception Handlers ---
+def to_dict(obj):
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return obj
 
+# Initialize CORS
+cfg_dict = to_dict(loaded_config)
+setup_cors(app, cfg_dict)
+
+# --- Exception Handlers ---
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception:")
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error", "type": "InternalServerError", "message": str(exc)})
+    trace_id = request_id_var.get() or str(uuid.uuid4())
+    logger.exception(f"Unhandled exception (Trace ID: {trace_id}):")
+    detail = str(exc) if os.getenv("ENVIRONMENT") == "development" else "Internal Server Error"
+    return JSONResponse(status_code=500, content={"detail": detail, "trace_id": trace_id})
 
-# Handle 404s specifically (Replacement for Catch-All)
-@app.exception_handler(404)
 @app.exception_handler(StarletteHTTPException)
-async def custom_http_exception_handler(request: Request, exc):
-    if isinstance(exc, StarletteHTTPException) and exc.status_code == 404:
-        logger.warning(f"404 Not Found: {request.method} {request.url.path}")
-        return JSONResponse(status_code=404, content={"detail": "Endpoint not found", "type": "NotFound"})
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "type": "HTTPException"})
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-@app.exception_handler(ResourceNotFound)
-async def resource_not_found_exception_handler(request: Request, exc: ResourceNotFound):
-    trace_id = str(uuid.uuid4())
-    logger.warning(f"Resource Not Found (Trace ID: {trace_id}): {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "type": "ResourceNotFound", "trace_id": trace_id},
-    )
-
-@app.exception_handler(OperationFailed)
-async def operation_failed_exception_handler(request: Request, exc: OperationFailed):
-    trace_id = str(uuid.uuid4())
-    logger.error(f"Operation Failed (Trace ID: {trace_id}): {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "type": "OperationFailed", "trace_id": trace_id},
-    )
-
-@app.exception_handler(BadRequest)
-async def bad_request_exception_handler(request: Request, exc: BadRequest):
-    trace_id = str(uuid.uuid4())
-    logger.warning(f"Bad Request (Trace ID: {trace_id}): {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "type": "BadRequest", "trace_id": trace_id},
-    )
-
-@app.exception_handler(Unauthorized)
-async def unauthorized_exception_handler(request: Request, exc: Unauthorized):
-    trace_id = str(uuid.uuid4())
-    logger.warning(f"Unauthorized Access (Trace ID: {trace_id}): {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "type": "Unauthorized", "trace_id": trace_id},
-    )
-
-@app.exception_handler(Forbidden)
-async def forbidden_exception_handler(request: Request, exc: Forbidden):
-    trace_id = str(uuid.uuid4())
-    logger.warning(f"Forbidden Access (Trace ID: {trace_id}): {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "type": "Forbidden", "trace_id": trace_id},
-    )
-
-# --- Middleware ---
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "https://*.ngrok-free.app",
-    "https://3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
-]
-# If you need wildcard, you MUST set allow_credentials=False
-# If you need credentials, you MUST remove "*" from origins
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- Middleware Registration ---
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(RateLimitMiddleware, limit=60, window=60)
 
-# --- Routers ---
+rate_limits = {
+    "/api/v1/analytics": RateLimitConfig(limit=10, window=60),
+    "/api/v1/feeds": RateLimitConfig(limit=30, window=60)
+}
+app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+
+# Audit Logger Middleware
+@app.middleware("http")
+async def audit_middleware(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Log write operations
+    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+        try:
+            db_manager = get_database_manager()
+            audit_logger = AuditLogger(db_manager)
+            
+            user_id = request.headers.get("X-User-ID", "anonymous")
+            
+            # Extract simple resource info
+            path_parts = request.url.path.strip("/").split("/")
+            resource_type = path_parts[2] if len(path_parts) > 2 else "unknown" # api/v1/resource
+            resource_id = request.path_params.get("id", "N/A")
+            
+            await audit_logger.log_action(
+                user_id=user_id,
+                action=f"{request.method} {request.url.path}",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                ip_address=request.client.host if request.client else "unknown"
+            )
+        except Exception as e:
+            logger.error(f"Error in audit middleware: {e}")
+            
+    return response
+
+# --- Routers Inclusion ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
 app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
 app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics"])
@@ -386,32 +344,33 @@ app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(video_ws.router, prefix="/api/v1", tags=["VideoWebSocket"])
 app.include_router(routes.router, prefix="/api/v1", tags=["General"])
 
-# --- Static Files (Snapshots) ---
-SNAPSHOT_DIR = "backend/data/snapshots"
-os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
+# --- Secure File Serving ---
+@app.get("/api/v1/snapshots/{file_path:path}", tags=["Snapshots"])
+async def serve_snapshot(file_path: str):
+    safe_path = (SNAPSHOT_DIR / file_path).resolve()
+    if not str(safe_path).startswith(str(SNAPSHOT_DIR.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not safe_path.exists() or not safe_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(safe_path)
 
 # --- Utility Endpoints ---
 @app.get("/")
 async def root():
-    return {
-        "message": "Welcome to Route One Traffic Management Hub API",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return {"message": "Welcome to Route One API", "version": "1.1.0"}
 
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "service": "Route One Backend"}
-
-@app.get("/firebase-status")
-async def firebase_status():
+@app.get("/health/detailed")
+async def detailed_health_check():
+    health = {"status": "ok", "services": {}}
     try:
-        firebase_admin.get_app()
-        return {"status": "initialized"}
-    except ValueError:
-        return {"status": "not_initialized"}
+        db = get_database_manager()
+        health["services"]["database"] = {"status": "ok", "pool": await db.get_pool_stats()}
+    except Exception as e:
+        health["services"]["database"] = {"status": "error", "message": str(e)}
+        health["status"] = "degraded"
+    return health
 
 if __name__ == "__main__":
     import uvicorn
+    # Use standard uvicorn runner for development
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

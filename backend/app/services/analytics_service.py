@@ -2,13 +2,22 @@ import logging
 import asyncio
 import json
 import math
+import uuid
+import time
+import pandas as pd
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 from sqlalchemy import select
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
+
+logger = logging.getLogger("app.services.analytics_service")
+
+try:
+    from aiokafka import AIOKafkaConsumer
+except ImportError:
+    AIOKafkaConsumer = None
+    logger.warning("aiokafka module not found. Kafka consumer features will be disabled.")
 
 from app.models.websocket import (
     WebSocketMessage,
@@ -28,9 +37,7 @@ from app.ml.anomaly_detector import TrafficAnomalyDetector
 from app.websocket.connection_manager import ConnectionManager
 from app.services.traffic_signal_service import TrafficSignalService
 from app.services.notification_service import NotificationService
-from app.models.traffic import IncidentReport, IncidentTypeEnum, IncidentSeverityEnum
-
-logger = logging.getLogger("app.services.analytics_service")
+from app.models.traffic import IncidentReport, IncidentTypeEnum, IncidentSeverityEnum, IncidentStatusEnum
 
 
 class AnalyticsService:
@@ -64,21 +71,16 @@ class AnalyticsService:
         ) # Default to 1 hour
         self._prediction_verification_task: Optional[asyncio.Task] = None
         
+        self._feed_manager = None
+        self._active_incidents = {} # { "location_name": timestamp }
         self._kafka_consumer = None
-        if self.config.get("kafka", {}).get("enabled", False):
-            try:
-                self._kafka_consumer = KafkaConsumer(
-                    self.config["kafka"]["processed_topic"],
-                    bootstrap_servers=self.config["kafka"]["brokers"],
-                    group_id=self.config["kafka"]["group_id"],
-                    auto_offset_reset='earliest',
-                    value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                )
-            except KafkaError as e:
-                logger.error(f"Failed to initialize Kafka consumer: {e}")
-
 
         logger.info("AnalyticsService initialized.")
+
+    def set_feed_manager(self, feed_manager):
+        """Sets the feed manager to avoid circular imports."""
+        self._feed_manager = feed_manager
+        logger.info("FeedManager set in AnalyticsService.")
 
     async def predict_incident_likelihood(
         self, location: Dict[str, Any], prediction_time: datetime
@@ -183,10 +185,6 @@ class AnalyticsService:
     ):
         """Creates and saves a new incident report to the database."""
         try:
-            import uuid
-            import time
-            from app.models.traffic import IncidentStatusEnum
-            
             # Construct dictionary matching the create_incident expectation
             now = datetime.now(timezone.utc)
             incident_data = {
@@ -227,12 +225,9 @@ class AnalyticsService:
                 asyncio.create_task(self._notification_service.notify_incident(incident_data))
 
             # Trigger Snapshot if feed_id is provided
-            if source_feed_id:
-                # We need access to feed_manager to request a snapshot
-                from app.services import get_feed_manager
+            if source_feed_id and self._feed_manager:
                 try:
-                    fm = get_feed_manager()
-                    await fm.request_snapshot(source_feed_id, incident_data["id"])
+                    await self._feed_manager.request_snapshot(source_feed_id, incident_data["id"])
                 except Exception as e:
                     logger.warning(f"Failed to request snapshot for incident {incident_data['id']}: {e}")
 
@@ -509,6 +504,7 @@ class AnalyticsService:
         Detects anomalies using ML and statistical methods.
         """
         anomalies = []
+        now = time.time()
         
         # 1. Advanced Anomaly Detection (Pattern-based)
         # Use the last N points for sequence-based detection
@@ -518,28 +514,34 @@ class AnalyticsService:
                 latest = traffic_data_points[-1]
                 location_name = latest.get("location_description", "Unknown Location")
                 
-                anomalies.append({
-                    "type": "pattern_anomaly",
-                    "description": f"AI Detected Anomaly: {result.get('reason')} (Score: {result.get('score'):.2f})",
-                    "location": location_name,
-                    "timestamp": latest.get("timestamp", datetime.now(timezone.utc)).isoformat(),
-                })
+                # Cooldown check: 5 minutes (300 seconds)
+                last_reported = self._active_incidents.get(location_name, 0)
                 
-                # Auto-generate incident
-                severity = IncidentSeverityEnum.HIGH if result.get("score", 0) > 0.8 else IncidentSeverityEnum.MEDIUM
-                location_data = {
-                    "latitude": latest.get("latitude"),
-                    "longitude": latest.get("longitude"),
-                    "name": location_name
-                }
-                await self._create_and_save_incident(
-                    location=location_data, 
-                    incident_type=IncidentTypeEnum.OTHER, 
-                    severity=severity, 
-                    description=anomalies[-1]["description"], 
-                    source_feed_id=latest.get("feed_id"), 
-                    details={"anomaly_result": result, "data_point": latest}
-                )
+                if (now - last_reported > 300):
+                    self._active_incidents[location_name] = now
+                    
+                    anomalies.append({
+                        "type": "pattern_anomaly",
+                        "description": f"AI Detected Anomaly: {result.get('reason')} (Score: {result.get('score'):.2f})",
+                        "location": location_name,
+                        "timestamp": latest.get("timestamp", datetime.now(timezone.utc)).isoformat(),
+                    })
+                    
+                    # Auto-generate incident
+                    severity = IncidentSeverityEnum.HIGH if result.get("score", 0) > 0.8 else IncidentSeverityEnum.MEDIUM
+                    location_data = {
+                        "latitude": latest.get("latitude"),
+                        "longitude": latest.get("longitude"),
+                        "name": location_name
+                    }
+                    await self._create_and_save_incident(
+                        location=location_data, 
+                        incident_type=IncidentTypeEnum.OTHER, 
+                        severity=severity, 
+                        description=anomalies[-1]["description"], 
+                        source_feed_id=latest.get("feed_id"), 
+                        details={"anomaly_result": result, "data_point": latest}
+                    )
 
         # 2. Hard Threshold Fallback (Rule-based)
         speed_threshold = 10.0  # km/h
@@ -551,8 +553,10 @@ class AnalyticsService:
             location_name = data_point.get("location_description", "Unknown Location")
 
             if speed < speed_threshold and vehicle_count > vehicle_count_threshold:
-                # Check if we already flagged this point via AI to avoid duplicates
-                if not any(a["location"] == location_name for a in anomalies):
+                # Check if we already flagged this point via AI or cooldown
+                last_reported = self._active_incidents.get(location_name, 0)
+                if (now - last_reported > 300) and not any(a["location"] == location_name for a in anomalies):
+                    self._active_incidents[location_name] = now
                     anomalies.append({
                         "type": "traffic_anomaly",
                         "description": f"Rule-based detection: Low speed ({speed:.1f} km/h) with high vehicle count ({vehicle_count}) detected.",
@@ -681,6 +685,14 @@ class AnalyticsService:
         logger.info(f"Retrieved {len(data)} node congestion summaries from cache.")
         return data
 
+    def get_data_cache(self) -> TrafficDataCache:
+        """Returns the internal data cache instance."""
+        return self._data_cache
+
+    def get_traffic_predictor(self) -> TrafficPredictor:
+        """Returns the internal traffic predictor instance."""
+        return self._traffic_predictor
+
     async def start_background_tasks(self):
         if self.config.get("node_congestion_broadcast", {}).get("enabled", True):
             if self._node_congestion_task is None or self._node_congestion_task.done():
@@ -787,29 +799,51 @@ class AnalyticsService:
                 logger.error(f"Error in data cache cleanup loop: {e}", exc_info=True)
 
     async def _consume_processed_traffic_data_loop(self):
-        logger.info("Starting Kafka consumer loop for processed traffic data.")
+        if AIOKafkaConsumer is None:
+            logger.warning("AIOKafkaConsumer not available. Skipping Kafka consumer loop.")
+            return
+
+        logger.info("Starting AIOKafka consumer loop for processed traffic data.")
+        
+        consumer = AIOKafkaConsumer(
+            self.config["kafka"]["processed_topic"],
+            bootstrap_servers=self.config["kafka"]["brokers"],
+            group_id=self.config["kafka"]["group_id"],
+            auto_offset_reset='earliest'
+        )
+        
         try:
-            for message in self._kafka_consumer:
+            await consumer.start()
+            async for message in consumer:
                 try:
-                    data = message.value
-                    latitude = data.get("latitude")
-                    longitude = data.get("longitude")
-                    timestamp_str = data.get("timestamp")
-                    if latitude is not None and longitude is not None and timestamp_str:
-                        timestamp = datetime.fromisoformat(timestamp_str)
-                        self._data_cache.add_data_point(latitude, longitude, timestamp, data)
-                    else:
-                        logger.warning(f"Skipping message due to missing data: {data}")
+                    val_bytes = message.value
+                    if val_bytes:
+                        data = json.loads(val_bytes.decode('utf-8'))
+                        latitude = data.get("latitude")
+                        longitude = data.get("longitude")
+                        timestamp_str = data.get("timestamp")
+                        
+                        if latitude is not None and longitude is not None and timestamp_str:
+                            timestamp = datetime.fromisoformat(timestamp_str)
+                            self._data_cache.add_data_point(latitude, longitude, timestamp, data)
+                        else:
+                            logger.warning(f"Skipping message due to missing data: {data}")
+                        
+                        # Yield control to the event loop
+                        await asyncio.sleep(0)
+                        
                 except json.JSONDecodeError:
                     logger.error(f"Failed to decode message: {message.value}")
                 except Exception as e:
-                    logger.error(f"Error processing message: {e}", exc_info=True)
+                    logger.error(f"Error processing Kafka message: {e}", exc_info=True)
+                    
         except asyncio.CancelledError:
-            logger.info("Kafka consumer loop cancelled.")
+            logger.info("Kafka consumer loop task cancelled.")
+        except Exception as e:
+            logger.error(f"Kafka consumer error: {e}")
         finally:
-            if self._kafka_consumer:
-                self._kafka_consumer.close()
-                logger.info("Kafka consumer closed.")
+            await consumer.stop()
+            logger.info("AIOKafka consumer stopped.")
 
     async def _broadcast_node_congestion_updates_loop(self):
         while True:
@@ -851,7 +885,7 @@ class AnalyticsService:
                 type=WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE, data=payload
             )
             await self._connection_manager.broadcast_to_topic(
-                message, topic="node_congestion"
+                message.model_dump_json(), topic="node_congestion"
             )
             logger.debug(
                 f"Broadcasted {len(nodes_for_broadcast)} node congestion updates."

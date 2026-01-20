@@ -1,6 +1,6 @@
 import aiohttp
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from fastapi import HTTPException
 
@@ -19,7 +19,7 @@ class EventService:
 
     async def get_events(self) -> List[Dict[str, Any]]:
         """Fetch current events from the API"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if self._cache and self._cache_expiry and self._cache_expiry > now:
             return self._cache
 

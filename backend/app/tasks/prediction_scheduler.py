@@ -62,7 +62,7 @@ class PredictionScheduler:
         self, all_locations: List[LocationModel]
     ):
         """Refreshes the prediction accuracy cache if it's stale."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if self._last_accuracy_cache_refresh is None or (
             now - self._last_accuracy_cache_refresh > self._accuracy_cache_ttl
         ):

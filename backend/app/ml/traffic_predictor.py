@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler # Assuming StandardScaler is used for feature scaling
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import logging
 
@@ -208,7 +208,7 @@ class TrafficPredictor:
                      "average_speed": 0.0,
                      "congestion_level": 0.0,
                      "congestion_score": 0.0,
-                     "processing_timestamp": datetime.now(),
+                     "processing_timestamp": datetime.now(timezone.utc),
                      "status": "simulated",
                      "hour_of_day": prediction_time.hour,
                      "day_of_week": prediction_time.weekday(),
@@ -558,11 +558,11 @@ if __name__ == "__main__":
     # Example prediction
     # Create some sample recent traffic data (list of dicts)
     sample_recent_data: List[Dict[str, Any]] = [
-        {"timestamp": datetime.utcnow() - timedelta(minutes=i), 
+        {"timestamp": datetime.now(timezone.utc) - timedelta(minutes=i), 
          "latitude": 40.7128, "longitude": -74.0060, 
          "vehicle_count": 50 + i*5, "average_speed": 40 - i*2, 
          "congestion_score": 30 + i*3, "road_type": "major_artery",
-         "is_weekend": datetime.utcnow().weekday() >= 5,
+         "is_weekend": datetime.now(timezone.utc).weekday() >= 5,
          "weather_conditions_temperature": 25.0, "weather_conditions_precipitation": 0.1,
          "truck_percentage": 5.0 + i,
          "incident_occurred": 0 # Assuming no incident in recent history
@@ -572,7 +572,7 @@ if __name__ == "__main__":
     sample_recent_data.reverse()
 
     sample_location = {"latitude": 40.7128, "longitude": -74.0060}
-    prediction_time = datetime.utcnow() + timedelta(minutes=15) # Predict 15 minutes into future
+    prediction_time = datetime.now(timezone.utc) + timedelta(minutes=15) # Predict 15 minutes into future
 
     logger.info(f"Attempting prediction for location {sample_location} at {prediction_time.isoformat()}")
     prediction_result = predictor.predict_incident_likelihood(sample_recent_data, sample_location, prediction_time)

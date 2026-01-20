@@ -357,7 +357,7 @@ vehicle_detection:
   track_timeout: 5
   reid_timeout: 10
   max_active_tracks: 100
-  yolo_imgsz: 640
+  yolo_imgsz: 320
   skip_frames: 1
   reid_enabled: false
   car_classification_enabled: true
@@ -384,7 +384,7 @@ analytics_service:
   proximity_threshold: 75
   track_timeout: 20
   max_active_tracks: 50
-  yolo_imgsz: 640
+  yolo_imgsz: 320
   skip_frames: 30
   vehicle_type_map:
     2: car

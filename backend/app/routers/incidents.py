@@ -3,7 +3,7 @@ from typing import List, Optional
 from app.database import get_database_manager
 from app.utils.database import DatabaseManager
 from app.models.incidents import Incident, IncidentCreate, IncidentUpdate, IncidentStatus
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import time
 
@@ -31,7 +31,7 @@ async def create_incident(
 ):
     """Manually report a new incident."""
     new_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     new_incident = Incident(
         id=new_id,
@@ -63,7 +63,7 @@ async def update_incident(
     if not update_data:
         return existing
         
-    update_data["updated_at"] = datetime.utcnow().isoformat()
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     success = await db.update_incident(incident_id, update_data)
     if not success:

@@ -11,7 +11,7 @@ class ProcessedVideo(Base):
     id = Column(Integer, primary_key=True, index=True)
     stream_id = Column(String, index=True, nullable=False)
     file_path = Column(String, nullable=False)
-    start_time = Column(DateTime, default=datetime.now, nullable=False)
+    start_time = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     end_time = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     duration = Column(Float, nullable=False)
 

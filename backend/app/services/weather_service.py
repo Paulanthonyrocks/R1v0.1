@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from fastapi import HTTPException
 import aiohttp
@@ -13,8 +13,9 @@ class WeatherService(BaseApiClient):
     """
 
     def __init__(self, api_key: str, api_url: str, cache_ttl_minutes: int = 10, timeout: float = 10.0):
+        super().__init__(base_url=api_url, timeout=timeout)
         self.api_key = api_key
-        self.api_url = api_url
+        # self.api_url = api_url # Handled by BaseApiClient
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_expiry: Dict[str, datetime] = {}
@@ -23,7 +24,7 @@ class WeatherService(BaseApiClient):
     async def get_current_weather(self, lat: float, lon: float) -> Dict[str, Any]:
         """Get current weather for a given location with async HTTP request"""
         cache_key = f"{lat},{lon}"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Check cache
         if cache_key in self._cache and self._cache_expiry[cache_key] > now:
@@ -80,7 +81,7 @@ class WeatherService(BaseApiClient):
             "description": f"{weather['conditions']} - {weather['temperature']}°C",
             "severity": severity,
             "location": f"Location ({lat:.2f}, {lon:.2f})",
-            "startTime": datetime.utcnow().isoformat(),
+            "startTime": datetime.now(timezone.utc).isoformat(),
             "details": weather,
         }
 
@@ -107,7 +108,3 @@ class WeatherService(BaseApiClient):
         elif weather["precipitation_chance"] > 30 or weather["wind_speed"] > 30:
             return "Medium"
         return "Low"
-
-    async def close(self):
-        """Close the underlying HTTP client session."""
-        await self._client.aclose()

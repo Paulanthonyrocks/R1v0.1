@@ -3,7 +3,7 @@ import httpx
 import logging
 from typing import Dict, Any, Optional, List
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 
 import numpy as np # Import numpy for haversine distance
@@ -71,7 +71,7 @@ class TrafficSignalService:
                     ),
                     current_phase=SignalPhaseEnum.UNKNOWN,
                     operational_status=SignalOperationalStatusEnum.ONLINE,
-                    last_updated=datetime.utcnow(),
+                    last_updated=datetime.now(timezone.utc),
                 )
         # Add latitude and longitude to the default signals for distance calculation example
         logger.info(f"Initialized {len(self._signal_states)} mock signals.")
@@ -198,7 +198,7 @@ class TrafficSignalService:
             if api_response_data.get("status") == "accepted":
                 current_signal_state = self._signal_states[signal_id]
                 current_signal_state.current_phase = phase
-                current_signal_state.last_updated = datetime.utcnow()
+                current_signal_state.last_updated = datetime.now(timezone.utc)
                 current_signal_state.operational_status = (
                     SignalOperationalStatusEnum.ONLINE
                 )
@@ -212,7 +212,7 @@ class TrafficSignalService:
                     status=SignalControlStatusEnum.ACCEPTED,
                     message=api_response_data.get("message", "Command accepted."),
                     new_state=current_signal_state,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                 )
             else:
                 return SignalControlCommandResponse(
@@ -223,7 +223,7 @@ class TrafficSignalService:
                     message=api_response_data.get(
                         "message", "Command failed at controller."
                     ),
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                 )
 
         except httpx.HTTPStatusError as e:
@@ -234,7 +234,7 @@ class TrafficSignalService:
                 self._signal_states[
                     signal_id
                 ].operational_status = SignalOperationalStatusEnum.ERROR
-                self._signal_states[signal_id].last_updated = datetime.utcnow()
+                self._signal_states[signal_id].last_updated = datetime.now(timezone.utc)
                 await self._broadcast_signal_state_update(
                     signal_id, self._signal_states[signal_id]
                 )
@@ -242,7 +242,7 @@ class TrafficSignalService:
                 signal_id=signal_id,
                 status=SignalControlStatusEnum.ERROR,
                 message=f"External API error: {e.response.status_code}",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
         except httpx.RequestError as e:
             logger.error(f"Request error setting phase for {signal_id}: {e}")
@@ -250,7 +250,7 @@ class TrafficSignalService:
                 self._signal_states[
                     signal_id
                 ].operational_status = SignalOperationalStatusEnum.ERROR
-                self._signal_states[signal_id].last_updated = datetime.utcnow()
+                self._signal_states[signal_id].last_updated = datetime.now(timezone.utc)
                 await self._broadcast_signal_state_update(
                     signal_id, self._signal_states[signal_id]
                 )
@@ -258,7 +258,7 @@ class TrafficSignalService:
                 signal_id=signal_id,
                 status=SignalControlStatusEnum.ERROR,
                 message="Request error",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
         except Exception as e:
             logger.error(
@@ -268,7 +268,7 @@ class TrafficSignalService:
                 signal_id=signal_id,
                 status=SignalControlStatusEnum.ERROR,
                 message="Unexpected server error",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
 
     async def close(self):

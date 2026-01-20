@@ -26,12 +26,16 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
                 parent_dead = False
                 
                 # On Linux, if parent dies, ppid becomes 1 (init) or a subreaper
-                if curr_ppid != orig_ppid or curr_ppid == 1:
+                # Only treat ppid=1 as death if we didn't start with ppid=1
+                if curr_ppid != orig_ppid:
+                    parent_dead = True
+                elif curr_ppid == 1 and orig_ppid != 1:
                     parent_dead = True
                 else:
                     try:
                          # Signal 0 checks if process exists
-                         os.kill(orig_ppid, 0)
+                         if orig_ppid != 1: # Don't try to kill(1, 0) usually
+                             os.kill(orig_ppid, 0)
                     except OSError:
                          parent_dead = True
                 

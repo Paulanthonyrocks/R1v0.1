@@ -4,6 +4,8 @@ import logging
 import time
 import numpy as np
 import queue
+import signal
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
@@ -13,6 +15,39 @@ from ..utils.monitoring import TrafficMonitor
 from ..utils.process import start_parent_monitor
 
 logger = logging.getLogger("Inference")
+
+"""
+WORKER ARCHITECTURE:
+- ingestion_worker.py: Capture frames from source → central_input_queue
+  Use for: Multi-feed systems where AI is shared across feeds
+  
+- inference_worker.py: Process frames from central_input_queue → AI results
+  Use for: GPU-bound scenarios where one GPU serves multiple feeds
+  
+- processing_worker.py: All-in-one (capture + AI + visualization)
+  Use for: Single-feed systems or when each feed needs isolated processing
+  
+DO NOT MIX: Choose either (ingestion + inference) OR (processing) per deployment
+"""
+
+class WorkerMetrics:
+    def __init__(self, feed_id):
+        self.feed_id = feed_id
+        self.frames_processed = 0
+        self.frames_dropped = 0
+        self.errors = 0
+        self.start_time = time.time()
+    
+    def to_dict(self):
+        uptime = time.time() - self.start_time
+        return {
+            "feed_id": self.feed_id,
+            "frames_processed": self.frames_processed,
+            "frames_dropped": self.frames_dropped,
+            "errors": self.errors,
+            "uptime_seconds": uptime,
+            "fps": self.frames_processed / uptime if uptime > 0 else 0
+        }
 
 def _make_serializable(obj):
     if isinstance(obj, (np.integer, np.int64, np.int32)):
@@ -47,10 +82,12 @@ def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: floa
                 "confidence": _make_serializable(data.get("confidence", 0)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
+                "ground_centroid": [_make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
                 "car_model": data.get("car_model"),
                 "car_model_confidence": _make_serializable(data.get("car_model_confidence", 0)),
             })
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")
             continue
     return serialized_list
 
@@ -74,6 +111,14 @@ def inference_worker(
     except Exception as e:
         print(f"DEBUG: Worker {worker_id} failed to init logging: {e}")
 
+    # --- Signal Handling ---
+    def signal_handler(signum, frame):
+        logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
+        stop_event.set()
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
     pid = os.getpid()
     print(f"DEBUG: Inference process {pid} (Worker {worker_id}) entering initialization...")
     logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
@@ -87,6 +132,7 @@ def inference_worker(
     core_modules: Dict[str, CoreModule] = {}
     traffic_monitors: Dict[str, TrafficMonitor] = {}
     pending_configs: Dict[str, Dict] = {}
+    metrics_map: Dict[str, WorkerMetrics] = {} # Feed-specific metrics
     shared_model = None
     
     # Pre-extract shared config
@@ -95,97 +141,88 @@ def inference_worker(
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
-
-    # Pre-load shared model if possible to save memory
-    model_path = vehicle_det_cfg.get("model_path")
-    gpu_enabled = config.get("performance", {}).get("gpu_acceleration", False)
     
+    model_path = vehicle_det_cfg.get("model_path")
+
+    # Shared Model Loading Logic ...
+    model_load_failed = False
     if model_path:
-        print(f"DEBUG: [Worker {worker_id}] Pre-loading shared model: {model_path} (GPU: {gpu_enabled})")
         try:
-            # Resolve path relative to project root
-            resolved_path = Path(config.get("project_root_dir", "")) / model_path
+            logger.info(f"[Worker {worker_id}] Loading shared model from {model_path}...")
+            # Resolve absolute path
+            root_dir = config.get("project_root_dir", "")
+            full_model_path = str(Path(root_dir) / model_path)
             
-            if str(resolved_path).endswith((".onnx", "_quant.onnx")):
+            use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
+            
+            if full_model_path.endswith(".onnx") or full_model_path.endswith("_quant.onnx"):
                 import onnxruntime as ort
                 providers = ["CPUExecutionProvider"]
-                if gpu_enabled:
-                    if "CUDAExecutionProvider" in ort.get_available_providers():
-                        providers.insert(0, "CUDAExecutionProvider")
-                        print(f"DEBUG: [Worker {worker_id}] Enabled CUDA for ONNX shared model")
-                    else:
-                         print(f"DEBUG: [Worker {worker_id}] CUDA requested but not available for ONNX")
-                
-                shared_model = ort.InferenceSession(str(resolved_path), providers=providers)
+                if use_gpu and "CUDAExecutionProvider" in ort.get_available_providers():
+                    providers.insert(0, "CUDAExecutionProvider")
+                shared_model = ort.InferenceSession(full_model_path, providers=providers)
+                logger.info(f"[Worker {worker_id}] Shared ONNX model loaded.")
             else:
+                # Lazy import to avoid startup overhead if not used
                 from ultralytics import YOLO
                 import torch
-                shared_model = YOLO(str(resolved_path))
                 
-                target_device = "cpu"
-                if gpu_enabled and torch.cuda.is_available():
-                    target_device = "cuda"
-                    print(f"DEBUG: [Worker {worker_id}] Moving YOLO shared model to CUDA")
+                device = "cpu"
+                if use_gpu:
+                    if torch.cuda.is_available():
+                        device = "cuda:0"
+                    else:
+                        logger.warning(f"[Worker {worker_id}] GPU requested but not available.")
                 
-                shared_model.to(target_device)
-
-            print(f"DEBUG: [Worker {worker_id}] Shared model loaded successfully.")
+                shared_model = YOLO(full_model_path)
+                shared_model.to(device)
+                logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
+                
         except Exception as e:
-            print(f"DEBUG: [Worker {worker_id}] Failed to preload model: {e}")
+            logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
+            shared_model = None
 
-    print(f"DEBUG: [Worker {worker_id}] Entering main processing loop.")
-
+        # After loading:
+        if shared_model is None:
+             logger.error(f"[Worker {worker_id}] Failed to load shared model. Will attempt per-feed load.")
+             model_load_failed = True
+    
+    # ... handle command ...
     def handle_command(cmd):
-        nonlocal skip_frames
         if not cmd: return
-        feed_id = cmd.get("feed_id")
-        
-        if cmd.get("type") == "config_update":
-            data = cmd.get("data", {})
-            if "skip_frames" in data:
-                try:
-                    skip_frames = int(data["skip_frames"])
-                    logger.info(f"[Worker {worker_id}] Updated skip_frames to {skip_frames}")
-                except: pass
-            
-            if not feed_id: return
-            logger.info(f"[Worker {worker_id}] Received config update command for {feed_id}")
-            
-            cm_update = data.copy()
-            
-            # Transform ROI for CoreModule
-            if "roi" in data:
-                if "roi_processing" not in cm_update:
-                    cm_update["roi_processing"] = {}
+        try:
+            cmd_type = cmd.get("type")
+            if cmd_type == "config_update":
+                data = cmd.get("data", {})
+                # Some commands might wrap data, others might be flat. Adjust as needed.
+                feed_id_cmd = data.get("feed_id") or cmd.get("feed_id")
                 
-                roi = data["roi"]
-                if roi and isinstance(roi, list) and len(roi) >= 3:
-                    # Pass as list of [x, y] floats
-                    try:
-                        normalized_points = [[p['x'], p['y']] for p in roi]
-                        cm_update["roi_processing"]["roi_points_normalized"] = normalized_points
-                        cm_update["roi_processing"]["enabled"] = True
-                        logger.info(f"[Worker {worker_id}] Parsed ROI update for {feed_id}")
-                    except Exception as e:
-                        logger.error(f"[Worker {worker_id}] Failed to parse ROI: {e}")
-                else:
-                    cm_update["roi_processing"]["roi_points_normalized"] = None
-                    cm_update["roi_processing"]["enabled"] = False
-                    logger.info(f"[Worker {worker_id}] ROI disabled in update for {feed_id}")
+                if feed_id_cmd:
+                    # Fix #27: Limit pending configs
+                    if feed_id_cmd not in core_modules:
+                        if feed_id_cmd not in pending_configs:
+                            pending_configs[feed_id_cmd] = {}
+                        pending_configs[feed_id_cmd].update(data)
+                        
+                        MAX_PENDING_CONFIGS = 100
+                        if len(pending_configs) > MAX_PENDING_CONFIGS:
+                            oldest = next(iter(pending_configs))
+                            pending_configs.pop(oldest)
+                            logger.warning(f"[Worker {worker_id}] Dropped pending config for {oldest} (limit reached)")
+                    else:
+                        core_modules[feed_id_cmd].update_config(data)
+                        
+        except Exception as e:
+            logger.error(f"[Worker {worker_id}] Command error: {e}")
 
-            if feed_id in core_modules:
-                core_modules[feed_id].update_config(cm_update)
-                logger.info(f"[Worker {worker_id}] Applied config update to active CoreModule for {feed_id}")
-            else:
-                # Store in pending to be applied upon initialization
-                if feed_id not in pending_configs:
-                    pending_configs[feed_id] = {}
-                pending_configs[feed_id].update(cm_update)
-                logger.info(f"[Worker {worker_id}] Stored pending config update for {feed_id}")
+    last_detection_mode = {} # feed_id -> bool
+    last_metrics_log = time.time()
+    
+    print(f"DEBUG: [Worker {worker_id}] Entering main loop...")
 
     try:
         while not stop_event.is_set():
-            # 0. Check for commands first (broadcast channel)
+            # ... handle command queue ...
             try:
                 while True:
                     cmd = command_queue.get_nowait()
@@ -195,16 +232,41 @@ def inference_worker(
 
             try:
                 # 1. Get a frame task from the queue
-                # Format: (feed_id, frame_index, frame_bytes, timestamp_or_payload)
-                task = central_input_queue.get(timeout=0.1) # Shorter timeout to check commands more often
+                # print(f"DEBUG: [Worker {worker_id}] Waiting for frame...") # Commented out to avoid spam
+                task = central_input_queue.get(timeout=0.1) 
                 if task is None: continue
                 
                 feed_id, frame_index, frame_bytes, extra_payload = task
+                # print(f"DEBUG: [Worker {worker_id}] Got frame {frame_index} from {feed_id}")
 
-                # --- OLD CONTROL MESSAGE HANDLING REMOVED ---
-                if frame_index == -1:
+                # Initialize metrics for feed if needed
+                if feed_id not in metrics_map:
+                    metrics_map[feed_id] = WorkerMetrics(feed_id)
+
+                # Handle Lifecycle Signals
+                if frame_index == -888:  # Feed started
+                    logger.info(f"[Worker {worker_id}] Feed {feed_id} started signal received")
+                    if feed_id in core_modules:
+                         core_modules[feed_id]._first_detection_done = False
                     continue
-                # --------------------------------
+                    
+                if frame_index == -999: # End of Stream
+                    logger.info(f"[Worker {worker_id}] Received EOS for {feed_id}")
+                    if feed_id in core_modules:
+                        core_modules[feed_id].cleanup()
+                        del core_modules[feed_id]
+                    if feed_id in traffic_monitors:
+                        del traffic_monitors[feed_id]
+                    # Clean pending configs
+                    pending_configs.pop(feed_id, None)
+                    # Clean metrics
+                    if feed_id in metrics_map:
+                         logger.info(f"[Worker {worker_id}] Final Metrics for {feed_id}: {json.dumps(metrics_map[feed_id].to_dict())}")
+                         del metrics_map[feed_id]
+                    continue
+
+                if frame_index == -1: # Control Message
+                    continue
 
                 # 3. Lazy initialize feed logic
                 if feed_id not in core_modules:
@@ -217,57 +279,101 @@ def inference_worker(
                         db_queue=db_queue,
                         gemini_api_key=ocr_cfg.get("gemini_api_key"),
                         model_type=vehicle_det_cfg.get("model_type", "yolo"),
-                        preloaded_model=shared_model
+                        preloaded_model=shared_model if not model_load_failed else None
                     )
+                    core_modules[feed_id]._first_detection_done = False # Initialize flag
+                    
+                    if model_load_failed:
+                        logger.warning(f"[Worker {worker_id}] Feed {feed_id} loaded model independently (shared model failed)")
+
                     traffic_monitors[feed_id] = TrafficMonitor(config)
                     
                     # Apply any pending configs
                     if feed_id in pending_configs:
-                        logger.info(f"[Worker {worker_id}] Applying pending config to new CoreModule for {feed_id}")
                         core_modules[feed_id].update_config(pending_configs.pop(feed_id))
                 
                 core = core_modules[feed_id]
                 monitor = traffic_monitors[feed_id]
+                metrics_obj = metrics_map[feed_id]
                 
                 # 4. Process AI with Frame Skipping
-                # Logic: Detect every (skip_frames + 1) frames, predict on others.
-                # Always detect if no tracks exist.
-                should_detect = (frame_index % (skip_frames + 1) == 0) or (not core.vehicle_data)
+                # Fix #22: Ensure first detection runs
+                first_detect = not getattr(core, '_first_detection_done', False)
+                should_detect = (frame_index % (skip_frames + 1) == 0) or (first_detect and not core.vehicle_data)
                 
                 if should_detect:
                     # 2. Decode frame only if we need to detect
                     nparr = np.frombuffer(frame_bytes, np.uint8)
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    if frame is None: continue
+                    if frame is None: 
+                        metrics_obj.errors += 1
+                        continue
                     
                     tracked_vehicles = core.detect_and_track(
                         frame, frame_index
                     )
+                    
+                    if tracked_vehicles and first_detect:
+                        core._first_detection_done = True
+                        
+                    # Update stats on detection
+                    monitor.update_vehicles(tracked_vehicles)
                 else:
                     # Skip detection, use Kalman Filter prediction
                     tracked_vehicles = core.predict_only(frame_index)
+                    # DON'T update monitor with pure predictions to avoid stats pollution
+                    # Or update only active/confirmed ones if needed. For now, strict separation.
                 
-                monitor.update_vehicles(tracked_vehicles)
                 metrics = monitor.get_metrics()
+                metrics_obj.frames_processed += 1
                 
                 # 5. Serialize and push results
-                # Scale factors are 1.0 since ingestion already resized to stream_res
                 serialized_vehicles = _serialize_tracked_vehicles(tracked_vehicles, 1.0, 1.0)
                 
                 try:
-                    # Format: (feed_id, frame_index, frame_bytes, metrics, vehicles, extra)
                     central_output_queue.put_nowait((
                         feed_id, frame_index, frame_bytes, metrics, serialized_vehicles, {}
                     ))
                 except queue.Full:
-                    pass
+                    metrics_obj.frames_dropped += 1
+                
+                # Periodic Metrics Logging
+                now = time.time()
+                if now - last_metrics_log > 30.0:
+                     for fid, m in metrics_map.items():
+                         logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
+                     last_metrics_log = now
 
             except queue.Empty:
                 continue
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
+                if 'metrics_obj' in locals(): metrics_obj.errors += 1
 
+    except KeyboardInterrupt:
+        logger.info(f"[Worker {worker_id}] Received keyboard interrupt")
+    except Exception as e:
+        logger.error(f"[Worker {worker_id}] Fatal error in main loop: {e}", exc_info=True)
     finally:
-        for cm in core_modules.values():
-            cm.cleanup()
-        logger.info(f"Inference process {pid} terminated.")
+        logger.info(f"[Worker {worker_id}] Shutting down, cleaning up {len(core_modules)} feeds...")
+        for feed_id, cm in core_modules.items():
+            try:
+                cm.cleanup()
+                logger.debug(f"[Worker {worker_id}] Cleaned up {feed_id}")
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Cleanup failed for {feed_id}: {e}")
+        
+        # Clear shared model reference
+        if shared_model is not None:
+            del shared_model
+            
+            # If using PyTorch, explicitly clear cache
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.debug(f"[Worker {worker_id}] Cleared CUDA cache")
+            except:
+                pass
+        
+        logger.info(f"Inference process {os.getpid()} terminated.")

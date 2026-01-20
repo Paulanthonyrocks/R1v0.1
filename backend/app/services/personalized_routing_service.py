@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta  # Added timedelta for time-based filtering
+from datetime import datetime, timedelta, timezone  # Added timedelta for time-based filtering
 from sqlalchemy import select
 from typing import Tuple
 from app.models.base import Base
@@ -321,7 +321,7 @@ class PersonalizedRoutingService:
                 dest_name = f"({most_common_destination.get('latitude')}, {most_common_destination.get('longitude')})"  # Simplified name
 
                 # Query for recent negative feedback for similar suggestions
-                seven_days_ago = datetime.utcnow() - timedelta(days=7)
+                seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
                 stmt = (
                     select(ProactiveSuggestionFeedbackLog)
@@ -375,7 +375,7 @@ class PersonalizedRoutingService:
                         "message": suggestion_text,
                     },
                     interaction_status="suggested",
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                 )
                 session.add(suggestion_log_entry)
                 await session.commit()
@@ -444,7 +444,7 @@ class PersonalizedRoutingService:
                 # Save updated profile
                 if profile_record:
                     profile_record.profile_data = updated_profile.model_dump()
-                    profile_record.updated_at = datetime.utcnow()
+                    profile_record.updated_at = datetime.now(timezone.utc)
                 else:
                     session.add(
                         UserProfileModel(
@@ -532,7 +532,7 @@ class PersonalizedRoutingService:
                     return False
 
                 feedback_log_entry.interaction_status = interaction_status
-                feedback_log_entry.timestamp = datetime.utcnow()
+                feedback_log_entry.timestamp = datetime.now(timezone.utc)
 
                 if feedback_text is not None:
                     feedback_log_entry.user_feedback_text = feedback_text

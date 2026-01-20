@@ -2,7 +2,6 @@ import numpy as np
 import cv2
 import logging
 from typing import Optional, Tuple, List, Dict
-import tensorflow as tf
 from pathlib import Path
 
 logger = logging.getLogger("app.ml.car_classifier")
@@ -16,6 +15,13 @@ class CarClassifier:
         
         if not self.model_path.exists():
             logger.error(f"Car classifier model not found at {self.model_path}")
+            self.interpreter = None
+            return
+
+        try:
+            import tensorflow as tf
+        except (ImportError, OSError) as e:
+            logger.error(f"Failed to import tensorflow: {e}. Car classification will be disabled.")
             self.interpreter = None
             return
 

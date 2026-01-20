@@ -105,28 +105,20 @@ class FrameReader:
                 if self.is_file:
                     if self.is_looped:
                         logger.info(f"Looping video '{self.source_name}'")
-                        # Try seeking first (much faster)
-                        try:
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                            # Verify seek worked by reading one frame
-                            ret_check, _ = cap.read()
-                            if ret_check:
-                                # Rewind again to start fresh loop logic correctly on next iteration
-                                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                                self.frame_index = -1
-                                continue
-                        except Exception as e:
-                            logger.warning(f"Seek failed for '{self.source_name}': {e}. Fallback to reopen.")
-
-                        # Fallback to reopen
+                        # Robust looping: Reopen the file to ensure a clean state
                         cap.release()
+                        time.sleep(0.05) # Brief pause to release handles
                         cap = cv2.VideoCapture(self.source)
+                        
                         if not cap.isOpened():
                              logger.error(f"Failed to reopen video '{self.source_name}' for looping.")
                              self.end_of_video = True
                              break
                         
+                        # Reset reader state
                         self.frame_index = -1
+                        # Reset timing to prevent fast-forwarding after the pause
+                        next_frame_time = time.time() 
                         continue
                     else:
                         logger.info(f"End of video '{self.source_name}'")

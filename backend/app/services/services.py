@@ -1,11 +1,12 @@
 # app/services.py
 import logging
+import asyncio
+from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+
 from app.websocket.connection_manager import ConnectionManager
 from app.services.feed_manager import FeedManager as FMClass, initialize_feed_manager
-
-from typing import Optional, Dict, Any
-from datetime import datetime
-
 from app.services.traffic_signal_service import TrafficSignalService
 from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
@@ -16,324 +17,500 @@ from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.services.retention import RetentionService
 from app.services.notification_service import NotificationService
-from app.ml.traffic_predictor import TrafficPredictor # Import TrafficPredictor
+from app.ml.traffic_predictor import TrafficPredictor
 
 logger = logging.getLogger(__name__)
 
-connection_manager_instance: Optional[ConnectionManager] = None
-feed_manager_instance: Optional[FMClass] = (
-    None  # Keep FeedManager instance global if needed outside initialize_services
-)
+
+class ServiceRegistry:
+    """Centralized service registry for managing application services."""
+    
+    def __init__(self):
+        self._connection_manager: Optional[ConnectionManager] = None
+        self._feed_manager: Optional[FMClass] = None
+        self._traffic_signal_service: Optional[TrafficSignalService] = None
+        self._analytics_service: Optional[AnalyticsService] = None
+        self._route_optimization_service: Optional[RouteOptimizationService] = None
+        self._personalized_routing_service: Optional[PersonalizedRoutingService] = None
+        self._weather_service: Optional[WeatherService] = None
+        self._event_service: Optional[EventService] = None
+        self._retention_service: Optional[RetentionService] = None
+        self._notification_service: Optional[NotificationService] = None
+        self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
+        self._health_check_lock = asyncio.Lock()
+        self._initialized = False
+        
+        # Deadlock detection
+        self._initialization_stack = []
+        self._max_init_depth = 10
+
+    @property
+    def connection_manager(self) -> ConnectionManager:
+        if self._connection_manager is None:
+            raise RuntimeError("ConnectionManager not initialized.")
+        return self._connection_manager
+
+    @property
+    def feed_manager(self) -> FMClass:
+        if self._feed_manager is None:
+            raise RuntimeError("FeedManager not initialized.")
+        return self._feed_manager
+
+    @property
+    def traffic_signal_service(self) -> TrafficSignalService:
+        if self._traffic_signal_service is None:
+            raise RuntimeError("TrafficSignalService not initialized.")
+        return self._traffic_signal_service
+
+    @property
+    def analytics_service(self) -> AnalyticsService:
+        if self._analytics_service is None:
+            raise RuntimeError("AnalyticsService not initialized.")
+        return self._analytics_service
+
+    @property
+    def advanced_analytics_service(self) -> AdvancedAnalyticsService:
+        if self._advanced_analytics_service is None:
+            raise RuntimeError("AdvancedAnalyticsService not initialized.")
+        return self._advanced_analytics_service
+
+    @property
+    def route_optimization_service(self) -> RouteOptimizationService:
+        if self._route_optimization_service is None:
+            raise RuntimeError("RouteOptimizationService not initialized.")
+        return self._route_optimization_service
+
+    @property
+    def personalized_routing_service(self) -> PersonalizedRoutingService:
+        if self._personalized_routing_service is None:
+            raise RuntimeError("PersonalizedRoutingService not initialized.")
+        return self._personalized_routing_service
+
+    @property
+    def weather_service(self) -> WeatherService:
+        if self._weather_service is None:
+            raise RuntimeError("WeatherService not initialized.")
+        return self._weather_service
+
+    @property
+    def event_service(self) -> EventService:
+        if self._event_service is None:
+            raise RuntimeError("EventService not initialized.")
+        return self._event_service
+
+    @property
+    def notification_service(self) -> NotificationService:
+        if self._notification_service is None:
+            raise RuntimeError("NotificationService not initialized.")
+        return self._notification_service
+
+    @property
+    def retention_service(self) -> RetentionService:
+        if self._retention_service is None:
+            raise RuntimeError("RetentionService not initialized.")
+        return self._retention_service
+
+    async def initialize(
+        self, 
+        config: Dict[str, Any], 
+        connection_manager: ConnectionManager
+    ) -> None:
+        """Initialize all application services."""
+        if self._initialized:
+            logger.warning("Services already initialized. Skipping re-initialization.")
+            return
+
+        self._connection_manager = connection_manager
+
+        try:
+            # Get database manager
+            db_manager = get_database_manager()
+            logger.info("DatabaseManager instance obtained for service initialization.")
+        except RuntimeError as e:
+            logger.error(f"Failed to get DatabaseManager: {e}")
+            raise
+
+        # Initialize core services
+        await self._initialize_core_services(config, connection_manager)
+        
+        # Initialize dependent services
+        await self._initialize_dependent_services(config, db_manager)
+        
+        # Initialize optional services
+        await self._initialize_optional_services(config, db_manager)
+
+        self._initialized = True
+        logger.info("All application services initialized successfully.")
+
+    async def _initialize_core_services(
+        self, 
+        config: Dict[str, Any], 
+        connection_manager: ConnectionManager
+    ) -> None:
+        """Initialize critical services required for basic operation."""
+        if len(self._initialization_stack) > self._max_init_depth:
+            raise RuntimeError(
+                f"Possible circular dependency detected: {self._initialization_stack}"
+            )
+        
+        self._initialization_stack.append("core_services")
+        try:
+            # Traffic Signal Service
+            self._traffic_signal_service = TrafficSignalService(
+                config=config,
+                connection_manager=connection_manager,
+            )
+            logger.info("TrafficSignalService initialized.")
+
+            # Notification Service
+            self._notification_service = NotificationService(
+                config=config.get("notifications", {})
+            )
+            logger.info("NotificationService initialized.")
+
+            # Weather Service
+            self._weather_service = WeatherService(
+                api_url=config.get("weather_service", {}).get("api_url", ""),
+                api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
+                cache_ttl_minutes=config.get("weather_service", {}).get("cache_ttl_minutes", 10),
+            )
+            logger.info("WeatherService initialized.")
+
+            # Analytics Service with Traffic Predictor
+            traffic_predictor = await self._load_traffic_predictor(config)
+            
+            self._analytics_service = AnalyticsService(
+                config=config,
+                connection_manager=connection_manager,
+                database_manager=get_database_manager(),
+                traffic_predictor=traffic_predictor,
+                traffic_signal_service=self._traffic_signal_service,
+                notification_service=self._notification_service,
+            )
+            logger.info("AnalyticsService initialized.")
+
+            # Feed Manager
+            self._feed_manager = await initialize_feed_manager(config)
+            self._feed_manager.set_connection_manager(connection_manager)
+            self._feed_manager.set_analytics_service(self._analytics_service)
+            logger.info("FeedManager initialized.")
+        finally:
+            self._initialization_stack.pop()
+
+    async def _load_traffic_predictor(self, config: Dict[str, Any]) -> Optional[TrafficPredictor]:
+        """Load the traffic predictor model if configured."""
+        analytics_cfg = config.get("analytics_service", {})
+        model_path = analytics_cfg.get("model_path")
+        prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
+        
+        if not prediction_enabled:
+            logger.info("Traffic prediction disabled in config.")
+            return None
+            
+        if not model_path:
+            logger.warning("No model_path configured for TrafficPredictor.")
+            return None
+
+        model_file = Path(model_path)
+        if not model_file.exists():
+            logger.error(f"TrafficPredictor model file not found: {model_path}")
+            return None
+        
+        if not model_file.is_file():
+            logger.error(f"TrafficPredictor model path is not a file: {model_path}")
+            return None
+
+        try:
+            predictor = TrafficPredictor(config=config)
+            predictor.load_model(str(model_file))
+            logger.info(f"TrafficPredictor model loaded from {model_path}")
+            return predictor
+        except Exception as e:
+            logger.error(f"Failed to load TrafficPredictor model: {e}", exc_info=True)
+            return None
+
+    async def _initialize_dependent_services(
+        self, 
+        config: Dict[str, Any], 
+        db_manager
+    ) -> None:
+        """Initialize services that depend on core services."""
+        
+        # Get public interfaces instead of private attributes
+        data_cache = self._analytics_service.get_data_cache()
+        traffic_predictor = self._analytics_service.get_traffic_predictor()
+
+        # Route Optimization Service
+        self._route_optimization_service = RouteOptimizationService(
+            traffic_predictor=traffic_predictor,
+            data_cache=data_cache,
+            weather_service=self._weather_service
+        )
+        logger.info("RouteOptimizationService initialized.")
+
+        # Personalized Routing Service
+        self._personalized_routing_service = PersonalizedRoutingService(
+            database_manager=db_manager,
+            traffic_predictor=traffic_predictor,
+            data_cache=data_cache,
+        )
+        logger.info("PersonalizedRoutingService initialized.")
+
+        # Advanced Analytics Service
+        self._advanced_analytics_service = AdvancedAnalyticsService(
+            db_manager=db_manager
+        )
+        logger.info("AdvancedAnalyticsService initialized.")
+
+    async def _initialize_optional_services(
+        self, 
+        config: Dict[str, Any], 
+        db_manager
+    ) -> None:
+        """Initialize optional services that can fail without breaking the app."""
+        
+        # Event Service
+        try:
+            self._event_service = EventService(
+                api_url=config.get("event_service", {}).get("api_url", ""),
+                cache_ttl_minutes=config.get("event_service", {}).get("cache_ttl_minutes", 30),
+            )
+            logger.info("EventService initialized.")
+        except Exception as e:
+            logger.warning(f"EventService initialization failed (non-critical): {e}")
+            self._event_service = None
+
+        # Retention Service
+        try:
+            self._retention_service = RetentionService(config=config)
+            self._retention_service.start()
+            logger.info("RetentionService initialized and started.")
+        except Exception as e:
+            logger.warning(f"RetentionService initialization failed (non-critical): {e}")
+            self._retention_service = None
+
+    async def shutdown(self) -> None:
+        """Gracefully shutdown all services."""
+        logger.info("Shutting down application services...")
+
+        # Shutdown in reverse order of dependency
+        shutdown_tasks = [
+            ("FeedManager", self._shutdown_feed_manager),
+            ("RetentionService", self._shutdown_retention_service),
+            ("AnalyticsService", self._shutdown_analytics_service),
+            ("NotificationService", self._shutdown_notification_service),
+            ("TrafficSignalService", self._shutdown_traffic_signal_service),
+            ("WeatherService", self._shutdown_weather_service),
+            ("EventService", self._shutdown_event_service),
+        ]
+
+        for service_name, shutdown_func in shutdown_tasks:
+            try:
+                await shutdown_func()
+            except Exception as e:
+                logger.error(f"Error shutting down {service_name}: {e}", exc_info=True)
+
+        # Clear all references
+        self._reset_services()
+        self._initialized = False
+        logger.info("All services shut down successfully.")
+
+    async def _shutdown_feed_manager(self) -> None:
+        if self._feed_manager:
+            await self._feed_manager.shutdown()
+            logger.info("FeedManager shutdown completed.")
+
+    async def _shutdown_retention_service(self) -> None:
+        if self._retention_service:
+            await self._retention_service.stop()
+            logger.info("RetentionService stopped.")
+
+    async def _shutdown_analytics_service(self) -> None:
+        if self._analytics_service:
+            await self._analytics_service.stop_background_tasks()
+            logger.info("AnalyticsService background tasks stopped.")
+
+    async def _shutdown_notification_service(self) -> None:
+        if self._notification_service and hasattr(self._notification_service, 'close'):
+            await self._notification_service.close()
+            logger.info("NotificationService closed.")
+
+    async def _shutdown_traffic_signal_service(self) -> None:
+        if self._traffic_signal_service:
+            await self._traffic_signal_service.close()
+            logger.info("TrafficSignalService closed.")
+
+    async def _shutdown_weather_service(self) -> None:
+        if self._weather_service and hasattr(self._weather_service, 'close'):
+            await self._weather_service.close()
+            logger.info("WeatherService closed.")
+
+    async def _shutdown_event_service(self) -> None:
+        if self._event_service and hasattr(self._event_service, 'close'):
+            await self._event_service.close()
+            logger.info("EventService closed.")
+
+    def _reset_services(self) -> None:
+        """Reset all service references to None."""
+        self._feed_manager = None
+        self._traffic_signal_service = None
+        self._analytics_service = None
+        self._route_optimization_service = None
+        self._personalized_routing_service = None
+        self._weather_service = None
+        self._event_service = None
+        self._retention_service = None
+        self._notification_service = None
+        self._advanced_analytics_service = None
+        self._connection_manager = None
+
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform health check on all services."""
+        async with self._health_check_lock:
+            services_health = {}
+            overall_healthy = True
+
+            # Check Feed Manager
+            if self._feed_manager:
+                fm_healthy = self._feed_manager.is_healthy()
+                services_health["feed_manager"] = {
+                    "status": "healthy" if fm_healthy else "unhealthy",
+                    "healthy": fm_healthy
+                }
+                overall_healthy = overall_healthy and fm_healthy
+            else:
+                services_health["feed_manager"] = {"status": "not initialized", "healthy": False}
+                overall_healthy = False
+
+        # Check other critical services
+        critical_services = [
+            ("traffic_signal_service", self._traffic_signal_service),
+            ("analytics_service", self._analytics_service),
+            ("weather_service", self._weather_service),
+        ]
+
+        for service_name, service in critical_services:
+            if service:
+                # Check if service has a health check method
+                if hasattr(service, 'health_check'):
+                    try:
+                        health_status = await service.health_check()
+                        services_health[service_name] = health_status
+                        overall_healthy = overall_healthy and health_status.get("healthy", True)
+                    except Exception as e:
+                        logger.error(f"Health check failed for {service_name}: {e}")
+                        services_health[service_name] = {"status": "error", "healthy": False}
+                        overall_healthy = False
+                else:
+                    services_health[service_name] = {"status": "initialized", "healthy": True}
+            else:
+                services_health[service_name] = {"status": "not initialized", "healthy": False}
+                overall_healthy = False
+
+        # Check optional services (don't affect overall health)
+        optional_services = [
+            ("event_service", self._event_service),
+            ("retention_service", self._retention_service),
+        ]
+
+        for service_name, service in optional_services:
+            if service:
+                services_health[service_name] = {"status": "initialized", "healthy": True}
+            else:
+                services_health[service_name] = {"status": "not initialized", "healthy": None}
+
+        return {
+            "status": "healthy" if overall_healthy else "degraded",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "services": services_health,
+        }
 
 
-_traffic_signal_service_instance: Optional[TrafficSignalService] = None
-_analytics_service_instance: Optional[AnalyticsService] = None
-_route_optimization_service_instance: Optional[RouteOptimizationService] = None
-_personalized_routing_service_instance: Optional[PersonalizedRoutingService] = None
-_weather_service_instance: Optional[WeatherService] = None
-_event_service_instance: Optional[EventService] = None
-_retention_service_instance: Optional[RetentionService] = None
-_notification_service_instance: Optional[NotificationService] = None
-_advanced_analytics_service_instance: Optional[AdvancedAnalyticsService] = None
+# Global registry instance
+_service_registry: Optional[ServiceRegistry] = None
+
+
+def get_service_registry() -> ServiceRegistry:
+    """Get the global service registry instance."""
+    global _service_registry
+    if _service_registry is None:
+        raise RuntimeError("ServiceRegistry not initialized. Call initialize_services first.")
+    return _service_registry
 
 
 async def initialize_services(
-    config: Dict[str, Any], logger: logging.Logger, connection_manager: ConnectionManager
-):  # Accept logger as argument
-    global \
-        feed_manager_instance, \
-        _traffic_signal_service_instance, \
-        _analytics_service_instance, \
-        _route_optimization_service_instance, \
-        _personalized_routing_service_instance, \
-        _weather_service_instance, \
-        _event_service_instance, \
-        _retention_service_instance, \
-        _notification_service_instance, \
-        _advanced_analytics_service_instance, \
-        connection_manager_instance
-
-    connection_manager_instance = connection_manager
-
-    # Get the database manager instance
-    try:
-        db_manager = get_database_manager()
-        logger.info("DatabaseManager instance obtained for service initialization.")
-    except RuntimeError as e:
-        logger.error(f"Failed to get DatabaseManager for service initialization: {e}")
-        # Depending on criticality, you might want to raise this error
-        db_manager = None  # Ensure db_manager is None if getting it fails
-
-    _traffic_signal_service_instance = TrafficSignalService(
-        config=config.get("traffic_signal_service", {}),
-        connection_manager=connection_manager,
-    )
-
-    # Initialize NotificationService
-    _notification_service_instance = NotificationService(
-        config=config.get("notifications", {})
-    )
-
-    # Pass db_manager to AnalyticsService
-    try:
-        from app.services.analytics_service import AnalyticsService
-
-        # Load the TrafficPredictor model
-        analytics_cfg = config.get("analytics_service", {})
-        traffic_predictor_model_path = analytics_cfg.get("model_path")
-        prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
-        
-        loaded_traffic_predictor = None
-        if traffic_predictor_model_path and prediction_enabled:
-            try:
-                loaded_traffic_predictor = TrafficPredictor(config=analytics_cfg)
-                loaded_traffic_predictor.load_model(traffic_predictor_model_path)
-                logger.info(f"TrafficPredictor model loaded from {traffic_predictor_model_path}")
-            except Exception as e:
-                logger.error(f"Failed to load TrafficPredictor model from {traffic_predictor_model_path}: {e}", exc_info=True)
-        elif not prediction_enabled:
-            logger.info("Traffic prediction disabled in config. Skipping model load.")
-        else:
-            logger.warning("No model_path configured for TrafficPredictor. AnalyticsService will use a mock predictor.")
-
-        _analytics_service_instance = AnalyticsService(
-            config=config.get("analytics_service", {}),
-            connection_manager=connection_manager,
-            database_manager=db_manager,
-            traffic_predictor=loaded_traffic_predictor, # Pass the loaded predictor
-            traffic_signal_service=_traffic_signal_service_instance,
-            notification_service=_notification_service_instance,
-        )
-        logger.info("AnalyticsService initialized successfully in services.py.")
-        print(
-            f"services.py: _analytics_service_instance created: {_analytics_service_instance}"
-        )
-        # Initialize FeedManager
-        feed_manager_instance = await initialize_feed_manager(config)
-        feed_manager_instance.set_connection_manager(connection_manager)
-        feed_manager_instance.set_analytics_service(_analytics_service_instance)
-        logger.info("FeedManager initialized.")
-        print(f"DEBUG: feed_manager_instance in services.py: {feed_manager_instance}")
-    except Exception as e:
-        logger.error(f"Failed to initialize AnalyticsService: {e}", exc_info=True)
-        _analytics_service_instance = None
-        raise # Re-raise the exception to propagate the error
-
-    # Initialize weather service
-    try:
-        _weather_service_instance = WeatherService(
-            api_url=config.get("weather_service", {}).get("api_url", ""),
-            api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
-            cache_ttl_minutes=config.get("weather_service", {}).get(
-                "cache_ttl_minutes", 10
-            ),
-        )
-        logger.info("WeatherService initialized successfully")
-    except Exception:
-        raise  # Re-raise the exception to propagate the error
-
-    if _analytics_service_instance:
-        _route_optimization_service_instance = RouteOptimizationService(
-            weather_service=_weather_service_instance,
-            data_cache=_analytics_service_instance._data_cache,  # Assuming data_cache is also needed by RouteOptimizationService
-            traffic_predictor=_analytics_service_instance._traffic_predictor,  # Pass the loaded predictor
-        )
-        logger.info("RouteOptimizationService initialized successfully.")
-        feed_manager_instance.set_analytics_service(_analytics_service_instance)
-    else:
-        logger.warning(
-            "AnalyticsService not initialized, skipping RouteOptimizationService initialization."
-        )
-    # Initialize personalized routing service
-    try:
-        _personalized_routing_service_instance = PersonalizedRoutingService(
-            database_manager=db_manager,
-            traffic_predictor=_analytics_service_instance._traffic_predictor
-            if _analytics_service_instance
-            else None,
-            data_cache=_analytics_service_instance._data_cache
-            if _analytics_service_instance
-            else None,
-        )
-        logger.info("PersonalizedRoutingService initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize PersonalizedRoutingService: {e}")
-        _personalized_routing_service_instance = None
-
-    # Initialize event service
-    try:
-        _event_service_instance = EventService(
-            api_url=config.get("event_service", {}).get("api_url", ""),
-            cache_ttl_minutes=config.get("event_service", {}).get(
-                "cache_ttl_minutes", 30
-            ),
-        )
-        logger.info("EventService initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize EventService: {e}")
-        _event_service_instance = None
-
-    # Initialize and start RetentionService
-    try:
-        _retention_service_instance = RetentionService(config=config)
-        _retention_service_instance.start()
-        logger.info("RetentionService initialized and started successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize RetentionService: {e}")
-        _retention_service_instance = None
-
-    # Initialize Advanced Analytics Service (Pro)
-    if db_manager:
-        _advanced_analytics_service_instance = AdvancedAnalyticsService(db_manager=db_manager)
-        logger.info("AdvancedAnalyticsService (Pro) initialized successfully.")
-
-    logger.info("Application services initialized.")
-
-
-
-
-def get_connection_manager() -> ConnectionManager:
-    if connection_manager_instance is None:
-        raise RuntimeError("ConnectionManager not initialized.")
-    return connection_manager_instance
-
-def get_feed_manager() -> FMClass:
-    if feed_manager_instance is None:
-        logger.error("FeedManager accessed before initialization!")
-        raise RuntimeError("FeedManager not initialized.")
-    return feed_manager_instance
-
-
-def get_traffic_signal_service() -> TrafficSignalService:
-    if _traffic_signal_service_instance is None:
-        # This path should ideally not be taken if initialize_services is called at startup.
-        logger.error("TrafficSignalService accessed before initialization!")
-        raise RuntimeError("TrafficSignalService not initialized.")
-    return _traffic_signal_service_instance
-
-
-def get_analytics_service() -> AnalyticsService:  # New getter
-    if _analytics_service_instance is None:
-        logger.error("AnalyticsService accessed before initialization!")
-        raise RuntimeError("AnalyticsService not initialized.")
-    return _analytics_service_instance
-
-
-def get_advanced_analytics_service() -> AdvancedAnalyticsService:
-    if _advanced_analytics_service_instance is None:
-        logger.error("AdvancedAnalyticsService accessed before initialization!")
-        raise RuntimeError("AdvancedAnalyticsService not initialized.")
-    return _advanced_analytics_service_instance
-
-
-def get_route_optimization_service() -> RouteOptimizationService:
-    """Get the route optimization service instance"""
-    if _route_optimization_service_instance is None:
-        logger.error("RouteOptimizationService accessed before initialization!")
-        raise RuntimeError("RouteOptimizationService not initialized.")
-    return _route_optimization_service_instance
-
-
-def get_personalized_routing_service() -> Optional[PersonalizedRoutingService]:
-    """Get the personalized routing service instance."""
-    # No logging needed here as it returns Optional
-    return _personalized_routing_service_instance
-
-
-def get_weather_service() -> WeatherService:
-    """Get the weather service instance"""
-    if _weather_service_instance is None:
-        logger.error("WeatherService accessed before initialization!")
-        raise RuntimeError("WeatherService not initialized")
-    return _weather_service_instance
-
-
-def get_event_service() -> EventService:
-    """Get the event service instance"""
-    if _event_service_instance is None:
-        logger.error("EventService accessed before initialization!")
-        raise RuntimeError("EventService not initialized")
-    return _event_service_instance
-
-
-async def shutdown_services():  # Make async for feed manager shutdown
-    global \
-        feed_manager_instance, \
-        _traffic_signal_service_instance, \
-        _analytics_service_instance, \
-        _route_optimization_service_instance, \
-        _notification_service_instance
-    logger.info("Shutting down application services...")
+    config: Dict[str, Any], 
+    logger_instance: logging.Logger, 
+    connection_manager: ConnectionManager
+) -> None:
+    """Initialize all application services."""
+    global _service_registry
     
+    if _service_registry is not None:
+        logger_instance.warning("Services already initialized.")
+        return
+    
+    _service_registry = ServiceRegistry()
+    await _service_registry.initialize(config, connection_manager)
 
-    if feed_manager_instance:
-        try:
-            logger.info("Requesting FeedManager shutdown from app.services...")
-            await feed_manager_instance.shutdown()
-            logger.info("FeedManager shutdown completed successfully.")
-        except Exception as e:
-            logger.error(f"Error during FeedManager shutdown: {e}")
-    else:
-        logger.info("FeedManager not initialized, skipping shutdown.")
 
-    if _traffic_signal_service_instance:
-        await _traffic_signal_service_instance.close()  # Call its close method
-        _traffic_signal_service_instance = None
-
-    if _analytics_service_instance:
-        logger.info("Shutting down AnalyticsService background tasks...")
-        await _analytics_service_instance.stop_background_tasks()
-        _analytics_service_instance = None
-
-    if _notification_service_instance:
-        await _notification_service_instance.close()
-        _notification_service_instance = None
-
-    # Clear route optimization service
-    _route_optimization_service_instance = None
-
-    logger.info("Application services shut down.")
+async def shutdown_services() -> None:
+    """Shutdown all application services."""
+    global _service_registry
+    
+    if _service_registry is None:
+        logger.warning("Services not initialized, nothing to shutdown.")
+        return
+    
+    await _service_registry.shutdown()
+    _service_registry = None
 
 
 async def health_check() -> Dict[str, Any]:
-    """Performs a health check on critical services."""
-    # logger = logging.getLogger("app.services") # Ensure logger is defined here too
-    # Basic health check, can be expanded
-    # For FeedManager, you might check if the result reader task is alive
-    # For Database, you might do a simple query
-    # For external APIs (like traffic signal controller), you might ping them
-    fm_status = "FeedManager not initialized"
-    fm_healthy = False
-    if feed_manager_instance:
-        fm_status = "FeedManager initialized"
-        # Add more detailed checks if needed, e.g., _feed_manager._result_reader_task.done() / .exception()
-        fm_healthy = (
-            feed_manager_instance._result_reader_task is not None
-            and not feed_manager_instance._result_reader_task.done()
-        )
-        fm_status += f", ResultReader: {'Alive' if fm_healthy else 'Not Alive'}"
+    """Perform health check on all services."""
+    return await get_service_registry().health_check()
 
-    # Add checks for other services like TSS, Analytics if they have health indicators
-    tss_status = "TrafficSignalService not initialized or no health check implemented."
-    as_status = "AnalyticsService not initialized or no health check implemented."
 
-    if _traffic_signal_service_instance:
-        # Placeholder: a real TSS health check might try a benign API call
-        tss_status = "TrafficSignalService initialized."
+# Convenience getter functions for backward compatibility
+def get_connection_manager() -> ConnectionManager:
+    return get_service_registry().connection_manager
 
-    if _analytics_service_instance:
-        as_status = "AnalyticsService initialized."
 
-    return {
-        "status": "healthy"
-        if fm_healthy
-        else "degraded",  # Overall status based on critical components
-        "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "feed_manager": {"status": fm_status, "healthy": fm_healthy},
-            
-            "traffic_signal_service": {"status": tss_status},
-            "analytics_service": {"status": as_status},
-            # Add database health here
-        },
-    }
+def get_feed_manager() -> FMClass:
+    return get_service_registry().feed_manager
+
+
+def get_traffic_signal_service() -> TrafficSignalService:
+    return get_service_registry().traffic_signal_service
+
+
+def get_analytics_service() -> AnalyticsService:
+    return get_service_registry().analytics_service
+
+
+def get_advanced_analytics_service() -> AdvancedAnalyticsService:
+    return get_service_registry().advanced_analytics_service
+
+
+def get_route_optimization_service() -> RouteOptimizationService:
+    return get_service_registry().route_optimization_service
+
+
+def get_personalized_routing_service() -> PersonalizedRoutingService:
+    return get_service_registry().personalized_routing_service
+
+
+def get_weather_service() -> WeatherService:
+    return get_service_registry().weather_service
+
+
+def get_event_service() -> EventService:
+    return get_service_registry().event_service
+
+
+def get_notification_service() -> NotificationService:
+    return get_service_registry().notification_service
+
+
+def get_retention_service() -> RetentionService:
+    return get_service_registry().retention_service

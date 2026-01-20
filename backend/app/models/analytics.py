@@ -16,7 +16,7 @@ class PredictionLogModel(Base):
     __tablename__ = "prediction_logs"
 
     id = Column(String, primary_key=True, index=True)
-    prediction_made_at = Column(DateTime, default=datetime.now(timezone.utc))
+    prediction_made_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     location_name = Column(String, nullable=True)
     location_latitude = Column(Float)
     location_longitude = Column(Float)

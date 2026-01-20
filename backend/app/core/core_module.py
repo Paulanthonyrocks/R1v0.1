@@ -134,9 +134,6 @@ class CoreModule:
         preloaded_model: Optional[Any] = None,
     ):
         self.feed_id = feed_id
-
-        self.model_path = Path(config["project_root_dir"]) / model_path
-        # Use deep copy to avoid shared state between instances
         import copy
         self.config = copy.deepcopy(config)
         self.fps = fps
@@ -144,67 +141,88 @@ class CoreModule:
         self.gemini_api_key = gemini_api_key
         self.model_type = model_type
 
-        self.vehicle_data: Dict[str, Dict] = {}
+        # Initialize all attributes to None/default first to avoid AttributeErrors
         self.model = preloaded_model
         self.preprocessor = None
-        
-        # Initialize OCR executor as instance attribute
-        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
-        self.ocr_results_queue = queue.Queue()
         self.local_ocr = None
         self.reid_embedder = None
+        self.car_classifier = None
+        self.homography_matrix = None
+        self.perspective_matrix = None
+        self.roi_mask = None
+        self.roi_polygon_points_pixel = None
+        self.roi_points_normalized = None
+        self.cached_lane_boundaries = None
+        self.vehicle_data = {}
+        self._reid_updates_this_frame = 0
+        
+        # Initialize OCR executor
+        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+        self.ocr_results_queue = queue.Queue()
 
+        self.model_path = Path(self.config.get("project_root_dir", "")) / model_path
+        
         # Configuration parameters from config
-        self.vehicle_class_ids = config["vehicle_detection"].get(
-            "vehicle_class_ids", []
-        )
-        self.confidence_threshold = config["vehicle_detection"].get(
-            "confidence_threshold", 0.4
-        )
-        self.proximity_threshold = config["vehicle_detection"].get(
-            "proximity_threshold", 60
-        )
-        self.track_timeout = config["vehicle_detection"].get("track_timeout", 5)
-        self.reid_timeout = config["vehicle_detection"].get("reid_timeout", 10) # New parameter for re-identification timeout
-        self.max_active_tracks = config["vehicle_detection"].get(
-            "max_active_tracks", 50
-        )
-        self.max_reid_per_frame = config["vehicle_detection"].get(
-            "max_reid_per_frame", 2
-        )
-        self.yolo_imgsz = config["vehicle_detection"].get("yolo_imgsz", 640)
-        self.num_lanes = config["lane_detection"].get("num_lanes", 4)
-        self.lane_width_pixels = (
-            config["vehicle_detection"]["frame_resolution"][0] / self.num_lanes
-        )
-        self.perspective_matrix = None  # Initialize as None, load if needed
-        self.roi_polygon_points = config["roi_processing"].get("polygon_points", None)
-        self.roi_points_normalized = None # Store normalized points for resolution-independent scaling
-        self.roi_polygon_points_pixel = None # Cached pixel points for pointPolygonTest
+        vehicle_cfg = self.config.get("vehicle_detection", {})
+        self.vehicle_class_ids = vehicle_cfg.get("vehicle_class_ids", [])
+        self.confidence_threshold = vehicle_cfg.get("confidence_threshold", 0.4)
+        self.proximity_threshold = vehicle_cfg.get("proximity_threshold", 60)
+        self.track_timeout = vehicle_cfg.get("track_timeout", 5)
+        self.reid_timeout = vehicle_cfg.get("reid_timeout", 10)
+        self.max_active_tracks = vehicle_cfg.get("max_active_tracks", 50)
+        self.max_reid_per_frame = vehicle_cfg.get("max_reid_per_frame", 2)
+        
+        # Fix #30: Validate yolo_imgsz
+        self.yolo_imgsz = vehicle_cfg.get("yolo_imgsz", 640)
+        valid_sizes = [320, 416, 512, 640, 800, 1024, 1280]
+        if self.yolo_imgsz not in valid_sizes:
+            closest = min(valid_sizes, key=lambda x: abs(x - self.yolo_imgsz))
+            logger.warning(f"[{feed_id}] Invalid yolo_imgsz {self.yolo_imgsz}, using {closest}")
+            self.yolo_imgsz = closest
+
+        self.predict_timeout = vehicle_cfg.get("predict_timeout", 0.4)
+        
+        lane_cfg = self.config.get("lane_detection", {})
+        self.dynamic_lane_detection_enabled = lane_cfg.get("dynamic_lane_detection_enabled", False)
+        self.num_lanes = lane_cfg.get("num_lanes", 4)
+        self.lane_width_pixels = vehicle_cfg.get("frame_resolution", [640, 480])[0] / max(1, self.num_lanes)
+        
+        self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
         
         # --- Optimization: Cache ROI Mask ---
-        self.roi_mask = None
         if self.roi_polygon_points:
-            self._initialize_roi_mask(config["vehicle_detection"]["frame_resolution"])
+            self._initialize_roi_mask(vehicle_cfg.get("frame_resolution", [640, 480]))
         
-        self.ocr_cfg = config.get("ocr_engine", {})
-        self.stopped_speed_threshold_kmh = config["behavior_analysis"].get(
-            "stopped_speed_threshold_kmh", 5
-        )
-        self.speed_limit = config["behavior_analysis"].get("speed_limit", 60)
-        self.accel_threshold_mps2 = config["behavior_analysis"].get(
-            "accel_threshold_mps2", 0.5
-        )
-        self.lane_change_buffer = config["behavior_analysis"].get(
-            "lane_change_buffer", 20
-        )
-        self.pixels_per_meter = config.get("pixels_per_meter", 40)
-        self.kf_params = config.get("kalman_filter_params", {})
-        self.ewma_alpha = config["behavior_analysis"].get("ewma_alpha", 0.2) # New parameter for EWMA smoothing
-        self.occlusion_confidence_threshold = config["vehicle_detection"].get("occlusion_confidence_threshold", 0.2) # New parameter for occlusion detection
+        # Check for calibration data
+        if "calibration" in vehicle_cfg:
+            self._update_homography(vehicle_cfg["calibration"])
+
+        self.ocr_cfg = self.config.get("ocr_engine", {})
+        behavior_cfg = self.config.get("behavior_analysis", {})
+        self.stopped_speed_threshold_kmh = behavior_cfg.get("stopped_speed_threshold_kmh", 5)
+        self.speed_limit = behavior_cfg.get("speed_limit", 60)
+        self.accel_threshold_mps2 = behavior_cfg.get("accel_threshold_mps2", 0.5)
+        self.lane_change_buffer = behavior_cfg.get("lane_change_buffer", 20)
+        self.pixels_per_meter = self.config.get("pixels_per_meter", 40)
+        self.kf_params = self.config.get("kalman_filter_params", {})
+        self.ewma_alpha = behavior_cfg.get("ewma_alpha", 0.2)
+        self.occlusion_confidence_threshold = vehicle_cfg.get("occlusion_confidence_threshold", 0.2)
+
+        # --- Dynamic Tracking Parameters based on Frame Skipping ---
+        # As skip_frames increases, we need to be more "forgiving" and "persistent"
+        self.skip_frames = config.get("vehicle_detection", {}).get("skip_frames", 0)
+        
+        # Confidence Decay: How much confidence we keep per predicted frame.
+        # Formula: 0.95 - (skip_frames * 0.01). Clamp between 0.85 and 0.98.
+        self.dynamic_conf_decay = max(0.85, min(0.98, 0.96 - (self.skip_frames * 0.005)))
+        
+        # Matching Threshold: Max IoU-based cost for Hungarian association.
+        # As skip_frames increases, prediction error grows, so we increase the search radius (threshold).
+        # Formula: 0.8 + (skip_frames * 0.1).
+        self.dynamic_matching_threshold = 0.8 + (self.skip_frames * 0.1)
 
         # Lane detection caching
-        self.lane_detection_interval = config["lane_detection"].get("lane_detection_interval", 10)
+        self.lane_detection_interval = lane_cfg.get("lane_detection_interval", 10)
         self.last_lane_detection_frame = -1
         self.cached_lane_boundaries = None
 
@@ -231,6 +249,7 @@ class CoreModule:
             logger.info("No OCR engine (Gemini or Local) enabled or initialized.")
 
         # Initialize ReID Embedder
+        self.reid_embedder = None
         if self.config.get("vehicle_detection", {}).get("reid_enabled", True):
             try:
                 self.reid_embedder = ReIDEmbedder(self.config)
@@ -239,16 +258,19 @@ class CoreModule:
                 self.reid_embedder = None
 
         # Initialize Car Classifier
+        self.car_classifier = None
+        logger.debug(f"[{self.feed_id}] Initializing car_classifier attribute.")
         if self.config.get("vehicle_detection", {}).get("car_classification_enabled", True):
             try:
                 if CarClassifier:
                     self.car_classifier = CarClassifier(self.config)
+                    logger.info(f"[{self.feed_id}] CarClassifier initialized.")
                 else:
-                    logger.warning("CarClassifier class not found.")
+                    logger.warning(f"[{self.feed_id}] CarClassifier class not found.")
             except Exception as e:
-                logger.error(f"Failed to initialize CarClassifier: {e}")
+                logger.error(f"[{self.feed_id}] Failed to initialize CarClassifier: {e}")
                 self.car_classifier = None
-
+        
         # Load Model
         try:
             use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
@@ -274,6 +296,77 @@ class CoreModule:
             cv2.fillPoly(self.roi_mask, [points_np], 255)
         else:
             self.roi_polygon_points_pixel = None
+
+    def _update_homography(self, calibration_cfg: Dict):
+        """
+        Calculates the homography matrix to map image pixels to real-world ground coordinates.
+        Expects calibration_cfg to contain 'image_points' and 'world_points'.
+        
+        LIMITATIONS:
+        - Assumes flat ground plane (Z=0)
+        - Vehicles at different heights (trucks vs cars) will have position errors
+        - Speed estimates are 2D ground speed (no elevation component)
+        - For hilly terrain, consider 3D camera calibration instead
+        """
+        if not calibration_cfg or "image_points" not in calibration_cfg or "world_points" not in calibration_cfg:
+            logger.debug(f"[{self.feed_id}] Incomplete calibration data for homography.")
+            return
+
+        img_pts = np.array(calibration_cfg["image_points"], dtype=np.float32)
+        world_pts = np.array(calibration_cfg["world_points"], dtype=np.float32)
+
+        if len(img_pts) < 4 or len(world_pts) < 4 or len(img_pts) != len(world_pts):
+            logger.warning(f"[{self.feed_id}] Homography requires at least 4 matching point pairs.")
+            return
+
+        # If points are normalized (0-1), scale them to the current frame resolution
+        res = self.config["vehicle_detection"]["frame_resolution"]
+        if np.max(img_pts) <= 1.0:
+            img_pts *= [res[0], res[1]]
+
+        try:
+            # Using findHomography (handles 4 or more points using least-squares)
+            h_matrix, status = cv2.findHomography(img_pts, world_pts, cv2.RANSAC, 5.0)
+            
+            if h_matrix is not None:
+                # Validate matrix is reasonable (not degenerate)
+                det = np.linalg.det(h_matrix[:2, :2])  # Check 2x2 submatrix
+                
+                if abs(det) < 1e-6:
+                    logger.error(f"[{self.feed_id}] Homography matrix is degenerate (det={det})")
+                    return
+                
+                # Check condition number (should be < 1000 for well-conditioned)
+                try:
+                    cond = np.linalg.cond(h_matrix)
+                    if cond > 1000:
+                        logger.warning(f"[{self.feed_id}] Homography matrix is ill-conditioned (cond={cond:.1f})")
+                except np.linalg.LinAlgError:
+                    pass
+
+                self.homography_matrix = h_matrix
+                logger.info(f"[{self.feed_id}] Homography matrix updated using {len(img_pts)} points.")
+            else:
+                logger.error(f"[{self.feed_id}] Failed to calculate homography matrix.")
+        except Exception as e:
+            logger.error(f"[{self.feed_id}] Homography calculation error: {e}")
+
+    def _pixel_to_ground(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+        """Transforms image pixel coordinates to real-world ground coordinates (meters)."""
+        if self.homography_matrix is None:
+            return None
+        
+        # Validate coordinates are reasonable
+        res = self.config["vehicle_detection"]["frame_resolution"]
+        if not (0 <= x <= res[0] * 1.2 and 0 <= y <= res[1] * 1.2):  # Allow 20% margin
+            return None
+        
+        point = np.array([[[x, y]]], dtype=np.float32)
+        try:
+            ground_point = cv2.perspectiveTransform(point, self.homography_matrix)
+            return float(ground_point[0][0][0]), float(ground_point[0][0][1])
+        except Exception:
+            return None
 
     def _load_model(self, use_gpu: bool = False):
         if self.model is not None and not isinstance(self.model, str):
@@ -316,13 +409,16 @@ class CoreModule:
                 device = "cpu"
                 if use_gpu:
                     if torch.cuda.is_available():
-                        device = "cuda"
+                        device = "cuda:0"
                     else:
                         logger.warning(
                             "GPU acceleration requested but CUDA not available. Falling back to CPU."
                         )
                 else:
                     logger.info("GPU acceleration disabled in config. Using CPU.")
+
+                if "yolov8n.pt" in str(self.model_path):
+                     logger.info(f"Prioritizing GPU for yolov8n.pt. Target device: {device}")
 
                 start_time = time.time()
                 self.model = YOLO(self.model_path)
@@ -353,6 +449,7 @@ class CoreModule:
         if frame is None or frame.size == 0:
             return {}
         if self.model is None:
+            logger.error("Model not loaded, cannot detect vehicles")
             return {}
         logger.debug("detect_and_track executed")
 
@@ -372,9 +469,6 @@ class CoreModule:
         )
         current_time = time.time()
         
-        # Process asynchronous OCR results from previous frames
-        self._process_ocr_results()
-        
         # Reset ReID budget for this frame
         self._reid_updates_this_frame = 0
 
@@ -382,6 +476,20 @@ class CoreModule:
         LOW_CONF_THRESHOLD = 0.1
 
         try:
+            # Calculate lane boundaries periodically if lane detection is enabled
+            if self.dynamic_lane_detection_enabled and process_frame_for_lanes and (frame_index - self.last_lane_detection_frame) >= self.lane_detection_interval:
+                try:
+                    lines = process_frame_for_lanes(frame, self.config)
+                    if lines and get_lane_boundaries_from_lines:
+                        self.cached_lane_boundaries = get_lane_boundaries_from_lines(
+                            frame.shape[1],
+                            lines,
+                            self.config
+                        )
+                        self.last_lane_detection_frame = frame_index
+                except Exception as e:
+                    logger.warning(f"Lane detection failed: {e}")
+
             # Detect with low threshold
             detections = self._detect_vehicles(frame, frame_index, LOW_CONF_THRESHOLD)
             
@@ -392,8 +500,30 @@ class CoreModule:
             logger.debug("Tracks updated")
             logger.debug("Removing stale tracks")
             self._remove_stale_tracks(current_time, used_track_timeout)
-            self._save_vehicle_data(current_tracks)  # Pass currently tracked vehicles
-            return current_tracks
+            
+            # Fix #21: Only deduplicate every N frames or when track count is high
+            dedupe_interval = 10
+            dedupe_threshold = 30
+            if (frame_index % dedupe_interval == 0) or (len(self.vehicle_data) > dedupe_threshold):
+                self.vehicle_data = self._deduplicate_tracks(self.vehicle_data)
+            
+            # Filter tracks for visualization: only show active or recently predicting
+            # This prevents long-lived "ghosts" (kept for ReID) from cluttering the screen
+            vis_tracks = {}
+            for vid, track in current_tracks.items():
+                 if track["status"] == "active":
+                     vis_tracks[vid] = track
+                 elif track["status"] == "predicting":
+                     # Only show predicting tracks for a short burst
+                     if (current_time - track["last_seen"]) < self.predict_timeout:
+                         vis_tracks[vid] = track
+
+            self._save_vehicle_data(vis_tracks)  # Pass filtered vehicles
+            
+            # Process OCR results AFTER all updates are done
+            self._process_ocr_results()
+
+            return vis_tracks
 
         except Exception as e:
             logger.error(
@@ -413,8 +543,27 @@ class CoreModule:
             else:
                 detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
 
-            # logger.debug(f"Frame {frame_index}: Detections after ROI processing: {len(detections)}") # Reduce noise
-            return detections
+            # Refine classifications based on dimensions
+            refined_detections = []
+            for det in detections:
+                bbox, conf, cls = det
+                x1, y1, x2, y2 = bbox
+                w = x2 - x1
+                h = y2 - y1
+                aspect_ratio = w / h if h > 0 else 0
+                area = w * h
+                
+                # Heuristic: Downgrade 'truck' (7) or 'bus' (5) to 'car' (2) if too small
+                # These thresholds (area < 4000) depend on resolution (640x480)
+                if cls in [5, 7] and area < 3000:
+                    cls = 2 # Downgrade to car
+                
+                # Heuristic: 'car' (2) with very square aspect ratio might be 'truck' (7) from back, 
+                # but YOLO usually gets this right. We focus on false positives for heavy vehicles.
+                
+                refined_detections.append((bbox, conf, cls))
+
+            return refined_detections
 
         except Exception as e:
             logger.error(
@@ -580,12 +729,12 @@ class CoreModule:
         Predicts the next state of existing tracks without running detection.
         Useful for maintaining high FPS when detection is skipped.
         """
+        self._reid_updates_this_frame = 0  # Reset budget for prediction frames too
         predicted_tracks = {}
         current_time = time.time()
         
         # We use a shorter timeout for showing 'predicting' tracks to avoid ghosts
         # Reduced from 1.0s to 0.4s for better responsiveness during frame skipping
-        PREDICT_TIMEOUT = self.config.get("vehicle_detection", {}).get("predict_timeout", 0.4)
         
         frame_res = self.config["vehicle_detection"]["frame_resolution"]
         frame_w, frame_h = frame_res[0], frame_res[1]
@@ -598,7 +747,18 @@ class CoreModule:
                 continue
 
             if kf:
+                # Dynamic dt calculation
+                last_pred = track.get("last_prediction_time", track["last_seen"])
+                dt = current_time - last_pred
+                if dt <= 0.001: dt = 1.0 / self.fps
+                
+                # Update F
+                kf.F[0, 2] = dt
+                kf.F[1, 3] = dt
+
                 kf.predict()
+                track["last_prediction_time"] = current_time
+
                 x, y = float(kf.x[0][0]), float(kf.x[1][0])
                 
                 # Update bbox based on predicted center and original dimensions
@@ -611,10 +771,16 @@ class CoreModule:
                 new_x2 = int(x + w / 2)
                 new_y2 = int(y + h / 2)
 
-                # Boundary Check: Remove if it leaves the frame
-                if new_x2 < 0 or new_x1 > frame_w or new_y2 < 0 or new_y1 > frame_h:
+                # Fix #23: Clamp bbox to frame boundaries and validate
+                new_x1 = max(0, min(frame_w, new_x1))
+                new_y1 = max(0, min(frame_h, new_y1))
+                new_x2 = max(0, min(frame_w, new_x2))
+                new_y2 = max(0, min(frame_h, new_y2))
+
+                # Validate bbox is still valid after clamping
+                if new_x2 <= new_x1 or new_y2 <= new_y1:
                     continue
-                
+
                 # ROI Check: Remove if centroid leaves ROI
                 if not self._is_point_in_roi(x, y):
                     continue
@@ -624,12 +790,12 @@ class CoreModule:
                 track["frame_index_last_seen"] = frame_index
                 
                 # Confidence Decay: reduce confidence as we predict more frames without detection
-                # Increased decay from 0.95 to 0.85 to clear ghosts faster
+                # Dynamic decay based on skip_frames (calculated in __init__)
                 time_since_seen = current_time - track["last_seen"]
-                track["confidence"] *= 0.7 # Stronger decay per frame (was 0.85)
+                track["confidence"] *= self.dynamic_conf_decay
                 
                 # Only keep in output if it's recently seen AND has enough confidence
-                if time_since_seen < PREDICT_TIMEOUT and track["confidence"] > 0.1:
+                if time_since_seen < self.predict_timeout and track["confidence"] > 0.1:
                     track["status"] = "predicting"
                     predicted_tracks[vehicle_id] = track
                 else:
@@ -648,9 +814,9 @@ class CoreModule:
         self.vehicle_data = self._deduplicate_tracks(self.vehicle_data, iou_threshold=0.6)
         
         # Return only the tracks we want to render/process this frame
-        return {vid: t for vid, t in predicted_tracks.items() if t["status"] == "predicting" and t["confidence"] > 0.15}
+        return {vid: t for vid, t in predicted_tracks.items() if t["status"] == "predicting" and t["confidence"] > 0.1}
 
-    def _deduplicate_tracks(self, tracks: Dict[str, Dict], iou_threshold: float = 0.7) -> Dict[str, Dict]:
+    def _deduplicate_tracks(self, tracks: Dict[str, Dict], iou_threshold: float = 0.6) -> Dict[str, Dict]:
         """
         Removes overlapping tracks, keeping the most confident or recently seen ones.
         """
@@ -672,12 +838,22 @@ class CoreModule:
             
             is_duplicate = False
             for kept_id, kept_track in kept_tracks.items():
-                # For predicting tracks, use a more sensitive IoU threshold
-                current_iou_thresh = iou_threshold
-                if track["status"] == "predicting" or kept_track["status"] == "predicting":
-                    current_iou_thresh = 0.4 # More aggressive deduplication for uncertain tracks (was 0.5)
+                # Check 1: IoU Overlap
+                iou = self._bbox_iou(bbox, kept_track["bbox"])
                 
-                if self._bbox_iou(bbox, kept_track["bbox"]) > current_iou_thresh:
+                # Check 2: Containment (one box inside another)
+                # If a smaller box is inside a larger one, it's likely a duplicate part
+                ba = bbox
+                bb = kept_track["bbox"]
+                area_a = (ba[2]-ba[0]) * (ba[3]-ba[1])
+                area_b = (bb[2]-bb[0]) * (bb[3]-bb[1])
+                intersection_area = max(0, min(ba[2], bb[2]) - max(ba[0], bb[0])) * max(0, min(ba[3], bb[3]) - max(ba[1], bb[1]))
+                
+                containment = 0.0
+                if area_a > 0: containment = intersection_area / area_a
+                
+                # If highly overlapping OR mostly contained
+                if iou > iou_threshold or containment > 0.85:
                     is_duplicate = True
                     break
             
@@ -709,7 +885,17 @@ class CoreModule:
             kf = track.get("kalman_filter")
             if kf:
                 # CRITICAL: Always predict before association to get the prior state for current frame
+                # Dynamic dt calculation
+                last_pred = track.get("last_prediction_time", track["last_seen"])
+                dt = current_time - last_pred
+                if dt <= 0.001: dt = 1.0 / self.fps # Fallback for very fast updates
+                
+                # Update State Transition Matrix F with dynamic dt
+                kf.F[0, 2] = dt
+                kf.F[1, 3] = dt
+                
                 kf.predict()
+                # last_prediction_time will be updated after measurement association in _update_track
                 
                 x, y = kf.x[0][0], kf.x[1][0]
                 x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
@@ -732,8 +918,8 @@ class CoreModule:
         matched_tracks = set()
         
         # 3. Process matched tracks
-        # Stricter threshold: 0.8 ensures better association quality (IoU based)
-        MATCHING_THRESHOLD = 0.8 
+        # Dynamic threshold based on skip_frames (calculated in __init__)
+        MATCHING_THRESHOLD = self.dynamic_matching_threshold 
 
         for i, j in zip(row_ind, col_ind):
             cost = cost_matrix[i, j]
@@ -751,23 +937,22 @@ class CoreModule:
                     matched_tracks.add(track_id)
 
         # 4. Process unmatched tracks (keep them alive if within timeout)
-        h, w = frame.shape[:2]
         for track_id, track in self.vehicle_data.items():
             if track_id not in matched_tracks:
                 # Keep track if within timeout
                 if (current_time - track["last_seen"]) < self.track_timeout:
                     track["status"] = "predicting"
                     
-                    # Update position based on Kalman Filter prediction (Coasting)
+                    # Update with predicted state to allow "coasting" instead of freezing
                     if "predicted_bbox" in track:
                         track["bbox"] = track["predicted_bbox"]
-                        kf = track["kalman_filter"]
-                        track["centroid"] = (kf.x[0][0], kf.x[1][0])
-                    
-                    # Boundary check
-                    x1, y1, x2, y2 = track["bbox"]
-                    if x2 < 0 or x1 > w or y2 < 0 or y1 > h:
-                        continue
+                        px1, py1, px2, py2 = track["predicted_bbox"]
+                        track["centroid"] = ((px1 + px2) / 2, (py1 + py2) / 2)
+
+                        # Boundary Check: Remove if it leaves the frame
+                        h, w = frame.shape[:2]
+                        if px2 < 0 or px1 > w or py2 < 0 or py1 > h:
+                            continue
 
                     cx, cy = track["centroid"]
                     if self._is_point_in_roi(cx, cy):
@@ -787,7 +972,9 @@ class CoreModule:
                 # Dynamic threshold: 25% of box dimension or min 30px
                 dup_thresh = max(30, min(det_w, det_h) * 0.4)
                 
-                for existing_track in new_or_updated_tracks.values():
+                # Check against ALL tracks (new + existing)
+                all_tracks = {**self.vehicle_data, **new_or_updated_tracks}
+                for existing_track in all_tracks.values():
                     ex_cx, ex_cy = existing_track["centroid"]
                     dist = math.sqrt((det_cx - ex_cx)**2 + (det_cy - ex_cy)**2)
                     if dist < dup_thresh: 
@@ -831,16 +1018,17 @@ class CoreModule:
                     dist_cost = dist / proximity_thresh
                     
                     # 3. Class Match Penalty (Reduced to allow some flexibility)
-                    class_penalty = 0 if det_cls == track["class_id"] else 0.8
+                    class_penalty = 0 if det_cls == track["class_id"] else 0.5 # Was 0.8
 
                     # Combined Cost: Prioritize IoU if overlap exists, else use distance
-                    if iou > 0.1:
+                    if iou > 0.05: # Was 0.1
                         cost = iou_cost + class_penalty * 0.4
                     else:
                         # For non-overlapping boxes, use distance but with a higher base cost
                         # If class mismatch AND low overlap, punish severely
                         extra_penalty = 1.0 if class_penalty > 0 else 0.0
-                        cost = 0.9 + dist_cost + class_penalty + extra_penalty
+                        # Reduced base cost from 0.9 to 0.5 to allow re-association of fast moving objects
+                        cost = 0.5 + dist_cost + class_penalty + extra_penalty
 
                     # Add confidence factor: less confident detections are more expensive to match
                     cost += (1.0 - det_conf) * 0.3
@@ -865,12 +1053,23 @@ class CoreModule:
     def _remove_stale_tracks(self, current_time: float, track_timeout: int):
         stale_tracks = []
         for vehicle_id, track in self.vehicle_data.items():
-            if (current_time - track["last_seen"]) > track_timeout:
+            is_stale = (current_time - track["last_seen"]) > track_timeout
+            
+            # ALSO remove if outside ROI for too long (prevents "boundary ghosts")
+            is_out_of_roi = False
+            if self.roi_polygon_points_pixel is not None:
+                cx, cy = track["centroid"]
+                if not self._is_point_in_roi(cx, cy):
+                    # Track left ROI - give it grace period (half timeout) then remove
+                    if (current_time - track["last_seen"]) > (track_timeout / 2):
+                        is_out_of_roi = True
+            
+            if is_stale or is_out_of_roi:
                 stale_tracks.append(vehicle_id)
 
         for vehicle_id in stale_tracks:
             self.vehicle_data.pop(vehicle_id)
-            logger.debug(f"Removed stale track {vehicle_id}")
+            logger.debug(f"Removed stale/out-of-ROI track {vehicle_id}")
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
         for vehicle_id, data in tracked_vehicles.items():
@@ -885,6 +1084,7 @@ class CoreModule:
                         "timestamp": now,
                         "bbox": data["bbox"],
                         "centroid": data["centroid"],
+                        "ground_centroid": data.get("ground_centroid"),
                         "speed": data["speed"],
                         "license_plate": data.get("license_plate", "Unknown"),
                         "class_id": data["class_id"],
@@ -995,6 +1195,7 @@ class CoreModule:
             "confidence": conf,
             "kalman_filter": kf,
             "last_seen": current_time,
+            "last_prediction_time": current_time, # Initialize prediction time
             "frame_index_last_seen": frame_index,
             "speed": 0.0,
             "smoothed_speed": 0.0, # <--- Added state for EWMA
@@ -1024,19 +1225,35 @@ class CoreModule:
         track["bbox"] = bbox
         track["centroid"] = (kf.x[0][0], kf.x[1][0])
         
-        # Class Voting Mechanism
-        if "class_history" not in track:
-            track["class_history"] = deque([track["class_id"]], maxlen=10)
-        track["class_history"].append(cls)
-        
-        # Determine most frequent class
-        from collections import Counter
-        most_common = Counter(track["class_history"]).most_common(1)
-        if most_common:
-            track["class_id"] = most_common[0][0]
+        # Fix #28: Reset class history if track was lost for a while
+        time_since_last = current_time - track["last_seen"]
+        if time_since_last > 2.0:  # 2 second gap
+            track["class_history"] = deque([cls], maxlen=10)
+            track["class_id"] = cls
+            logger.debug(f"Reset class history for {track['vehicle_id']} after {time_since_last:.1f}s gap")
+        else:
+            # Class Voting Mechanism - Optimized to only recalculate when class changes
+            if cls != track["class_id"]:
+                if "class_history" not in track:
+                    track["class_history"] = deque([track["class_id"]], maxlen=10)
+                track["class_history"].append(cls)
+                
+                # Determine most frequent class with Hysteresis
+                from collections import Counter
+                most_common = Counter(track["class_history"]).most_common(1)
+                if most_common:
+                    new_class = most_common[0][0]
+                    count = most_common[0][1]
+                    
+                    # Only change if new class has strong majority (60%+)
+                    # This prevents rapid flipping between classes (e.g. car <-> truck)
+                    if count >= 6:
+                        track["class_id"] = new_class
 
         track["confidence"] = conf
         track["last_seen"] = current_time
+        # Update prediction timestamp after measurement update
+        track["last_prediction_time"] = current_time
         track["frame_index_last_seen"] = frame_index
         track["status"] = "active"
         track["is_occluded"] = False # Reset occlusion if detected
@@ -1073,8 +1290,9 @@ class CoreModule:
 
         # Car Make/Model Classification
         car_class_interval = self.config.get("vehicle_detection", {}).get("car_classification_interval_frames", 60)
+        car_classifier = getattr(self, "car_classifier", None)
         if (
-            self.car_classifier
+            car_classifier
             and track.get("car_model") is None
             and frame_index % max(1, car_class_interval) == 0
         ):
@@ -1082,7 +1300,7 @@ class CoreModule:
             h, w = frame.shape[:2]
             crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             if crop.size > 0:
-                label, confidence = self.car_classifier.classify(crop)
+                label, confidence = car_classifier.classify(crop)
                 if label:
                     track["car_model"] = label
                     track["car_model_confidence"] = confidence
@@ -1092,7 +1310,8 @@ class CoreModule:
         reid_interval = self.config.get("vehicle_detection", {}).get("reid_interval_frames", 60)
         
         should_update_reid = False
-        if self.reid_embedder:
+        reid_embedder = getattr(self, "reid_embedder", None)
+        if reid_embedder:
             # Determine offset based on vehicle_id to stagger updates
             try:
                 # Assumes format "vehicle_123"
@@ -1110,14 +1329,14 @@ class CoreModule:
                  if self._reid_updates_this_frame < self.max_reid_per_frame:
                      should_update_reid = True
 
-        if should_update_reid:
+        if should_update_reid and reid_embedder:
             x1, y1, x2, y2 = map(int, bbox)
             h, w = frame.shape[:2]
             crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             if crop.size > 0:
                 # We'll run embedding extraction in the main worker thread for now
                 # but could offload to pool if too slow
-                embedding = self.reid_embedder.get_embedding(crop)
+                embedding = reid_embedder.get_embedding(crop)
                 if embedding is not None:
                     track["embedding"] = embedding.tolist() # Make serializable
                     track["new_embedding"] = True # Mark as new for sending to db_queue
@@ -1135,12 +1354,16 @@ class CoreModule:
             and not track["is_occluded"]
         ):
             if self._is_roi_optimal_for_ocr(track["bbox"]):
-                # Submit task with explicit ID and BBox copy to avoid race conditions
+                # Create immutable copies to prevent race conditions
+                frame_copy = frame.copy()
+                bbox_copy = tuple(track["bbox"])  # Tuple is immutable
+                track_id_copy = str(track["vehicle_id"])
+                
                 self.ocr_executor.submit(
                     self._run_ocr, 
-                    frame.copy(), 
-                    track["vehicle_id"], 
-                    list(track["bbox"]) # Pass a copy of the list
+                    frame_copy, 
+                    track_id_copy, 
+                    bbox_copy
                 )
 
     def _estimate_speed_kalman(self, track: Dict, current_time: float, prev_time: float) -> float:
@@ -1149,19 +1372,50 @@ class CoreModule:
             return 0.0
         
         try:
-            vx, vy = kf.x[2], kf.x[3]
-            # No longer dividing by time_diff here. Kalman filter velocity is already per unit time.
-            pixel_speed_per_sec = np.sqrt(vx**2 + vy**2)
-            dynamic_ppm = self._get_dynamic_pixels_per_meter(kf.x[1])
+            time_diff = current_time - prev_time
             
-            speed_mps = (pixel_speed_per_sec / dynamic_ppm) if dynamic_ppm > 0 else 0
-            raw_speed_kmph = speed_mps * 3.6
+            # Fix #17: Clamp time_diff to reasonable bounds
+            min_dt = 1.0 / (self.fps * 2)  # At least half frame time
+            max_dt = 2.0  # Max 2 seconds
+            
+            time_diff = max(min_dt, min(max_dt, time_diff))
 
-            # --- Corrected EWMA Logic ---
-            # S_t = alpha * Y_t + (1 - alpha) * S_{t-1}
+            raw_speed_kmph = 0.0
+
+            # 1. Prefer Homography-based speed estimation
+            if self.homography_matrix is not None:
+                cx, cy = kf.x[0][0], kf.x[1][0]
+                vx, vy = kf.x[2][0], kf.x[3][0]
+
+                # Current position in ground space
+                current_ground = self._pixel_to_ground(cx, cy)
+                
+                # Estimated previous position in ground space
+                # We use the velocity from Kalman Filter to backtrack one step
+                prev_ground = self._pixel_to_ground(cx - vx * time_diff, cy - vy * time_diff)
+
+                if current_ground and prev_ground:
+                    dx = current_ground[0] - prev_ground[0]
+                    dy = current_ground[1] - prev_ground[1]
+                    dist_meters = math.sqrt(dx**2 + dy**2)
+                    speed_mps = dist_meters / time_diff
+                    raw_speed_kmph = speed_mps * 3.6
+                
+                # Store ground position for analytics
+                if current_ground:
+                    track["ground_centroid"] = current_ground
+
+            # 2. Fallback to constant PPM
+            if raw_speed_kmph == 0.0:
+                vx, vy = kf.x[2][0], kf.x[3][0]
+                pixel_speed_per_sec = np.sqrt(vx**2 + vy**2)
+                dynamic_ppm = self._get_dynamic_pixels_per_meter(kf.x[1][0])
+                
+                speed_mps = (pixel_speed_per_sec / dynamic_ppm) if dynamic_ppm > 0 else 0
+                raw_speed_kmph = speed_mps * 3.6
+
+            # --- EWMA Smoothing ---
             prev_smoothed = track.get("smoothed_speed", 0.0)
-            
-            # If this is the first speed reading, initialize it
             if prev_smoothed == 0.0 and raw_speed_kmph > 0:
                 new_smoothed = raw_speed_kmph
             else:
@@ -1169,7 +1423,6 @@ class CoreModule:
 
             # Update state
             track["smoothed_speed"] = new_smoothed
-            # Update speed history (which is used for acceleration)
             track["speed_history"].append(new_smoothed)
 
             return round(float(max(0, new_smoothed)), 1)
@@ -1245,9 +1498,12 @@ class CoreModule:
         except queue.Empty:
             pass
 
-    def _get_lane_for_vehicle(self, centroid: Tuple[float, float], lane_boundaries: List[Tuple]) -> int:
+    def _get_lane_for_vehicle(self, centroid: Tuple[float, float], lane_boundaries: List[int]) -> int:
         cx, _ = centroid
-        for i, (start_x, end_x) in enumerate(lane_boundaries):
+        # Iterate over adjacent pairs of boundaries to form lanes
+        for i in range(len(lane_boundaries) - 1):
+            start_x = lane_boundaries[i]
+            end_x = lane_boundaries[i+1]
             if start_x <= cx < end_x:
                 return i + 1  # Lane numbers typically start from 1
         return -1 # Not in any defined lane
@@ -1274,11 +1530,14 @@ class CoreModule:
         if plate_image.size == 0:
             logger.warning(f"Empty plate image for OCR: {bbox}")
             return "Unknown (Empty Image)"
+        
+        # Convert BGR to RGB for OCR
+        plate_image_rgb = cv2.cvtColor(plate_image, cv2.COLOR_BGR2RGB)
 
         # Prefer Local OCR if enabled
         if self.local_ocr:
             try:
-                result = self.local_ocr.read_plate(plate_image)
+                result = self.local_ocr.read_plate(plate_image_rgb)
                 if result:
                     return result
             except Exception as e:
@@ -1287,10 +1546,6 @@ class CoreModule:
         # Fallback to Gemini if configured
         if self.preprocessor:
             try:
-                # The preprocessor expects RGB, but the frame passed is already RGB because of _preprocess_frame
-                # So we don't need another cvtColor here, but we ensure to use a copy.
-                plate_image_rgb = plate_image # It's already RGB from _preprocess_frame -> _detect_vehicles -> _update_track
-                
                 # Perform OCR
                 ocr_result = self.preprocessor.process_image(plate_image_rgb)
                 return ocr_result
@@ -1351,3 +1606,34 @@ class CoreModule:
                 self.roi_mask = None
             
             logger.info(f"[{self.feed_id}] ROI configuration updated.")
+
+        # Fix #15: Restart OCR executor if OCR config changes
+        if "ocr_engine" in updates:
+            self.ocr_cfg = updates["ocr_engine"]
+            if self.ocr_executor:
+                self.ocr_executor.shutdown(wait=False)
+            self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+            logger.info(f"[{self.feed_id}] OCR configuration updated and executor restarted.")
+
+        # Update Frame Skipping and related dynamic parameters
+        if "skip_frames" in updates:
+            self.skip_frames = int(updates["skip_frames"])
+            self.dynamic_conf_decay = max(0.85, min(0.98, 0.96 - (self.skip_frames * 0.005)))
+            self.dynamic_matching_threshold = 0.8 + (self.skip_frames * 0.1)
+            logger.info(f"[{self.feed_id}] Dynamic tracking parameters updated for skip_frames: {self.skip_frames}")
+
+        # Update Lane Detection
+        if "lane_detection" in updates:
+            lane_cfg = updates["lane_detection"]
+            self.config["lane_detection"] = lane_cfg
+            self.dynamic_lane_detection_enabled = lane_cfg.get("dynamic_lane_detection_enabled", False)
+            self.num_lanes = lane_cfg.get("num_lanes", 4)
+            vehicle_cfg = self.config.get("vehicle_detection", {})
+            self.lane_width_pixels = vehicle_cfg.get("frame_resolution", [640, 480])[0] / max(1, self.num_lanes)
+            logger.info(f"[{self.feed_id}] Lane detection configuration updated.")
+
+        # Update Calibration / Homography
+        if "calibration" in updates:
+            self.config["vehicle_detection"]["calibration"] = updates["calibration"]
+            self._update_homography(updates["calibration"])
+            logger.info(f"[{self.feed_id}] Calibration/Homography updated.")

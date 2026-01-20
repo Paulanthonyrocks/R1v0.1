@@ -58,19 +58,36 @@ def process_frame_for_lanes(frame: Optional[np.ndarray], config: Dict[str, Any])
     edges = cv2.Canny(blur_gray, low_threshold, high_threshold)
 
     # 4. Region of Interest
-    # Define a trapezoidal ROI that covers the road ahead
-    # These vertices should be calibrated for the specific camera view
-    # For now, use a default that might work for a typical road view
-    # The values are percentages of frame width/height
     imshape = frame.shape
-    roi_vertices_percent = lane_cfg.get("roi_vertices_percent", [
-        (0.1, 1.0), (0.45, 0.6), (0.55, 0.6), (0.9, 1.0)
-    ])
+    roi_cfg = config.get("roi_processing", {})
     
-    vertices = np.array([
-        [(int(imshape[1] * p[0]), int(imshape[0] * p[1])) for p in roi_vertices_percent]
-    ], dtype=np.int32)
+    vertices = None
     
+    # Check if frontend ROI is enabled and available
+    if roi_cfg.get("enabled", False):
+        if "roi_points_normalized" in roi_cfg and roi_cfg["roi_points_normalized"]:
+            # Use normalized points from frontend
+            norm_points = roi_cfg["roi_points_normalized"]
+            vertices = np.array([
+                [(int(imshape[1] * p[0]), int(imshape[0] * p[1])) for p in norm_points]
+            ], dtype=np.int32)
+            logger.debug("Using normalized ROI points from frontend for lane detection.")
+            
+        elif "polygon_points" in roi_cfg and roi_cfg["polygon_points"]:
+            # Use pixel points from frontend (less robust to res change, but fallback)
+            poly_points = roi_cfg["polygon_points"]
+            vertices = np.array([poly_points], dtype=np.int32)
+            logger.debug("Using pixel polygon points from frontend for lane detection.")
+
+    # Fallback to default trapezoid if no frontend ROI used
+    if vertices is None:
+        roi_vertices_percent = lane_cfg.get("roi_vertices_percent", [
+            (0.1, 1.0), (0.45, 0.6), (0.55, 0.6), (0.9, 1.0)
+        ])
+        vertices = np.array([
+            [(int(imshape[1] * p[0]), int(imshape[0] * p[1])) for p in roi_vertices_percent]
+        ], dtype=np.int32)
+
     masked_edges = region_of_interest(edges, vertices)
 
     # 5. Hough Line Transform

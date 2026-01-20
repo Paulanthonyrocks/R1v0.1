@@ -6,7 +6,6 @@ import {
     DialogTitle, 
     DialogDescription,
     DialogFooter,
-    DialogTrigger
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,37 +78,37 @@ function AddFeedDialog() {
     };
 
     return (
-        <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogTrigger asChild>
-                <Button 
-                    type="button"
-                    variant="outline"
-                    data-add-feed-trigger="true"
-                    className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold"
-                >
-                    <Plus className="mr-2 h-4 w-4" /> Add Feed
-                </Button>
-            </DialogTrigger>
-
-            <DialogContent 
-                className="sm:max-w-[425px]"
-                onPointerDownOutside={(e) => {
-                    const target = e.target as Element;
-                    // If clicking the trigger while dialog is open, prevent default 
-                    // to avoid "flicker" where it closes and immediately re-opens
-                    if (target?.closest('[data-add-feed-trigger="true"]')) {
-                        console.log("[AddFeedDialog] Prevented closing via trigger click");
-                        e.preventDefault();
-                    }
-                }}
+        <>
+            <Button 
+                type="button"
+                variant="outline"
+                data-add-feed-trigger="true"
+                onClick={() => setOpen(true)}
+                className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold"
             >
-                <DialogHeader>
-                    <DialogTitle>Add New Feed</DialogTitle>
-                    <DialogDescription>
-                        Enter the source details for the new traffic monitoring node.
-                    </DialogDescription>
-                </DialogHeader>
-                <form onSubmit={handleSubmit} className="grid gap-4 py-4">
+                <Plus className="mr-2 h-4 w-4" /> Add Feed
+            </Button>
+
+            <Dialog open={open} onOpenChange={handleOpenChange}>
+                <DialogContent 
+                    className="sm:max-w-[425px]"
+                    onPointerDownOutside={(e) => {
+                        const target = e.target as Element;
+                        // If clicking the trigger while dialog is open, prevent default 
+                        // to avoid "flicker" where it closes and immediately re-opens
+                        if (target?.closest('[data-add-feed-trigger="true"]')) {
+                            console.log("[AddFeedDialog] Prevented closing via trigger click");
+                            e.preventDefault();
+                        }
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Add New Feed</DialogTitle>
+                        <DialogDescription>
+                            Enter the source details for the new traffic monitoring node.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleSubmit} className="grid gap-4 py-4">
                     {error && <div className="text-red-500 text-sm font-lcd matrix-glow">{error}</div>}
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="source" className="text-right">
@@ -173,6 +172,7 @@ function AddFeedDialog() {
                 </form>
             </DialogContent>
         </Dialog>
+        </>
     );
 }
 

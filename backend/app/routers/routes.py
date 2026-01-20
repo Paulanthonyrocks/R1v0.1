@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Body, Query, HTTPException, status
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 import logging
 
@@ -79,7 +79,7 @@ async def get_supported_areas(
                 "coverage_level": "high",
             }
         ],
-        "last_updated": datetime.now().isoformat(),
+        "last_updated": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -110,7 +110,7 @@ async def get_route_analytics(
                     "origin": "Downtown",
                     "destination": "Airport",
                     "routeSummary": "Main Highway Route",
-                    "date": datetime.now().isoformat(),
+                    "date": datetime.now(timezone.utc).isoformat(),
                     "duration": 1800,  # 30 minutes in seconds
                     "distance": 25000,  # 25km in meters
                     "trafficImpact": "Medium congestion",
