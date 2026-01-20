@@ -1,10 +1,9 @@
-project_root_dir: /home/user/R1v0.1
-fps: 5
+fps: 15
 speed_limit: 60
 video_processing:
-  target_fps: 5
+  target_fps: 15
 firebase_admin:
-  service_account_key_path: /home/user/R1v0.1/backend/configs/firebase/service-account-key.json
+  service_account_key_path: /content/drive/MyDrive/R1v0.1/backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
   storage_bucket: r1v0-1.appspot.com
@@ -24,42 +23,42 @@ logging:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_main.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_main.log
       maxBytes: 10485760
       backupCount: 5
     workerFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_worker.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_worker.log
       maxBytes: 10485760
       backupCount: 5
     databaseFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_database.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_database.log
       maxBytes: 10485760
       backupCount: 5
     servicesFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_services.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_services.log
       maxBytes: 10485760
       backupCount: 5
     mlFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_ml.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_ml.log
       maxBytes: 10485760
       backupCount: 5
     videoWsFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /home/user/R1v0.1/backend/logs/backend_video_ws.log
+      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_video_ws.log
       maxBytes: 10485760
       backupCount: 5
   loggers:
@@ -285,7 +284,7 @@ logging:
       level: INFO
       propagate: false
 database:
-  db_path: backend/data/vehicle_data.db
+  db_path: /tmp/vehicle_data.db
   chunk_size: 100
   cache_size: 128
   schema:
@@ -310,14 +309,14 @@ mongodb:
   uri: "mongodb://localhost:27017/"
   database_name: "traffic_hub"
 feed_manager:
-  max_concurrent_feeds: 2
+  max_concurrent_feeds: 5
   db_write_interval: 0.5
   error_check_interval: 5.0
 queue_log_interval: 120.0
 video_input:
   webcam_index: 0
   webcam_buffer_size: 20
-  max_queue_size: 100
+  max_queue_size: 500
   queue_put_timeout_ms: 1000
 
 post_startup_processing:
@@ -333,7 +332,7 @@ video_output:
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
-  fps: 5
+  fps: 15
   frame_resolution:
   - 640
   - 480
@@ -343,7 +342,7 @@ video_output:
 vehicle_detection:
   enabled: true
   model_type: yolo
-  model_path: backend/models/yolov8n.onnx
+  model_path: backend/models/yolov8n.pt
   frame_resolution:
   - 640
   - 480
@@ -352,15 +351,15 @@ vehicle_detection:
   - 3
   - 5
   - 7
-  confidence_threshold: 0.3
+  confidence_threshold: 0.6
   proximity_threshold: 100
-  track_timeout: 5
+  track_timeout: 3
   reid_timeout: 10
-  max_active_tracks: 100
-  yolo_imgsz: 320
-  skip_frames: 1
+  max_active_tracks: 200
+  yolo_imgsz: 640
+  skip_frames: 4
   reid_enabled: false
-  car_classification_enabled: true
+  car_classification_enabled: false
   car_classification_interval_frames: 30
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
   car_classifier_labels_path: backend/models/car_labels.txt
@@ -384,8 +383,8 @@ analytics_service:
   proximity_threshold: 75
   track_timeout: 20
   max_active_tracks: 50
-  yolo_imgsz: 320
-  skip_frames: 30
+  yolo_imgsz: 640
+  skip_frames: 0
   vehicle_type_map:
     2: car
     3: motorcycle

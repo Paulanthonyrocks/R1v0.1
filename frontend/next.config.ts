@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  outputFileTracingRoot: require('path').join(__dirname, '../../'),
+  outputFileTracingRoot: require('path').join(__dirname, '..'),
   // @ts-ignore
   allowedDevOrigins: [
     '3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
@@ -15,6 +15,9 @@ const nextConfig: NextConfig = {
     ];
   },
   reactStrictMode: true,
+  turbopack: {
+    root: require('path').join(__dirname, '..'),
+  },
   /* other config options here */
 };
 
