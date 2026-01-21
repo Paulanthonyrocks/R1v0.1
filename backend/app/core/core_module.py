@@ -1587,6 +1587,39 @@ class CoreModule:
         Updates the CoreModule configuration dynamically.
         """
         # Update ROI
+        roi_updated = False
+        
+        # Handle 'roi' from frontend (normalized coordinates)
+        if "roi" in updates:
+            roi_data = updates["roi"]
+            if roi_data and isinstance(roi_data, list):
+                # Convert list of dicts [{'x':0.1, 'y':0.2}] to list of lists [[0.1, 0.2]]
+                normalized_points = []
+                for p in roi_data:
+                    if isinstance(p, dict) and 'x' in p and 'y' in p:
+                        normalized_points.append([float(p['x']), float(p['y'])])
+                    elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                        normalized_points.append([float(p[0]), float(p[1])])
+                
+                if normalized_points:
+                    self.roi_points_normalized = normalized_points
+                    self.roi_polygon_points = None # Invalidate pixel points
+                    
+                    # Ensure roi_processing config reflects enabled state
+                    if "roi_processing" not in self.config:
+                        self.config["roi_processing"] = {}
+                    self.config["roi_processing"]["enabled"] = True
+                    self.config["roi_processing"]["points_normalized"] = normalized_points
+                    
+                    roi_updated = True
+                elif len(roi_data) == 0:
+                     # Clear ROI
+                     self.roi_points_normalized = None
+                     self.roi_polygon_points = None
+                     if "roi_processing" in self.config:
+                         self.config["roi_processing"]["enabled"] = False
+                     roi_updated = True
+
         if "roi_processing" in updates:
             roi_cfg = updates["roi_processing"]
             self.config["roi_processing"] = roi_cfg # Update internal config storage
@@ -1595,13 +1628,16 @@ class CoreModule:
             if "roi_points_normalized" in roi_cfg:
                 self.roi_points_normalized = roi_cfg["roi_points_normalized"]
                 self.roi_polygon_points = None # Invalidate pixel points to force usage of normalized
+                roi_updated = True
             elif "polygon_points" in roi_cfg:
                 self.roi_polygon_points = roi_cfg["polygon_points"]
                 self.roi_points_normalized = None # Clear normalized if explicit pixels provided
+                roi_updated = True
             
+        if roi_updated:
             if self.roi_points_normalized or self.roi_polygon_points:
                 # Use current config resolution as baseline, or it will be re-inited on next frame if mismatch
-                self._initialize_roi_mask(self.config["vehicle_detection"]["frame_resolution"])
+                self._initialize_roi_mask(self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480]))
             else:
                 self.roi_mask = None
             
