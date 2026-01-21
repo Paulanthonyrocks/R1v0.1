@@ -119,8 +119,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         // Guard against out-of-order execution: 
         // Only update if this frame is newer than what's currently in the ref
         if (data.frame_index !== undefined && frameRef.current && data.frame_index < frameRef.current.index) {
-            if (decodedImage instanceof ImageBitmap) decodedImage.close();
-            return;
+             // Exception for loop restarts: if new frame is < 20, we accept it as a restart
+             if (data.frame_index >= 20) {
+                 if (decodedImage instanceof ImageBitmap) decodedImage.close();
+                 return;
+             }
         }
 
         if (frameRef.current?.image instanceof ImageBitmap && frameRef.current.image !== decodedImage) {
