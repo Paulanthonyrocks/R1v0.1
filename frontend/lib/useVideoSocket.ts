@@ -59,7 +59,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     // Drop late frames (out of order), but allow for loops
     if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-        if (lastProcessedIndexRef.current - data.frame_index < 100) {
+        // If the new frame is very close to 0, it's likely a loop restart (even for short videos)
+        if (data.frame_index < 20) {
+             // Accept as loop restart
+             console.debug(`[useVideoSocket] Loop restart detected (prev=${lastProcessedIndexRef.current}, new=${data.frame_index})`);
+        }
+        // Otherwise, if the gap is small, it's likely just network jitter/out-of-order. Drop it.
+        else if (lastProcessedIndexRef.current - data.frame_index < 100) {
             return;
         }
     }
@@ -207,9 +213,14 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     // Detect loop or out-of-order frame
     if (index < lastDrawnIndexRef.current) {
-        // If the gap is large, it's likely a loop restart
-        if (lastDrawnIndexRef.current - index > 100) {
-            console.log(`[useVideoSocket] Video loop detected for ${streamId}. Resetting frame tracker.`);
+        // If index is very low, assume loop restart regardless of gap size
+        if (index < 20) {
+            console.log(`[useVideoSocket] Video loop detected (index reset) for ${streamId}.`);
+            lastDrawnIndexRef.current = -1;
+        }
+        // If the gap is large, it's likely a loop restart (for longer videos)
+        else if (lastDrawnIndexRef.current - index > 100) {
+            console.log(`[useVideoSocket] Video loop detected (large gap) for ${streamId}.`);
             lastDrawnIndexRef.current = -1;
         } else {
             // Minor jitter, just skip
