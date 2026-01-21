@@ -1261,7 +1261,9 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
             data=FeedStatusUpdate(feed_status_data=data).model_dump()
         )
-        await self._connection_manager.broadcast_to_topic(msg.model_dump_json(), f"feed:{feed_id}")
+        # Broadcast to ALL connected clients so the dashboard gets the update
+        # regardless of specific topic subscriptions.
+        await self._connection_manager.broadcast(msg.model_dump_json())
 
     async def _broadcast_kpi_update(self):
         if not self._connection_manager:
