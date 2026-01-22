@@ -429,6 +429,11 @@ class ServiceRegistry:
 # Global registry instance
 _service_registry: Optional[ServiceRegistry] = None
 
+# Globals for backward compatibility
+feed_manager_instance: Optional[FMClass] = None
+connection_manager_instance: Optional[ConnectionManager] = None
+analytics_service_instance: Optional[AnalyticsService] = None
+
 
 def get_service_registry() -> ServiceRegistry:
     """Get the global service registry instance."""
@@ -444,7 +449,7 @@ async def initialize_services(
     connection_manager: ConnectionManager
 ) -> None:
     """Initialize all application services."""
-    global _service_registry
+    global _service_registry, feed_manager_instance, connection_manager_instance, analytics_service_instance
     
     if _service_registry is not None:
         logger_instance.warning("Services already initialized.")
@@ -452,11 +457,19 @@ async def initialize_services(
     
     _service_registry = ServiceRegistry()
     await _service_registry.initialize(config, connection_manager)
+    
+    # Update globals for backward compatibility
+    try:
+        feed_manager_instance = _service_registry.feed_manager
+        connection_manager_instance = _service_registry.connection_manager
+        analytics_service_instance = _service_registry.analytics_service
+    except RuntimeError as e:
+        logger_instance.error(f"Failed to set backward compatibility globals: {e}")
 
 
 async def shutdown_services() -> None:
     """Shutdown all application services."""
-    global _service_registry
+    global _service_registry, feed_manager_instance, connection_manager_instance, analytics_service_instance
     
     if _service_registry is None:
         logger.warning("Services not initialized, nothing to shutdown.")
@@ -464,6 +477,11 @@ async def shutdown_services() -> None:
     
     await _service_registry.shutdown()
     _service_registry = None
+    
+    # Reset globals
+    feed_manager_instance = None
+    connection_manager_instance = None
+    analytics_service_instance = None
 
 
 async def health_check() -> Dict[str, Any]:

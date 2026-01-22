@@ -188,9 +188,16 @@ class CoreModule:
         self.lane_width_pixels = vehicle_cfg.get("frame_resolution", [640, 480])[0] / max(1, self.num_lanes)
         
         self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
+        self.exclusion_zones_normalized = self.config.get("roi_processing", {}).get("exclusion_zones", [])
+        self.exclusion_zones_pixels = []
+        
+        # Static object filter settings
+        self.static_object_filter_enabled = vehicle_cfg.get("static_object_filter_enabled", False)
+        self.static_object_timeout = vehicle_cfg.get("static_object_timeout", 300) # 5 minutes default
+        self.static_movement_threshold = vehicle_cfg.get("static_movement_threshold", 10) # 10 pixels
         
         # --- Optimization: Cache ROI Mask ---
-        if self.roi_polygon_points:
+        if self.roi_polygon_points or self.exclusion_zones_normalized:
             self._initialize_roi_mask(vehicle_cfg.get("frame_resolution", [640, 480]))
         
         # Check for calibration data
@@ -284,6 +291,7 @@ class CoreModule:
         width, height = resolution
         self.roi_mask = np.zeros((height, width), dtype=np.uint8)
         
+        # 1. Inclusion ROI
         points_np = None
         if self.roi_points_normalized is not None and len(self.roi_points_normalized) >= 3:
             # Scale normalized points to current resolution
@@ -296,6 +304,18 @@ class CoreModule:
             cv2.fillPoly(self.roi_mask, [points_np], 255)
         else:
             self.roi_polygon_points_pixel = None
+            # If no inclusion ROI defined but masking is enabled, fill with 255
+            self.roi_mask.fill(255)
+
+        # 2. Exclusion Zones
+        self.exclusion_zones_pixels = []
+        if self.exclusion_zones_normalized:
+            for zone in self.exclusion_zones_normalized:
+                if len(zone) >= 3:
+                    zone_np = (np.array(zone, dtype=np.float32) * [width, height]).astype(np.int32)
+                    self.exclusion_zones_pixels.append(zone_np)
+                    # Cut out exclusion zones from the mask
+                    cv2.fillPoly(self.roi_mask, [zone_np], 0)
 
     def _update_homography(self, calibration_cfg: Dict):
         """
@@ -511,6 +531,8 @@ class CoreModule:
             # This prevents long-lived "ghosts" (kept for ReID) from cluttering the screen
             vis_tracks = {}
             for vid, track in current_tracks.items():
+                 if track.get("is_static_object"):
+                     continue
                  if track["status"] == "active":
                      vis_tracks[vid] = track
                  elif track["status"] == "predicting":
@@ -543,24 +565,13 @@ class CoreModule:
             else:
                 detections = self._run_pytorch_inference(processed_frame, confidence_threshold, roi_enabled, x1_crop, y1_crop)
 
-            # Refine classifications based on dimensions
+            # Post-process classifications: Optional refinement
             refined_detections = []
             for det in detections:
                 bbox, conf, cls = det
-                x1, y1, x2, y2 = bbox
-                w = x2 - x1
-                h = y2 - y1
-                aspect_ratio = w / h if h > 0 else 0
-                area = w * h
-                
-                # Heuristic: Downgrade 'truck' (7) or 'bus' (5) to 'car' (2) if too small
-                # These thresholds (area < 4000) depend on resolution (640x480)
-                if cls in [5, 7] and area < 3000:
-                    cls = 2 # Downgrade to car
-                
-                # Heuristic: 'car' (2) with very square aspect ratio might be 'truck' (7) from back, 
-                # but YOLO usually gets this right. We focus on false positives for heavy vehicles.
-                
+                # We previously had a heuristic here to downgrade small trucks to cars,
+                # but this caused flipping issues when vehicles were far away.
+                # We now rely on the 'Class Stabilization' voting logic in _update_track.
                 refined_detections.append((bbox, conf, cls))
 
             return refined_detections
@@ -579,7 +590,9 @@ class CoreModule:
         x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
 
         # 1. ROI Masking (Optimized)
-        if roi_enabled and self.roi_mask is not None:
+        # DISABLE MASKING: It causes partial detections when vehicles cross ROI boundaries.
+        # We detect on the full frame and filter results post-inference instead.
+        if False and roi_enabled and self.roi_mask is not None:
             # Ensure mask matches frame size (handle resolution changes)
             if self.roi_mask.shape[:2] != frame.shape[:2]: # Check shape
                 self._initialize_roi_mask((frame.shape[1], frame.shape[0])) # Re-initialize if different
@@ -795,7 +808,8 @@ class CoreModule:
                 track["confidence"] *= self.dynamic_conf_decay
                 
                 # Only keep in output if it's recently seen AND has enough confidence
-                if time_since_seen < self.predict_timeout and track["confidence"] > 0.1:
+                # AND it's not a static object
+                if time_since_seen < self.predict_timeout and track["confidence"] > 0.1 and not track.get("is_static_object"):
                     track["status"] = "predicting"
                     predicted_tracks[vehicle_id] = track
                 else:
@@ -865,9 +879,22 @@ class CoreModule:
         return kept_tracks
 
     def _is_point_in_roi(self, x: float, y: float) -> bool:
-        if self.roi_polygon_points_pixel is None or not self.config.get("roi_processing", {}).get("enabled", False):
+        roi_enabled = self.config.get("roi_processing", {}).get("enabled", False)
+        if not roi_enabled:
             return True
-        return cv2.pointPolygonTest(self.roi_polygon_points_pixel, (int(x), int(y)), False) >= 0
+            
+        # 1. Check Inclusion ROI
+        if self.roi_polygon_points_pixel is not None:
+            if cv2.pointPolygonTest(self.roi_polygon_points_pixel, (int(x), int(y)), False) < 0:
+                return False
+        
+        # 2. Check Exclusion Zones
+        if self.exclusion_zones_pixels:
+            for zone in self.exclusion_zones_pixels:
+                if cv2.pointPolygonTest(zone, (int(x), int(y)), False) >= 0:
+                    return False
+                    
+        return True
 
     def _update_tracks(
         self,
@@ -1166,13 +1193,17 @@ class CoreModule:
         ])
 
         # Measurement uncertainty (R - higher values mean more trust in prediction)
-        kf.R = np.diag([self.kf_params.get("measurement_noise_x", 10), self.kf_params.get("measurement_noise_y", 10)]) ** 2
+        r_std_x = self.kf_params.get("kf_sigma_mx", 5)
+        r_std_y = self.kf_params.get("kf_sigma_my", 5)
+        kf.R = np.diag([r_std_x, r_std_y]) ** 2
 
         # Process uncertainty (Q - higher values mean more trust in measurement)
         # Represents how much the state (position/velocity) can change between time steps
-        q_std_pos = self.kf_params.get("process_noise_pos", 1) # Position noise
-        q_std_vel = self.kf_params.get("process_noise_vel", 0.1) # Velocity noise
-        kf.Q = np.diag([q_std_pos, q_std_pos, q_std_vel, q_std_vel]) ** 2
+        q_std_px = self.kf_params.get("kf_sigma_px", 1)
+        q_std_py = self.kf_params.get("kf_sigma_py", 1)
+        q_std_vx = self.kf_params.get("kf_sigma_pvx", 1)
+        q_std_vy = self.kf_params.get("kf_sigma_pvy", 1)
+        kf.Q = np.diag([q_std_px, q_std_py, q_std_vx, q_std_vy]) ** 2
         
         # Covariance matrix (P - reflects initial uncertainty in state)
         # Start with high uncertainty, as we don't know the true state yet
@@ -1210,6 +1241,9 @@ class CoreModule:
             "acceleration": 0.0,
             "estimated_pixels_per_meter": self.pixels_per_meter, # Default, can be updated
             "new_embedding": False, # Flag to signal that a new ReID embedding is available
+            "stationary_start_time": current_time,
+            "last_stable_centroid": (kf.x[0][0], kf.x[1][0]),
+            "is_static_object": False
         }
         logger.debug(f"Initialized new track {vehicle_id} at {bbox}")
         return vehicle_id
@@ -1232,7 +1266,11 @@ class CoreModule:
             track["class_id"] = cls
             logger.debug(f"Reset class history for {track['vehicle_id']} after {time_since_last:.1f}s gap")
         else:
-            # Class Voting Mechanism - Optimized to only recalculate when class changes
+            # --- Class Stabilization Mechanism ---
+            # Define Hierarchy: Larger/Heavier vehicles are more 'sticky'
+            # 7: truck, 5: bus, 2: car, 3: motorcycle
+            class_hierarchy = {7: 3, 5: 2, 2: 1, 3: 0}
+            
             if cls != track["class_id"]:
                 if "class_history" not in track:
                     track["class_history"] = deque([track["class_id"]], maxlen=10)
@@ -1240,15 +1278,33 @@ class CoreModule:
                 
                 # Determine most frequent class with Hysteresis
                 from collections import Counter
-                most_common = Counter(track["class_history"]).most_common(1)
+                history_counts = Counter(track["class_history"])
+                most_common = history_counts.most_common(1)
+                
                 if most_common:
                     new_class = most_common[0][0]
                     count = most_common[0][1]
                     
-                    # Only change if new class has strong majority (60%+)
-                    # This prevents rapid flipping between classes (e.g. car <-> truck)
-                    if count >= 6:
+                    current_class = track["class_id"]
+                    current_rank = class_hierarchy.get(current_class, -1)
+                    new_rank = class_hierarchy.get(new_class, -1)
+
+                    # LOGIC:
+                    # 1. UPGRADE: If new class is 'heavier' (e.g. car -> truck), upgrade more easily (60% majority)
+                    # 2. DOWNGRADE: If new class is 'lighter' (e.g. truck -> car), require strong majority (80%+)
+                    #    This prevents a truck being called a car just because it's far away or seen from behind.
+                    
+                    should_change = False
+                    if new_rank > current_rank:
+                        if count >= 6: should_change = True
+                    elif new_rank < current_rank:
+                        if count >= 8: should_change = True
+                    else:
+                        if count >= 7: should_change = True
+                        
+                    if should_change:
                         track["class_id"] = new_class
+                        logger.info(f"Class stabilized for {track['vehicle_id']}: {self.vehicle_type_map.get(current_class)} -> {self.vehicle_type_map.get(new_class)}")
 
         track["confidence"] = conf
         track["last_seen"] = current_time
@@ -1257,6 +1313,26 @@ class CoreModule:
         track["frame_index_last_seen"] = frame_index
         track["status"] = "active"
         track["is_occluded"] = False # Reset occlusion if detected
+
+        # Update stationary status
+        curr_cx, curr_cy = track["centroid"]
+        last_stable_cx, last_stable_cy = track.get("last_stable_centroid", (curr_cx, curr_cy))
+        dist_from_stable = math.sqrt((curr_cx - last_stable_cx)**2 + (curr_cy - last_stable_cy)**2)
+        
+        if dist_from_stable > self.static_movement_threshold:
+            # Object moved! Reset stationary timer
+            track["stationary_start_time"] = current_time
+            track["last_stable_centroid"] = (curr_cx, curr_cy)
+            if track.get("is_static_object"):
+                logger.info(f"Object {track['vehicle_id']} moved after being static. Re-activating.")
+                track["is_static_object"] = False
+        else:
+            # Object stationary. Check if it exceeded timeout
+            if not track.get("is_static_object") and self.static_object_filter_enabled:
+                stationary_duration = current_time - track.get("stationary_start_time", current_time)
+                if stationary_duration > self.static_object_timeout:
+                    track["is_static_object"] = True
+                    logger.info(f"Object {track['vehicle_id']} flagged as STATIC after {stationary_duration:.1f}s")
 
         # Speed estimation
         prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps)) # Default to one frame ago
@@ -1619,6 +1695,31 @@ class CoreModule:
                      if "roi_processing" in self.config:
                          self.config["roi_processing"]["enabled"] = False
                      roi_updated = True
+            
+            # Handle exclusion zones
+            if "exclusion_zones" in updates:
+                zones_data = updates["exclusion_zones"]
+                if zones_data and isinstance(zones_data, list):
+                    normalized_zones = []
+                    for zone in zones_data:
+                        if isinstance(zone, list):
+                            normalized_points = []
+                            for p in zone:
+                                if isinstance(p, dict) and 'x' in p and 'y' in p:
+                                    normalized_points.append([float(p['x']), float(p['y'])])
+                                elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                                    normalized_points.append([float(p[0]), float(p[1])])
+                            if normalized_points:
+                                normalized_zones.append(normalized_points)
+                    
+                    self.exclusion_zones_normalized = normalized_zones
+                elif isinstance(zones_data, list) and len(zones_data) == 0:
+                    self.exclusion_zones_normalized = []
+                
+                if "roi_processing" not in self.config:
+                    self.config["roi_processing"] = {}
+                self.config["roi_processing"]["exclusion_zones"] = self.exclusion_zones_normalized
+                roi_updated = True
 
         if "roi_processing" in updates:
             roi_cfg = updates["roi_processing"]
@@ -1634,14 +1735,27 @@ class CoreModule:
                 self.roi_points_normalized = None # Clear normalized if explicit pixels provided
                 roi_updated = True
             
+            if "exclusion_zones" in roi_cfg:
+                self.exclusion_zones_normalized = roi_cfg["exclusion_zones"]
+                roi_updated = True
+            
         if roi_updated:
-            if self.roi_points_normalized or self.roi_polygon_points:
+            if self.roi_points_normalized or self.roi_polygon_points or self.exclusion_zones_normalized:
                 # Use current config resolution as baseline, or it will be re-inited on next frame if mismatch
                 self._initialize_roi_mask(self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480]))
             else:
                 self.roi_mask = None
             
-            logger.info(f"[{self.feed_id}] ROI configuration updated.")
+            logger.info(f"[{self.feed_id}] ROI configuration updated (including exclusion zones).")
+
+        # Handle static object filter
+        if "static_object_filter_enabled" in updates:
+            self.static_object_filter_enabled = bool(updates["static_object_filter_enabled"])
+            logger.info(f"[{self.feed_id}] Static object filter enabled: {self.static_object_filter_enabled}")
+        
+        if "static_object_timeout" in updates:
+            self.static_object_timeout = float(updates["static_object_timeout"])
+            logger.info(f"[{self.feed_id}] Static object timeout: {self.static_object_timeout}s")
 
         # Fix #15: Restart OCR executor if OCR config changes
         if "ocr_engine" in updates:

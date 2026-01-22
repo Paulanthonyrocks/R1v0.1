@@ -10,6 +10,11 @@ interface StreamOverlayControlsProps {
   setShowVehicleDetails: (value: boolean) => void;
   showROI: boolean;
   setShowROI: (value: boolean) => void;
+  showExclusionZones?: boolean;
+  setShowExclusionZones?: (value: boolean) => void;
+  onClearExclusionZones?: () => void;
+  staticFilterEnabled?: boolean;
+  setStaticFilterEnabled?: (value: boolean) => void;
   controlId: string;
 }
 
@@ -46,6 +51,11 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   setShowVehicleDetails,
   showROI,
   setShowROI,
+  showExclusionZones,
+  setShowExclusionZones,
+  onClearExclusionZones,
+  staticFilterEnabled,
+  setStaticFilterEnabled,
   controlId,
 }) => {
   return (
@@ -90,6 +100,38 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
               onCheckedChange={setShowROI}
             />
           </div>
+
+          {setShowExclusionZones && (
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor={`toggle-excl-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Exclusion Zones</Label>
+              <div className="flex items-center gap-2">
+                {onClearExclusionZones && (
+                  <button 
+                    onClick={onClearExclusionZones}
+                    className="text-[10px] bg-red-900/50 hover:bg-red-900 px-1 border border-red-500 text-white uppercase"
+                  >
+                    Clear All
+                  </button>
+                )}
+                <MatrixCheckbox
+                  id={`toggle-excl-${controlId}`}
+                  checked={!!showExclusionZones}
+                  onCheckedChange={setShowExclusionZones}
+                />
+              </div>
+            </div>
+          )}
+
+          {setStaticFilterEnabled && (
+            <div className="flex items-center justify-between gap-4 pt-2 border-t border-lcd-bg/30">
+              <Label htmlFor={`toggle-static-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Static Filter</Label>
+              <MatrixCheckbox
+                id={`toggle-static-${controlId}`}
+                checked={!!staticFilterEnabled}
+                onCheckedChange={setStaticFilterEnabled}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import AuthGuard from "@/components/auth/AuthGuard";
+import DashboardShell from "@/components/dashboard/DashboardShell";
 import { UserRole } from "@/lib/auth/roles";
-import { Clock, BatteryFull, Search, Terminal, ShieldAlert, Info, ArrowLeft, X } from 'lucide-react';
-import Link from 'next/link';
+import { Search, Terminal, ShieldAlert, Info, X } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -60,26 +60,7 @@ const SystemLogsPage = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.ADMIN}>
-      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-        {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text sticky top-0 z-50 bg-lcd-bg">
-          <div className="flex items-center gap-4">
-              <Link href="/dashboard" className="hover:opacity-70 transition-opacity">
-                <ArrowLeft size={20} />
-              </Link>
-              <div className="flex items-center space-x-2">
-                <Terminal size={20} />
-                <span className="font-lcd matrix-glow uppercase font-bold">Kernel Audit Trail</span>
-              </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Clock size={20} />
-            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <BatteryFull size={20} />
-          </div>
-        </header>
-
-        <main className="flex-1 p-6 max-w-[1400px] mx-auto w-full">
+      <DashboardShell>
           <div className="flex flex-col lg:flex-row justify-between items-end mb-8 gap-6">
               <div className="flex-1">
                   <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2">System Telemetry Logs</h1>
@@ -161,7 +142,6 @@ const SystemLogsPage = () => {
                   </table>
               </div>
           </div>
-        </main>
 
         {/* Detail Modal Overlay */}
         {selectedLog && (
@@ -210,7 +190,7 @@ const SystemLogsPage = () => {
                 </div>
             </div>
         )}
-      </div>
+      </DashboardShell>
     </AuthGuard>
   );
 };

@@ -2,12 +2,12 @@
 
 import { UserRole } from "@/lib/auth/roles";
 import AuthGuard from "@/components/auth/AuthGuard";
+import DashboardShell from '@/components/dashboard/DashboardShell';
 import MatrixCard from '@/components/MatrixCard';
 import { useState, useEffect } from 'react';
 import TrafficSignalIcon from '@/components/ui/TrafficSignalIcon';
 import DitheredTrafficIndicator from '@/components/ui/DitheredTrafficIndicator';
 import styles from './Grid.module.css';
-import { Signal, Clock, BatteryFull } from 'lucide-react';
 
 interface GridItemData {
   id: number;
@@ -98,24 +98,10 @@ const TrafficGridPage: React.FC = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.VIEWER}>
-      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-        {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-          <div className="flex items-center space-x-2">
-            <Signal size={20} />
-            <span className="font-lcd matrix-glow">GRID VIEW</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Clock size={20} />
-            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <BatteryFull size={20} />
-          </div>
-        </header>
-        <main className="flex-1 p-4 flex flex-col">
+      <DashboardShell>
           <h1 className="text-2xl font-bold mb-4 uppercase tracking-normal">Grid View</h1>
           {renderContent()}
-        </main>
-      </div>
+      </DashboardShell>
     </AuthGuard>
   );
 };

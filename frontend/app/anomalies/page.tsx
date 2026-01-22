@@ -2,17 +2,16 @@
 
 import React, { useState, useMemo } from 'react';
 import AuthGuard from '@/components/auth/AuthGuard';
+import DashboardShell from '@/components/dashboard/DashboardShell';
 import { UserRole } from '@/lib/auth/roles';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import AnomalyItem from '@/components/dashboard/AnomalyItem';
 import AnomalyDetailsModal from '@/components/dashboard/AnomalyDetailsModal';
 import { AlertData, SeverityLevel } from '@/lib/types';
-import { BatteryFull, Filter, ArrowLeft, Search, AlertOctagon } from 'lucide-react';
-import Link from 'next/link';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Filter, Search } from 'lucide-react';
 
 const AnomaliesPage = () => {
-  const { alerts, isConnected, isReady } = useRealtimeUpdates();
+  const { alerts, isReady } = useRealtimeUpdates();
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [severityFilter, setSeverityLevel] = useState<SeverityLevel | 'ALL'>('ALL');
@@ -39,42 +38,7 @@ const AnomaliesPage = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.AGENCY}>
-      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-        {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text sticky top-0 z-50 bg-lcd-bg">
-          <div className="flex items-center gap-4">
-              <Link href="/dashboard" className="hover:opacity-70 transition-opacity">
-                <ArrowLeft size={20} />
-              </Link>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <div className="flex items-center space-x-2 cursor-pointer">
-                    <AlertOctagon size={20} />
-                    <span className="font-lcd matrix-glow uppercase">Anomalies & Incidents</span>
-                  </div>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="matrix-card">
-                  <DropdownMenuItem asChild>
-                    <Link href="/dashboard" className="w-full tracking-normal font-lcd matrix-glow uppercase">Dashboard</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/surveillance" className="w-full tracking-normal font-lcd matrix-glow uppercase">Surveillance</Link>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-          </div>
-          
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="text-[10px] opacity-70">WS {isConnected ? 'LIVE' : 'OFFLINE'}</span>
-            </div>
-            <span className="font-lcd matrix-glow text-sm">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <BatteryFull size={20} />
-          </div>
-        </header>
-
-        <main className="flex-1 p-6 max-w-[1200px] mx-auto w-full">
+      <DashboardShell>
           <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
               <h1 className="text-4xl font-bold uppercase tracking-tighter">System Anomalies</h1>
               <div className="flex items-center gap-2">
@@ -153,14 +117,13 @@ const AnomaliesPage = () => {
                   )}
               </div>
           </div>
-        </main>
 
         <AnomalyDetailsModal 
           anomaly={selectedAnomaly} 
           open={isModalOpen} 
           onOpenChange={setIsModalOpen} 
         />
-      </div>
+      </DashboardShell>
     </AuthGuard>
   );
 };

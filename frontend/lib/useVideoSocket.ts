@@ -273,28 +273,33 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             
             // Visual distinction for predicting (ghost) tracks
             if (v.status === 'predicting') {
-                ctx.setLineDash([4, 4]);
-                ctx.globalAlpha = 0.6;
+                ctx.setLineDash([2, 2]);
+                ctx.globalAlpha = 0.3; // Much more subtle
+                ctx.lineWidth = 1;
             } else {
                 ctx.setLineDash([]);
                 ctx.globalAlpha = 1.0;
+                ctx.lineWidth = 2;
             }
 
             if (showBoundingBoxes) {
                 ctx.strokeRect(sx1, sy1, sw, sh);
-                // Add a small inner glow/shadow effect
-                ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-                ctx.lineWidth = 1;
-                ctx.strokeRect(sx1 + 1, sy1 + 1, sw - 2, sh - 2);
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = color;
+                
+                // Only add shadow/glow for active tracks to reduce clutter
+                if (v.status === 'active') {
+                    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(sx1 + 1, sy1 + 1, sw - 2, sh - 2);
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = color;
+                }
             }
             
             // Reset styles
             ctx.setLineDash([]);
-            ctx.globalAlpha = 1.0;
             
-            if (showVehicleDetails) {
+            // Only show labels for ACTIVE detections to reduce screen occlusion
+            if (showVehicleDetails && v.status === 'active') {
                 const lines = [
                     `${v.vehicle_id.split('_').pop()}: ${v.class_name}`,
                     `${v.speed.toFixed(0)} km/h`
@@ -322,6 +327,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 });
             }
         });
+        
+        // Final style reset to prevent leaks to next frame/call
+        ctx.globalAlpha = 1.0;
+        ctx.setLineDash([]);
     }
   }, [streamId]);
 

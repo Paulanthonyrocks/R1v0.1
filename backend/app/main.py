@@ -148,10 +148,9 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Lifespan Startup Failed: {e}")
 
     # 2. Database & Migrations
-    db_cfg = to_dict(getattr(loaded_config, "database", {}))
     try:
         await run_migrations()
-        await initialize_database(db_cfg)
+        await initialize_database(cfg_dict)
     except Exception as e:
         logger.critical(f"Database Init Failed: {e}")
         raise
@@ -161,7 +160,12 @@ async def lifespan(app: FastAPI):
     try:
         if fb_cfg.get("auth_enabled", False):
             key_path = Path(fb_cfg.get("service_account_key_path", ""))
-            if not key_path.is_absolute(): key_path = BASE_DIR / key_path
+            if not key_path.is_absolute():
+                # Handle paths relative to project root (e.g., starting with 'backend/')
+                if str(key_path).startswith("backend/"):
+                    key_path = BASE_DIR.parent / key_path
+                else:
+                    key_path = BASE_DIR / key_path
             
             if key_path.exists():
                 cred = credentials.Certificate(str(key_path))
@@ -169,6 +173,8 @@ async def lifespan(app: FastAPI):
                 logger.info("Firebase initialized.")
             elif fb_cfg.get("required", False):
                 raise FileNotFoundError(f"Required Firebase key missing: {key_path}")
+            else:
+                logger.warning(f"Firebase auth enabled but key file not found at {key_path}. Auth will fail.")
     except Exception as e:
         logger.error(f"Firebase Init Failed: {e}")
         if fb_cfg.get("required", False): raise

@@ -21,6 +21,9 @@ export interface FeedStatusData {
       latitude: number;
       longitude: number;
       roi?: { x: number; y: number }[];
+      exclusion_zones?: { x: number; y: number }[][];
+      static_object_filter_enabled?: boolean;
+      static_object_timeout?: number;
   };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;

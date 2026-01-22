@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home, AlertTriangle, Camera, Navigation, TrendingUp } from 'lucide-react';
+import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home, AlertTriangle, Camera, Navigation, TrendingUp, Terminal, Zap } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { cn } from '@/lib/utils';
@@ -25,10 +25,11 @@ const DashboardHeader: React.FC = () => {
         { href: '/dashboard/map', label: 'MAP', icon: MapIcon },
         { href: '/dashboard/analytics', label: 'ANALYTICS', icon: BarChart3 },
         { href: '/surveillance', label: 'FEEDS', icon: LayoutGrid },
+        { href: '/anomalies', label: 'ALERTS', icon: Zap },
         { href: '/incidents', label: 'INCIDENTS', icon: AlertTriangle },
-        { href: '/dashboard/gallery', label: 'GALLERY', icon: Camera },
         { href: '/dashboard/tracking', label: 'TRACKING', icon: Navigation },
         { href: '/dashboard/predictive', label: 'FORECASTS', icon: TrendingUp },
+        { href: '/logs', label: 'LOGS', icon: Terminal },
     ];
 
     return (

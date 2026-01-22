@@ -3,7 +3,7 @@ speed_limit: 60
 video_processing:
   target_fps: 15
 firebase_admin:
-  service_account_key_path: /content/drive/MyDrive/R1v0.1/backend/configs/firebase/service-account-key.json
+  service_account_key_path: backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
   storage_bucket: r1v0-1.appspot.com
@@ -23,42 +23,42 @@ logging:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_main.log
+      filename: logs/backend_main.log
       maxBytes: 10485760
       backupCount: 5
     workerFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_worker.log
+      filename: logs/backend_worker.log
       maxBytes: 10485760
       backupCount: 5
     databaseFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_database.log
+      filename: logs/backend_database.log
       maxBytes: 10485760
       backupCount: 5
     servicesFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_services.log
+      filename: logs/backend_services.log
       maxBytes: 10485760
       backupCount: 5
     mlFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_ml.log
+      filename: logs/backend_ml.log
       maxBytes: 10485760
       backupCount: 5
     videoWsFileHandler:
       class: logging.handlers.RotatingFileHandler
       level: INFO
       formatter: standardFormatter
-      filename: /content/drive/MyDrive/R1v0.1/backend/logs/backend_video_ws.log
+      filename: logs/backend_video_ws.log
       maxBytes: 10485760
       backupCount: 5
   loggers:
@@ -351,14 +351,21 @@ vehicle_detection:
   - 3
   - 5
   - 7
-  confidence_threshold: 0.6
-  proximity_threshold: 100
+  confidence_threshold: 0.3
+  proximity_threshold: 150
   track_timeout: 3
   reid_timeout: 10
   max_active_tracks: 200
   yolo_imgsz: 640
   skip_frames: 4
-  reid_enabled: false
+  reid_enabled: true
+  reid:
+    backbone: resnet50
+    input_size: [256, 256]
+    embedding_dim: 128
+  static_object_filter_enabled: true
+  static_movement_threshold: 25
+  static_object_timeout: 20
   car_classification_enabled: false
   car_classification_interval_frames: 30
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
@@ -397,12 +404,12 @@ behavior_analysis:
   lane_change_buffer: 20
   ewma_alpha: 0.2
 kalman_filter_params:
-  kf_sigma_px: 2.0
-  kf_sigma_py: 2.0
+  kf_sigma_px: 5.0
+  kf_sigma_py: 5.0
   kf_sigma_pvx: 5.0
   kf_sigma_pvy: 5.0
-  kf_sigma_mx: 0.5
-  kf_sigma_my: 0.5
+  kf_sigma_mx: 15.0
+  kf_sigma_my: 15.0
   kf_sigma_ax: 0.5
   kf_sigma_ay: 0.5
 lane_detection:

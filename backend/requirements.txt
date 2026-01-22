@@ -6,7 +6,8 @@ python-multipart>=0.0.5
 httpx>=0.25.0 # For async HTTP calls
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-pydantic>=1.8.2
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
 
 # Configuration & Utilities
 pyyaml>=6.0
@@ -48,6 +49,7 @@ easyocr>=1.7.0
 sqlalchemy
 asyncpg
 psycopg2-binary
+aiosqlite
 
 pymongo>=4.0.0 # For MongoDB support
 aiokafka>=0.8.0 # For async Kafka messaging support

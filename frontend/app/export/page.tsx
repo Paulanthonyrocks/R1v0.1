@@ -3,10 +3,10 @@
 import { useState, useEffect } from "react";
 import MatrixCard from "@/components/MatrixCard";
 import AuthGuard from "@/components/auth/AuthGuard";
+import DashboardShell from "@/components/dashboard/DashboardShell";
 import MatrixButton from "@/components/MatrixButton";
 import { UserRole } from "@/lib/auth/roles";
 import { cn } from "@/lib/utils";
-import { Signal, Clock, BatteryFull } from 'lucide-react';
 
 const ExportPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
@@ -62,20 +62,7 @@ const ExportPage: React.FC = () => {
 
   return (
     <AuthGuard requiredRole={UserRole.PLANNER}>
-      <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-        {/* Status Bar */}
-        <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-          <div className="flex items-center space-x-2">
-            <Signal size={20} />
-            <span className="font-lcd matrix-glow">EXPORT</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Clock size={20} />
-            <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <BatteryFull size={20} />
-          </div>
-        </header>
-        <main className="flex-1 p-4">
+      <DashboardShell>
           {loading && (
             <div className="fixed top-0 left-0 w-full h-full flex items-center justify-center bg-lcd-bg z-50">
               <div className="text-lcd-text tracking-normal">Loading...</div>
@@ -164,8 +151,7 @@ const ExportPage: React.FC = () => {
               </div>
             )}
           </MatrixCard>
-        </main>
-      </div>
+      </DashboardShell>
     </AuthGuard>
   );
 };

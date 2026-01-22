@@ -27,11 +27,15 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
     const [showROI, setShowROI] = useState<boolean>(false);
+    const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); 
+    const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
     
-    // ROI State
-    const [roiMode, setRoiMode] = useState<boolean>(false);
+    // ROI & Exclusion Zone State
+    const [roiMode, setRoiMode] = useState<'roi' | 'exclusion' | null>(null);
     const [roiPoints, setRoiPoints] = useState<{x: number, y: number}[]>([]);
+    const [exclusionZones, setExclusionZones] = useState<{x: number, y: number}[][]>(feed.config?.exclusion_zones ?? []);
+    const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{x: number, y: number}[]>([]);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -44,10 +48,18 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const component_name = feedName ?? `Feed ${feed_id}`;
     const component_node = `Source: ${source ?? 'N/A'}`;
 
-    // Load existing ROI if available
+    // Load existing ROI and filter settings if available
     useEffect(() => {
-        if (!roiMode && feed && feed.config && feed.config.roi) {
-            setRoiPoints(feed.config.roi);
+        if (feed && feed.config) {
+            if (!roiMode && feed.config.roi) {
+                setRoiPoints(feed.config.roi);
+            }
+            if (!roiMode && feed.config.exclusion_zones) {
+                setExclusionZones(feed.config.exclusion_zones);
+            }
+            if (feed.config.static_object_filter_enabled !== undefined) {
+                setStaticFilterEnabled(feed.config.static_object_filter_enabled);
+            }
         }
     }, [feed, roiMode]);
 
@@ -61,6 +73,11 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         }
     }, [status]);
 
+    const handleToggleStaticFilter = (enabled: boolean) => {
+        setStaticFilterEnabled(enabled);
+        updateFeedConfig({ static_object_filter_enabled: enabled });
+    };
+
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (!roiMode || !canvasRef.current) return;
 
@@ -68,23 +85,44 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         const x = (e.clientX - rect.left) / rect.width;
         const y = (e.clientY - rect.top) / rect.height;
 
-        setRoiPoints(prev => [...prev, { x, y }]);
+        if (roiMode === 'roi') {
+            setRoiPoints(prev => [...prev, { x, y }]);
+        } else if (roiMode === 'exclusion') {
+            setCurrentExclusionPoints(prev => [...prev, { x, y }]);
+        }
     };
 
     const handleSaveROI = async () => {
         if (!feed_id) return;
         try {
-            // Using WebSocket for configuration updates to avoid tunnel timeouts
             updateFeedConfig({ roi: roiPoints });
-            setRoiMode(false);
+            setRoiMode(null);
             console.log("ROI Save command sent via WebSocket");
         } catch (error) {
             console.error("Error sending ROI update:", error);
         }
     };
 
+    const handleSaveExclusionZone = async () => {
+        if (!feed_id || currentExclusionPoints.length < 3) return;
+        try {
+            const newZones = [...exclusionZones, currentExclusionPoints];
+            setExclusionZones(newZones);
+            updateFeedConfig({ exclusion_zones: newZones });
+            setCurrentExclusionPoints([]);
+            setRoiMode(null);
+        } catch (error) {
+            console.error("Error saving exclusion zone:", error);
+        }
+    };
+
     const handleClearROI = () => {
         setRoiPoints([]);
+    };
+
+    const handleClearExclusionZones = () => {
+        setExclusionZones([]);
+        updateFeedConfig({ exclusion_zones: [] });
     };
 
     useEffect(() => {
@@ -116,30 +154,67 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     }
 
                     // Draw ROI
-                    if (roiMode || (showOverlays && showROI && roiPoints.length > 0)) {
+                    if (roiMode === 'roi' || (showOverlays && showROI && roiPoints.length > 0)) {
                         ctx.save();
-                        ctx.strokeStyle = roiMode ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
-                        ctx.lineWidth = 1; // Thinner line
+                        ctx.strokeStyle = roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
+                        ctx.lineWidth = 1;
                         ctx.beginPath();
                         roiPoints.forEach((p, i) => {
                             const px = p.x * canvas.width;
                             const py = p.y * canvas.height;
                             if (i === 0) ctx.moveTo(px, py);
                             else ctx.lineTo(px, py);
-                            
-                            // Draw anchor points in edit mode
-                            if (roiMode) {
+                            if (roiMode === 'roi') {
                                 ctx.fillStyle = '#00ff00';
-                                ctx.fillRect(px - 2, py - 2, 4, 4); // Smaller anchors
+                                ctx.fillRect(px - 2, py - 2, 4, 4);
                             }
                         });
-                        if (roiPoints.length > 2) {
-                            ctx.closePath();
-                        }
+                        if (roiPoints.length > 2) ctx.closePath();
                         ctx.stroke();
                         if (roiPoints.length > 2) {
-                            ctx.fillStyle = 'rgba(0, 255, 0, 0.05)'; // More transparent fill
+                            ctx.fillStyle = 'rgba(0, 255, 0, 0.05)';
                             ctx.fill();
+                        }
+                        ctx.restore();
+                    }
+
+                    // Draw Exclusion Zones
+                    if (showOverlays && showExclusionZones) {
+                        ctx.save();
+                        
+                        // Draw established zones
+                        exclusionZones.forEach(zone => {
+                            ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            zone.forEach((p, i) => {
+                                const px = p.x * canvas.width;
+                                const py = p.y * canvas.height;
+                                if (i === 0) ctx.moveTo(px, py);
+                                else ctx.lineTo(px, py);
+                            });
+                            if (zone.length > 2) {
+                                ctx.closePath();
+                                ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
+                                ctx.fill();
+                            }
+                            ctx.stroke();
+                        });
+
+                        // Draw current being edited zone
+                        if (roiMode === 'exclusion') {
+                            ctx.strokeStyle = '#ff0000';
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            currentExclusionPoints.forEach((p, i) => {
+                                const px = p.x * canvas.width;
+                                const py = p.y * canvas.height;
+                                if (i === 0) ctx.moveTo(px, py);
+                                else ctx.lineTo(px, py);
+                                ctx.fillStyle = '#ff0000';
+                                ctx.fillRect(px - 3, py - 3, 6, 6);
+                            });
+                            ctx.stroke();
                         }
                         ctx.restore();
                     }
@@ -155,7 +230,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, feed_id, roiPoints, roiMode, lastFrameRef]);
+    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -251,13 +326,24 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     </div>
                 )}
 
-                {/* ROI Controls */}
+                {/* ROI/Exclusion Controls */}
                 {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
-                        <span className="text-white text-xs self-center mr-2">Click to add points</span>
-                        <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
-                        <button onClick={handleSaveROI} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700">Save</button>
-                        <button onClick={() => setRoiMode(false)} className="px-2 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700">Cancel</button>
+                        <span className="text-white text-xs self-center mr-2">
+                            {roiMode === 'roi' ? 'Set Inclusion ROI' : 'Add Exclusion Zone'}
+                        </span>
+                        {roiMode === 'roi' ? (
+                            <>
+                                <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
+                                <button onClick={handleSaveROI} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700">Save ROI</button>
+                            </>
+                        ) : (
+                            <>
+                                <button onClick={() => setCurrentExclusionPoints([])} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Reset</button>
+                                <button onClick={handleSaveExclusionZone} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700">Add Zone</button>
+                            </>
+                        )}
+                        <button onClick={() => { setRoiMode(null); setCurrentExclusionPoints([]); }} className="px-2 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700">Cancel</button>
                     </div>
                 )}
 
@@ -325,13 +411,22 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             <Square className="h-4 w-4" />
                         </button>
                         {isAdmin && (
-                            <button
-                                onClick={(e) => { e.stopPropagation(); setRoiMode(!roiMode); }}
-                                title="Set Region of Interest"
-                                className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode && "bg-primary text-primary-foreground")}
-                            >
-                                <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
-                            </button>
+                            <>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'roi' ? null : 'roi'); }}
+                                    title="Set Inclusion ROI"
+                                    className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode === 'roi' && "bg-primary text-primary-foreground")}
+                                >
+                                    <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'exclusion' ? null : 'exclusion'); }}
+                                    title="Add Exclusion Zone"
+                                    className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode === 'exclusion' && "bg-red-600 text-white")}
+                                >
+                                    <AlertTriangle className="h-4 w-4" />
+                                </button>
+                            </>
                         )}
                     </div>
                 )}
@@ -364,8 +459,14 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             setShowBoundingBoxes={setShowBoundingBoxes}
                             showVehicleDetails={showVehicleDetails}
                             setShowVehicleDetails={setShowVehicleDetails}
-                            showROI={showROI}
-                            setShowROI={setShowROI}
+                                                    showROI={showROI}
+                                                    setShowROI={setShowROI}
+                                                    showExclusionZones={showExclusionZones}
+                                                    setShowExclusionZones={setShowExclusionZones}
+                                                    onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
+                                                    staticFilterEnabled={staticFilterEnabled}
+                            
+                            setStaticFilterEnabled={isAdmin ? handleToggleStaticFilter : undefined}
                             controlId={feed_id}
                         />
                     </div>
