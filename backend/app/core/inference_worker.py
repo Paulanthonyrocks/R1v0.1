@@ -13,83 +13,19 @@ from multiprocessing import Queue as MPQueue, Event
 from ..core.core_module import CoreModule
 from ..utils.monitoring import TrafficMonitor
 from ..utils.process import start_parent_monitor
+from .worker_utils import WorkerMetrics, make_serializable, serialize_tracked_vehicles
 
 logger = logging.getLogger("Inference")
 
-"""
-WORKER ARCHITECTURE:
-- ingestion_worker.py: Capture frames from source → central_input_queue
-  Use for: Multi-feed systems where AI is shared across feeds
-  
-- inference_worker.py: Process frames from central_input_queue → AI results
-  Use for: GPU-bound scenarios where one GPU serves multiple feeds
-  
-- processing_worker.py: All-in-one (capture + AI + visualization)
-  Use for: Single-feed systems or when each feed needs isolated processing
-  
-DO NOT MIX: Choose either (ingestion + inference) OR (processing) per deployment
-"""
 
-class WorkerMetrics:
-    def __init__(self, feed_id):
-        self.feed_id = feed_id
-        self.frames_processed = 0
-        self.frames_dropped = 0
-        self.errors = 0
-        self.start_time = time.time()
-    
-    def to_dict(self):
-        uptime = time.time() - self.start_time
-        return {
-            "feed_id": self.feed_id,
-            "frames_processed": self.frames_processed,
-            "frames_dropped": self.frames_dropped,
-            "errors": self.errors,
-            "uptime_seconds": uptime,
-            "fps": self.frames_processed / uptime if uptime > 0 else 0
-        }
-
-def _make_serializable(obj):
-    if isinstance(obj, (np.integer, np.int64, np.int32)):
-        return int(obj)
-    if isinstance(obj, (np.floating, np.float64, np.float32)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
-
-def _serialize_tracked_vehicles(tracked_vehicles: Dict[str, Dict], scale_x: float = 1.0, scale_y: float = 1.0) -> List[Dict[str, Any]]:
-    serialized_list = []
+def _serialize_tracked_vehicles_with_map(
+    tracked_vehicles: Dict[str, Dict], 
+    scale_x: float = 1.0, 
+    scale_y: float = 1.0
+) -> List[Dict[str, Any]]:
+    """Wrapper that uses CoreModule's vehicle_type_map."""
     v_map = CoreModule.vehicle_type_map if CoreModule else {}
-    
-    for vehicle_id, data in tracked_vehicles.items():
-        try:
-            c_id = data.get("class_id", -1)
-            c_name = v_map.get(c_id, "unknown")
-            bbox = data.get("bbox")
-            scaled_bbox = []
-            if bbox and len(bbox) == 4:
-                scaled_bbox = [bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y]
-
-            serialized_list.append({
-                "vehicle_id": str(vehicle_id),
-                "bbox": [_make_serializable(x) for x in scaled_bbox],
-                "speed": _make_serializable(data.get("speed", 0)),
-                "license_plate": str(data.get("license_plate", "Unknown")),
-                "class_id": int(c_id),
-                "class_name": c_name,
-                "behavior": str(data.get("behavior", "unknown")),
-                "confidence": _make_serializable(data.get("confidence", 0)),
-                "lane": int(data.get("lane", -1)),
-                "status": str(data.get("status", "unknown")),
-                "ground_centroid": [_make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
-                "car_model": data.get("car_model"),
-                "car_model_confidence": _make_serializable(data.get("car_model_confidence", 0)),
-            })
-        except Exception as e:
-            logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")
-            continue
-    return serialized_list
+    return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
 
 def inference_worker(
     worker_id: int,
@@ -109,7 +45,8 @@ def inference_worker(
     try:
         logging.config.dictConfig(config["logging"])
     except Exception as e:
-        print(f"DEBUG: Worker {worker_id} failed to init logging: {e}")
+        # Cannot use logger here as it may not be configured
+        pass  # Logging config failed, will use default
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
@@ -120,14 +57,14 @@ def inference_worker(
     signal.signal(signal.SIGINT, signal_handler)
 
     pid = os.getpid()
-    print(f"DEBUG: Inference process {pid} (Worker {worker_id}) entering initialization...")
+    logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
     logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
     
     # Start parent monitor to avoid zombies
-    print(f"DEBUG: [Worker {worker_id}] Starting parent monitor...")
+    logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
     start_parent_monitor(stop_event, f"Inference-{worker_id}")
     
-    print(f"DEBUG: [Worker {worker_id}] Initializing state containers...")
+    logger.debug(f"[Worker {worker_id}] Initializing state containers...")
     # Per-feed CoreModules and Monitors (lazy initialized)
     core_modules: Dict[str, CoreModule] = {}
     traffic_monitors: Dict[str, TrafficMonitor] = {}
@@ -218,7 +155,7 @@ def inference_worker(
     last_detection_mode = {} # feed_id -> bool
     last_metrics_log = time.time()
     
-    print(f"DEBUG: [Worker {worker_id}] Entering main loop...")
+    logger.debug(f"[Worker {worker_id}] Entering main loop...")
 
     try:
         while not stop_event.is_set():
@@ -373,7 +310,7 @@ def inference_worker(
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     logger.debug(f"[Worker {worker_id}] Cleared CUDA cache")
-            except:
-                pass
+            except Exception:
+                pass  # PyTorch may not be installed or CUDA unavailable
         
         logger.info(f"Inference process {os.getpid()} terminated.")

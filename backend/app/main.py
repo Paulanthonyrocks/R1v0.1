@@ -39,7 +39,7 @@ from app.database import get_database_manager
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
     incidents, personalized_routes, traffic_data, weather,
-    events, route_history, ws, video_ws, routes, vehicles,
+    events, route_history, ws, routes, vehicles,
 )
 
 # --- Constants & Setup ---
@@ -347,7 +347,6 @@ app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["
 app.include_router(traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"])
 app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
-app.include_router(video_ws.router, prefix="/api/v1", tags=["VideoWebSocket"])
 app.include_router(routes.router, prefix="/api/v1", tags=["General"])
 
 # --- Secure File Serving ---

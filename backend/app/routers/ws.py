@@ -5,6 +5,7 @@ from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
 from app.utils.auth_utils import verify_firebase_token
+from app.dependency_injection import is_admin as is_admin_check
 from app.models.websocket import (
     WebSocketMessage,
     WebSocketMessageTypeEnum,
@@ -101,41 +102,48 @@ async def message_receiver(
                     )
                     await connection_manager.send_personal_message(response.model_dump_json(), client_id)
 
-                elif msg_type == WebSocketMessageTypeEnum.START_FEED:
-                    try:
-                        feed_id_data = FeedIdData(**data)
-                        await feed_manager.start_feed(feed_id_data.feed_id)
-                    except Exception as e:
-                        logger.error(f"Error starting feed: {e}")
-                        # Optionally send error back to client
-
-                elif msg_type == WebSocketMessageTypeEnum.STOP_FEED:
-                    try:
-                        feed_id_data = FeedIdData(**data)
-                        await feed_manager.stop_feed(feed_id_data.feed_id)
-                    except Exception as e:
-                        logger.error(f"Error stopping feed: {e}")
-
-                elif msg_type == WebSocketMessageTypeEnum.RESTART_FEED:
-                    try:
-                        feed_id_data = FeedIdData(**data)
-                        await feed_manager.restart_feed(feed_id_data.feed_id)
-                    except Exception as e:
-                        logger.error(f"Error restarting feed: {e}")
+                elif msg_type in [
+                    WebSocketMessageTypeEnum.START_FEED,
+                    WebSocketMessageTypeEnum.STOP_FEED,
+                    WebSocketMessageTypeEnum.RESTART_FEED,
+                    WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG
+                ]:
+                    # Check Authorization
+                    user_role = connection_manager.get_user_role(client_id)
+                    if user_role != "admin":
+                        logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": f"Failed to restart feed: {str(e)}"}
+                                data={"message": "Unauthorized: Admin privileges required for feed control."}
                             ).model_dump_json(),
                             client_id
                         )
+                        continue
 
-                elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
+                    # Process Admin Commands
                     try:
-                        update_data = UpdateFeedConfigData(**data)
-                        await feed_manager.update_feed_config(update_data.feed_id, update_data.updates)
+                        if msg_type == WebSocketMessageTypeEnum.START_FEED:
+                            feed_id_data = FeedIdData(**data)
+                            await feed_manager.start_feed(feed_id_data.feed_id)
+                        elif msg_type == WebSocketMessageTypeEnum.STOP_FEED:
+                            feed_id_data = FeedIdData(**data)
+                            await feed_manager.stop_feed(feed_id_data.feed_id)
+                        elif msg_type == WebSocketMessageTypeEnum.RESTART_FEED:
+                            feed_id_data = FeedIdData(**data)
+                            await feed_manager.restart_feed(feed_id_data.feed_id)
+                        elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
+                            update_data = UpdateFeedConfigData(**data)
+                            await feed_manager.update_feed_config(update_data.feed_id, update_data.updates)
                     except Exception as e:
-                        logger.error(f"Error updating feed config: {e}")
+                        logger.error(f"Error processing {msg_type}: {e}")
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": f"Operation failed: {str(e)}"}
+                            ).model_dump_json(),
+                            client_id
+                        )
 
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
@@ -218,7 +226,7 @@ async def websocket_endpoint(
             return
 
         # Proceed with connection
-        await connection_manager.connect(websocket, client_id, user.username)
+        await connection_manager.connect(websocket, client_id, user.username, user.role)
 
         try:
             # Run the receiver loop directly.

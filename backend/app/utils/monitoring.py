@@ -117,7 +117,7 @@ class TrafficMonitor:
             )  # Get type, default to 'unknown'
             vehicle_type_counts[type_name] = vehicle_type_counts.get(type_name, 0) + 1
 
-        avg_speed_kmh = float(np.mean(speeds_list_kmh)) if speeds_list_kmh else 0.0
+        avg_speed_kmh = float(np.median(speeds_list_kmh)) if speeds_list_kmh else 0.0
 
         # Congestion level as percentage of stopped vehicles
         congestion_lvl_percent = (

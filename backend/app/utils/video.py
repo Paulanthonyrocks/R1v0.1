@@ -216,6 +216,22 @@ class FrameReader:
             "alive": self.thread.is_alive() if self.thread else False,
         }
 
+    @property
+    def isOpened(self) -> bool:
+        """
+        Check if the frame reader is actively reading frames.
+        
+        Provides API consistency with cv2.VideoCapture interface.
+        
+        Returns:
+            True if the reader thread is alive and video hasn't ended.
+        """
+        return (
+            self.thread is not None 
+            and self.thread.is_alive() 
+            and not self.end_of_video
+        )
+
 class FrameTimer:
     """Helper to calculate internal processing FPS"""
     def __init__(self, window_size: int = 100):

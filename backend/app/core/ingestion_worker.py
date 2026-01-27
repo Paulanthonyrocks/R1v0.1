@@ -11,41 +11,9 @@ from multiprocessing import Queue as MPQueue, Event
 
 from ..utils.video import FrameReader
 from ..utils.process import start_parent_monitor
+from .worker_utils import WorkerMetrics
 
 logger = logging.getLogger("Ingestion")
-
-"""
-WORKER ARCHITECTURE:
-- ingestion_worker.py: Capture frames from source → central_input_queue
-  Use for: Multi-feed systems where AI is shared across feeds
-  
-- inference_worker.py: Process frames from central_input_queue → AI results
-  Use for: GPU-bound scenarios where one GPU serves multiple feeds
-  
-- processing_worker.py: All-in-one (capture + AI + visualization)
-  Use for: Single-feed systems or when each feed needs isolated processing
-  
-DO NOT MIX: Choose either (ingestion + inference) OR (processing) per deployment
-"""
-
-class WorkerMetrics:
-    def __init__(self, feed_id):
-        self.feed_id = feed_id
-        self.frames_processed = 0
-        self.frames_dropped = 0
-        self.errors = 0
-        self.start_time = time.time()
-    
-    def to_dict(self):
-        uptime = time.time() - self.start_time
-        return {
-            "feed_id": self.feed_id,
-            "frames_processed": self.frames_processed,
-            "frames_dropped": self.frames_dropped,
-            "errors": self.errors,
-            "uptime_seconds": uptime,
-            "fps": self.frames_processed / uptime if uptime > 0 else 0
-        }
 
 def ingestion_worker(
     video_path: str,
@@ -63,7 +31,8 @@ def ingestion_worker(
     try:
         logging.config.dictConfig(config["logging"])
     except Exception as e:
-        print(f"DEBUG: Ingestion {feed_id} failed to init logging: {e}")
+        # Cannot use logger here as it may not be configured
+        pass  # Logging config failed, will use default
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
@@ -74,11 +43,11 @@ def ingestion_worker(
     signal.signal(signal.SIGINT, signal_handler)
 
     pid = os.getpid()
-    print(f"DEBUG: Ingestion process {pid} for {feed_id} entering initialization...")
+    logger.debug(f"Ingestion process {pid} for {feed_id} entering initialization...")
     logger.info(f"Ingestion process {pid} started for {feed_id}")
     
     # Start parent monitor to avoid zombies
-    print(f"DEBUG: [{feed_id}] Starting parent monitor...")
+    logger.debug(f"[{feed_id}] Starting parent monitor...")
     start_parent_monitor(stop_event, f"Ingestion-{feed_id}")
     
     metrics = WorkerMetrics(feed_id)
@@ -108,7 +77,7 @@ def ingestion_worker(
     last_fps_log = time.time()
     last_metrics_log = time.time()
 
-    print(f"DEBUG: [{feed_id}] Initializing FrameReader...")
+    logger.debug(f"[{feed_id}] Initializing FrameReader...")
     
     # Signal feed start
     try:
@@ -192,7 +161,8 @@ def ingestion_worker(
                         try:
                             # Put data in the central queue
                             # Format: (feed_id, frame_index, frame_bytes, metadata)
-                            central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=1.0)
+                            # Reduced timeout to 0.1s to avoid blocking ingestion pulse
+                            central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         except queue.Full:
                             metrics.frames_dropped += 1

@@ -484,6 +484,12 @@ export class WebSocketClient implements IWebSocketClient {
                     console.log(`[WebSocketClient ${this.instanceId}] Received INITIAL_FEED_STATUSES. Feeds:`, (message.data as any)?.feeds?.length);
                 }
 
+                if (message.type === WebSocketMessageType.ERROR_NOTIFICATION) {
+                    const errorData = message.data as { message?: string, error_code?: string };
+                    console.error(`[WebSocketClient ${this.instanceId}] Backend Error:`, errorData);
+                    this.notifyError(errorData.error_code || 'backend_error', errorData.message || 'An unexpected error occurred.');
+                }
+
                 this.notifyListeners(message.type, message.data);
             } catch (error) {
                 console.error(`[WebSocketClient ${this.instanceId}] Error handling WebSocket message:`, error, event.data);

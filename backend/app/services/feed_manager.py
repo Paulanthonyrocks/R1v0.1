@@ -37,7 +37,6 @@ from app.models.websocket import (
 )
 
 # Import core worker and utilities
-from app.core.processing_worker import process_video
 from app.core.ingestion_worker import ingestion_worker
 from app.core.inference_worker import inference_worker
 from app.utils.monitoring import check_system_resources
@@ -990,14 +989,15 @@ class FeedManager:
                 items_buffer = []
                 # Drain Central Output Queue
                 try:
-                    for _ in range(QUEUE_DRAIN_LIMIT):
+                    # Increased drain limit for high-throughput
+                    for _ in range(200):
                         items_buffer.append(self._central_output_queue.get_nowait())
                 except queue.Empty:
                     pass
 
                 if not items_buffer:
-                    # Adaptive sleep when idle
-                    await asyncio.sleep(0.01)
+                    # Adaptive sleep when idle (reduced for lower jitter)
+                    await asyncio.sleep(0.001)
                     # Still need to handle periodic tasks
                     await self._handle_periodic_tasks()
                     continue
@@ -1086,7 +1086,12 @@ class FeedManager:
                 await self._perform_broadcasts(feed_ids_to_update, False, False)
                 await self._handle_periodic_tasks()
 
-                await asyncio.sleep(0.001)
+                # If we processed a full buffer, skip sleep to maintain high throughput
+                # but yield control to other tasks
+                if len(items_buffer) < 200:
+                    await asyncio.sleep(0.001)
+                else:
+                    await asyncio.sleep(0)
 
             except Exception as e:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)
@@ -1113,15 +1118,22 @@ class FeedManager:
         loop = asyncio.get_running_loop()
         try:
             b64_frame = await loop.run_in_executor(self._cpu_executor, self._encode_frame, frame_bytes)
+            
+            # Pre-serialize message to JSON to avoid redundant work per client
             vid_msg = VideoFrameData(
                 feed_id=feed_id, frame_index=frame_idx,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 frame=b64_frame, metrics=metrics, vehicles=vehicles
             )
             msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
+            
             subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
-            for client_id in subscribed_client_ids:
-                await self._connection_manager.send_realtime_message(msg_json, client_id)
+            if not subscribed_client_ids:
+                return
+
+            # Parallel delivery to all clients on this feed
+            tasks = [self._connection_manager.send_realtime_message(msg_json, cid) for cid in subscribed_client_ids]
+            await asyncio.gather(*tasks)
         except Exception as e:
             logger.error(f"Broadcast error for {feed_id}: {e}")
 

@@ -93,7 +93,6 @@ def create_grid_overlay(
 def alpha_blend(foreground: np.ndarray, background: np.ndarray) -> np.ndarray:
     """Alpha blends the foreground image (with an alpha channel) onto the background image."""
     if foreground.shape[:2] != background.shape[:2]:
-        # Resize foreground to match background if dimensions differ
         foreground = cv2.resize(
             foreground,
             (background.shape[1], background.shape[0]),
@@ -101,41 +100,20 @@ def alpha_blend(foreground: np.ndarray, background: np.ndarray) -> np.ndarray:
         )
 
     if foreground.shape[2] != 4:
-        logger.warning(
-            "Foreground image for alpha blending does not have an alpha channel. Blending may not work as expected."
-        )
-        # Optionally, add an alpha channel here or return background
-        return background  # Or raise error
+        logger.warning("Foreground image for alpha blending does not have an alpha channel.")
+        return background
 
-    # Ensure background is 3-channel BGR
-    if (
-        background.shape[2] == 4
-    ):  # If background also has alpha, remove it or handle appropriately
-        background = cv2.cvtColor(background, cv2.COLOR_BGRA2BGR)
+    # Extract alpha and BGR
+    fg_bgr = foreground[:, :, :3]
+    alpha = foreground[:, :, 3:4].astype(np.float32) / 255.0
 
-    fg_b, fg_g, fg_r, fg_a = cv2.split(foreground)
+    # Ensure background is 3-channel
+    if background.shape[2] == 4:
+        background = background[:, :, :3]
 
-    # Normalize alpha channel to range 0-1
-    alpha = fg_a.astype(float) / 255.0
-
-    # Multiply foreground BGR channels by alpha
-    fg_b_w = (fg_b * alpha).astype(background.dtype)
-    fg_g_w = (fg_g * alpha).astype(background.dtype)
-    fg_r_w = (fg_r * alpha).astype(background.dtype)
-
-    # Multiply background BGR channels by (1 - alpha)
-    bg_b, bg_g, bg_r = cv2.split(background)
-    inv_alpha = 1.0 - alpha
-    bg_b_w = (bg_b * inv_alpha).astype(background.dtype)
-    bg_g_w = (bg_g * inv_alpha).astype(background.dtype)
-    bg_r_w = (bg_r * inv_alpha).astype(background.dtype)
-
-    # Add weighted channels
-    out_b = cv2.add(fg_b_w, bg_b_w)
-    out_g = cv2.add(fg_g_w, bg_g_w)
-    out_r = cv2.add(fg_r_w, bg_r_w)
-
-    return cv2.merge((out_b, out_g, out_r))
+    # Vectorized blending: out = fg * alpha + bg * (1 - alpha)
+    blended = (fg_bgr.astype(np.float32) * alpha + background.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+    return blended
 
 
 def visualize_data(
@@ -145,21 +123,20 @@ def visualize_data(
     visualization_options: Set[str],
     config: Dict[str, Any],
     feed_id: str = "",
+    lane_boundaries: Optional[List[int]] = None,
+    lane_lines: Optional[List[Tuple[int, int, int, int]]] = None
 ) -> Optional[np.ndarray]:
     global cached_lane_overlay, cached_grid_overlay, overlay_cache_size
 
     if frame is None:
-        logger.debug("visualize_data received None frame.")
         return None
 
     try:
+        # Avoid unnecessary copying and color conversions if possible
+        # We'll work on a 3-channel frame and only use alpha blending for specific overlays
         vis_frame = frame.copy()
         h, w = vis_frame.shape[:2]
         current_size = (w, h)
-
-        # Ensure vis_frame has an alpha channel for blending if needed later
-        if vis_frame.shape[2] == 3:
-            vis_frame = cv2.cvtColor(vis_frame, cv2.COLOR_BGR2BGRA)
 
         # --- Draw ROI Polygon ---
         roi_cfg = config.get("roi_processing", {})
@@ -181,22 +158,9 @@ def visualize_data(
             cached_grid_overlay = None
             overlay_cache_size = current_size
 
-        lane_cfg = config.get("lane_detection", {})
-        dynamic_lane_detection_enabled = lane_cfg.get("dynamic_lane_detection_enabled", False)
-
-        detected_lane_lines = None
-        lane_boundaries = None
-
-        if dynamic_lane_detection_enabled:
-            detected_lane_lines = process_frame_for_lanes(vis_frame, config)
-            if detected_lane_lines:
-                lane_boundaries = get_lane_boundaries_from_lines(w, detected_lane_lines, config)
-                logger.debug(f"[{feed_id}] Dynamically detected lane boundaries: {lane_boundaries}")
-            else:
-                logger.debug(f"[{feed_id}] No dynamic lane lines detected.")
-
-        # Fallback to static lane configuration if dynamic detection is disabled or fails
-        if not dynamic_lane_detection_enabled or not lane_boundaries:
+        # Use passed boundaries or fallback to static ones if not provided
+        if not lane_boundaries:
+            lane_cfg = config.get("lane_detection", {})
             num_lanes = lane_cfg.get("num_lanes", 0)
             lane_width = w / num_lanes if num_lanes > 0 else w
             if num_lanes > 0:
@@ -204,6 +168,9 @@ def visualize_data(
             else:
                 lane_boundaries = []
             logger.debug(f"[{feed_id}] Using static lane boundaries: {lane_boundaries}")
+        else:
+            logger.debug(f"[{feed_id}] Using provided lane boundaries: {lane_boundaries}")
+
 
         if "Grid Overlay" in visualization_options:
             if cached_grid_overlay is None or overlay_cache_size != current_size:  # Recreate if size changes
@@ -218,11 +185,11 @@ def visualize_data(
             )
             vis_frame = alpha_blend(lane_overlay, vis_frame)
 
-        # Draw detected lane lines if dynamic detection is enabled and lines are found
-        if dynamic_lane_detection_enabled and detected_lane_lines and "Lane Lines" in visualization_options:
-            for line in detected_lane_lines:
+        # Draw lane lines if provided
+        if lane_lines and "Lane Lines" in visualization_options:
+            for line in lane_lines:
                 x1, y1, x2, y2 = line
-                cv2.line(vis_frame, (x1, y1), (x2, y2), (0, 255, 255, 200), 2) # Cyan color for detected lines
+                cv2.line(vis_frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
         if (
             "Tracked Vehicles" in visualization_options

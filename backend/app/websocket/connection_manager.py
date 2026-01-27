@@ -28,6 +28,7 @@ class ConnectionManager:
         self._initialized = True
         self.active_connections: Dict[str, WebSocket] = {}
         self.client_id_to_user_id: Dict[str, str] = {}
+        self.client_id_to_user_role: Dict[str, str] = {} # New: Track user roles
         self.user_id_to_client_ids: Dict[str, List[str]] = {}
         self.topic_subscriptions: Dict[str, Set[str]] = {}
         self.client_id_to_topics: Dict[str, Set[str]] = {}
@@ -75,7 +76,7 @@ class ConnectionManager:
              cls._instance = ConnectionManager()
         return cls._instance
 
-    async def connect(self, websocket: WebSocket, client_id: str, user_id: str):
+    async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user"):
         if len(self.active_connections) >= self.max_connections:
             logger.warning(
                 f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
@@ -83,6 +84,7 @@ class ConnectionManager:
             await websocket.close(code=4000, reason="Connection limit exceeded")
             return
 
+        # ... (Collision logic) ...
         # Handle reconnection: Close existing connection if present
         if client_id in self.active_connections:
             logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
@@ -98,6 +100,7 @@ class ConnectionManager:
         # websocket.accept() is now handled by the endpoint router before calling connect
         self.active_connections[client_id] = websocket
         self.client_id_to_user_id[client_id] = user_id
+        self.client_id_to_user_role[client_id] = user_role # Store role
 
         if user_id not in self.user_id_to_client_ids:
             self.user_id_to_client_ids[user_id] = []
@@ -150,6 +153,7 @@ class ConnectionManager:
                 return
 
             del self.active_connections[client_id]
+            self.client_id_to_user_role.pop(client_id, None) # Remove role
             self.last_pong_received_time.pop(client_id, None)
             
             user_id = self.client_id_to_user_id.pop(client_id, None)
@@ -240,10 +244,17 @@ class ConnectionManager:
         for client_id in list(self.active_connections.keys()):
             await self.send_personal_message(message, client_id)
 
+    def get_user_role(self, client_id: str) -> str:
+        """Helper to get user role for authorization."""
+        return self.client_id_to_user_role.get(client_id, "user")
+
     async def broadcast_realtime(self, message: str):
         """Broadcast fire-and-forget message to all."""
+        tasks = []
         for client_id in list(self.active_connections.keys()):
-            await self.send_realtime_message(message, client_id)
+            tasks.append(self.send_realtime_message(message, client_id))
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])

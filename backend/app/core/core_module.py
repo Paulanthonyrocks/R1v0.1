@@ -171,6 +171,8 @@ class CoreModule:
         self.reid_timeout = vehicle_cfg.get("reid_timeout", 10)
         self.max_active_tracks = vehicle_cfg.get("max_active_tracks", 50)
         self.max_reid_per_frame = vehicle_cfg.get("max_reid_per_frame", 2)
+        self.nms_threshold = vehicle_cfg.get("nms_threshold", 0.45)
+        self.stationary_cleanup_timeout = behavior_cfg.get("stationary_cleanup_timeout", 14400) # 4 hours default
         
         # Fix #30: Validate yolo_imgsz
         self.yolo_imgsz = vehicle_cfg.get("yolo_imgsz", 640)
@@ -232,6 +234,7 @@ class CoreModule:
         self.lane_detection_interval = lane_cfg.get("lane_detection_interval", 10)
         self.last_lane_detection_frame = -1
         self.cached_lane_boundaries = None
+        self.last_detected_lane_lines = None
 
         # Initialize OCR Preprocessor (Gemini)
         if self.ocr_cfg.get("enabled", False) and self.gemini_api_key and self.ocr_cfg.get("use_gemini_ocr", False):
@@ -500,6 +503,7 @@ class CoreModule:
             if self.dynamic_lane_detection_enabled and process_frame_for_lanes and (frame_index - self.last_lane_detection_frame) >= self.lane_detection_interval:
                 try:
                     lines = process_frame_for_lanes(frame, self.config)
+                    self.last_detected_lane_lines = lines
                     if lines and get_lane_boundaries_from_lines:
                         self.cached_lane_boundaries = get_lane_boundaries_from_lines(
                             frame.shape[1],
@@ -521,11 +525,8 @@ class CoreModule:
             logger.debug("Removing stale tracks")
             self._remove_stale_tracks(current_time, used_track_timeout)
             
-            # Fix #21: Only deduplicate every N frames or when track count is high
-            dedupe_interval = 10
-            dedupe_threshold = 30
-            if (frame_index % dedupe_interval == 0) or (len(self.vehicle_data) > dedupe_threshold):
-                self.vehicle_data = self._deduplicate_tracks(self.vehicle_data)
+            # Deduplicate on every detection frame to ensure visual consistency
+            self.vehicle_data = self._deduplicate_tracks(self.vehicle_data)
             
             # Filter tracks for visualization: only show active or recently predicting
             # This prevents long-lived "ghosts" (kept for ReID) from cluttering the screen
@@ -545,14 +546,14 @@ class CoreModule:
             # Process OCR results AFTER all updates are done
             self._process_ocr_results()
 
-            return vis_tracks
+            return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
 
         except Exception as e:
             logger.error(
                 f"Frame {frame_index}: Unhandled error in detect_and_track: {e}",
                 exc_info=True,
             )
-            return {}
+            return {}, None, None
 
     def _detect_vehicles(
         self, frame: np.ndarray, frame_index: int, confidence_threshold: float
@@ -698,7 +699,7 @@ class CoreModule:
             nms_class_ids.append(int(class_ids[i]))
 
         # Apply Non-Maximum Suppression (NMS)
-        indices = cv2.dnn.NMSBoxes(nms_boxes, nms_scores, confidence_threshold, 0.45)
+        indices = cv2.dnn.NMSBoxes(nms_boxes, nms_scores, confidence_threshold, self.nms_threshold)
         
         if len(indices) > 0:
             # Flatten indices if needed (depends on OpenCV version)
@@ -737,7 +738,7 @@ class CoreModule:
                     detections.append(((x1, y1, x2, y2), float(conf), int(cls)))
         return detections
 
-    def predict_only(self, frame_index: int) -> Dict[str, Dict]:
+    def predict_only(self, frame_index: int) -> Tuple[Dict[str, Dict], Optional[List[int]], Optional[List[Tuple[int, int, int, int]]]]:
         """
         Predicts the next state of existing tracks without running detection.
         Useful for maintaining high FPS when detection is skipped.
@@ -822,13 +823,18 @@ class CoreModule:
                 track["last_speed_update_time"] = current_time
             else:
                 self.vehicle_data.pop(vehicle_id, None)
+            
+            # Fix #32: Explicitly remove stale tracks during prediction to prevent memory growth
+            if (current_time - track["last_seen"]) > self.track_timeout:
+                self.vehicle_data.pop(vehicle_id, None)
 
         # Deduplicate to prevent overlapping ghost boxes
         # We use a stricter IoU for predicting tracks
         self.vehicle_data = self._deduplicate_tracks(self.vehicle_data, iou_threshold=0.6)
         
         # Return only the tracks we want to render/process this frame
-        return {vid: t for vid, t in predicted_tracks.items() if t["status"] == "predicting" and t["confidence"] > 0.1}
+        vis_tracks = {vid: t for vid, t in predicted_tracks.items() if t["status"] == "predicting" and t["confidence"] > 0.1}
+        return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
 
     def _deduplicate_tracks(self, tracks: Dict[str, Dict], iou_threshold: float = 0.6) -> Dict[str, Dict]:
         """
@@ -1095,8 +1101,20 @@ class CoreModule:
                 stale_tracks.append(vehicle_id)
 
         for vehicle_id in stale_tracks:
-            self.vehicle_data.pop(vehicle_id)
+            self.vehicle_data.pop(vehicle_id, None)
             logger.debug(f"Removed stale/out-of-ROI track {vehicle_id}")
+
+        # Stationary Object Eviction: remove objects that have been static for too long
+        stationary_to_remove = []
+        for vid, track in self.vehicle_data.items():
+            if track.get("is_static_object"):
+                stationary_duration = current_time - track.get("stationary_start_time", current_time)
+                if stationary_duration > self.stationary_cleanup_timeout:
+                    stationary_to_remove.append(vid)
+        
+        for vid in stationary_to_remove:
+            self.vehicle_data.pop(vid, None)
+            logger.info(f"Evicted long-term stationary object {vid} after {self.stationary_cleanup_timeout}s")
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
         for vehicle_id, data in tracked_vehicles.items():
@@ -1521,9 +1539,19 @@ class CoreModule:
             logger.error(f"Error in _run_ocr thread for {track_id}: {e}")
 
     def _get_dynamic_pixels_per_meter(self, y_pixel: float) -> float:
-        # Placeholder for dynamic PPM logic (e.g., using perspective transform)
-        # For now, return a constant or implement a lookup based on y_pixel
-        return self.pixels_per_meter
+        """
+        Calculates dynamic Pixels Per Meter (PPM) based on the Y-coordinate to account for perspective.
+        Objects further away (higher Y in screen space, if looking down) appear smaller.
+        This assumes a linear relationship for simplicity.
+        """
+        frame_height = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])[1]
+        
+        # Calibration point is usually at the bottom (near camera)
+        # We assume PPM decreases as we go up the frame (towards the horizon)
+        # Simple linear model: PPM(y) = baseline_PPM * (y / frame_height)
+        # Clamped to at least 20% of baseline to avoid division by zero or extreme speeds
+        factor = max(0.2, y_pixel / frame_height)
+        return self.pixels_per_meter * factor
 
     def _analyze_behavior(self, track: Dict):
         # Example behaviors: stopped, speeding, accelerating, decelerating, changing lane
