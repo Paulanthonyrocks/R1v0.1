@@ -164,6 +164,8 @@ class CoreModule:
         
         # Configuration parameters from config
         vehicle_cfg = self.config.get("vehicle_detection", {})
+        behavior_cfg = self.config.get("behavior_analysis", {})
+        
         self.vehicle_class_ids = vehicle_cfg.get("vehicle_class_ids", [])
         self.confidence_threshold = vehicle_cfg.get("confidence_threshold", 0.4)
         self.proximity_threshold = vehicle_cfg.get("proximity_threshold", 60)
@@ -207,7 +209,6 @@ class CoreModule:
             self._update_homography(vehicle_cfg["calibration"])
 
         self.ocr_cfg = self.config.get("ocr_engine", {})
-        behavior_cfg = self.config.get("behavior_analysis", {})
         self.stopped_speed_threshold_kmh = behavior_cfg.get("stopped_speed_threshold_kmh", 5)
         self.speed_limit = behavior_cfg.get("speed_limit", 60)
         self.accel_threshold_mps2 = behavior_cfg.get("accel_threshold_mps2", 0.5)
