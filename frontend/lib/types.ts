@@ -34,6 +34,7 @@ export interface FeedStatusData {
     queue_lengths?: Record<string, number>;
     [key: string]: unknown; // Allow for other potential metrics
   } | null;
+  latest_vehicles?: any[]; // Array of vehicle data
 }
 
 export interface AlertData {
@@ -218,6 +219,7 @@ export interface SurveillanceFeedMessage {
   // Additional instantaneous metrics
   stopped_vehicles?: number;
   congestion_level_percent?: number;
+  congestion_index?: number; // Alias or alternative naming
   is_congested?: boolean;
 
   // Individual vehicle data is now sent directly in VideoFrameMessage.vehicles
@@ -240,5 +242,7 @@ export interface VideoFrameMessage {
     confidence: number;
     is_occluded: boolean;
     lane: number;
+    vx?: number;
+    vy?: number;
   }[];
 }

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import { Incident, IncidentStatus, IncidentSeverity } from '@/lib/types/incident';
-import { AlertTriangle, CheckCircle, Clock, Search, Filter } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, Search, Filter, RefreshCw, Loader2, ShieldCheck, MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';

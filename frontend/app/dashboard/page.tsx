@@ -286,7 +286,7 @@ const DashboardPage: React.FC = () => {
                 {/* AI Insights */}
                 <AIInsightsPanel
                     metrics={kpis}
-                    feedName={feeds.length > 0 ? feeds[0].name : "System"}
+                    feedName={feeds.length > 0 ? (feeds[0].name ?? "Feed " + feeds[0].feed_id) : "System"}
                 />
 
                 {/* Eco Stats */}

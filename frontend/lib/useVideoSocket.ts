@@ -15,8 +15,8 @@ interface VehicleFrontendData {
     is_occluded: boolean;
     lane: number;
     status?: string;
-    vx: number;
-    vy: number;
+    vx?: number;
+    vy?: number;
 }
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -288,15 +288,15 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     ctx.strokeRect(sx1, sy1, sw, sh);
 
                     // --- Trajectory Projection ---
-                    if (showTrajectories && (Math.abs(v.vx) > 0.1 || Math.abs(v.vy) > 0.1)) {
+                    if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.1 || Math.abs(v.vy ?? 0) > 0.1)) {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
 
                         // Project 1.5 seconds ahead
                         // vx/vy are in pixels/frame (at current FPS)
                         // We'll normalize to a reasonable length
-                        const projX = cx + v.vx * 30 * scaleX;
-                        const projY = cy + v.vy * 30 * scaleY;
+                        const projX = cx + (v.vx ?? 0) * 30 * scaleX;
+                        const projY = cy + (v.vy ?? 0) * 30 * scaleY;
 
                         ctx.beginPath();
                         ctx.moveTo(cx, cy);

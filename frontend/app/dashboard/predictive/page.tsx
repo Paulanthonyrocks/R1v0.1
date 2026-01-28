@@ -70,7 +70,7 @@ export default function PredictivePage() {
                                     key={f.feed_id}
                                     className={cn(
                                         "px-4 py-2 font-black text-[10px] uppercase border-2 transition-all",
-                                        selectedId === f.feed_id 
+                                        selectedFeed === f.feed_id 
                                             ? "bg-lcd-text text-lcd-bg border-lcd-text" 
                                             : "border-lcd-text/20 hover:border-lcd-text/50 opacity-60 hover:opacity-100"
                                     )}

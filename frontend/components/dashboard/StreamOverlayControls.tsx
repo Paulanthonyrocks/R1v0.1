@@ -58,6 +58,8 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   onClearExclusionZones,
   staticFilterEnabled,
   setStaticFilterEnabled,
+  showTrajectories,
+  setShowTrajectories,
   controlId,
 }) => {
   return (
