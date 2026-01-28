@@ -9,6 +9,11 @@ import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
 import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
@@ -37,6 +42,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
     const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);
     const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -73,6 +79,14 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
             }
         }
     }, [status]);
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            setIsFullscreen(document.fullscreenElement === containerRef.current);
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
 
     const handleToggleStaticFilter = (enabled: boolean) => {
         setStaticFilterEnabled(enabled);
@@ -286,20 +300,64 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (showControlsPanel && containerRef.current && !containerRef.current.contains(event.target as Node)) {
+            // Only handle click outside for the custom inline panel (when in fullscreen)
+            if (isFullscreen && showControlsPanel && containerRef.current && !containerRef.current.contains(event.target as Node)) {
                 setShowControlsPanel(false);
             }
         };
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [showControlsPanel, containerRef]);
+    }, [showControlsPanel, containerRef, isFullscreen]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'f' || e.key === 'F') {
             toggleFullScreen();
         }
     };
+
+    const renderOverlayControls = () => (
+        <>
+            {/* Congestion Gauge Overlay - Integrated here to show in both Dropdown and Fullscreen if needed, 
+                but usually we only want it in the fullscreen panel or as a separate overlay. 
+                Upstream put it inside the panel. */}
+            {metrics && (
+                <div className="flex flex-col items-end gap-1 mb-4 p-2 bg-black/40 rounded border border-lcd-text/20">
+                    <div className="text-[10px] text-lcd-text/70 uppercase tracking-tighter font-lcd">Congestion</div>
+                    <div className="w-24 h-1.5 bg-black/40 border border-lcd-text/20 overflow-hidden">
+                        <div
+                            className={cn(
+                                "h-full transition-all duration-500",
+                                (metrics.congestion_index || 0) > 70 ? "bg-red-500" :
+                                    (metrics.congestion_index || 0) > 40 ? "bg-yellow-500" : "bg-primary"
+                            )}
+                            style={{ width: `${metrics.congestion_index || 0}%` }}
+                        />
+                    </div>
+                    <div className="text-[8px] text-lcd-text/50 font-lcd uppercase">Index: {metrics.congestion_index || 0}%</div>
+                </div>
+            )}
+            
+            <StreamOverlayControls
+                showOverlays={showOverlays}
+                setShowOverlays={setShowOverlays}
+                showBoundingBoxes={showBoundingBoxes}
+                setShowBoundingBoxes={setShowBoundingBoxes}
+                showVehicleDetails={showVehicleDetails}
+                setShowVehicleDetails={setShowVehicleDetails}
+                showROI={showROI}
+                setShowROI={setShowROI}
+                showTrajectories={showTrajectories}
+                setShowTrajectories={setShowTrajectories}
+                showExclusionZones={showExclusionZones}
+                setShowExclusionZones={setShowExclusionZones}
+                onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
+                staticFilterEnabled={staticFilterEnabled}
+                setStaticFilterEnabled={isAdmin ? handleToggleStaticFilter : undefined}
+                controlId={feed_id}
+            />
+        </>
+    );
 
     return (
         <Card
@@ -434,13 +492,35 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
                 {!isToggling && !isLoading && !error && !minimalControls && (
                     <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                        <button
-                            className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
-                            onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
-                            title="Overlay Controls"
-                        >
-                            <Settings className="h-4 w-4" />
-                        </button>
+                         {isFullscreen ? (
+                            <button
+                                className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
+                                onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
+                                title="Overlay Controls"
+                            >
+                                <Settings className="h-4 w-4" />
+                            </button>
+                        ) : (
+                            <DropdownMenu open={showControlsPanel} onOpenChange={setShowControlsPanel}>
+                                <DropdownMenuTrigger asChild>
+                                    <button
+                                        className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
+                                        title="Overlay Controls"
+                                        onClick={(e) => e.stopPropagation()} // Prevent trigger from bubbling
+                                    >
+                                        <Settings className="h-4 w-4" />
+                                    </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent 
+                                    className="p-0 border-0 bg-transparent shadow-none" 
+                                    align="end"
+                                    side="right"
+                                    sideOffset={5}
+                                >
+                                    {renderOverlayControls()}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
                         <button
                             className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
                             onClick={(e) => { e.stopPropagation(); toggleFullScreen(); }}
@@ -450,47 +530,10 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         </button>
                     </div>
                 )}
-
-                {showControlsPanel && (
+                
+                {isFullscreen && showControlsPanel && (
                     <div className="absolute top-12 right-8 z-30">
-                        {/* Congestion Gauge Overlay */}
-                        {metrics && (
-                            <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-1">
-                                <div className="text-[10px] text-lcd-text/70 uppercase tracking-tighter font-lcd">Congestion</div>
-                                <div className="w-24 h-1.5 bg-black/40 border border-lcd-text/20 overflow-hidden">
-                                    <div
-                                        className={cn(
-                                            "h-full transition-all duration-500",
-                                            (metrics.congestion_index || 0) > 70 ? "bg-red-500" :
-                                                (metrics.congestion_index || 0) > 40 ? "bg-yellow-500" : "bg-primary"
-                                        )}
-                                        style={{ width: `${metrics.congestion_index || 0}%` }}
-                                    />
-                                </div>
-                                <div className="text-[8px] text-lcd-text/50 font-lcd uppercase">Index: {metrics.congestion_index || 0}%</div>
-                            </div>
-                        )}
-
-                        {/* Stream Controls Overlay (Top Right) */}
-                        <StreamOverlayControls
-                            showOverlays={showOverlays}
-                            setShowOverlays={setShowOverlays}
-                            showBoundingBoxes={showBoundingBoxes}
-                            setShowBoundingBoxes={setShowBoundingBoxes}
-                            showVehicleDetails={showVehicleDetails}
-                            setShowVehicleDetails={setShowVehicleDetails}
-                            showROI={showROI}
-                            setShowROI={setShowROI}
-                            showTrajectories={showTrajectories}
-                            setShowTrajectories={setShowTrajectories}
-                            showExclusionZones={showExclusionZones}
-                            setShowExclusionZones={setShowExclusionZones}
-                            onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
-                            staticFilterEnabled={staticFilterEnabled}
-
-                            setStaticFilterEnabled={isAdmin ? handleToggleStaticFilter : undefined}
-                            controlId={feed_id}
-                        />
+                        {renderOverlayControls()}
                     </div>
                 )}
 

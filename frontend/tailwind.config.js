@@ -58,8 +58,8 @@ const config = {
                     light: 'hsl(var(--matrix-light))',
                     dark: 'hsl(var(--matrix-dark))',
                 },
-                'lcd-bg': 'var(--lcd-bg)',
-                'lcd-text': 'var(--lcd-text)',
+                'lcd-bg': 'rgb(var(--lcd-bg-rgb) / <alpha-value>)',
+                'lcd-text': 'rgb(var(--lcd-text-rgb) / <alpha-value>)',
                 warning: { // New semantic color
                   DEFAULT: "hsl(var(--warning))",
                   foreground: "hsl(var(--warning-foreground))",

@@ -113,125 +113,155 @@ export default function IncidentsPage() {
 
     return (
         <DashboardShell>
-            <div className="flex flex-col space-y-6">
-                <div className="flex justify-between items-center">
+            <div className="retro-title-container">
+                <div className="flex flex-col md:flex-row justify-between items-end gap-4">
                     <div>
-                        <h1 className="text-3xl font-bold font-lcd matrix-glow tracking-wider text-lcd-text">INCIDENT COMMAND</h1>
-                        <p className="text-lcd-text/60 font-lcd">Monitor and manage active traffic incidents</p>
+                        <h1 className="text-5xl font-black uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-1">Incident Command</h1>
+                        <div className="flex items-center gap-2">
+                            <span className="terminal-text text-[10px]">AUTH.OPERATOR_SECURE // INCIDENT_PROTOCOLS_ENABLED</span>
+                        </div>
                     </div>
-                    <Button onClick={fetchIncidents} variant="outline" className="border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg font-lcd">
-                        REFRESH DATA
+                    <Button onClick={fetchIncidents} className="matrix-btn-sleek h-12 px-8">
+                        <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+                        RESYNC DATABASE
                     </Button>
                 </div>
+            </div>
 
-                {/* Filters */}
-                <div className="flex gap-4 p-4 matrix-card rounded-lg items-center">
-                    <div className="relative flex-1">
-                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-lcd-text/50" />
+            {/* Filters Bar */}
+            <div className="matrix-card p-0 mb-8 overflow-hidden">
+                <div className="matrix-card-header bg-lcd-text/10">
+                    <div className="flex items-center gap-2">
+                        <Filter size={14} />
+                        <span>Filter Matrix // Registry Query</span>
+                    </div>
+                </div>
+                <div className="p-4 flex flex-col md:flex-row gap-6 items-center bg-lcd-text/5">
+                    <div className="relative flex-1 w-full">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-lcd-text/50" />
                         <Input
-                            placeholder="Search incidents..."
-                            className="pl-8 bg-black/20 border-lcd-text/30 text-lcd-text font-lcd"
+                            placeholder="QUERY BY DESCRIPTION OR CLASSIFICATION..."
+                            className="pl-10 bg-black/10 border-2 border-lcd-text/30 text-lcd-text font-lcd h-12 uppercase placeholder:text-lcd-text/30 focus-visible:ring-lcd-text"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-[180px] bg-black/20 border-lcd-text/30 text-lcd-text font-lcd">
-                            <SelectValue placeholder="Filter by Status" />
+                        <SelectTrigger className="w-full md:w-[240px] bg-black/10 border-2 border-lcd-text/30 text-lcd-text font-lcd h-12 uppercase">
+                            <SelectValue placeholder="STATUS" />
                         </SelectTrigger>
-                        <SelectContent className="bg-lcd-bg border-lcd-text text-lcd-text font-lcd">
-                            <SelectItem value="ALL">All Statuses</SelectItem>
-                            <SelectItem value={IncidentStatus.NEW}>New</SelectItem>
-                            <SelectItem value={IncidentStatus.ACKNOWLEDGED}>Acknowledged</SelectItem>
-                            <SelectItem value={IncidentStatus.RESOLVED}>Resolved</SelectItem>
+                        <SelectContent className="bg-lcd-bg border-2 border-lcd-text text-lcd-text font-lcd">
+                            <SelectItem value="ALL">ALL REGISTRIES</SelectItem>
+                            <SelectItem value={IncidentStatus.NEW}>UNRESOLVED (NEW)</SelectItem>
+                            <SelectItem value={IncidentStatus.ACKNOWLEDGED}>PENDING (ACK)</SelectItem>
+                            <SelectItem value={IncidentStatus.RESOLVED}>ARCHIVED (RESOLVED)</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>
+            </div>
 
-                {/* Incident List */}
-                <div className="grid gap-4">
-                    {loading && incidents.length === 0 ? (
-                         <div className="text-center py-20 text-lcd-text/50 font-lcd">Loading incidents...</div>
-                    ) : filteredIncidents.length === 0 ? (
-                        <div className="text-center py-20 text-lcd-text/50 font-lcd border border-dashed border-lcd-text/30 rounded-lg">
-                            No incidents found matching your criteria.
-                        </div>
-                    ) : (
-                        filteredIncidents.map((incident) => (
-                            <Card key={incident.id} className="matrix-card border-l-4 border-l-lcd-text hover:bg-lcd-text/5 transition-colors">
-                                <CardHeader className="pb-2">
-                                    <div className="flex justify-between items-start">
-                                        <div className="space-y-1">
-                                            <CardTitle className="text-xl font-lcd tracking-wide flex items-center gap-2">
-                                                {incident.type.replace(/_/g, " ")}
-                                                <Badge variant="outline" className={cn("font-lcd ml-2", getSeverityColor(incident.severity))}>
-                                                    {incident.severity}
-                                                </Badge>
-                                            </CardTitle>
-                                            <CardDescription className="text-lcd-text/70 font-lcd">
-                                                Reported: {new Date(incident.created_at).toLocaleString()}
-                                            </CardDescription>
-                                        </div>
-                                        <div className={cn("font-bold font-lcd", getStatusColor(incident.status))}>
-                                            {incident.status}
+            {/* Incident List */}
+            <div className="space-y-6">
+                {loading && incidents.length === 0 ? (
+                    <div className="matrix-card py-24 flex flex-col items-center justify-center border-dashed border-4 opacity-30">
+                         <Loader2 className="animate-spin h-12 w-12 mb-4" />
+                         <p className="tracking-[0.5em] font-black text-2xl uppercase">Polling Active Threads...</p>
+                    </div>
+                ) : filteredIncidents.length === 0 ? (
+                    <div className="matrix-card py-24 flex flex-col items-center justify-center border-dashed border-4 opacity-30">
+                        <ShieldCheck size={48} className="mb-4" />
+                        <p className="tracking-[0.3em] font-black text-xl uppercase text-center">No Incidents Found // Area Clear</p>
+                    </div>
+                ) : (
+                    filteredIncidents.map((incident) => (
+                        <div key={incident.id} className="matrix-card p-0 group overflow-hidden border-l-[12px] border-l-lcd-text">
+                            <div className="matrix-card-header bg-lcd-text/5">
+                                <div className="flex items-center gap-4">
+                                    <span className="text-lg font-black tracking-tighter">
+                                        {incident.type.replace(/_/g, " ")}
+                                    </span>
+                                    <div className={cn(
+                                        "px-2 py-0.5 text-[10px] font-black uppercase border-2",
+                                        incident.severity === IncidentSeverity.CRITICAL ? "severity-critical" :
+                                        incident.severity === IncidentSeverity.HIGH ? "severity-high" :
+                                        incident.severity === IncidentSeverity.MEDIUM ? "severity-medium" : "severity-low"
+                                    )}>
+                                        {incident.severity}
+                                    </div>
+                                </div>
+                                <div className={cn("font-black tracking-widest text-[10px] px-3 py-1 border-2", 
+                                    incident.status === IncidentStatus.NEW ? "bg-red-600/10 text-red-600 border-red-600" :
+                                    incident.status === IncidentStatus.ACKNOWLEDGED ? "bg-yellow-500/10 text-yellow-600 border-yellow-600" :
+                                    "bg-green-600/10 text-green-700 border-green-700"
+                                )}>
+                                    {incident.status.toUpperCase()}
+                                </div>
+                            </div>
+                            
+                            <div className="p-6 grid md:grid-cols-4 gap-8 bg-lcd-text/[0.02]">
+                                {incident.snapshot_path && (
+                                    <div className="md:col-span-1">
+                                        <div className="relative group cursor-zoom-in aspect-square bg-black/20 border-2 border-lcd-text overflow-hidden shadow-inner">
+                                            <img 
+                                                src={getSnapshotUrl(incident.snapshot_path)} 
+                                                alt="Evidence" 
+                                                className="w-full h-full object-cover transition-all group-hover:scale-110 filter grayscale group-hover:grayscale-0"
+                                            />
+                                            <div className="absolute inset-0 bg-lcd-text/10 group-hover:bg-transparent transition-colors" />
+                                            <div className="absolute bottom-2 right-2 bg-black/80 text-white text-[8px] px-1.5 py-0.5 font-lcd">
+                                                EVIDENCE_01
+                                            </div>
                                         </div>
                                     </div>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="grid md:grid-cols-3 gap-6">
-                                        {incident.snapshot_path && (
-                                            <div className="relative group cursor-zoom-in aspect-video bg-black/20 border border-lcd-text/20 overflow-hidden">
-                                                <img 
-                                                    src={getSnapshotUrl(incident.snapshot_path)} 
-                                                    alt="Incident Evidence" 
-                                                    className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                                                />
-                                                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 transition-opacity">
-                                                    <span className="text-[10px] font-lcd text-white uppercase tracking-widest">View Full Record</span>
+                                )}
+                                
+                                <div className={cn("flex flex-col justify-between", incident.snapshot_path ? "md:col-span-2" : "md:col-span-3")}>
+                                    <div className="space-y-4">
+                                        <p className="text-2xl font-bold leading-tight uppercase tracking-tight">{incident.description}</p>
+                                        <div className="grid grid-cols-2 gap-4 text-[10px] font-bold opacity-60">
+                                            <div className="flex items-center gap-2 uppercase">
+                                                <AlertTriangle size={14} /> Node_ID: {incident.feed_id}
+                                            </div>
+                                            <div className="flex items-center gap-2 uppercase">
+                                                <Clock size={14} /> Reported: {new Date(incident.created_at).toLocaleTimeString()}
+                                            </div>
+                                            {incident.latitude && (
+                                                <div className="flex items-center gap-2 uppercase">
+                                                    <MapPin size={14} /> LOC: {incident.latitude.toFixed(4)}N, {incident.longitude?.toFixed(4)}E
                                                 </div>
-                                            </div>
-                                        )}
-                                        <div className={cn(incident.snapshot_path ? "md:col-span-1" : "md:col-span-2")}>
-                                            <p className="text-lg mb-2">{incident.description}</p>
-                                            <div className="space-y-1">
-                                                {incident.feed_id && (
-                                                    <div className="text-sm opacity-60 flex items-center gap-1">
-                                                        <AlertTriangle size={14} /> Source: {incident.feed_id}
-                                                    </div>
-                                                )}
-                                                {incident.latitude && (
-                                                    <div className="text-sm opacity-60 font-lcd">
-                                                        LOC: {incident.latitude.toFixed(4)}, {incident.longitude?.toFixed(4)}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <div className="flex justify-end items-center gap-2">
-                                            {incident.status === IncidentStatus.NEW && (
-                                                <Button 
-                                                    size="sm"
-                                                    onClick={() => handleUpdateStatus(incident.id, IncidentStatus.ACKNOWLEDGED)}
-                                                    className="bg-yellow-500/20 text-yellow-500 border border-yellow-500 hover:bg-yellow-500 hover:text-black font-lcd"
-                                                >
-                                                    <Clock className="mr-2 h-4 w-4" /> Acknowledge
-                                                </Button>
-                                            )}
-                                            {incident.status !== IncidentStatus.RESOLVED && (
-                                                <Button 
-                                                    size="sm"
-                                                    onClick={() => handleUpdateStatus(incident.id, IncidentStatus.RESOLVED)}
-                                                    className="bg-green-500/20 text-green-500 border border-green-500 hover:bg-green-500 hover:text-black font-lcd"
-                                                >
-                                                    <CheckCircle className="mr-2 h-4 w-4" /> Resolve
-                                                </Button>
                                             )}
                                         </div>
                                     </div>
-                                </CardContent>
-                            </Card>
-                        ))
-                    )}
-                </div>
+                                    
+                                    <div className="pt-4 border-t border-lcd-text/10 mt-4 flex gap-3">
+                                        {incident.status === IncidentStatus.NEW && (
+                                            <Button 
+                                                onClick={() => handleUpdateStatus(incident.id, IncidentStatus.ACKNOWLEDGED)}
+                                                className="matrix-btn-sleek bg-yellow-400 text-black border-yellow-600 hover:bg-yellow-500 h-10 px-6 text-xs"
+                                            >
+                                                <Clock className="mr-2 h-4 w-4" /> Acknowledge
+                                            </Button>
+                                        )}
+                                        {incident.status !== IncidentStatus.RESOLVED && (
+                                            <Button 
+                                                onClick={() => handleUpdateStatus(incident.id, IncidentStatus.RESOLVED)}
+                                                className="matrix-btn-sleek bg-green-500 text-black border-green-700 hover:bg-green-600 h-10 px-6 text-xs"
+                                            >
+                                                <CheckCircle className="mr-2 h-4 w-4" /> Resolve & Archive
+                                            </Button>
+                                        )}
+                                        <Button 
+                                            variant="outline"
+                                            className="matrix-btn-sleek h-10 border-lcd-text/30 text-lcd-text/50 hover:text-lcd-text px-4"
+                                        >
+                                            View Logs
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ))
+                )}
             </div>
         </DashboardShell>
     );

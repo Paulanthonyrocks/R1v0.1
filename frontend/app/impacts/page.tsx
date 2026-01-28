@@ -1,25 +1,36 @@
+"use client";
+
 import React from 'react';
-import WeatherEventImpactPanel from '../../components/WeatherEventImpactPanel';
-import { Signal, Clock, BatteryFull } from 'lucide-react';
+import DashboardShell from '@/components/dashboard/DashboardShell';
+import WeatherEventImpactPanel from '@/components/WeatherEventImpactPanel';
+import AuthGuard from '@/components/auth/AuthGuard';
+import { UserRole } from '@/lib/auth/roles';
 
 const ImpactsPage: React.FC = () => (
-  <div className="bg-lcd-bg text-lcd-text font-lcd flex flex-col min-h-screen w-full">
-    {/* Status Bar */}
-    <header className="flex items-center justify-between px-4 py-1 border-b-2 border-lcd-text">
-      <div className="flex items-center space-x-2">
-        <Signal size={20} />
-        <span className="font-lcd matrix-glow">IMPACTS</span>
-      </div>
-      <div className="flex items-center space-x-2">
-        <Clock size={20} />
-        <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-        <BatteryFull size={20} />
-      </div>
-    </header>
-    <main className="flex-1 p-8">
-      <WeatherEventImpactPanel />
-    </main>
-  </div>
+  <AuthGuard requiredRole={UserRole.VIEWER}>
+      <DashboardShell>
+          <div className="retro-title-container">
+              <div className="flex flex-col md:flex-row justify-between items-end gap-4">
+                  <div>
+                      <h1 className="text-5xl font-black uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-1">Atmospheric Impacts</h1>
+                      <div className="flex items-center gap-2">
+                          <span className="terminal-text text-[10px]">ENV.MONITORING // WEATHER_EVENT_CORRELATION</span>
+                      </div>
+                  </div>
+                  <div className="flex bg-lcd-text/5 px-4 py-2 border-2 border-lcd-text font-bold text-[10px] uppercase tracking-widest items-center gap-4">
+                      <div className="flex items-center gap-2">
+                          <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                          Sensor Array: Active
+                      </div>
+                  </div>
+              </div>
+          </div>
+          
+          <div className="max-w-6xl mx-auto w-full">
+            <WeatherEventImpactPanel />
+          </div>
+      </DashboardShell>
+  </AuthGuard>
 );
 
 export default ImpactsPage;

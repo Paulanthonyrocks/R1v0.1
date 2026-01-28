@@ -12,7 +12,8 @@ import {
   BatteryFull,
   Clock,
   LayoutDashboard,
-  Info
+  Info,
+  CloudSun
 } from 'lucide-react';
 import { getAuth, signOut } from 'firebase/auth';
 import RetroModal from '@/components/ui/RetroModal';
@@ -21,8 +22,10 @@ import RetroModal from '@/components/ui/RetroModal';
 const menuItems = [
   { href: '/dashboard', label: 'DASHBOARD', icon: <LayoutDashboard size={48} /> },
   { href: '/dashboard/map', label: 'LIVE MAP', icon: <Map size={48} /> },
+  { href: '/signals', label: 'SIGNALS', icon: <Signal size={48} /> },
+  { href: '/impacts', label: 'IMPACTS', icon: <CloudSun size={48} /> },
   { href: '/logs', label: 'SYSTEM LOGS', icon: <Book size={48} /> },
-  { href: '/anomalies', label: 'ANOMALIES', icon: <AlertTriangle size={48} /> },
+  { href: '/anomalies', label: 'ALERTS', icon: <AlertTriangle size={48} /> },
   { href: '/dashboard/analytics', label: 'ANALYTICS', icon: <BarChart2 size={48} /> },
   { href: '/landing', label: 'ABOUT', icon: <Info size={48} /> },
 ];
@@ -135,7 +138,7 @@ const NokiaHomeScreen = () => {
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold tracking-widest">ROUTE ONE</h1>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             {menuItems.map((item, index) => (
               <Link
                 href={item.href}

@@ -72,70 +72,72 @@ const SurveillancePage = () => {
   return (
     <AuthGuard requiredRole={UserRole.AGENCY}>
       <DashboardShell>
-          <div className="flex flex-col lg:flex-row justify-between items-end mb-8 gap-6">
-              <div>
-                  <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2 text-lcd-text matrix-glow">Omni-Channel Monitoring</h1>
-                  <p className="text-lcd-text/60 max-w-2xl">
-                      Live video processing via YOLOv8. Manage individual node states or broadcast global commands 
-                      to the processing cluster.
-                  </p>
-              </div>
-              
-              <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto">
-                  <div className="relative flex-1 sm:w-80">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40 text-lcd-text" size={18} />
-                      <input
-                        type="text"
-                        placeholder="FILTER FEEDS..."
-                        className="bg-lcd-text/10 border-2 border-lcd-text/20 text-lcd-text rounded-none p-3 pl-10 w-full focus:outline-none focus:border-lcd-text tracking-[0.1em] placeholder:text-lcd-text/30 font-bold"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                      />
+          <div className="retro-title-container">
+              <div className="flex flex-col lg:flex-row justify-between items-end gap-6">
+                  <div>
+                      <h1 className="text-5xl font-black uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-1">Surveillance Matrix</h1>
+                      <div className="flex items-center gap-2">
+                          <span className="terminal-text text-[10px]">UPLINK.SECURE // LIVE_VIDEO_PROCESSOR_v8</span>
+                      </div>
                   </div>
-                  <div className="flex gap-2">
-                      <AddFeedDialog />
-                      <Button 
-                        onClick={handleStartAll}
-                        variant="outline" 
-                        className="flex-1 sm:flex-none bg-green-900/20 border-green-500/50 text-green-900 hover:bg-green-500 hover:text-white rounded-none uppercase font-bold"
-                      >
-                          <Play size={16} className="mr-2" /> Start All
-                      </Button>
-                      <Button 
-                        onClick={handleStopAll}
-                        variant="outline" 
-                        className="flex-1 sm:flex-none bg-red-900/20 border-red-500/50 text-red-900 hover:bg-red-500 hover:text-white rounded-none uppercase font-bold"
-                      >
-                          <Square size={16} className="mr-2" /> Stop All
-                      </Button>
+                  
+                  <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto items-center">
+                      <div className="relative flex-1 sm:w-80 font-bold group">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40 group-focus-within:opacity-100 transition-opacity" size={18} />
+                          <input
+                            type="text"
+                            placeholder="SEARCH NODE REGISTRY..."
+                            className="bg-lcd-text/5 border-2 border-lcd-text/30 text-lcd-text rounded-none p-4 pl-12 w-full focus:outline-none focus:border-lcd-text focus:bg-lcd-text/10 tracking-[0.2em] placeholder:text-lcd-text/20 font-black uppercase transition-all"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                          />
+                      </div>
+                      <div className="flex gap-3">
+                          <AddFeedDialog />
+                          <Button 
+                            onClick={handleStartAll}
+                            className="matrix-btn-sleek h-12 px-6 bg-green-500/10 text-green-700 border-green-600 hover:bg-green-500 hover:text-white"
+                          >
+                              <Play size={16} className="mr-2" /> Global Start
+                          </Button>
+                          <Button 
+                            onClick={handleStopAll}
+                            className="matrix-btn-sleek h-12 px-6 bg-red-500/10 text-red-700 border-red-600 hover:bg-red-500 hover:text-white"
+                          >
+                              <Square size={16} className="mr-2" /> Global Stop
+                          </Button>
+                      </div>
                   </div>
               </div>
           </div>
 
-          <div className="mb-6 flex items-center justify-between border-b border-lcd-text/10 pb-4 text-lcd-text">
-              <div className="flex items-center gap-6 text-[10px] uppercase font-bold opacity-70">
-                  <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                      Running: {feeds.filter(f => f.status === 'running').length}
+          <div className="mb-8 flex items-center justify-between border-b-2 border-lcd-text/20 pb-4">
+              <div className="flex items-center gap-8 text-[10px] uppercase font-black tracking-widest">
+                  <div className="flex items-center gap-3 bg-green-500/10 px-3 py-1 border border-green-500/30">
+                      <div className="w-2 h-2 rounded-full bg-green-600 animate-pulse"></div>
+                      <span>ONLINE: {feeds.filter(f => f.status === 'running').length}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
-                      Starting: {feeds.filter(f => f.status === 'starting').length}
+                  <div className="flex items-center gap-3 bg-yellow-500/10 px-3 py-1 border border-yellow-500/30">
+                      <div className="w-2 h-2 rounded-full bg-yellow-600"></div>
+                      <span>INITIALIZING: {feeds.filter(f => f.status === 'starting').length}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                      Stopped/Error: {feeds.filter(f => f.status === 'stopped' || f.status === 'error').length}
+                  <div className="flex items-center gap-3 bg-red-500/10 px-3 py-1 border border-red-500/30 text-red-700">
+                      <div className="w-2 h-2 rounded-full bg-red-600"></div>
+                      <span>OFFLINE: {feeds.filter(f => f.status === 'stopped' || f.status === 'error').length}</span>
                   </div>
               </div>
-              <div className="text-[10px] opacity-40 uppercase">
-                  Showing {filteredFeeds.length} of {feeds.length} clusters
+              <div className="text-[10px] font-bold opacity-30 uppercase tracking-[0.2em]">
+                  Registry Index: {filteredFeeds.length} / {feeds.length} Active
               </div>
           </div>
 
-          {renderContent()}
+          <div className="min-h-[600px] flex flex-col">
+              {renderContent()}
+          </div>
       </DashboardShell>
     </AuthGuard>
   );
 };
+
 
 export default SurveillancePage;

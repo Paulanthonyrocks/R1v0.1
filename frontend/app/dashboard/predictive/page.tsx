@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
-const API_BASE_URL = "";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 export default function PredictivePage() {
     const { feeds } = useRealtimeUpdates();
@@ -54,80 +54,99 @@ export default function PredictivePage() {
 
     return (
         <DashboardShell>
-            <div className="flex flex-col space-y-6">
-                <div className="flex justify-between items-end border-b-2 border-lcd-text/20 pb-4">
+            <div className="retro-title-container">
+                <div className="flex flex-col md:flex-row justify-between items-end gap-6">
                     <div>
-                        <h1 className="text-3xl font-bold font-lcd matrix-glow tracking-wider text-lcd-text uppercase">Predictive Intelligence</h1>
-                        <p className="text-lcd-text/60 font-lcd italic text-sm">Forecast vs. Actual Performance Metrics</p>
+                        <h1 className="text-5xl font-black uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-1">Predictive Intel</h1>
+                        <div className="flex items-center gap-2">
+                            <span className="terminal-text text-[10px]">MODEL.STOCHASTIC_ENGINE // FORECAST_HORIZON: 24H</span>
+                        </div>
                     </div>
-                    <div className="flex gap-2">
-                        {feeds.slice(0, 3).map(f => (
-                            <Button 
-                                key={f.feed_id}
-                                variant="outline" 
-                                size="sm"
-                                className={cn(
-                                    "font-lcd text-[10px] h-8",
-                                    selectedFeed === f.feed_id ? "bg-lcd-text text-lcd-bg" : "border-lcd-text/30"
-                                )}
-                                onClick={() => setSelectedFeed(f.feed_id)}
-                            >
-                                {f.feed_id.split('_').pop()}
-                            </Button>
-                        ))}
+                    <div className="flex bg-lcd-text/5 p-2 border-2 border-lcd-text shadow-inner">
+                        <span className="text-[10px] font-black uppercase opacity-40 self-center mr-4 ml-2">Select Node:</span>
+                        <div className="flex gap-2">
+                            {feeds.slice(0, 5).map(f => (
+                                <button 
+                                    key={f.feed_id}
+                                    className={cn(
+                                        "px-4 py-2 font-black text-[10px] uppercase border-2 transition-all",
+                                        selectedId === f.feed_id 
+                                            ? "bg-lcd-text text-lcd-bg border-lcd-text" 
+                                            : "border-lcd-text/20 hover:border-lcd-text/50 opacity-60 hover:opacity-100"
+                                    )}
+                                    onClick={() => setSelectedFeed(f.feed_id)}
+                                >
+                                    {f.feed_id.slice(-4)}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
+                {/* Main Chart */}
+                <div className="lg:col-span-3 matrix-card p-0 flex flex-col min-h-[550px]">
+                    <div className="matrix-card-header bg-lcd-text/10">
+                        <div className="flex items-center gap-2">
+                            <TrendingUp size={16} />
+                            <span>Actual vs Forecast // Variance Analysis</span>
+                        </div>
+                        <Badge className="bg-primary text-secondary rounded-none text-[8px] tracking-widest px-2">
+                            LSTM_PROB_v4
+                        </Badge>
+                    </div>
+                    <div className="matrix-card-content flex-1 pt-8">
+                        <PredictiveFlowChart data={comparisonData} isLoading={loading} />
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                    {/* Main Chart */}
-                    <div className="lg:col-span-3 matrix-card p-6">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-xl font-bold uppercase flex items-center gap-2 font-lcd">
-                                <TrendingUp className="text-primary" />
-                                Model Accuracy Analysis
-                            </h2>
-                            <Badge variant="outline" className="font-lcd bg-lcd-text/5 text-primary border-primary/50">
-                                LSTM STOCHASTIC ENGINE
-                            </Badge>
+                {/* Stats Sidebar */}
+                <div className="lg:col-span-1 space-y-8">
+                    <Card className="matrix-card p-0 overflow-hidden">
+                        <div className="matrix-card-header">
+                            <span>Model Drift</span>
                         </div>
-                        <PredictiveFlowChart data={comparisonData} isLoading={loading} />
-                    </div>
-
-                    {/* Stats Sidebar */}
-                    <div className="lg:col-span-1 space-y-6">
-                        <Card className="matrix-card">
-                            <CardHeader className="pb-2">
-                                <CardTitle className="text-xs uppercase opacity-60 font-lcd">Current Model Drift</CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                                <div className="text-3xl font-bold font-lcd text-red-500">±4.2%</div>
-                                <p className="text-[10px] opacity-40 uppercase mt-1">Variance from ground truth</p>
-                            </CardContent>
-                        </Card>
-
-                        <Card className="matrix-card">
-                            <CardHeader className="pb-2">
-                                <CardTitle className="text-xs uppercase opacity-60 font-lcd">Confidence Interval</CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                                <div className="text-3xl font-bold font-lcd text-primary">92%</div>
-                                <div className="h-1.5 w-full bg-lcd-text/10 rounded-full mt-2 overflow-hidden">
-                                    <div className="h-full bg-primary w-[92%]" />
+                        <div className="p-6">
+                            <div className="text-5xl font-black font-lcd text-red-600 tracking-tighter">±4.2%</div>
+                            <p className="text-[10px] font-black opacity-40 uppercase mt-2 tracking-widest">Variance from ground truth</p>
+                            <div className="mt-4 pt-4 border-t-2 border-lcd-text/10">
+                                <div className="flex justify-between items-center text-[8px] font-black uppercase opacity-60">
+                                    <span>Training Epochs</span>
+                                    <span>4,200</span>
                                 </div>
-                            </CardContent>
-                        </Card>
+                            </div>
+                        </div>
+                    </Card>
 
-                        <div className="matrix-card p-4 space-y-4">
-                            <h3 className="text-xs font-bold uppercase border-b border-lcd-text/10 pb-2">Forecast Insights</h3>
-                            <div className="space-y-3">
-                                <div className="flex gap-2">
-                                    <Clock size={14} className="text-primary shrink-0" />
-                                    <p className="text-[10px] uppercase leading-tight">Next congestion peak expected at 17:45 (+/- 10m)</p>
-                                </div>
-                                <div className="flex gap-2">
-                                    <AlertCircle size={14} className="text-yellow-500 shrink-0" />
-                                    <p className="text-[10px] uppercase leading-tight">Historical variance increasing due to local weather event</p>
-                                </div>
+                    <Card className="matrix-card p-0 overflow-hidden">
+                        <div className="matrix-card-header">
+                            <span>Confidence Interval</span>
+                        </div>
+                        <div className="p-6">
+                            <div className="text-5xl font-black font-lcd text-primary tracking-tighter">92%</div>
+                            <div className="h-4 w-full bg-lcd-text/10 border-2 border-lcd-text/20 mt-4 overflow-hidden">
+                                <div className="h-full bg-primary shadow-[0_0_10px_var(--lcd-text)]" style={{ width: '92%' }} />
+                            </div>
+                        </div>
+                    </Card>
+
+                    <div className="matrix-card p-0 overflow-hidden">
+                        <div className="matrix-card-header">
+                            <span>Heuristic Insights</span>
+                        </div>
+                        <div className="p-6 space-y-6">
+                            <div className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
+                                <Clock size={18} className="text-primary shrink-0" />
+                                <p className="text-[10px] font-black uppercase leading-relaxed">
+                                    Next congestion peak expected at <span className="text-primary">17:45</span> (+/- 10m)
+                                </p>
+                            </div>
+                            <div className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
+                                <AlertCircle size={18} className="text-yellow-600 shrink-0" />
+                                <p className="text-[10px] font-black uppercase leading-relaxed opacity-60">
+                                    Historical variance increasing due to local event correlation.
+                                </p>
                             </div>
                         </div>
                     </div>
