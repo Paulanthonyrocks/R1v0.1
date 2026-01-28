@@ -263,7 +263,8 @@ def inference_worker(
                          pending_configs.pop(feed_id, None)
                          if feed_id in metrics_map: del metrics_map[feed_id]
                          continue
-                    if frame_index == -1: continue
+                    if frame_index == -1:
+                        continue
 
                     # --- Init Core if needed ---
                     if feed_id not in core_modules:
@@ -315,11 +316,13 @@ def inference_worker(
                         # And handle ROI.
                         
                         # We'll use CoreModule's preprocess to handle ROI masking/cropping
-                        # But NOTE: _preprocess_frame returns processed_frame, booleans...
-                        proc_frame, roi_enabled, x1, y1 = core._preprocess_frame(frame)
+                        proc_frame, roi_enabled, x_off, y_off = core._preprocess_frame(frame)
                         
                         frames_to_infer.append(proc_frame) 
                         inference_indices.append(len(batch_meta) - 1)
+                        
+                        # Store offsets in meta for coordinate restoration
+                        batch_meta[-1]["crop_offsets"] = (x_off, y_off) if roi_enabled else (0, 0)
                 
                 # 4. Run Batch Inference
                 batch_detections_map = {} # index -> detections list
@@ -350,21 +353,16 @@ def inference_worker(
                                 boxes_data = res.boxes.data.cpu().numpy()
                                 
                                 formatted_dets = []
+                                x_off, y_off = meta.get("crop_offsets", (0, 0))
+                                
                                 for row in boxes_data:
-                                    x1, y1, x2, y2, conf, cls_id = row
-                                    # We need to map coordinates back if ROI cropping was used?
-                                    # Wait, core._preprocess_frame handles cropping. 
-                                    # If cropping was used, YOLO sees cropped image. 
-                                    # We need to restore coordinates.
-                                    # Since we called core._preprocess_frame but tossed x1,y1... we need them.
-                                    # We can re-call or access them but we didn't store x1,y1 in batch_meta well.
-                                    # Actually we assumed Ultralytics handles it... NO it doesn't know about our manual crop.
+                                    rx1, ry1, rx2, ry2, conf, cls_id = row
                                     
-                                    # QUICK FIX: For now, assume no ROI cropping or accept small offset error 
-                                    # (Pipeline optimization task - accuracy secondary to getting batching working).
-                                    # BUT: CoreModule returns x1_crop, y1_crop.
+                                    # Restore full-frame coordinates
+                                    fx1, fy1 = rx1 + x_off, ry1 + y_off
+                                    fx2, fy2 = rx2 + x_off, ry2 + y_off
                                     
-                                    formatted_dets.append(((x1, y1, x2, y2), conf, cls_id))
+                                    formatted_dets.append(((fx1, fy1, fx2, fy2), conf, cls_id))
                                 
                                 batch_detections_map[meta_idx] = formatted_dets
 
@@ -440,7 +438,8 @@ def inference_worker(
                 continue
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
-                if 'metrics_obj' in locals(): metrics_obj.errors += 1
+                if 'metrics_obj' in locals():
+                    metrics_obj.errors += 1
 
     except KeyboardInterrupt:
         logger.info(f"[Worker {worker_id}] Received keyboard interrupt")

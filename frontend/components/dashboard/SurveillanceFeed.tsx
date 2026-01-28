@@ -14,28 +14,29 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token, userRole } = useAuth();
-    
+
     // Only subscribe if the feed is in an active state
     const shouldSubscribe = status === 'running' || status === 'starting';
     const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
-        shouldSubscribe ? feed_id : "", 
+        shouldSubscribe ? feed_id : "",
         token
     );
-    
+
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
     const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
     const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
+    const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
     const [showROI, setShowROI] = useState<boolean>(false);
     const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
-    const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false); 
+    const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
     const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
-    
+
     // ROI & Exclusion Zone State
     const [roiMode, setRoiMode] = useState<'roi' | 'exclusion' | null>(null);
-    const [roiPoints, setRoiPoints] = useState<{x: number, y: number}[]>([]);
-    const [exclusionZones, setExclusionZones] = useState<{x: number, y: number}[][]>(feed.config?.exclusion_zones ?? []);
-    const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{x: number, y: number}[]>([]);
+    const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
+    const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);
+    const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -135,18 +136,18 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 if (ctx) {
                     const displayWidth = canvas.offsetWidth;
                     const displayHeight = canvas.offsetHeight;
-                    
+
                     if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
                         canvas.width = displayWidth;
                         canvas.height = displayHeight;
                     }
-                    
+
                     // Draw Video
-                    const currentFrame = lastFrameRef.current;
-                    if (isLive && currentFrame && currentFrame.image) {
-                        drawFrame(ctx, currentFrame, {
-                            showBoundingBoxes: showOverlays && showBoundingBoxes,
-                            showVehicleDetails: showOverlays && showVehicleDetails
+                    if (lastFrameRef.current) {
+                        drawFrame(ctx, lastFrameRef.current, {
+                            showBoundingBoxes: showBoundingBoxes,
+                            showVehicleDetails: showVehicleDetails,
+                            showTrajectories: showTrajectories
                         });
                     } else {
                         // Clear canvas if not live
@@ -181,7 +182,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     // Draw Exclusion Zones
                     if (showOverlays && showExclusionZones) {
                         ctx.save();
-                        
+
                         // Draw established zones
                         exclusionZones.forEach(zone => {
                             ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
@@ -230,7 +231,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef]);
+    }, [isLive, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showTrajectories, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -240,7 +241,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         }
         setIsToggling(true);
         startFeed(feed_id);
-        
+
         if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
         toggleTimeoutRef.current = setTimeout(() => setIsToggling(false), 5000);
     };
@@ -302,7 +303,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     return (
         <Card
-            ref={ref} 
+            ref={ref}
             onKeyDown={handleKeyDown}
             className={cn(
                 "matrix-glow-card overflow-hidden group",
@@ -313,11 +314,11 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         >
             <div ref={containerRef} className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden">
                 {isLive ? (
-                    <canvas 
-                        ref={canvasRef} 
+                    <canvas
+                        ref={canvasRef}
                         className={cn("w-full h-full object-cover image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
-                        width="640" 
-                        height="480" 
+                        width="640"
+                        height="480"
                         onClick={handleCanvasClick}
                     />
                 ) : (
@@ -449,9 +450,28 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         </button>
                     </div>
                 )}
-                
+
                 {showControlsPanel && (
                     <div className="absolute top-12 right-8 z-30">
+                        {/* Congestion Gauge Overlay */}
+                        {metrics && (
+                            <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-1">
+                                <div className="text-[10px] text-lcd-text/70 uppercase tracking-tighter font-lcd">Congestion</div>
+                                <div className="w-24 h-1.5 bg-black/40 border border-lcd-text/20 overflow-hidden">
+                                    <div
+                                        className={cn(
+                                            "h-full transition-all duration-500",
+                                            (metrics.congestion_index || 0) > 70 ? "bg-red-500" :
+                                                (metrics.congestion_index || 0) > 40 ? "bg-yellow-500" : "bg-primary"
+                                        )}
+                                        style={{ width: `${metrics.congestion_index || 0}%` }}
+                                    />
+                                </div>
+                                <div className="text-[8px] text-lcd-text/50 font-lcd uppercase">Index: {metrics.congestion_index || 0}%</div>
+                            </div>
+                        )}
+
+                        {/* Stream Controls Overlay (Top Right) */}
                         <StreamOverlayControls
                             showOverlays={showOverlays}
                             setShowOverlays={setShowOverlays}
@@ -459,13 +479,15 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             setShowBoundingBoxes={setShowBoundingBoxes}
                             showVehicleDetails={showVehicleDetails}
                             setShowVehicleDetails={setShowVehicleDetails}
-                                                    showROI={showROI}
-                                                    setShowROI={setShowROI}
-                                                    showExclusionZones={showExclusionZones}
-                                                    setShowExclusionZones={setShowExclusionZones}
-                                                    onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
-                                                    staticFilterEnabled={staticFilterEnabled}
-                            
+                            showROI={showROI}
+                            setShowROI={setShowROI}
+                            showTrajectories={showTrajectories}
+                            setShowTrajectories={setShowTrajectories}
+                            showExclusionZones={showExclusionZones}
+                            setShowExclusionZones={setShowExclusionZones}
+                            onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
+                            staticFilterEnabled={staticFilterEnabled}
+
                             setStaticFilterEnabled={isAdmin ? handleToggleStaticFilter : undefined}
                             controlId={feed_id}
                         />
@@ -476,7 +498,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
             <CardContent className="p-2 rounded-none">
                 <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>
                 <p className="text-[10px] text-lcd-bg group-hover:text-lcd-text transition-colors truncate tracking-normal font-lcd matrix-glow">{component_node}</p>
-                </CardContent>
+            </CardContent>
         </Card>
     );
 });

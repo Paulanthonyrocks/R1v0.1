@@ -1497,7 +1497,8 @@ class CoreModule:
             track["acceleration"] = 0.0
 
         # Direction (simple based on velocity)
-        vx, vy = kf.x[2][0], kf.x[3][0]
+        # State order: [x, y, w, h, vx, vy, vw, vh]
+        vx, vy = kf.x[4][0], kf.x[5][0]
         track["vx"], track["vy"] = float(vx), float(vy)
         
         if abs(vx) > abs(vy): # Primarily horizontal motion

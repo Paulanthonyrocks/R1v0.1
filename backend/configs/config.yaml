@@ -416,12 +416,14 @@ behavior_analysis:
 kalman_filter_params:
   kf_sigma_px: 5.0
   kf_sigma_py: 5.0
-  kf_sigma_pvx: 5.0
-  kf_sigma_pvy: 5.0
-  kf_sigma_mx: 15.0
-  kf_sigma_my: 15.0
-  kf_sigma_ax: 0.5
-  kf_sigma_ay: 0.5
+  kf_sigma_pd: 0.5 # Process noise for dimensions
+  kf_sigma_pvx: 10.0 # Increased for better acceleration handling
+  kf_sigma_pvy: 10.0
+  kf_sigma_mx: 10.0 # Reduced measurement noise for position
+  kf_sigma_my: 10.0
+  kf_sigma_md: 10.0 # Added measurement noise for dimensions
+  kf_sigma_ax: 1.0
+  kf_sigma_ay: 1.0
 lane_detection:
   dynamic_lane_detection_enabled: false
   num_lanes: 6 # Fallback if dynamic detection fails or is disabled

@@ -19,6 +19,8 @@ import LaneAnalysisWidget from '@/components/dashboard/LaneAnalysisWidget';
 import LaneAnalysisWidget from '@/components/dashboard/LaneAnalysisWidget';
 import AnomalyList from '@/components/dashboard/AnomalyList';
 import { analyticsService } from '@/lib/services/analyticsService';
+import EcoStatsWidget from '@/components/dashboard/EcoStatsWidget';
+import AIInsightsPanel from '@/components/dashboard/AIInsightsPanel';
 
 const DashboardPage: React.FC = () => {
   const { kpis, alerts, feeds, isConnected, isReady } = useRealtimeUpdates();
@@ -269,9 +271,18 @@ const DashboardPage: React.FC = () => {
             )}
           </div>
 
-          {/* Side Panel: Anomalies & Alerts */}
+          {/* Side Panel: Anomalies & Alerts & AI Insights */}
           <div className="flex flex-col h-full gap-6">
-            <div className="matrix-card p-4 flex-1 flex flex-col min-h-[500px]">
+            <AIInsightsPanel
+              metrics={kpis}
+              feedName={feeds.length > 0 ? feeds[0].name : "System"}
+            />
+
+            <EcoStatsWidget
+              vehicles={feeds.length > 0 ? (feeds[0].latest_vehicles || []) : []}
+            />
+
+            <div className="matrix-card p-4 flex-1 flex flex-col min-h-[400px]">
               <AnomalyList
                 anomalies={alerts}
                 onSelect={handleAnomalySelect}

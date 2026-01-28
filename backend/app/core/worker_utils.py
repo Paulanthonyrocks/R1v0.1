@@ -11,7 +11,7 @@ import numpy as np
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.core.core_module import CoreModule
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,8 @@ def serialize_tracked_vehicles(
                 "is_occluded": bool(data.get("is_occluded", False)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
+                "vx": make_serializable(data.get("vx", 0)),
+                "vy": make_serializable(data.get("vy", 0)),
                 "ground_centroid": [make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
                 "car_model": data.get("car_model"),
                 "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),

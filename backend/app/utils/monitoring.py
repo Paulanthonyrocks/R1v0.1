@@ -1,9 +1,30 @@
 import logging
+import time
 import psutil  # Needed for check_system_resources
 from typing import Dict, Any, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+class FrameTimer:
+    """Simple timer for tracking frame processing stages."""
+    def __init__(self):
+        self._start_times = {}
+        self._metrics = {}
+
+    def start(self, stage: str):
+        self._start_times[stage] = time.time()
+
+    def stop(self, stage: str):
+        if stage in self._start_times:
+            duration = time.time() - self._start_times[stage]
+            self._metrics[stage] = duration
+            return duration
+        return 0.0
+
+    def get_metrics(self) -> Dict[str, float]:
+        return self._metrics.copy()
 
 
 def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:

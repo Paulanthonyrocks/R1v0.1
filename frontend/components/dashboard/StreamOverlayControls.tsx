@@ -15,6 +15,8 @@ interface StreamOverlayControlsProps {
   onClearExclusionZones?: () => void;
   staticFilterEnabled?: boolean;
   setStaticFilterEnabled?: (value: boolean) => void;
+  showTrajectories: boolean;
+  setShowTrajectories: (value: boolean) => void;
   controlId: string;
 }
 
@@ -59,7 +61,7 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   controlId,
 }) => {
   return (
-    <div 
+    <div
       className="p-4 space-y-3 bg-black/90 backdrop-blur-md rounded-none font-lcd matrix-glow text-lcd-bg border border-lcd-bg shadow-[0_0_10px_rgba(182,255,176,0.2)]"
       onClick={(e) => e.stopPropagation()}
     >
@@ -101,12 +103,21 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
             />
           </div>
 
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-trajectories-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Trajectories</Label>
+            <MatrixCheckbox
+              id={`toggle-trajectories-${controlId}`}
+              checked={showTrajectories}
+              onCheckedChange={setShowTrajectories}
+            />
+          </div>
+
           {setShowExclusionZones && (
             <div className="flex items-center justify-between gap-4">
               <Label htmlFor={`toggle-excl-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Exclusion Zones</Label>
               <div className="flex items-center gap-2">
                 {onClearExclusionZones && (
-                  <button 
+                  <button
                     onClick={onClearExclusionZones}
                     className="text-[10px] bg-red-900/50 hover:bg-red-900 px-1 border border-red-500 text-white uppercase"
                   >
