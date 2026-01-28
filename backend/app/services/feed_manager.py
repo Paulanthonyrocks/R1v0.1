@@ -41,7 +41,7 @@ from app.models.websocket import (
 from app.core.ingestion_worker import ingestion_worker
 from app.core.inference_worker import inference_worker
 # from app.core.processing_worker import result_reader_worker
-from app.utils.monitoring import FrameTimer
+from app.utils.monitoring import FrameTimer, check_system_resources
 from app.utils.distributed_queue import RedisQueue
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
