@@ -149,7 +149,21 @@ def ingestion_worker(
                 # Reset error counter on successful read
                 consecutive_errors = 0
                 frame_index, frame = result
-                
+
+                # --- Backpressure-Aware Capture ---
+                # If the AI queue is filling up, drop frames BEFORE expensive resize/encode
+                # We target a threshold of 50-70% of QUEUE_MAX_SIZE (500)
+                try:
+                    q_size = central_input_queue.qsize()
+                    if q_size > 300: # Congestion threshold
+                        metrics.frames_dropped += 1
+                        if metrics.frames_dropped % 100 == 0:
+                            logger.warning(f"[{feed_id}] High congestion ({q_size} in queue). Dropping frame {frame_index} EARLY.")
+                        continue
+                except (AttributeError, NotImplementedError):
+                    # qsize() not available on some platforms/types
+                    pass
+
                 try:
                     # total_frames_attempted tracked implicitly via metrics
                     

@@ -7,6 +7,7 @@ import re
 import atexit
 import json
 import numpy as np
+import msgpack
 
 from collections import deque
 from multiprocessing import (
@@ -39,8 +40,9 @@ from app.models.websocket import (
 # Import core worker and utilities
 from app.core.ingestion_worker import ingestion_worker
 from app.core.inference_worker import inference_worker
-from app.utils.monitoring import check_system_resources
-from app.utils.video import FrameTimer
+from app.core.processing_worker import result_reader_worker
+from app.utils.monitoring import FrameTimer
+from app.utils.distributed_queue import RedisQueue
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
 from app.services.reid_manager import GlobalReIDManager
@@ -108,10 +110,21 @@ class FeedManager:
 
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
         self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        self.redis_url = self.config.get("performance", {}).get("redis_url")
+        
         # We divide the QUEUE_MAX_SIZE among workers
         per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
-        self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
-        self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+        
+        if self.redis_url:
+            self._inference_input_queues = [
+                RedisQueue(self.redis_url, f"inference_input_{i}", maxsize=per_worker_q_size) 
+                for i in range(self._inference_pool_size)
+            ]
+            self._central_output_queue = RedisQueue(self.redis_url, "central_output", maxsize=QUEUE_MAX_SIZE)
+        else:
+            self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
+            self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+            
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
         self._inference_stop_event = Event()
@@ -1072,10 +1085,10 @@ class FeedManager:
                         
                         if now - last_broadcast >= min_interval:
                             # Only spawn if previous task for this feed finished (Backpressure)
-                            if feed_id not in self._active_broadcast_tasks or self._active_broadcast_tasks[feed_id].done():
-                                entry["last_broadcast_time"] = now
-                                task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles))
-                                self._active_broadcast_tasks[feed_id] = task
+                                if feed_id not in self._active_broadcast_tasks or self._active_broadcast_tasks[feed_id].done():
+                                    entry["last_broadcast_time"] = now
+                                    task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                                    self._active_broadcast_tasks[feed_id] = task
 
                         # Analytics hook
                         if self._analytics_service:
@@ -1112,30 +1125,41 @@ class FeedManager:
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 
-    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles):
+    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
         if not self._connection_manager or not frame_bytes: return
         
-        loop = asyncio.get_running_loop()
         try:
-            b64_frame = await loop.run_in_executor(self._cpu_executor, self._encode_frame, frame_bytes)
-            
-            # Pre-serialize message to JSON to avoid redundant work per client
-            vid_msg = VideoFrameData(
-                feed_id=feed_id, frame_index=frame_idx,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                frame=b64_frame, metrics=metrics, vehicles=vehicles
-            )
-            msg_json = WebSocketMessage(type=WebSocketMessageTypeEnum.VIDEO_FRAME, data=vid_msg.model_dump()).model_dump_json()
+            # 1. Prepare Payload
+            payload = {
+                "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
+                "f": feed_id,
+                "i": frame_idx,
+                "ts": time.time(),
+                "v": vehicles,
+                "m": metrics
+            }
+
+            # 2. Check for Adaptive Streaming (ROIs)
+            if extra_payload and "bg" in extra_payload:
+                payload["bg"] = extra_payload["bg"]
+                payload["rois"] = extra_payload.get("rois", [])
+                # Use smaller original frame if available (future: could drop frame_bytes here)
+            else:
+                payload["frame"] = frame_bytes
+
+            # 3. Binary Serialization with msgpack
+            # Use raw bytes for performance
+            msg_bytes = msgpack.packb(payload, use_bin_type=True)
             
             subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
             if not subscribed_client_ids:
                 return
 
-            # Parallel delivery to all clients on this feed
-            tasks = [self._connection_manager.send_realtime_message(msg_json, cid) for cid in subscribed_client_ids]
-            await asyncio.gather(*tasks)
+            # 4. Binary Delivery
+            await self._connection_manager.broadcast_realtime_bytes(msg_bytes)
+            
         except Exception as e:
-            logger.error(f"Broadcast error for {feed_id}: {e}")
+            logger.error(f"Binary broadcast error for {feed_id}: {e}")
 
     async def _watchdog_loop(self):
         """Periodically checks if processing workers are alive and responsive."""

@@ -31,7 +31,8 @@ filterpy>=1.4.5
 tensorflow-cpu>=2.16.1  # CPU-only version for systems without GPU
 ml-dtypes>=0.5.0
 scikit-learn>=1.0.0  # For StandardScaler and other ML utilities
-onnxruntime>=1.15.1 # For ONNX model inference
+onnxruntime-gpu>=1.15.1 # For GPU-accelerated inference
+onnxruntime>=1.15.1 # Fallback
 #transformers>=4.36.0 # For EdgeTAM model
 
 # Pavement Analysis Dependencies
@@ -56,6 +57,9 @@ aiokafka>=0.8.0 # For async Kafka messaging support
 
 # Firebase Admin
 firebase-admin>=5.0.0
+
+# Redis & Caching
+redis>=5.0.0
 
 # Additional Dependencies
 aiohttp>=3.8.0  # For async HTTP requests

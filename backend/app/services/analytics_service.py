@@ -74,6 +74,10 @@ class AnalyticsService:
         self._feed_manager = None
         self._active_incidents = {} # { "location_name": timestamp }
         self._kafka_consumer = None
+        self._metrics_buffer = []
+        self._metrics_buffer_lock = asyncio.Lock()
+        self._flush_interval = 60 # Flush every 60 seconds
+        self._last_flush_time = time.time()
 
         logger.info("AnalyticsService initialized.")
 
@@ -158,12 +162,70 @@ class AnalyticsService:
             "timestamp", datetime.now(timezone.utc)
         )  # Use current UTC time if not provided
 
+        # Handle Anomalies
+        anomalies = metrics.get("anomalies", [])
+        for anomaly in anomalies:
+            # Trigger Incident/Alert based on anomaly
+            severity_map = {
+                "Critical": IncidentSeverityEnum.CRITICAL,
+                "Warning": IncidentSeverityEnum.HIGH,
+                "INFO": IncidentSeverityEnum.MEDIUM
+            }
+            
+            # Create incident for significant anomalies
+            if anomaly.get("severity") in ["Critical", "Warning"]:
+                asyncio.create_task(self._create_and_save_incident(
+                    location={"latitude": latitude, "longitude": longitude},
+                    incident_type=IncidentTypeEnum.OTHER, # or map based on anomaly type
+                    severity=severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM),
+                    description=f"Automated Alert: {anomaly.get('details')}",
+                    source_feed_id=feed_id,
+                    details=anomaly
+                ))
+
         if latitude is not None and longitude is not None:
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)
+            
+            # Buffer for TimescaleDB
+            async with self._metrics_buffer_lock:
+                self._metrics_buffer.append({
+                    "id": self._data_cache._get_location_key(latitude, longitude),
+                    "timestamp": timestamp,
+                    "vehicle_count": metrics.get("total_vehicles", metrics.get("vehicle_count", 0)),
+                    "average_speed": metrics.get("average_speed_kmh", metrics.get("average_speed", 0.0)),
+                    "congestion_score": metrics.get("congestion_score", 0.0),
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "extra_data": {
+                        "lane_occupancy": metrics.get("lane_occupancy"),
+                        "queue_lengths": metrics.get("queue_lengths")
+                    }
+                })
+                
+                # Check for flush
+                if len(self._metrics_buffer) >= 100 or (time.time() - self._last_flush_time > self._flush_interval):
+                    asyncio.create_task(self._flush_metrics_to_db())
         else:
             logger.warning(
                 f"Metrics for feed {feed_id} missing latitude or longitude (Lat: {latitude}, Lon: {longitude}). Cannot add to TrafficDataCache."
             )
+
+    async def _flush_metrics_to_db(self):
+        """Flushes the metrics buffer to the database."""
+        async with self._metrics_buffer_lock:
+            if not self._metrics_buffer:
+                return
+            
+            batch = self._metrics_buffer.copy()
+            self._metrics_buffer.clear()
+            self._last_flush_time = time.time()
+            
+        try:
+            await self._db_manager.save_location_metrics_batch(batch)
+            logger.info(f"Flushed {len(batch)} metrics to database.")
+        except Exception as e:
+            logger.error(f"Error flushing metrics to database: {e}")
+            # Optional: Put back in buffer or discard
 
     async def save_vehicle_data(self, vehicle_data: Dict[str, Any]):
         """Saves vehicle data to the database."""
@@ -463,8 +525,27 @@ class AnalyticsService:
                 result = await session.execute(stmt)
                 logs = result.scalars().all()
 
-            # 2. Format into a time-series list
+            # 2. Fetch actual metrics from TimescaleDB
+            location_id = self._data_cache._get_location_key(latitude, longitude)
+            actual_metrics = await self._db_manager.get_location_metrics(location_id, hours=hours)
+            actual_map = {m["timestamp"].isoformat() if hasattr(m["timestamp"], "isoformat") else m["timestamp"]: m for m in actual_metrics}
+
+            # 3. Format into a time-series list
             chart_data = []
+            
+            # Combine predictions and actuals
+            # First, add all actuals to the chart
+            for ts_iso, m in actual_map.items():
+                chart_data.append({
+                    "timestamp": ts_iso,
+                    "forecasted": None,
+                    "actual": m.get("congestion_score"),
+                    "vehicle_count": m.get("vehicle_count"),
+                    "average_speed": m.get("average_speed"),
+                    "type": "actual"
+                })
+
+            # Next, overlay predictions
             for log in logs:
                 # Extract predicted value (likelihood or congestion)
                 pred_val = 0.0
@@ -472,25 +553,19 @@ class AnalyticsService:
                     pred_val = log.predicted_value.get("incident_likelihood") or \
                                log.predicted_value.get("congestion_score") or 0.0
                 
-                # Extract actual value if verified
-                actual_val = None
-                if log.outcome_verified and isinstance(log.actual_outcome_details, dict):
-                    actual_val = log.actual_outcome_details.get("congestion_score") or \
-                                log.actual_outcome_details.get("average_speed") # simplified
+                log_ts_iso = log.predicted_event_start_time.isoformat()
                 
+                # Check if we have an actual for this exact timestamp (unlikely to match exactly)
+                # In practice, we might want to find the nearest actual
                 chart_data.append({
-                    "timestamp": log.predicted_event_start_time.isoformat(),
+                    "timestamp": log_ts_iso,
                     "forecasted": pred_val,
-                    "actual": actual_val,
+                    "actual": None, # Actuals are already added separately
                     "type": log.prediction_type
                 })
 
-            # 3. If logs are empty, we can try to join with actual TrafficDataCache 
-            # to show current actuals even if we have no past forecasts for them.
-            if not chart_data:
-                # Mock some data for visualization purposes if DB is empty
-                # In production, this would return []
-                pass
+            # Sort by timestamp
+            chart_data.sort(key=lambda x: x["timestamp"])
 
             return chart_data
         except Exception as e:

@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time # Import time for timestamping
+import msgpack
 from typing import Dict, Optional, List, Set
 from fastapi import WebSocket
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, PingData # Import necessary models
@@ -191,7 +192,10 @@ class ConnectionManager:
                 message = await queue.get()
                 try:
                     # Use a timeout for the actual socket send to detect dead sockets faster
-                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                    if isinstance(message, bytes):
+                        await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                    else:
+                        await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
                     queue.task_done()
                 except (asyncio.TimeoutError, Exception) as e:
                     logger.warning(f"Error sending to {client_id}: {e}. Disconnecting.")
@@ -249,12 +253,25 @@ class ConnectionManager:
         return self.client_id_to_user_role.get(client_id, "user")
 
     async def broadcast_realtime(self, message: str):
-        """Broadcast fire-and-forget message to all."""
+        """Broadcast fire-and-forget message to all (JSON)."""
         tasks = []
         for client_id in list(self.active_connections.keys()):
             tasks.append(self.send_realtime_message(message, client_id))
         if tasks:
             await asyncio.gather(*tasks)
+
+    async def broadcast_realtime_bytes(self, data: bytes):
+        """Broadcast fire-and-forget binary message to all (Msgpack)."""
+        tasks = []
+        for client_id in list(self.active_connections.keys()):
+            if client_id in self.client_queues:
+                try:
+                    self.client_queues[client_id].put_nowait(data)
+                except asyncio.QueueFull:
+                    pass
+                except Exception as e:
+                    logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
+        # No need to gather put_nowait calls
 
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])

@@ -477,3 +477,21 @@ async def get_forecast_vs_actual(
     return await as_svc.get_forecast_vs_actual_data(lat, lon, hours)
 
 
+@router.get(
+    "/history/{feed_id}",
+    summary="Get Simple History Stats",
+    description="Get aggregated vehicle counts and speeds for a specific feed (for Dashboard charts).",
+    dependencies=[Depends(get_current_active_user)],
+)
+async def get_feed_history_endpoint(
+    feed_id: str,
+    hours: int = Query(24, ge=1, le=168),
+    db: DatabaseManager = Depends(get_db)
+):
+    try:
+        return await db.get_history_stats(feed_id, hours=hours)
+    except Exception as e:
+        logger.error(f"Error fetching history for {feed_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch history")
+
+

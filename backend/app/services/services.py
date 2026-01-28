@@ -17,6 +17,7 @@ from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.services.retention import RetentionService
 from app.services.notification_service import NotificationService
+from app.services.node_manager import NodeManager
 from app.ml.traffic_predictor import TrafficPredictor
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class ServiceRegistry:
         self._retention_service: Optional[RetentionService] = None
         self._notification_service: Optional[NotificationService] = None
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
+        self._node_manager: Optional[NodeManager] = None
         self._health_check_lock = asyncio.Lock()
         self._initialized = False
         
@@ -109,6 +111,12 @@ class ServiceRegistry:
         if self._retention_service is None:
             raise RuntimeError("RetentionService not initialized.")
         return self._retention_service
+
+    @property
+    def node_manager(self) -> NodeManager:
+        if self._node_manager is None:
+            raise RuntimeError("NodeManager not initialized.")
+        return self._node_manager
 
     async def initialize(
         self, 
@@ -188,6 +196,11 @@ class ServiceRegistry:
                 notification_service=self._notification_service,
             )
             logger.info("AnalyticsService initialized.")
+
+            # Node Manager
+            self._node_manager = NodeManager(config=config)
+            await self._node_manager.start()
+            logger.info("NodeManager initialized and started.")
 
             # Feed Manager
             self._feed_manager = await initialize_feed_manager(config)
@@ -301,6 +314,7 @@ class ServiceRegistry:
             ("NotificationService", self._shutdown_notification_service),
             ("TrafficSignalService", self._shutdown_traffic_signal_service),
             ("WeatherService", self._shutdown_weather_service),
+            ("NodeManager", self._shutdown_node_manager),
             ("EventService", self._shutdown_event_service),
         ]
 
@@ -349,6 +363,11 @@ class ServiceRegistry:
         if self._event_service and hasattr(self._event_service, 'close'):
             await self._event_service.close()
             logger.info("EventService closed.")
+
+    async def _shutdown_node_manager(self) -> None:
+        if self._node_manager:
+            await self._node_manager.stop()
+            logger.info("NodeManager shutdown completed.")
 
     def _reset_services(self) -> None:
         """Reset all service references to None."""

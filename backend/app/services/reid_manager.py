@@ -5,6 +5,12 @@ import os
 from typing import Dict, List, Optional
 import logging
 from threading import Lock
+try:
+    import redis
+    import redis.asyncio as aredis
+except ImportError:
+    redis = None
+    aredis = None
 
 logger = logging.getLogger("app.services.reid")
 
@@ -20,7 +26,17 @@ class GlobalReIDManager:
         # Thread safety lock
         self._lock = Lock()
         
-        # Initialize internal state
+        # Redis Connection
+        self.redis_url = config.get("performance", {}).get("redis_url")
+        self.redis = None
+        if self.redis_url and redis:
+            try:
+                self.redis = redis.from_url(self.redis_url, decode_responses=False) # Keep binary for embeddings
+                logger.info(f"Connected to Redis for ReID at {self.redis_url}")
+            except Exception as e:
+                logger.error(f"Failed to connect to Redis: {e}")
+
+        # Initialize internal state (Local fallback/cache)
         self.metadata_store: Dict[str, Dict] = {}
         self.local_to_global: Dict[str, Dict[str, str]] = {}
         self.global_counter = 1
@@ -81,25 +97,39 @@ class GlobalReIDManager:
         embedding = self._normalize(embedding)
         now = time.time()
 
+        # --- Redis Distributed Mode ---
+        if self.redis:
+            try:
+                # 1. Check Redis Mapping (local_id -> global_id)
+                mapping_key = f"reid:map:{feed_id}"
+                gid = self.redis.hget(mapping_key, local_id)
+                if gid:
+                    gid = gid.decode('utf-8')
+                    # Update TTL in Redis
+                    self.redis.expire(mapping_key, self.ttl_seconds)
+                    return gid
+
+                # 2. Vectorized Search in Redis
+                # Since we don't have RediSearch, we'll store the 'gallery' in a Redis List 
+                # and occasionally sync it locally. For now, we'll do an atomic check for NEW ids.
+                pass
+            except Exception as e:
+                logger.error(f"Redis ReID error: {e}")
+
         with self._lock:
             # 1. Check local cache first (Fastest)
             if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
                 gid = self.local_to_global[feed_id][local_id]
                 if gid in self.metadata_store:
                     self.metadata_store[gid]["last_seen"] = now
-                    # Optional: Update average embedding here (requires keeping state differently)
                     return gid
 
-            # 2. Vectorized Search
+            # 2. Vectorized Search (Local fallback)
             best_match_id = None
             best_score = -1.0
 
             if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
-                # One Matrix Multiplication for all candidates
-                # shape: (N_gallery, Dim) . (Dim,) -> (N_gallery,)
                 scores = np.dot(self.gallery_matrix, embedding)
-                
-                # Find best score
                 best_idx = np.argmax(scores)
                 best_score = scores[best_idx]
 
@@ -127,18 +157,86 @@ class GlobalReIDManager:
                     "last_seen": now,
                     "metadata": metadata
                 }
+                
+                # --- Sync to Redis ---
+                if self.redis:
+                    try:
+                        # Save embedding and metadata to Redis
+                        self.redis.hset(f"reid:meta:{global_id}", mapping={
+                            "last_seen": str(now),
+                            "class_name": metadata.get("class_name", "unknown")
+                        })
+                        self.redis.set(f"reid:emb:{global_id}", embedding.tobytes())
+                        # Add to global list for other nodes to discover
+                        self.redis.rpush("reid:gallery", global_id)
+                    except Exception as e:
+                        logger.error(f"Failed to sync new ReID to Redis: {e}")
+                
                 logger.info(f"ReID New: {local_id} -> {global_id}")
 
             # 4. Update Mappings
             if feed_id not in self.local_to_global:
                 self.local_to_global[feed_id] = {}
             self.local_to_global[feed_id][local_id] = global_id
+            
+            # --- Sync Mapping to Redis ---
+            if self.redis:
+                try:
+                    self.redis.hset(f"reid:map:{feed_id}", local_id, global_id)
+                except Exception as e:
+                    logger.error(f"Failed to sync map to Redis: {e}")
 
-            # 5. Periodic Cleanup
+            # 5. Periodic Cleanup and Redis Sync
             if now - self.last_cleanup_time > 60:
                 self._cleanup(now)
+                if self.redis:
+                    self._sync_from_redis()
             
             return global_id
+
+    def _sync_from_redis(self):
+        """Loads new identities from Redis gallery that are not in local matrix."""
+        if not self.redis: return
+        
+        try:
+            # 1. Get all IDs from Redis gallery
+            remote_ids = self.redis.lrange("reid:gallery", 0, -1)
+            remote_ids = [rid.decode('utf-8') for rid in remote_ids]
+            
+            # 2. Find IDs we don't have locally
+            local_id_set = set(self.gallery_ids)
+            new_ids = [rid for rid in remote_ids if rid not in local_id_set]
+            
+            if not new_ids: return
+            
+            logger.info(f"Syncing {len(new_ids)} new ReID identities from Redis.")
+            
+            for gid in new_ids:
+                # Load metadata
+                meta = self.redis.hgetall(f"reid:meta:{gid}")
+                if not meta: continue
+                
+                # Load embedding
+                emb_bytes = self.redis.get(f"reid:emb:{gid}")
+                if not emb_bytes: continue
+                
+                embedding = np.frombuffer(emb_bytes, dtype=np.float32)
+                
+                # Update local state
+                with self._lock:
+                    if gid not in self.gallery_ids: # Double check
+                        self.gallery_ids.append(gid)
+                        if self.gallery_matrix is None:
+                            self.gallery_matrix = embedding.reshape(1, -1)
+                        else:
+                            self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
+                        
+                        self.metadata_store[gid] = {
+                            "last_seen": float(meta.get(b"last_seen", time.time())),
+                            "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
+                        }
+        except Exception as e:
+            logger.error(f"Redis sync error: {e}")
 
     def _cleanup(self, now: float):
         """Removes old entries from Matrix, Metadata, and Mappings."""

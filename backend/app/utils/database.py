@@ -269,6 +269,26 @@ class DatabaseManager:
                 except Exception as e:
                     # 'already a hypertable' is fine
                     pass
+
+                # 3. Create location_metrics table
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS location_metrics (
+                        location_id TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        vehicle_count INTEGER,
+                        average_speed FLOAT,
+                        congestion_score FLOAT,
+                        latitude FLOAT,
+                        longitude FLOAT
+                    );
+                """))
+
+                # 4. Convert to hypertable
+                try:
+                    await conn.execute(text("SELECT create_hypertable('location_metrics', 'timestamp', if_not_exists => TRUE);"))
+                    logger.info("TimescaleDB 'location_metrics' hypertable verified/created.")
+                except Exception as e:
+                    pass
                     
         except Exception as e:
             logger.error(f"Error creating TimescaleDB hypertables: {e}")
@@ -672,6 +692,129 @@ class DatabaseManager:
                 await conn.execute(sql, params)
         except Exception as e:
             logger.error(f"TimescaleDB batch save failed: {e}")
+
+    async def save_location_metrics_batch(self, metrics_list: List[Dict]):
+        """Saves a batch of aggregated location metrics to TimescaleDB."""
+        if not self.timescale_engine:
+            return
+
+        sql = text("""
+            INSERT INTO location_metrics (
+                location_id, timestamp, vehicle_count, average_speed, 
+                congestion_score, latitude, longitude
+            ) VALUES (
+                :location_id, :timestamp, :vehicle_count, :average_speed,
+                :congestion_score, :latitude, :longitude
+            )
+        """)
+
+        try:
+            async with self.timescale_engine.begin() as conn:
+                params = []
+                for m in metrics_list:
+                    ts = m.get("timestamp")
+                    if isinstance(ts, (int, float)):
+                        ts = datetime.fromtimestamp(ts, tz=timezone.utc)
+                    elif isinstance(ts, str):
+                        try:
+                            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        except ValueError:
+                            ts = datetime.now(timezone.utc)
+                    
+                    params.append({
+                        "location_id": m.get("id"),
+                        "timestamp": ts,
+                        "vehicle_count": m.get("vehicle_count"),
+                        "average_speed": m.get("average_speed"),
+                        "congestion_score": m.get("congestion_score"),
+                        "latitude": m.get("latitude"),
+                        "longitude": m.get("longitude")
+                    })
+                
+                await conn.execute(sql, params)
+                logger.info(f"Saved {len(params)} location metrics to TimescaleDB.")
+        except Exception as e:
+            logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
+
+    async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
+        """Retrieves historical location metrics from TimescaleDB."""
+        if not self.timescale_engine:
+            return []
+
+        start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        sql = text("""
+            SELECT * FROM location_metrics 
+            WHERE location_id = :location_id 
+            AND timestamp >= :start_time
+            ORDER BY timestamp ASC
+        """)
+
+        try:
+            async with self.timescale_engine.connect() as conn:
+                result = await conn.execute(sql, {"location_id": location_id, "start_time": start_time})
+                return [dict(row._mapping) for row in result]
+        except Exception as e:
+            logger.error(f"Failed to query location metrics from TimescaleDB: {e}")
+            return []
+
+    async def get_history_stats(self, feed_id: str, hours: int = 24) -> List[Dict]:
+        """
+        Retrieves historical statistics (vehicle count, speed).
+        Tries TimescaleDB 'location_metrics' first.
+        Falls back to aggregating 'vehicle_tracks' in SQLite.
+        """
+        # 1. Try TimescaleDB (if configured and data exists)
+        if self.timescale_engine:
+            try:
+                metrics = await self.get_location_metrics(feed_id, hours)
+                if metrics:
+                    return metrics
+            except Exception as e:
+                logger.warning(f"TimescaleDB history fetch failed, falling back to SQLite: {e}")
+
+        # 2. Fallback to SQLite Aggregation
+        if not self.sqlite_db_path:
+             return []
+
+        # Calculate start timestamp
+        start_ts = time.time() - (hours * 3600)
+        
+        sql = """
+            SELECT 
+                cast(timestamp / 3600 as int) * 3600 as time_bucket, -- Group by hour
+                count(distinct track_id) as vehicle_count,
+                avg(speed) as average_speed
+            FROM vehicle_tracks
+            WHERE feed_id = ? AND timestamp >= ?
+            GROUP BY time_bucket
+            ORDER BY time_bucket ASC
+        """
+        
+        try:
+            results = []
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (feed_id, start_ts))
+                    rows = cursor.fetchall()
+                    
+                    for row in rows:
+                        # Row keys depend on row_factory, usually case-insensitive or index
+                        # Using numeric indices is safer if row_factory varies
+                        ts = row[0]
+                        count = row[1]
+                        speed = row[2] if row[2] is not None else 0.0
+                        
+                        results.append({
+                            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc),
+                            "vehicle_count": count,
+                            "average_speed": speed,
+                            "congestion_score": 0.0 # Not easily calculable from raw tracks
+                        })
+            return results
+        except Exception as e:
+            logger.error(f"SQLite aggregation failed: {e}")
+            return []
 
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:

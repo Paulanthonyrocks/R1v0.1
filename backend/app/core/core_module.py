@@ -11,7 +11,7 @@ from multiprocessing import Queue as MPQueue
 import queue
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
-from collections import deque
+from collections import deque, Counter
 from concurrent.futures import ThreadPoolExecutor
 
 # Import LicensePlatePreprocessor and lane_detection functions from utils
@@ -283,12 +283,73 @@ class CoreModule:
         
         # Load Model
         try:
-            use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
-            self._load_model(use_gpu)
+            self.device = self._check_gpu_availability()
+            self._load_model(self.device)
         except Exception as e:
             logger.error(f"Failed to load model in CoreModule __init__: {e}")
             raise
     
+    def _check_gpu_availability(self) -> str:
+        """
+        Check for GPU availability and return the appropriate device string.
+        """
+        import torch
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"[{self.feed_id}] GPU Detected: {device_name}. Enabling CUDA acceleration.")
+            return "0" # Ultralytics uses "0", "1", etc. for GPU
+        else:
+            logger.warning(f"[{self.feed_id}] No GPU detected. Falling back to CPU inference.")
+            return "cpu"
+
+    def _load_model(self, device: str):
+        """
+        Load the YOLO model, optionally optimizing for TensorRT/ONNX.
+        """
+        start_time = time.time()
+        
+        # 1. Attempt to find an optimized version if on GPU
+        model_path_obj = Path(self.model_path)
+        optimized_path = None
+        
+        # Priority: TensorRT (.engine) > ONNX (.onnx) > PyTorch (.pt)
+        if device != "cpu":
+            engine_path = model_path_obj.with_suffix(".engine")
+            onnx_path = model_path_obj.with_suffix(".onnx")
+            
+            if engine_path.exists():
+                logger.info(f"[{self.feed_id}] Found TensorRT engine: {engine_path}")
+                optimized_path = str(engine_path)
+            elif onnx_path.exists():
+                logger.info(f"[{self.feed_id}] Found ONNX model: {onnx_path}")
+                optimized_path = str(onnx_path)
+            
+            # Auto-Optimization Logic (only if enabled in config)
+            if not optimized_path and self.config.get("performance", {}).get("auto_optimize", False):
+                try:
+                    logger.info(f"[{self.feed_id}] No optimized model found. Exporting to TensorRT...")
+                    # Load .pt first to export
+                    pt_model = YOLO(self.model_path)
+                    # Export creates the file in the same dir
+                    # Note: TensorRT export requires valid GPU
+                    pt_model.export(format="engine", device=device, half=True) 
+                    if engine_path.exists():
+                        optimized_path = str(engine_path)
+                except Exception as e:
+                    logger.error(f"[{self.feed_id}] optimization failed: {e}. Falling back to .pt")
+
+        # 2. Load the best available model
+        final_path = optimized_path if optimized_path else self.model_path
+        
+        self.model = YOLO(final_path)
+        
+        # Warmup if using GPU
+        if device != "cpu":
+            # self.model.to(device) # YOLO handles this automatically usually, but let's be safe
+            pass
+            
+        logger.info(f"[{self.feed_id}] Model loaded from {final_path} on device {device} in {time.time() - start_time:.2f}s")
+
     def _initialize_roi_mask(self, resolution: List[int]):
         """Generate the ROI mask once to save CPU cycles per frame."""
         width, height = resolution
@@ -468,6 +529,7 @@ class CoreModule:
         confidence_threshold: Optional[float] = None,
         proximity_threshold: Optional[int] = None,
         track_timeout: Optional[int] = None,
+        external_detections: Optional[List[Tuple]] = None,
     ) -> Dict[str, Dict]:
         if frame is None or frame.size == 0:
             return {}
@@ -514,8 +576,12 @@ class CoreModule:
                 except Exception as e:
                     logger.warning(f"Lane detection failed: {e}")
 
-            # Detect with low threshold
-            detections = self._detect_vehicles(frame, frame_index, LOW_CONF_THRESHOLD)
+            # Detect with logic: if external provided, use them. Else run detection.
+            if external_detections is not None:
+                detections = external_detections
+            else:
+                # Detect with low threshold
+                detections = self._detect_vehicles(frame, frame_index, LOW_CONF_THRESHOLD)
             
             # Update tracks using ByteTrack logic
             current_tracks = self._update_tracks(
@@ -693,6 +759,20 @@ class CoreModule:
             
             x1 = x_center - width / 2
             y1 = y_center - height / 2
+
+            # --- Regional Filtering Optimization ---
+            # If lane boundaries are available, filter out detections far outside the road area
+            # to speed up NMS and reduce false positives in irrelevant regions.
+            if self.cached_lane_boundaries and len(self.cached_lane_boundaries) > 1:
+                road_min_x = min(self.cached_lane_boundaries)
+                road_max_x = max(self.cached_lane_boundaries)
+                buffer = 100 # Allow some margin for shoulders and lane changes
+                
+                # Adjust x1, y1 for ROI if needed for correct comparison
+                actual_x_center = x_center + x1_crop if roi_enabled else x_center
+                
+                if actual_x_center < (road_min_x - buffer) or actual_x_center > (road_max_x + buffer):
+                    continue
             
             nms_boxes.append([int(x1), int(y1), int(width), int(height)])
             nms_scores.append(float(scores[i]))
@@ -866,11 +946,11 @@ class CoreModule:
                 ba = bbox
                 bb = kept_track["bbox"]
                 area_a = (ba[2]-ba[0]) * (ba[3]-ba[1])
-                area_b = (bb[2]-bb[0]) * (bb[3]-bb[1])
                 intersection_area = max(0, min(ba[2], bb[2]) - max(ba[0], bb[0])) * max(0, min(ba[3], bb[3]) - max(ba[1], bb[1]))
                 
                 containment = 0.0
-                if area_a > 0: containment = intersection_area / area_a
+                if area_a > 0:
+                    containment = intersection_area / area_a
                 
                 # If highly overlapping OR mostly contained
                 if iou > iou_threshold or containment > 0.85:
@@ -921,22 +1001,22 @@ class CoreModule:
                 # Dynamic dt calculation
                 last_pred = track.get("last_prediction_time", track["last_seen"])
                 dt = current_time - last_pred
-                if dt <= 0.001: dt = 1.0 / self.fps # Fallback for very fast updates
+                if dt <= 0.001:
+                    dt = 1.0 / self.fps # Fallback for very fast updates
                 
                 # Update State Transition Matrix F with dynamic dt
-                kf.F[0, 2] = dt
-                kf.F[1, 3] = dt
+                kf.F[0, 4] = dt
+                kf.F[1, 5] = dt
+                kf.F[2, 6] = dt
+                kf.F[3, 7] = dt
                 
                 kf.predict()
                 # last_prediction_time will be updated after measurement association in _update_track
                 
-                x, y = kf.x[0][0], kf.x[1][0]
-                x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
-                width_orig = x2_orig - x1_orig
-                height_orig = y2_orig - y1_orig
+                x, y, w, h = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
                 track["predicted_bbox"] = (
-                    x - width_orig / 2, y - height_orig / 2,
-                    x + width_orig / 2, y + height_orig / 2
+                    x - w / 2, y - h / 2,
+                    x + w / 2, y + h / 2
                 )
         
         # 2. Hungarian Algorithm for Association
@@ -1047,24 +1127,36 @@ class CoreModule:
                     # 2. Distance Cost (Secondary/Fallback)
                     tr_cx, tr_cy = track["centroid"]
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
-                    # Normalize distance cost using proximity threshold
-                    dist_cost = dist / proximity_thresh
                     
-                    # 3. Class Match Penalty (Reduced to allow some flexibility)
-                    class_penalty = 0 if det_cls == track["class_id"] else 0.5 # Was 0.8
-
-                    # Combined Cost: Prioritize IoU if overlap exists, else use distance
-                    if iou > 0.05: # Was 0.1
-                        cost = iou_cost + class_penalty * 0.4
+                    # --- Gating Optimization ---
+                    # Use a Mahalanobis-inspired distance gate.
+                    # If the distance is too large relative to the object size, 
+                    # we prevent association.
+                    obj_diag = math.sqrt((det_bbox[2]-det_bbox[0])**2 + (det_bbox[3]-det_bbox[1])**2)
+                    gate_threshold = obj_diag * 1.5 # Gate at 1.5x object diagonal
+                    
+                    if dist > gate_threshold and iou < 0.01:
+                        # Too far to be the same vehicle if no overlap
+                        cost = 10000.0
                     else:
-                        # For non-overlapping boxes, use distance but with a higher base cost
-                        # If class mismatch AND low overlap, punish severely
-                        extra_penalty = 1.0 if class_penalty > 0 else 0.0
-                        # Reduced base cost from 0.9 to 0.5 to allow re-association of fast moving objects
-                        cost = 0.5 + dist_cost + class_penalty + extra_penalty
+                        # Normalize distance cost using proximity threshold
+                        dist_cost = dist / proximity_thresh
+                        
+                        # 3. Class Match Penalty (Reduced to allow some flexibility)
+                        class_penalty = 0 if det_cls == track["class_id"] else 0.5 # Was 0.8
 
-                    # Add confidence factor: less confident detections are more expensive to match
-                    cost += (1.0 - det_conf) * 0.3
+                        # Combined Cost: Prioritize IoU if overlap exists, else use distance
+                        if iou > 0.05: # Was 0.1
+                            cost = iou_cost + class_penalty * 0.4
+                        else:
+                            # For non-overlapping boxes, use distance but with a higher base cost
+                            # If class mismatch AND low overlap, punish severely
+                            extra_penalty = 1.0 if class_penalty > 0 else 0.0
+                            # Reduced base cost from 0.9 to 0.5 to allow re-association of fast moving objects
+                            cost = 0.5 + dist_cost + class_penalty + extra_penalty
+
+                        # Add confidence factor: less confident detections are more expensive to match
+                        cost += (1.0 - det_conf) * 0.3
                     
                     cost_matrix[d_idx, t_idx] = cost
         return cost_matrix
@@ -1188,46 +1280,61 @@ class CoreModule:
                 return None # Not in ROI
 
         # Initialize Kalman Filter for the new track
-        # State: [x, y, vx, vy] - centroid position and velocity
-        kf = KalmanFilter(dim_x=4, dim_z=2) # 4 state variables, 2 measurements (x, y)
+        # Expanded State: [x, y, w, h, vx, vy, vw, vh]
+        # This allows smoothing position AND dimensions
+        kf = KalmanFilter(dim_x=8, dim_z=4) # 8 state variables, 4 measurements (x, y, w, h)
         
-        # Initial state (centroid of detection)
-        centroid = np.array([[(x1 + x2) / 2], [(y1 + y2) / 2], [0], [0]]) # Initial velocity 0
-        kf.x = centroid
-
-        # State transition matrix (predicts next state from current)
-        dt = 1.0 / self.fps # Assuming constant velocity model between frames
-        kf.F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
-
-        # Measurement function (maps state to measurement)
-        kf.H = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0]
-        ])
-
-        # Measurement uncertainty (R - higher values mean more trust in prediction)
-        r_std_x = self.kf_params.get("kf_sigma_mx", 5)
-        r_std_y = self.kf_params.get("kf_sigma_my", 5)
-        kf.R = np.diag([r_std_x, r_std_y]) ** 2
-
-        # Process uncertainty (Q - higher values mean more trust in measurement)
-        # Represents how much the state (position/velocity) can change between time steps
-        q_std_px = self.kf_params.get("kf_sigma_px", 1)
-        q_std_py = self.kf_params.get("kf_sigma_py", 1)
-        q_std_vx = self.kf_params.get("kf_sigma_pvx", 1)
-        q_std_vy = self.kf_params.get("kf_sigma_pvy", 1)
-        kf.Q = np.diag([q_std_px, q_std_py, q_std_vx, q_std_vy]) ** 2
+        # Initial state
+        width = x2 - x1
+        height = y2 - y1
+        centroid_x = (x1 + x2) / 2
+        centroid_y = (y1 + y2) / 2
         
-        # Covariance matrix (P - reflects initial uncertainty in state)
-        # Start with high uncertainty, as we don't know the true state yet
-        p_init_pos = self.kf_params.get("init_covariance_pos", 100) # Initial position uncertainty
-        p_init_vel = self.kf_params.get("init_covariance_vel", 1000) # Initial velocity uncertainty
-        kf.P = np.diag([p_init_pos, p_init_pos, p_init_vel, p_init_vel]) ** 2
+        # [x, y, w, h, vx, vy, vw, vh]
+        kf.x = np.array([[centroid_x], [centroid_y], [width], [height], [0], [0], [0], [0]])
+
+        # State transition matrix
+        dt = 1.0 / self.fps
+        kf.F = np.eye(8)
+        kf.F[0, 4] = dt # x += vx * dt
+        kf.F[1, 5] = dt # y += vy * dt
+        kf.F[2, 6] = dt # w += vw * dt
+        kf.F[3, 7] = dt # h += vh * dt
+
+        # Measurement function (maps state to measurement: [x, y, w, h])
+        kf.H = np.zeros((4, 8))
+        kf.H[0, 0] = 1
+        kf.H[1, 1] = 1
+        kf.H[2, 2] = 1
+        kf.H[3, 3] = 1
+
+        # Measurement uncertainty (R)
+        # Start with base uncertainty, refined in _update_track based on confidence
+        r_std_pos = self.kf_params.get("kf_sigma_mx", 5)
+        r_std_dim = self.kf_params.get("kf_sigma_md", 10) # BBox dimensions often noisier
+        kf.R = np.diag([r_std_pos, r_std_pos, r_std_dim, r_std_dim]) ** 2
+
+        # Process uncertainty (Q)
+        q_std_pos = self.kf_params.get("kf_sigma_px", 1)
+        q_std_dim = self.kf_params.get("kf_sigma_pd", 0.5) # Dimensions should change slowly
+        q_std_vel = self.kf_params.get("kf_sigma_pvx", 2)
+        q_std_vdim = self.kf_params.get("kf_sigma_pvw", 1)
+        
+        # Constant velocity model noise: G * G.T * sigma^2 is more accurate, 
+        # but diagonal Q is easier to tune for different axes.
+        kf.Q = np.diag([
+            q_std_pos, q_std_pos, q_std_dim, q_std_dim,
+            q_std_vel, q_std_vel, q_std_vdim, q_std_vdim
+        ]) ** 2
+        
+        # Covariance matrix (P)
+        p_init_pos = self.kf_params.get("init_covariance_pos", 50)
+        p_init_dim = self.kf_params.get("init_covariance_dim", 100)
+        p_init_vel = self.kf_params.get("init_covariance_vel", 1000)
+        kf.P = np.diag([
+            p_init_pos, p_init_pos, p_init_dim, p_init_dim,
+            p_init_vel, p_init_vel, p_init_vel, p_init_vel
+        ]) ** 2
 
         # Assign a unique ID
         # Use UUID to prevent collisions across worker restarts and multiple feeds
@@ -1270,12 +1377,27 @@ class CoreModule:
         bbox, conf, cls = detection
         kf = track["kalman_filter"]
 
-        # Update Kalman Filter with new measurement
-        kf.update(np.array([[(bbox[0] + bbox[2]) / 2], [(bbox[1] + bbox[3]) / 2]]))
+        # --- Confidence-Weighted Measurement Noise ---
+        # If confidence is low, we trust the model (KF prediction) more.
+        # If confidence is high, we trust the measurement more.
+        r_mult = 1.0 / (conf + 0.1) # Multiplier: 1.0 (high conf) to 4.0+ (low conf)
+        base_r = kf.R / (getattr(kf, '_last_r_mult', 1.0)**2) # Reset to base scale
+        kf.R = base_r * (r_mult**2)
+        kf._last_r_mult = r_mult
 
-        # Update track properties
-        track["bbox"] = bbox
-        track["centroid"] = (kf.x[0][0], kf.x[1][0])
+        # Update Kalman Filter with new measurement [cx, cy, w, h]
+        measurement = np.array([
+            [(bbox[0] + bbox[2]) / 2],
+            [(bbox[1] + bbox[3]) / 2],
+            [bbox[2] - bbox[0]],
+            [bbox[3] - bbox[1]]
+        ])
+        kf.update(measurement)
+
+        # Update track properties using smoothed state
+        sx, sy, sw, sh = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
+        track["bbox"] = (sx - sw/2, sy - sh/2, sx + sw/2, sy + sh/2)
+        track["centroid"] = (sx, sy)
         
         # Fix #28: Reset class history if track was lost for a while
         time_since_last = current_time - track["last_seen"]
@@ -1295,7 +1417,6 @@ class CoreModule:
                 track["class_history"].append(cls)
                 
                 # Determine most frequent class with Hysteresis
-                from collections import Counter
                 history_counts = Counter(track["class_history"])
                 most_common = history_counts.most_common(1)
                 
@@ -1314,11 +1435,14 @@ class CoreModule:
                     
                     should_change = False
                     if new_rank > current_rank:
-                        if count >= 6: should_change = True
+                        if count >= 6:
+                            should_change = True
                     elif new_rank < current_rank:
-                        if count >= 8: should_change = True
+                        if count >= 8:
+                            should_change = True
                     else:
-                        if count >= 7: should_change = True
+                        if count >= 7:
+                            should_change = True
                         
                     if should_change:
                         track["class_id"] = new_class
@@ -1374,6 +1498,8 @@ class CoreModule:
 
         # Direction (simple based on velocity)
         vx, vy = kf.x[2][0], kf.x[3][0]
+        track["vx"], track["vy"] = float(vx), float(vy)
+        
         if abs(vx) > abs(vy): # Primarily horizontal motion
             track["direction"] = "East" if vx > 0 else "West"
         else: # Primarily vertical motion

@@ -1,5 +1,6 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
+import { decode } from '@msgpack/msgpack';
 
 interface WebSocketErrorEvent extends Event {
     message?: string;
@@ -7,7 +8,7 @@ interface WebSocketErrorEvent extends Event {
 
 const getOrCreateClientId = () => {
     if (typeof window === 'undefined') return '';
-    
+
     try {
         const storedId = sessionStorage.getItem('ws_client_id');
         if (storedId) {
@@ -123,7 +124,7 @@ export class WebSocketClient implements IWebSocketClient {
         this.requiresClientId = requiresClientId;
         this.tokenManager = TokenManager.getInstance();
         this.clientId = this.requiresClientId ? getOrCreateClientId() : null;
-        
+
         if (typeof window !== 'undefined') {
             console.debug(`[WebSocketClient ${this.instanceId}] Instantiated. Client ID: ${this.clientId}`);
         }
@@ -135,7 +136,7 @@ export class WebSocketClient implements IWebSocketClient {
      */
     public activate(): void {
         if (typeof window === 'undefined') return;
-        
+
         if (this.isInstanceActive()) {
             console.debug(`[WebSocketClient ${this.instanceId}] Already active.`);
             return;
@@ -143,7 +144,7 @@ export class WebSocketClient implements IWebSocketClient {
 
         lastActiveInstanceId = this.instanceId;
         console.log(`[WebSocketClient ${this.instanceId}] Activated. Client ID: ${this.clientId}`);
-        
+
         // Setup Worker if needed
         if (this.requiresClientId && !this.videoWorker) {
             this.videoWorker = new Worker('/workers/video-worker.js');
@@ -205,7 +206,7 @@ export class WebSocketClient implements IWebSocketClient {
 
     private async handleTokenRefresh(token: string): Promise<void> {
         this.currentToken = token;
-        
+
         if (!this.isInstanceActive()) {
             console.debug(`[WebSocketClient ${this.instanceId}] Instance dormant. Ignoring token refresh.`);
             return;
@@ -295,11 +296,11 @@ export class WebSocketClient implements IWebSocketClient {
                         .filter(Boolean)
                         .join('/');
                 }
-                
+
                 url.searchParams.set('token', token as string);
-                
+
                 console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, url.toString());
-                
+
                 this.ws = new WebSocket(url.toString());
                 this.ws.binaryType = 'arraybuffer';
 
@@ -312,7 +313,7 @@ export class WebSocketClient implements IWebSocketClient {
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
-                    
+
                     if (!this.shouldReconnect || !this.isInstanceActive()) {
                         console.debug(`[WebSocketClient ${this.instanceId}] Connection opened but instance is dormant or destroying. Closing.`);
                         this.ws?.close();
@@ -338,7 +339,7 @@ export class WebSocketClient implements IWebSocketClient {
                         reject(new Error(`Connection failed: ${reason}`));
                         return;
                     }
-                    
+
                     this.setState(ConnectionState.DISCONNECTED, reason);
                     if (this.shouldReconnect && !wasClean && this.isInstanceActive()) {
                         this.attemptReconnect(reason);
@@ -378,9 +379,9 @@ export class WebSocketClient implements IWebSocketClient {
         // Add exponential backoff with jitter (±20%)
         const jitter = 0.8 + Math.random() * 0.4;
         this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 30000);
-        
+
         console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
-        
+
         this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`);
         this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Reconnecting...`);
 
@@ -404,7 +405,7 @@ export class WebSocketClient implements IWebSocketClient {
         this.stopPingInterval();
         this.lastPongTime = Date.now();
         console.debug(`[WebSocketClient ${this.instanceId}] Starting ping interval`);
-        
+
         this.pingInterval = setInterval(() => {
             if (!this.isConnected()) {
                 console.warn(`[WebSocketClient ${this.instanceId}] Ping interval running but socket not connected. Stopping.`);
@@ -419,8 +420,8 @@ export class WebSocketClient implements IWebSocketClient {
             // If no pong is received within 120 seconds, consider connection timed out
             const timeSinceLastPong = Date.now() - this.lastPongTime;
             if (timeSinceLastPong > 120000) {
-                 console.warn(`[WebSocketClient ${this.instanceId}] Connection timed out. Last activity: ${timeSinceLastPong}ms ago.`);
-                 this.handleConnectionTimeout();
+                console.warn(`[WebSocketClient ${this.instanceId}] Connection timed out. Last activity: ${timeSinceLastPong}ms ago.`);
+                this.handleConnectionTimeout();
             }
         }, 15000);
     }
@@ -459,10 +460,10 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     const frameData = message.data as { feed_id?: string, frame?: string };
-                    
+
                     // If we have a worker and frame is a string (base64), use the worker
                     if (this.videoWorker && typeof frameData?.frame === 'string') {
-                        this.videoWorker.postMessage({ 
+                        this.videoWorker.postMessage({
                             frameData: frameData.frame,
                             feed_id: frameData.feed_id,
                             originalData: message.data // Pass through other metrics/vehicles
@@ -495,8 +496,43 @@ export class WebSocketClient implements IWebSocketClient {
                 console.error(`[WebSocketClient ${this.instanceId}] Error handling WebSocket message:`, error, event.data);
             }
         } else if (event.data instanceof ArrayBuffer) {
-            // Handle binary frame data
-            this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, { frame: event.data });
+            try {
+                // Decode Msgpack binary data
+                const decoded = decode(new Uint8Array(event.data)) as any;
+
+                // Map compact keys back to human-readable ones for the system
+                // t: type, f: feed_id, i: frame_index, ts: timestamp, 
+                // v: vehicles, m: metrics, bg: background, rois: patches, frame: fallback
+                const message: WebSocketMessage<any> = {
+                    type: decoded.t as WebSocketMessageType,
+                    data: {
+                        feed_id: decoded.f,
+                        frame_index: decoded.i,
+                        timestamp: decoded.ts,
+                        vehicles: decoded.v,
+                        metrics: decoded.m,
+                        background: decoded.bg, // Binary JPEG
+                        rois: decoded.rois,     // List of binary patches
+                        frame: decoded.frame    // Fallback raw binary frame
+                    }
+                };
+
+                if (message.type === WebSocketMessageType.VIDEO_FRAME) {
+                    if (this.videoWorker) {
+                        // Pass binary chunks to worker for reconstruction
+                        this.videoWorker.postMessage({
+                            binaryFrame: message.data,
+                            feed_id: message.data.feed_id
+                        });
+                    } else {
+                        this.notifyListeners(message.type, message.data, message.data.feed_id);
+                    }
+                } else {
+                    this.notifyListeners(message.type, message.data);
+                }
+            } catch (error) {
+                console.error(`[WebSocketClient ${this.instanceId}] Error decoding binary msgpack:`, error);
+            }
         }
     }
 
@@ -522,7 +558,7 @@ export class WebSocketClient implements IWebSocketClient {
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (!this.listeners.has(messageType)) this.listeners.set(messageType, new Set());
-        
+
         if (scope) {
             const scopedListener: ScopedListener = { scope, listener: listener as unknown as MessageListener<unknown> };
             this.listeners.get(messageType)?.add(scopedListener);
@@ -615,7 +651,7 @@ export class WebSocketClient implements IWebSocketClient {
         } else if (type === 'connection_error') {
             userMessage = 'Failed to connect to the server. Please check your network.';
         }
-        
+
         errorNotifier.error(userMessage);
     }
 }

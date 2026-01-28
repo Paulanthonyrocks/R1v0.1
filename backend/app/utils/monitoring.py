@@ -43,6 +43,12 @@ class TrafficMonitor:
             "congestion_samples": 0
         }
 
+        # Lane Geometry (Simplified mapping for occupancy)
+        # In a real system, this would come from lane_detection or calibration
+        # For now, we'll use a dynamic estimate based on observed lane width
+        self.lane_areas: Dict[int, float] = {} 
+        self.anomalies: List[Dict[str, Any]] = []
+
         # Extract relevant settings from the main configuration dict
         # Provide defaults if keys are missing to make the class more robust
         self.speed_limit_kmh: float = config.get("speed_limit", 60.0)
@@ -79,6 +85,43 @@ class TrafficMonitor:
                 except (ValueError, TypeError):
                     pass # Keep original if cast fails (though unlikely for lane ID)
                 self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
+        
+        # Performance: Clear old anomalies
+        if len(self.anomalies) > 100:
+            self.anomalies = self.anomalies[-100:]
+        
+        # Trigger Anomaly Detection
+        self._detect_anomalies(vehicles)
+
+    def _detect_anomalies(self, vehicles: Dict[int, Dict[str, Any]]):
+        """Internal check for vehicle behavior anomalies."""
+        now = time.time()
+        for v_id, data in vehicles.items():
+            # 1. Sudden Stop / Hard Braking
+            accel = data.get("acceleration", 0.0)
+            if accel < -8.0: # m/s^2 (Hard braking)
+                self.anomalies.append({
+                    "type": "hard_braking",
+                    "vehicle_id": v_id,
+                    "timestamp": now,
+                    "severity": "Warning",
+                    "details": f"Sudden deceleration detected: {accel:.1f} m/s²",
+                    "location": data.get("centroid")
+                })
+
+            # 2. Wrong Way Detection
+            direction = data.get("direction")
+            # Heuristic: If it's towards the bottom but in a 'North' designated lane (simplified logic)
+            # In a production app, lane_geometry would store 'expected_direction'
+            if direction == "North" and data.get("vy", 0) > 2.0:
+                 self.anomalies.append({
+                    "type": "wrong_way",
+                    "vehicle_id": v_id,
+                    "timestamp": now,
+                    "severity": "Critical",
+                    "details": "Vehicle traveling against lane flow",
+                    "location": data.get("centroid")
+                })
 
     def get_metrics(self) -> Dict[str, Any]:
         """
@@ -177,6 +220,27 @@ class TrafficMonitor:
             congestion_score = (speed_factor * 0.7 + density_factor * 0.3) * 100
             congestion_score = round(congestion_score, 1)
 
+        # Lane Occupancy & Queue Length
+        lane_occupancy: Dict[int, float] = {}
+        lane_queues: Dict[int, float] = {}
+        
+        for lane_id, count in self.lane_counts.items():
+            # Estimate lane occupancy (simplified: each vehicle takes ~5m of a 100m view segment)
+            # 100.0 is a placeholder for total lane capacity in view
+            lane_occupancy[lane_id] = min(100.0, (count * 15.0)) # 15% per car approx
+            
+            # Queue Length (Consecutive stopped vehicles)
+            # Find vehicles in this lane
+            lane_vehicles = [v for v in self.tracked_vehicles.values() if v.get("lane") == lane_id]
+            stopped_in_lane = [v for v in lane_vehicles if v.get("speed", 0) < self.stopped_threshold_kmh]
+            
+            if len(stopped_in_lane) >= 3:
+                # Estimate physical length as distance between furthest vehicles in chain
+                # Simplified: count * typical vehicle length + gap
+                lane_queues[lane_id] = len(stopped_in_lane) * 6.0 # 6 meters per car
+            else:
+                lane_queues[lane_id] = 0.0
+
         return {
             "total_vehicles": current_vehicle_count, # Instantaneous count
             "total_vehicles_cumulative": len(self.seen_vehicle_ids), # Session unique count
@@ -191,6 +255,9 @@ class TrafficMonitor:
             "vehicles_per_lane": self.lane_counts.copy(),  # Return a copy
             "high_density_lanes": high_density_lanes,
             "vehicle_type_counts": vehicle_type_counts,
+            "lane_occupancy": lane_occupancy,
+            "queue_lengths": lane_queues,
+            "anomalies": self.anomalies[-5:] # Return only recent ones to client
         }
 
 

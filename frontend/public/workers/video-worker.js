@@ -1,52 +1,77 @@
 
-self.onmessage = async function(e) {
-    const { frameData, feed_id, originalData } = e.data;
+let canvas = null;
+let ctx = null;
+
+self.onmessage = async function (e) {
+    const { binaryFrame, frameData, feed_id, originalData } = e.data;
 
     try {
-        if (!frameData) {
-            throw new Error('No frame data provided');
-        }
-
-        // 1. Base64 Decode to Uint8Array
-        const binaryString = atob(frameData);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // 2. Decode JPEG to ImageBitmap (highly efficient, transferable)
-        // This offloads the heaviest part of video processing from the main thread.
         let frameToSend;
         let transferables = [];
+        let metadata = originalData || {};
 
-        if (typeof createImageBitmap !== 'undefined') {
-            try {
-                const blob = new Blob([bytes], { type: 'image/jpeg' });
-                const imageBitmap = await createImageBitmap(blob);
-                frameToSend = imageBitmap;
-                transferables.push(imageBitmap);
-            } catch (err) {
-                console.warn('Worker: createImageBitmap failed, falling back to ArrayBuffer', err);
-                frameToSend = bytes.buffer;
-                transferables.push(bytes.buffer);
+        // 1. Handle Binary Data (New Protocol)
+        if (binaryFrame) {
+            const { background, rois, frame, frame_index, metrics, vehicles, timestamp } = binaryFrame;
+
+            metadata = { frame_index, metrics, vehicles, timestamp };
+
+            if (background && rois) {
+                // Adaptive ROI Reconstruction
+                const bgBlob = new Blob([background], { type: 'image/jpeg' });
+                const bgBitmap = await createImageBitmap(bgBlob);
+
+                // Initialize OffscreenCanvas if needed
+                if (!canvas || canvas.width !== bgBitmap.width || canvas.height !== bgBitmap.height) {
+                    canvas = new OffscreenCanvas(bgBitmap.width, bgBitmap.height);
+                    ctx = canvas.getContext('2d');
+                }
+
+                // Draw background
+                ctx.drawImage(bgBitmap, 0, 0);
+                bgBitmap.close();
+
+                // Draw ROI patches
+                for (const roi of rois) {
+                    const roiBlob = new Blob([roi.b], { type: 'image/jpeg' });
+                    const roiBitmap = await createImageBitmap(roiBlob);
+                    ctx.drawImage(roiBitmap, roi.x, roi.y, roi.w, roi.h);
+                    roiBitmap.close();
+                }
+
+                frameToSend = canvas.transferToImageBitmap();
+                transferables.push(frameToSend);
+            } else if (frame) {
+                // Raw binary frame (Binary Fallback)
+                const blob = new Blob([frame], { type: 'image/jpeg' });
+                frameToSend = await createImageBitmap(blob);
+                transferables.push(frameToSend);
             }
-        } else {
-            frameToSend = bytes.buffer;
-            transferables.push(bytes.buffer);
+        }
+        // 2. Handle Base64 Data (Legacy Protocol - Fallback)
+        else if (frameData) {
+            const binaryString = atob(frameData);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: 'image/jpeg' });
+            frameToSend = await createImageBitmap(blob);
+            transferables.push(frameToSend);
         }
 
-        // Send back to main thread with original metadata
-        self.postMessage({ 
-            feed_id: feed_id,
-            frame: frameToSend,
-            frame_index: originalData?.frame_index || 0,
-            metrics: originalData?.metrics,
-            vehicles: originalData?.vehicles,
-            timestamp: originalData?.timestamp
-        }, transferables);
+        if (frameToSend) {
+            self.postMessage({
+                feed_id: feed_id,
+                frame: frameToSend,
+                frame_index: metadata.frame_index || 0,
+                metrics: metadata.metrics,
+                vehicles: metadata.vehicles,
+                timestamp: metadata.timestamp
+            }, transferables);
+        }
     } catch (error) {
-        console.error('Worker: Frame decoding failed', error);
+        console.error('Worker: Frame processing failed', error);
         self.postMessage({ error: error.message, feed_id: feed_id });
     }
 };

@@ -2,6 +2,13 @@ fps: 15
 speed_limit: 60
 video_processing:
   target_fps: 15
+  adaptive_streaming: true
+  roi_scale: 0.5
+performance:
+  gpu_acceleration: true
+  auto_optimize: true # Set to true to auto-export to TensorRT
+  batch_size: 4
+  inference_timeout: 0.005 # 5ms wait
 firebase_admin:
   service_account_key_path: backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
@@ -285,6 +292,9 @@ logging:
       propagate: false
 database:
   db_path: /tmp/vehicle_data.db
+  timescaledb:
+    enabled: true
+    url: "postgresql+asyncpg://postgres:password@localhost:5432/traffic_hub"
   chunk_size: 100
   cache_size: 128
   schema:

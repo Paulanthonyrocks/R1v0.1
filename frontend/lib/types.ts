@@ -15,21 +15,23 @@ export interface FeedStatusData {
   latitude?: number; // Added latitude
   longitude?: number; // Added longitude
   config?: {
-      name: string;
-      source_type: string;
-      source_identifier: string;
-      latitude: number;
-      longitude: number;
-      roi?: { x: number; y: number }[];
-      exclusion_zones?: { x: number; y: number }[][];
-      static_object_filter_enabled?: boolean;
-      static_object_timeout?: number;
+    name: string;
+    source_type: string;
+    source_identifier: string;
+    latitude: number;
+    longitude: number;
+    roi?: { x: number; y: number }[];
+    exclusion_zones?: { x: number; y: number }[][];
+    static_object_filter_enabled?: boolean;
+    static_object_timeout?: number;
   };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;
     total_vehicles?: number | null;
     total_vehicles_cumulative?: number | null;
     session_average_speed_kmh?: number | null;
+    lane_occupancy?: Record<string, number>;
+    queue_lengths?: Record<string, number>;
     [key: string]: unknown; // Allow for other potential metrics
   } | null;
 }
@@ -88,12 +90,12 @@ export interface AlertsResponse {
 // --- Component Prop Types ---
 
 export interface MatrixCardProps {
- title: string;
- content?: string;
- colorOverride?: string;
- children?: React.ReactNode;
+  title: string;
+  content?: string;
+  colorOverride?: string;
+  children?: React.ReactNode;
 }
-export interface StatCardProps  {
+export interface StatCardProps {
   title: string;
   value: string;
   unit?: string; // Added unit property
@@ -139,12 +141,12 @@ export interface ReportAnomalyModalProps {
 }
 
 export interface MatrixButtonProps {
- onClick: () => void;
+  onClick: () => void;
   text: string;
- bgColor?: string;
- textColor?: string;
- backgroundColor?: string;
- children?: React.ReactNode;
+  bgColor?: string;
+  textColor?: string;
+  backgroundColor?: string;
+  children?: React.ReactNode;
 }
 
 // Interface for traffic metrics from a specific feed
@@ -207,12 +209,12 @@ export interface SurveillanceFeedMessage {
   timestamp?: string | Date;
   latitude?: number;
   longitude?: number;
-  
+
   // New cumulative/session metrics
   total_vehicles_cumulative?: number;
   session_average_speed_kmh?: number;
   session_congestion_level_percent?: number;
-  
+
   // Additional instantaneous metrics
   stopped_vehicles?: number;
   congestion_level_percent?: number;
@@ -223,9 +225,9 @@ export interface SurveillanceFeedMessage {
 
 export interface VideoFrameMessage {
   feed_id: string;
-  frame: string | ArrayBuffer;
+  frame: string | ArrayBuffer | ImageBitmap;
   frame_index?: number;
-  timestamp?: string;
+  timestamp?: string | number;
   metrics?: SurveillanceFeedMessage;
   vehicles?: { // Detailed vehicle data for frontend visualization
     vehicle_id: string;
