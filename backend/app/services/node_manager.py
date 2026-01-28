@@ -30,7 +30,7 @@ class NodeManager:
     async def start(self):
         """Starts the node heartbeat loop."""
         if not self.redis:
-            logger.warning("Redis not configured. NodeManager will not start heartbeat.")
+            logger.info("Redis not configured. NodeManager will operate in single-node mode (heartbeat disabled).")
             return
 
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())

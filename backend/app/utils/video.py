@@ -231,27 +231,3 @@ class FrameReader:
             and self.thread.is_alive() 
             and not self.end_of_video
         )
-
-class FrameTimer:
-    """Helper to calculate internal processing FPS"""
-    def __init__(self, window_size: int = 100):
-        self.timings = defaultdict(lambda: deque(maxlen=window_size))
-        self.last_tick = time.time()
-
-    def tick(self, name: str = "loop_total"):
-        now = time.time()
-        duration = now - self.last_tick
-        self.last_tick = now
-        self.log_time(name, duration)
-
-    def log_time(self, name: str, duration: float):
-        self.timings[name].append(duration)
-
-    def get_avg(self, name: str) -> float:
-        if not self.timings[name]:
-            return 0.0
-        return sum(self.timings[name]) / len(self.timings[name])
-
-    def get_fps(self, name: str) -> float:
-        avg_time = self.get_avg(name)
-        return 1.0 / avg_time if avg_time > 0.0 else 0.0

@@ -1,29 +1,65 @@
 import logging
 import time
 import psutil  # Needed for check_system_resources
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
+from collections import deque, defaultdict
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class FrameTimer:
-    """Simple timer for tracking frame processing stages."""
-    def __init__(self):
+    """
+    Advanced timer for tracking frame processing stages and calculating FPS.
+    Combines stage-based timing with frequency-based FPS counting.
+    """
+    def __init__(self, window_size: int = 100):
         self._start_times = {}
         self._metrics = {}
+        self.timings = defaultdict(lambda: deque(maxlen=window_size))
+        self.last_tick = time.time()
 
     def start(self, stage: str):
+        """Start timing a specific processing stage."""
         self._start_times[stage] = time.time()
 
     def stop(self, stage: str):
+        """Stop timing a specific processing stage and log the duration."""
         if stage in self._start_times:
             duration = time.time() - self._start_times[stage]
             self._metrics[stage] = duration
+            self.log_time(stage, duration)
             return duration
         return 0.0
 
+    def tick(self, name: str = "loop_total"):
+        """
+        Record a 'tick' for a given metric (e.g., end of a loop).
+        Calculates duration since the last tick.
+        """
+        now = time.time()
+        duration = now - self.last_tick
+        self.last_tick = now
+        self.log_time(name, duration)
+
+    def log_time(self, name: str, duration: float):
+        """Manually log a duration for a specific metric."""
+        self.timings[name].append(duration)
+
+    def get_avg(self, name: str) -> float:
+        """Get the average duration for a specific metric over the sliding window."""
+        if not self.timings[name]:
+            # Fallback to _metrics if available
+            return self._metrics.get(name, 0.0)
+        return sum(self.timings[name]) / len(self.timings[name])
+
+    def get_fps(self, name: str = "loop_total") -> float:
+        """Calculate FPS based on the average duration of a specific metric."""
+        avg_time = self.get_avg(name)
+        return 1.0 / avg_time if avg_time > 0.0 else 0.0
+
     def get_metrics(self) -> Dict[str, float]:
+        """Get current instantaneous metrics."""
         return self._metrics.copy()
 
 
@@ -41,21 +77,18 @@ def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:
 
 class TrafficMonitor:
     # Class attribute: Mapping of vehicle class IDs to their names.
-    # This can be expanded or moved to configuration if it becomes more complex.
     vehicle_type_map: Dict[int, str] = {
         2: "car",
         3: "motorcycle",
         5: "bus",
         7: "truck",
-        -1: "unknown",  # Explicitly define unknown for clarity
+        -1: "unknown",
     }
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.tracked_vehicles: Dict[int, Dict[str, Any]] = {}
-        self.lane_counts: Dict[int, int] = {}  # Stores count of vehicles per lane_id
-
-        # Cumulative / Session metrics
+        self.lane_counts: Dict[int, int] = {}
         self.seen_vehicle_ids = set()
         self.session_metrics = {
             "speed_sum": 0.0,
@@ -63,64 +96,36 @@ class TrafficMonitor:
             "congestion_sum": 0.0,
             "congestion_samples": 0
         }
-
-        # Lane Geometry (Simplified mapping for occupancy)
-        # In a real system, this would come from lane_detection or calibration
-        # For now, we'll use a dynamic estimate based on observed lane width
         self.lane_areas: Dict[int, float] = {} 
         self.anomalies: List[Dict[str, Any]] = []
-
-        # Extract relevant settings from the main configuration dict
-        # Provide defaults if keys are missing to make the class more robust
         self.speed_limit_kmh: float = config.get("speed_limit", 60.0)
 
         incident_cfg = config.get("incident_detection", {})
-        self.density_threshold: int = incident_cfg.get(
-            "density_threshold", 10
-        )  # Vehicles per lane/area
-        self.congestion_speed_threshold: float = incident_cfg.get(
-            "congestion_speed_threshold", 20.0
-        )  # km/h
-
-        self.stopped_threshold_kmh: float = config.get(
-            "stopped_speed_threshold_kmh", 5.0
-        )  # km/h
+        self.density_threshold: int = incident_cfg.get("density_threshold", 10)
+        self.congestion_speed_threshold: float = incident_cfg.get("congestion_speed_threshold", 20.0)
+        self.stopped_threshold_kmh: float = config.get("stopped_speed_threshold_kmh", 5.0)
 
     def update_vehicles(self, vehicles: Dict[int, Dict[str, Any]]):
-        """
-        Updates the monitor with the latest set of tracked vehicles.
-        Args:
-            vehicles: A dictionary where keys are track_ids and values are vehicle data dictionaries.
-                      Each vehicle data dictionary should ideally contain 'lane', 'speed', 'class_id'.
-        """
         self.tracked_vehicles = vehicles
-        self.lane_counts.clear()  # Reset lane counts for the new update
+        self.lane_counts.clear()
         for track_id, data in vehicles.items():
-            # Update cumulative count
             self.seen_vehicle_ids.add(track_id)
-            
-            lane = data.get("lane", -1)  # Default to -1 if lane info is missing
-            if lane != -1:  # Only count if lane info is valid
+            lane = data.get("lane", -1)
+            if lane != -1:
                 try:
-                    lane = int(lane) # Ensure native int for JSON serialization
+                    lane = int(lane)
                 except (ValueError, TypeError):
-                    pass # Keep original if cast fails (though unlikely for lane ID)
+                    pass
                 self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
-        
-        # Performance: Clear old anomalies
         if len(self.anomalies) > 100:
             self.anomalies = self.anomalies[-100:]
-        
-        # Trigger Anomaly Detection
         self._detect_anomalies(vehicles)
 
     def _detect_anomalies(self, vehicles: Dict[int, Dict[str, Any]]):
-        """Internal check for vehicle behavior anomalies."""
         now = time.time()
         for v_id, data in vehicles.items():
-            # 1. Sudden Stop / Hard Braking
             accel = data.get("acceleration", 0.0)
-            if accel < -8.0: # m/s^2 (Hard braking)
+            if accel < -8.0:
                 self.anomalies.append({
                     "type": "hard_braking",
                     "vehicle_id": v_id,
@@ -129,11 +134,7 @@ class TrafficMonitor:
                     "details": f"Sudden deceleration detected: {accel:.1f} m/s²",
                     "location": data.get("centroid")
                 })
-
-            # 2. Wrong Way Detection
             direction = data.get("direction")
-            # Heuristic: If it's towards the bottom but in a 'North' designated lane (simplified logic)
-            # In a production app, lane_geometry would store 'expected_direction'
             if direction == "North" and data.get("vy", 0) > 2.0:
                  self.anomalies.append({
                     "type": "wrong_way",
@@ -145,126 +146,62 @@ class TrafficMonitor:
                 })
 
     def get_metrics(self) -> Dict[str, Any]:
-        """
-        Calculates and returns various traffic metrics based on the current state of tracked vehicles.
-        Returns:
-            A dictionary containing metrics like total vehicles, counts of stopped/speeding vehicles,
-            average speed, congestion level, vehicle counts per lane, etc.
-        """
         current_vehicle_count = len(self.tracked_vehicles)
         stopped_count = 0
         speeding_count = 0
         speeds_list_kmh: list[float] = []
-
-        # Initialize vehicle type counts, ensuring all defined types in vehicle_type_map are present
-        vehicle_type_counts: Dict[str, int] = {
-            name: 0 for name in self.vehicle_type_map.values()
-        }
-        # Ensure 'unknown' is also initialized if not already in the map's values (though it is by default now)
+        vehicle_type_counts: Dict[str, int] = {name: 0 for name in self.vehicle_type_map.values()}
         if "unknown" not in vehicle_type_counts:
             vehicle_type_counts["unknown"] = 0
 
         for data in self.tracked_vehicles.values():
-            speed_kmh = float(
-                data.get("speed", 0.0)
-            )  # Default to 0.0 if speed is missing
+            speed_kmh = float(data.get("speed", 0.0))
             speeds_list_kmh.append(speed_kmh)
-
             if speed_kmh < self.stopped_threshold_kmh:
                 stopped_count += 1
             if speed_kmh > self.speed_limit_kmh:
                 speeding_count += 1
-
-            class_id = data.get("class_id", -1)  # Default to -1 for unknown class_id
-            type_name = self.vehicle_type_map.get(
-                class_id, "unknown"
-            )  # Get type, default to 'unknown'
+            class_id = data.get("class_id", -1)
+            type_name = self.vehicle_type_map.get(class_id, "unknown")
             vehicle_type_counts[type_name] = vehicle_type_counts.get(type_name, 0) + 1
 
         avg_speed_kmh = float(np.median(speeds_list_kmh)) if speeds_list_kmh else 0.0
-
-        # Congestion level as percentage of stopped vehicles
-        congestion_lvl_percent = (
-            float((stopped_count / current_vehicle_count) * 100.0)
-            if current_vehicle_count > 0
-            else 0.0
-        )
+        congestion_lvl_percent = float((stopped_count / current_vehicle_count) * 100.0) if current_vehicle_count > 0 else 0.0
         
-        # Update Session Metrics (Rolling Averages)
         if current_vehicle_count > 0:
             self.session_metrics["speed_sum"] += avg_speed_kmh
             self.session_metrics["speed_samples"] += 1
             self.session_metrics["congestion_sum"] += congestion_lvl_percent
             self.session_metrics["congestion_samples"] += 1
 
-        session_avg_speed = (
-            self.session_metrics["speed_sum"] / self.session_metrics["speed_samples"]
-            if self.session_metrics["speed_samples"] > 0 else 0.0
-        )
-        session_avg_congestion = (
-            self.session_metrics["congestion_sum"] / self.session_metrics["congestion_samples"]
-            if self.session_metrics["congestion_samples"] > 0 else 0.0
-        )
+        session_avg_speed = self.session_metrics["speed_sum"] / self.session_metrics["speed_samples"] if self.session_metrics["speed_samples"] > 0 else 0.0
+        session_avg_congestion = self.session_metrics["congestion_sum"] / self.session_metrics["congestion_samples"] if self.session_metrics["congestion_samples"] > 0 else 0.0
+        is_congested = avg_speed_kmh < self.congestion_speed_threshold and current_vehicle_count > self.density_threshold
+        high_density_lanes = [lane for lane, count in self.lane_counts.items() if count > self.density_threshold]
 
-        # Determine if overall congestion is occurring
-        is_congested = (
-            avg_speed_kmh < self.congestion_speed_threshold
-            and current_vehicle_count > self.density_threshold
-        )  # Basic congestion heuristic
-
-        # Identify lanes with high density
-        high_density_lanes = [
-            lane
-            for lane, count in self.lane_counts.items()
-            if count > self.density_threshold
-        ]
-
-        # Calculate a simple congestion score (0-100)
-        # Lower speed and higher vehicle count contribute to higher congestion
         congestion_score = 0.0
         if current_vehicle_count > 0:
-            # Inverse of speed (normalized by speed limit)
-            speed_factor = (
-                1 - (avg_speed_kmh / self.speed_limit_kmh)
-                if self.speed_limit_kmh > 0
-                else 0
-            )
-            speed_factor = max(0, min(1, speed_factor))  # Clamp between 0 and 1
-
-            # Vehicle density factor (normalized by a reasonable max density, e.g., 100 vehicles in view)
-            density_factor = (
-                current_vehicle_count / 100.0
-            )  # Assuming 100 is a high density for a single view
-            density_factor = max(0, min(1, density_factor))  # Clamp between 0 and 1
-
-            # Combine factors, e.g., 70% from speed, 30% from density
+            speed_factor = 1 - (avg_speed_kmh / self.speed_limit_kmh) if self.speed_limit_kmh > 0 else 0
+            speed_factor = max(0, min(1, speed_factor))
+            density_factor = current_vehicle_count / 100.0
+            density_factor = max(0, min(1, density_factor))
             congestion_score = (speed_factor * 0.7 + density_factor * 0.3) * 100
             congestion_score = round(congestion_score, 1)
 
-        # Lane Occupancy & Queue Length
         lane_occupancy: Dict[int, float] = {}
         lane_queues: Dict[int, float] = {}
-        
         for lane_id, count in self.lane_counts.items():
-            # Estimate lane occupancy (simplified: each vehicle takes ~5m of a 100m view segment)
-            # 100.0 is a placeholder for total lane capacity in view
-            lane_occupancy[lane_id] = min(100.0, (count * 15.0)) # 15% per car approx
-            
-            # Queue Length (Consecutive stopped vehicles)
-            # Find vehicles in this lane
+            lane_occupancy[lane_id] = min(100.0, (count * 15.0))
             lane_vehicles = [v for v in self.tracked_vehicles.values() if v.get("lane") == lane_id]
             stopped_in_lane = [v for v in lane_vehicles if v.get("speed", 0) < self.stopped_threshold_kmh]
-            
             if len(stopped_in_lane) >= 3:
-                # Estimate physical length as distance between furthest vehicles in chain
-                # Simplified: count * typical vehicle length + gap
-                lane_queues[lane_id] = len(stopped_in_lane) * 6.0 # 6 meters per car
+                lane_queues[lane_id] = len(stopped_in_lane) * 6.0
             else:
                 lane_queues[lane_id] = 0.0
 
         return {
-            "total_vehicles": current_vehicle_count, # Instantaneous count
-            "total_vehicles_cumulative": len(self.seen_vehicle_ids), # Session unique count
+            "total_vehicles": current_vehicle_count,
+            "total_vehicles_cumulative": len(self.seen_vehicle_ids),
             "session_average_speed_kmh": round(session_avg_speed, 1),
             "session_congestion_level_percent": round(session_avg_congestion, 1),
             "stopped_vehicles": stopped_count,
@@ -272,51 +209,11 @@ class TrafficMonitor:
             "average_speed_kmh": round(avg_speed_kmh, 1),
             "congestion_level_percent": round(congestion_lvl_percent, 1),
             "is_congested": is_congested,
-            "congestion_score": congestion_score,  # Added congestion_score
-            "vehicles_per_lane": self.lane_counts.copy(),  # Return a copy
+            "congestion_score": congestion_score,
+            "vehicles_per_lane": self.lane_counts.copy(),
             "high_density_lanes": high_density_lanes,
             "vehicle_type_counts": vehicle_type_counts,
             "lane_occupancy": lane_occupancy,
             "queue_lengths": lane_queues,
-            "anomalies": self.anomalies[-5:] # Return only recent ones to client
+            "anomalies": self.anomalies[-5:]
         }
-
-
-# Example of how this class might be used (optional, for testing this module directly)
-if __name__ == "__main__":
-    # Dummy config for testing
-    sample_config = {
-        "speed_limit": 50.0,
-        "incident_detection": {
-            "density_threshold": 5,  # Lower for easier testing
-            "congestion_speed_threshold": 15.0,
-        },
-        "stopped_speed_threshold_kmh": 3.0,
-    }
-
-    monitor = TrafficMonitor(sample_config)
-
-    # Dummy vehicle data
-    vehicles_data = {
-        1: {"speed": 10.0, "lane": 1, "class_id": 2},  # car, stopped
-        2: {"speed": 60.0, "lane": 1, "class_id": 7},  # truck, speeding
-        3: {"speed": 30.0, "lane": 2, "class_id": 2},  # car
-        4: {"speed": 2.0, "lane": 1, "class_id": 3},  # motorcycle, stopped
-        5: {"speed": 12.0, "lane": 1, "class_id": 5},  # bus, congesting speed
-        6: {"speed": 10.0, "lane": 1, "class_id": 2},  # car, congesting speed
-        7: {"speed": 8.0, "lane": 1, "class_id": 7},  # truck, congesting speed
-    }
-
-    monitor.update_vehicles(vehicles_data)
-    metrics = monitor.get_metrics()
-
-    logger.info("Traffic Monitor Test Metrics:")
-    for key, value in metrics.items():
-        logger.info(f"  {key}: {value}")
-
-    # Test with no vehicles
-    monitor.update_vehicles({})
-    metrics_empty = monitor.get_metrics()
-    logger.info("Traffic Monitor Test Metrics (Empty):")
-    for key, value in metrics_empty.items():
-        logger.info(f"  {key}: {value}")
