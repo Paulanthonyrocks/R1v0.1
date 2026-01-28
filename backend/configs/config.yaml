@@ -488,8 +488,8 @@ incident_detection:
 perspective_calibration:
   matrix_path: backend/configs/perspective_matrix.npy
 performance:
-  gpu_acceleration: false
-  inference_pool_size: 1
+  gpu_acceleration: true
+  inference_pool_size: 2
   memory_limit_percent: 95
   cpu_limit_percent: 90
   min_global_skip_factor: 1.0

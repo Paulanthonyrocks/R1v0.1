@@ -285,7 +285,7 @@ class CoreModule:
         # Load Model
         try:
             self.device = self._check_gpu_availability()
-            self._load_model(self.device)
+            self._load_model(use_gpu=(self.device != "cpu"))
         except Exception as e:
             logger.error(f"Failed to load model in CoreModule __init__: {e}")
             raise
@@ -293,63 +293,21 @@ class CoreModule:
     def _check_gpu_availability(self) -> str:
         """
         Check for GPU availability and return the appropriate device string.
+        Respects the 'gpu_acceleration' setting in performance config.
         """
         import torch
-        if torch.cuda.is_available():
+        use_gpu_config = self.config.get("performance", {}).get("gpu_acceleration", False)
+        
+        if use_gpu_config and torch.cuda.is_available():
             device_name = torch.cuda.get_device_name(0)
             logger.info(f"[{self.feed_id}] GPU Detected: {device_name}. Enabling CUDA acceleration.")
             return "0" # Ultralytics uses "0", "1", etc. for GPU
-        else:
-            logger.warning(f"[{self.feed_id}] No GPU detected. Falling back to CPU inference.")
+        elif use_gpu_config:
+            logger.warning(f"[{self.feed_id}] GPU acceleration requested but no CUDA device detected. Falling back to CPU.")
             return "cpu"
-
-    def _load_model(self, device: str):
-        """
-        Load the YOLO model, optionally optimizing for TensorRT/ONNX.
-        """
-        start_time = time.time()
-        
-        # 1. Attempt to find an optimized version if on GPU
-        model_path_obj = Path(self.model_path)
-        optimized_path = None
-        
-        # Priority: TensorRT (.engine) > ONNX (.onnx) > PyTorch (.pt)
-        if device != "cpu":
-            engine_path = model_path_obj.with_suffix(".engine")
-            onnx_path = model_path_obj.with_suffix(".onnx")
-            
-            if engine_path.exists():
-                logger.info(f"[{self.feed_id}] Found TensorRT engine: {engine_path}")
-                optimized_path = str(engine_path)
-            elif onnx_path.exists():
-                logger.info(f"[{self.feed_id}] Found ONNX model: {onnx_path}")
-                optimized_path = str(onnx_path)
-            
-            # Auto-Optimization Logic (only if enabled in config)
-            if not optimized_path and self.config.get("performance", {}).get("auto_optimize", False):
-                try:
-                    logger.info(f"[{self.feed_id}] No optimized model found. Exporting to TensorRT...")
-                    # Load .pt first to export
-                    pt_model = YOLO(self.model_path)
-                    # Export creates the file in the same dir
-                    # Note: TensorRT export requires valid GPU
-                    pt_model.export(format="engine", device=device, half=True) 
-                    if engine_path.exists():
-                        optimized_path = str(engine_path)
-                except Exception as e:
-                    logger.error(f"[{self.feed_id}] optimization failed: {e}. Falling back to .pt")
-
-        # 2. Load the best available model
-        final_path = optimized_path if optimized_path else self.model_path
-        
-        self.model = YOLO(final_path)
-        
-        # Warmup if using GPU
-        if device != "cpu":
-            # self.model.to(device) # YOLO handles this automatically usually, but let's be safe
-            pass
-            
-        logger.info(f"[{self.feed_id}] Model loaded from {final_path} on device {device} in {time.time() - start_time:.2f}s")
+        else:
+            logger.info(f"[{self.feed_id}] GPU acceleration disabled by config. Using CPU.")
+            return "cpu"
 
     def _initialize_roi_mask(self, resolution: List[int]):
         """Generate the ROI mask once to save CPU cycles per frame."""

@@ -404,7 +404,7 @@ def inference_worker(
                         core._first_detection_done = True
                         
                     monitor.update_vehicles(vis_tracks)
-                    metrics = monitor.get_metrics()
+                    metrics_result = monitor.get_metrics()
                     metrics_obj.frames_processed += 1
                     
                     serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks)
@@ -422,7 +422,7 @@ def inference_worker(
                     
                     try:
                         central_output_queue.put_nowait((
-                            meta['feed_id'], f_idx, meta['frame_bytes'], metrics, serialized_v, extra
+                            meta['feed_id'], f_idx, meta['frame_bytes'], metrics_result, serialized_v, extra
                         ))
                     except queue.Full:
                         metrics_obj.frames_dropped += 1

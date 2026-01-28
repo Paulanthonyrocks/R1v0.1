@@ -1149,7 +1149,18 @@ class FeedManager:
 
             # 3. Binary Serialization with msgpack
             # Use raw bytes for performance
-            msg_bytes = msgpack.packb(payload, use_bin_type=True)
+            def msgpack_default(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, (np.integer, np.int64, np.int32)):
+                    return int(obj)
+                if isinstance(obj, (np.floating, np.float64, np.float32)):
+                    return float(obj)
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return str(obj)
+
+            msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
             
             subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
             if not subscribed_client_ids:
