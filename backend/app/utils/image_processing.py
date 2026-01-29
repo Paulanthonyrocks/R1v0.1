@@ -18,6 +18,21 @@ from tenacity import (
 
 logger = logging.getLogger(__name__)
 
+# Define retryable exceptions for Gemini OCR
+try:
+    from google.api_core import exceptions as google_api_exceptions
+    GOOGLE_RETRY_EXCEPTIONS = (
+        google_api_exceptions.PermissionDenied,
+        google_api_exceptions.ResourceExhausted,
+        google_api_exceptions.DeadlineExceeded,
+        google_api_exceptions.InternalServerError,
+        google_api_exceptions.ServiceUnavailable,
+        google_api_exceptions.Aborted,
+        google_api_exceptions.Unknown,
+    )
+except ImportError:
+    GOOGLE_RETRY_EXCEPTIONS = ()
+
 
 class LicensePlatePreprocessor:
     def __init__(
@@ -75,17 +90,7 @@ class LicensePlatePreprocessor:
             3
         ),  # Matches the value from original config, adjustable
         retry=retry_if_exception_type(
-            (
-                google_api_exceptions.PermissionDenied,
-                google_api_exceptions.ResourceExhausted,
-                google_api_exceptions.DeadlineExceeded,
-                google_api_exceptions.InternalServerError,
-                google_api_exceptions.ServiceUnavailable,
-                google_api_exceptions.Aborted,
-                google_api_exceptions.Unknown,
-                ConnectionError,
-                TimeoutError,
-            )
+            GOOGLE_RETRY_EXCEPTIONS + (ConnectionError, TimeoutError)
         ),
     )
     def _call_gemini_ocr(self, image_roi: np.ndarray) -> str:
