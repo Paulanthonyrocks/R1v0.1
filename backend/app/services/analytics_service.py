@@ -56,9 +56,23 @@ class AnalyticsService:
         self._traffic_signal_service = traffic_signal_service
         self._notification_service = notification_service
         self._data_cache = TrafficDataCache()
-        self._traffic_predictor = TrafficPredictor(config=config)
-        self._anomaly_detector = TrafficAnomalyDetector(config=config)
+        self._traffic_predictor_instance = None
+        self._anomaly_detector_instance = None
         self._prediction_log_table_initialized = False
+
+    @property
+    def _traffic_predictor(self):
+        if self._traffic_predictor_instance is None:
+            logger.info("Lazy-loading TrafficPredictor...")
+            self._traffic_predictor_instance = TrafficPredictor(config=self.config)
+        return self._traffic_predictor_instance
+
+    @property
+    def _anomaly_detector(self):
+        if self._anomaly_detector_instance is None:
+            logger.info("Lazy-loading TrafficAnomalyDetector...")
+            self._anomaly_detector_instance = TrafficAnomalyDetector(config=self.config)
+        return self._anomaly_detector_instance
 
         self._node_congestion_task: Optional[asyncio.Task] = None
         self._kafka_consumer_task: Optional[asyncio.Task] = None

@@ -62,6 +62,15 @@ MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
 
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
+        # --- CRITICAL: Set multiprocessing start method for CUDA safety ---
+        import multiprocessing
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+            logger.info("Multiprocessing start method set to 'spawn' for CUDA safety.")
+        except RuntimeError:
+            # Already set, ignore
+            pass
+
         self.config = config
         self.process_registry: Dict[str, Dict[str, Any]] = {}
         self.video_writers: Dict[str, VideoWriter] = {}

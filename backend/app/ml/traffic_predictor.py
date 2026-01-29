@@ -7,14 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Attempt to import tensorflow gracefully
-try:
-    import tensorflow as tf
-except Exception as e:
-    tf = None
-    logger.error(f"Failed to import tensorflow. ML features will be disabled. Error: {e}")
-
-
 class TrafficPredictor:
     def __init__(self, config: Dict[str, Any], model_object=None):
         self.config = config
@@ -41,7 +33,9 @@ class TrafficPredictor:
 
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""
-        if tf is None:
+        try:
+            import tensorflow as tf
+        except ImportError:
             logger.error("TensorFlow is not available. Cannot initialize model.")
             self.model = None
             return
@@ -413,7 +407,9 @@ class TrafficPredictor:
 
     def train_model(self, filepath: str, epochs: int = 10, batch_size: int = 32):
         """Train the LSTM model with historical traffic data from a CSV file."""
-        if tf is None:
+        try:
+            import tensorflow as tf
+        except ImportError:
             logger.error("TensorFlow is not available. Cannot train model.")
             return
 
@@ -502,7 +498,9 @@ class TrafficPredictor:
 
     def load_model(self, path: str):
         """Load a trained model from a file"""
-        if tf is None:
+        try:
+            import tensorflow as tf
+        except ImportError:
             logger.error("TensorFlow is not available. Cannot load model.")
             return
 

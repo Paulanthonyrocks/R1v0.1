@@ -20,12 +20,16 @@ class CarClassifier:
 
         try:
             import tensorflow as tf
-        except (ImportError, OSError) as e:
-            logger.error(f"Failed to import tensorflow: {e}. Car classification will be disabled.")
-            self.interpreter = None
-            return
-
-        try:
+            # --- CRITICAL: Enable GPU Memory Growth ---
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                try:
+                    for gpu in gpus:
+                        tf.config.experimental.set_memory_growth(gpu, True)
+                    logger.info("CarClassifier: TensorFlow GPU memory growth enabled.")
+                except RuntimeError as e:
+                    logger.warning(f"CarClassifier: Memory growth must be set before GPUs have been initialized: {e}")
+            
             # Check for GPU acceleration config
             use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
             delegates = []
@@ -60,6 +64,10 @@ class CarClassifier:
             # If we don't have them, we might need to add them later or find the source.
             self.labels = self._load_labels()
             
+        except (ImportError, OSError) as e:
+            logger.error(f"Failed to import tensorflow: {e}. Car classification will be disabled.")
+            self.interpreter = None
+            return
         except Exception as e:
             logger.error(f"Failed to load car classifier: {e}")
             self.interpreter = None
