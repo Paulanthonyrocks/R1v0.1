@@ -31,13 +31,24 @@ def load_ml_model(model_path: str = None) -> YOLO:
         logger.info(f"Loading YOLOv8 model from {model_path}")
         model = YOLO(model_path)
         
-        # Check for CUDA and move model
+        # Check for CUDA and move model, respecting config
         import torch
-        if torch.cuda.is_available():
-            logger.info("CUDA available. Moving pavement model to GPU.")
+        from app.config import get_current_config
+        
+        use_gpu = False
+        try:
+            config = get_current_config()
+            use_gpu = config.performance.gpu_acceleration
+        except Exception:
+            # Fallback if config is not initialized (e.g., in some tests)
+            logger.warning("Config not initialized, defaulting to CPU for pavement model.")
+        
+        if use_gpu and torch.cuda.is_available():
+            logger.info("CUDA available and enabled in config. Moving pavement model to GPU.")
             model.to("cuda")
         else:
-            logger.info("CUDA not available. Using CPU for pavement model.")
+            reason = "disabled in config" if not use_gpu else "not available"
+            logger.info(f"Using CPU for pavement model (GPU {reason}).")
             
         return model
     except Exception as e:

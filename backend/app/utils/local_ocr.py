@@ -11,7 +11,8 @@ class LocalOCR:
         self.config = config
         self.ocr_cfg = config.get("ocr_engine", {})
         self.languages = self.ocr_cfg.get("languages", ["en"])
-        self.gpu = config.get("performance", {}).get("gpu_acceleration", False)
+        # Prioritize OCR specific GPU flag, fallback to global performance flag
+        self.gpu = self.ocr_cfg.get("use_gpu_ocr", config.get("performance", {}).get("gpu_acceleration", False))
         
         logger.info(f"Initializing EasyOCR with languages {self.languages} (GPU: {self.gpu})")
         try:

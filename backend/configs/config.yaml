@@ -5,8 +5,8 @@ video_processing:
   adaptive_streaming: true
   roi_scale: 0.5
 performance:
-  gpu_acceleration: true
-  auto_optimize: true # Set to true to auto-export to TensorRT
+  gpu_acceleration: false
+  auto_optimize: false # Set to true to auto-export to TensorRT
   batch_size: 4
   inference_timeout: 0.005 # 5ms wait
   inference_pool_size: 2
@@ -393,7 +393,7 @@ vehicle_detection:
   static_object_filter_enabled: true
   static_movement_threshold: 25
   static_object_timeout: 20
-  car_classification_enabled: true
+  car_classification_enabled: false
   car_classification_interval_frames: 30
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
   car_classifier_labels_path: backend/models/car_labels.txt
@@ -463,9 +463,10 @@ pixels_per_meter: 30
 stopped_speed_threshold_kmh: 5
 accel_threshold_mps2: 0.5
 ocr_engine:
+  enabled: false
   use_gemini_ocr: false
   use_tesseract: true
-  use_gpu_ocr: true
+  use_gpu_ocr: false
   min_roi_size: 600
   sharpen_kernel:
   - - -1
