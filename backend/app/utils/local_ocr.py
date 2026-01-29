@@ -1,11 +1,6 @@
 import cv2
 import numpy as np
 import logging
-import easyocr
-from typing import List, Dict, Any, Optional
-
-logger = logging.getLogger("app.ml.ocr")
-
 class LocalOCR:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -16,8 +11,12 @@ class LocalOCR:
         
         logger.info(f"Initializing EasyOCR with languages {self.languages} (GPU: {self.gpu})")
         try:
+            import easyocr
             self.reader = easyocr.Reader(self.languages, gpu=self.gpu)
             logger.info("EasyOCR initialized successfully.")
+        except ImportError:
+            logger.error("EasyOCR library not found. Please install it with 'pip install easyocr'.")
+            self.reader = None
         except Exception as e:
             logger.error(f"Failed to initialize EasyOCR: {e}")
             self.reader = None

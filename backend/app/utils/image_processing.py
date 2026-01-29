@@ -8,10 +8,6 @@ from typing import (
     Optional,
 )  # Ensure Any is imported if used, though not directly in LPP
 from PIL import Image
-import pytesseract
-from google import genai
-from google.genai import types
-from google.api_core import exceptions as google_api_exceptions
 from tenacity import (
     retry,
     wait_exponential,
@@ -35,8 +31,12 @@ class LicensePlatePreprocessor:
         self.model_id = "gemini-1.5-flash"
         if self.gemini_api_key and self.use_gemini_ocr:
             try:
+                from google import genai
                 self.client = genai.Client(api_key=self.gemini_api_key)
                 logger.info(f"Gemini {self.model_id} client initialized for OCR.")
+            except ImportError:
+                logger.error("google-genai library not found. Gemini OCR will not be available.")
+                self.client = None
             except Exception as e:
                 logger.error(
                     f"Failed to initialize Gemini client: {e}", exc_info=True
@@ -85,7 +85,6 @@ class LicensePlatePreprocessor:
                 google_api_exceptions.Unknown,
                 ConnectionError,
                 TimeoutError,
-                # Not retrying on genai.types.BlockedPromptException or genai.types.StopCandidateException
             )
         ),
     )
@@ -93,6 +92,8 @@ class LicensePlatePreprocessor:
         if not self.client:
             logger.warning("Gemini client not available for _call_gemini_ocr.")
             return ""
+
+        from google.genai import types
 
         current_time = time.monotonic()
         if current_time - self.last_api_error_time < self.cool_down_secs:
@@ -153,18 +154,24 @@ class LicensePlatePreprocessor:
             self.last_api_error_time = time.monotonic()
             
             # Re-raise if it's one of the retryable exceptions handled by tenacity
-            if isinstance(e, (
-                google_api_exceptions.PermissionDenied,
-                google_api_exceptions.ResourceExhausted,
-                google_api_exceptions.DeadlineExceeded,
-                google_api_exceptions.InternalServerError,
-                google_api_exceptions.ServiceUnavailable,
-                google_api_exceptions.Aborted,
-                google_api_exceptions.Unknown,
-                ConnectionError,
-                TimeoutError,
-            )):
-                raise e
+            try:
+                from google.api_core import exceptions as google_api_exceptions
+                if isinstance(e, (
+                    google_api_exceptions.PermissionDenied,
+                    google_api_exceptions.ResourceExhausted,
+                    google_api_exceptions.DeadlineExceeded,
+                    google_api_exceptions.InternalServerError,
+                    google_api_exceptions.ServiceUnavailable,
+                    google_api_exceptions.Aborted,
+                    google_api_exceptions.Unknown,
+                    ConnectionError,
+                    TimeoutError,
+                )):
+                    raise e
+            except ImportError:
+                # If google.api_core is not present, we can't check for these specific exceptions
+                # but they probably won't be raised anyway if the lib is missing
+                pass
             return ""
 
     def _preprocess_for_tesseract(self, roi: np.ndarray) -> Optional[np.ndarray]:
@@ -236,6 +243,7 @@ class LicensePlatePreprocessor:
 
         if processed_roi_for_tesseract is not None:
             try:
+                import pytesseract
                 # Standard Tesseract config for license plates
                 custom_config = r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
                 text = pytesseract.image_to_string(
@@ -247,6 +255,9 @@ class LicensePlatePreprocessor:
                     logger.info(f"Tesseract OCR successful: '{ocr_result}'")
                 else:
                     logger.debug("Tesseract OCR: No text found.")
+            except ImportError:
+                logger.error("pytesseract library not found. Local OCR will not be available.")
+                ocr_result = ""
             except Exception as e:
                 logger.error(f"Tesseract OCR error: {e}")
                 ocr_result = ""
