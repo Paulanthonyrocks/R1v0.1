@@ -60,20 +60,6 @@ class AnalyticsService:
         self._anomaly_detector_instance = None
         self._prediction_log_table_initialized = False
 
-    @property
-    def _traffic_predictor(self):
-        if self._traffic_predictor_instance is None:
-            logger.info("Lazy-loading TrafficPredictor...")
-            self._traffic_predictor_instance = TrafficPredictor(config=self.config)
-        return self._traffic_predictor_instance
-
-    @property
-    def _anomaly_detector(self):
-        if self._anomaly_detector_instance is None:
-            logger.info("Lazy-loading TrafficAnomalyDetector...")
-            self._anomaly_detector_instance = TrafficAnomalyDetector(config=self.config)
-        return self._anomaly_detector_instance
-
         self._node_congestion_task: Optional[asyncio.Task] = None
         self._kafka_consumer_task: Optional[asyncio.Task] = None
         self._node_congestion_broadcast_interval = self.config.get("node_congestion_broadcast", {}).get(
@@ -94,6 +80,20 @@ class AnalyticsService:
         self._last_flush_time = time.time()
 
         logger.info("AnalyticsService initialized.")
+
+    @property
+    def _traffic_predictor(self):
+        if self._traffic_predictor_instance is None:
+            logger.info("Lazy-loading TrafficPredictor...")
+            self._traffic_predictor_instance = TrafficPredictor(config=self.config)
+        return self._traffic_predictor_instance
+
+    @property
+    def _anomaly_detector(self):
+        if self._anomaly_detector_instance is None:
+            logger.info("Lazy-loading TrafficAnomalyDetector...")
+            self._anomaly_detector_instance = TrafficAnomalyDetector(config=self.config)
+        return self._anomaly_detector_instance
 
     def set_feed_manager(self, feed_manager):
         """Sets the feed manager to avoid circular imports."""

@@ -1,19 +1,36 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query, status
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field  # Added for SuggestionFeedbackRequest
 import logging
 
+from app.models.traffic import LocationModel
 from app.models.routing import (
     PersonalizedRouteRequest,
     PersonalizedRouteResponse,
     RouteHistoryEntry,
     UserRoutingProfile,
+    SupportedAreasResponse,
 )
-from app.dependency_injection import get_current_active_user, get_prs
+from app.dependency_injection import get_current_active_user, get_prs, get_route_optimization_service
 from app.services.personalized_routing_service import PersonalizedRoutingService
+from app.services.route_optimization_service import RouteOptimizationService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class RouteOptimizationRequest(BaseModel):
+    start_location: LocationModel
+    end_location: LocationModel
+    departure_time: Optional[datetime] = None
+    preferences: Optional[Dict[str, Any]] = Field(
+        default={
+            "include_alternatives": True,
+            "avoid_highways": False,
+            "minimize_congestion": True,
+        }
+    )
 
 
 # Pydantic model for suggestion feedback request body
@@ -134,6 +151,31 @@ async def get_route_history(
         )
 
 
+@router.get(
+    "/history/analytics", 
+    summary="Get route history analytics for the current user",
+    description="Returns analytics on the user's route history, such as most common routes, time-of-day patterns, etc.",
+)
+async def get_route_history_analytics(
+    current_user: dict = Depends(get_current_active_user),
+    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    limit: int = Query(20, ge=1, le=100),
+) -> Dict[str, Any]:
+    logger.info(
+        f"GET /routes/history/analytics endpoint called by user: {current_user.get('email')}"
+    )
+    try:
+        analytics = await routing_service.get_route_history_analytics(
+            user_id=current_user["uid"], limit=limit
+        )
+        return analytics
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to compute route history analytics: {e}",
+        )
+
+
 @router.post(
     "/suggestions/feedback",
     summary="Record Feedback on Proactive Suggestion",
@@ -177,3 +219,59 @@ async def record_suggestion_feedback_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while recording feedback: {str(e)}",
         )
+
+
+@router.post(
+    "/optimize",
+    response_model=Dict[str, Any],
+    summary="Get Optimized Route",
+    description="Get an AI-optimized route with traffic predictions and recommendations",
+)
+async def optimize_route(
+    request: RouteOptimizationRequest = Body(...),
+    optimization_service: RouteOptimizationService = Depends(
+        get_route_optimization_service
+    ),
+    current_user: Dict = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    logger.info(f"POST /optimize endpoint called by user: {current_user.get('uid')}")
+    """Get an optimized route with traffic predictions"""
+    try:
+        return await optimization_service.get_optimized_route(
+            start_location=request.start_location,
+            end_location=request.end_location,
+            departure_time=request.departure_time,
+            preferences=request.preferences,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Route optimization failed: {str(e)}",
+        )
+
+
+@router.get(
+    "/supported-areas",
+    response_model=SupportedAreasResponse,
+    summary="Get Supported Areas",
+    description="Get areas where route optimization is available",
+)
+async def get_supported_areas(
+    _: Dict = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """Get areas where route optimization is available"""
+    return {
+        "supported_areas": [
+            {
+                "name": "Downtown Area",
+                "bounds": {
+                    "north": 34.0522 + 0.1,
+                    "south": 34.0522 - 0.1,
+                    "east": -118.2437 + 0.1,
+                    "west": -118.2437 - 0.1,
+                },
+                "coverage_level": "high",
+            }
+        ],
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }

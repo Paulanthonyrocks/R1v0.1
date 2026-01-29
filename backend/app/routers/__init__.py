@@ -4,13 +4,12 @@ from . import config
 from . import events
 from . import feeds
 from . import incidents
-from . import personalized_routes
-from . import route_history
-from . import routes
+from . import routing
 from . import signals
-from . import token
 from . import video
 from . import weather
+from . import ws
+from . import vehicles
 
 
 __all__ = [
@@ -20,11 +19,10 @@ __all__ = [
     "events",
     "feeds",
     "incidents",
-    "personalized_routes",
-    "route_history",
-    "routes",
+    "routing",
     "signals",
-    "token",
     "video",
     "weather",
+    "ws",
+    "vehicles",
 ]

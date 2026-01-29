@@ -14,7 +14,6 @@ from .services import (
     get_event_service,
     get_analytics_service,
     get_advanced_analytics_service,
-    feed_manager_instance,
     analytics_service_instance,
     connection_manager_instance,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "get_event_service",
     "get_analytics_service",
     "get_advanced_analytics_service",
-    "feed_manager_instance",
     "analytics_service_instance",
     "connection_manager_instance",
     # Add class names here if you want them included in '*' import

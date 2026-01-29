@@ -45,8 +45,8 @@ from app.database import get_database_manager
 # --- Routers ---
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
-    incidents, personalized_routes, traffic_data, weather,
-    events, route_history, ws, routes, vehicles, signals,
+    incidents, routing, weather,
+    events, ws, vehicles, signals,
 )
 
 # --- Constants & Setup ---
@@ -360,15 +360,12 @@ app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics
 app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])
 app.include_router(video.router, prefix="/api/v1/video", tags=["Video"])
 app.include_router(incidents.router, prefix="/api/v1/incidents", tags=["Incidents"])
-app.include_router(personalized_routes.router, prefix="/api/v1/routes", tags=["Routes"])
+app.include_router(routing.router, prefix="/api/v1/routes", tags=["Routing"])
 app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
 app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
-app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["History"])
-app.include_router(traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"])
 app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"])
-app.include_router(signals.router, prefix="/api/v1", tags=["Signals"])
+app.include_router(signals.router, prefix="/api/v1/signals", tags=["Signals"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
-app.include_router(routes.router, prefix="/api/v1", tags=["General"])
 
 # --- Secure File Serving ---
 @app.get("/api/v1/snapshots/{file_path:path}", tags=["Snapshots"])

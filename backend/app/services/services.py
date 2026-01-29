@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from app.websocket.connection_manager import ConnectionManager
-from app.services.feed_manager import FeedManager as FMClass, initialize_feed_manager
+from app.services.feed_manager import FeedManager as FMClass
 from app.services.traffic_signal_service import TrafficSignalService
 from app.services.route_optimization_service import RouteOptimizationService
 from app.services.personalized_routing_service import PersonalizedRoutingService
@@ -203,7 +203,7 @@ class ServiceRegistry:
             logger.info("NodeManager initialized and started.")
 
             # Feed Manager
-            self._feed_manager = await initialize_feed_manager(config)
+            self._feed_manager = FMClass(config)
             self._feed_manager.set_connection_manager(connection_manager)
             self._feed_manager.set_analytics_service(self._analytics_service)
             logger.info("FeedManager initialized.")
@@ -449,7 +449,6 @@ class ServiceRegistry:
 _service_registry: Optional[ServiceRegistry] = None
 
 # Globals for backward compatibility
-feed_manager_instance: Optional[FMClass] = None
 connection_manager_instance: Optional[ConnectionManager] = None
 analytics_service_instance: Optional[AnalyticsService] = None
 
@@ -468,7 +467,7 @@ async def initialize_services(
     connection_manager: ConnectionManager
 ) -> None:
     """Initialize all application services."""
-    global _service_registry, feed_manager_instance, connection_manager_instance, analytics_service_instance
+    global _service_registry, connection_manager_instance, analytics_service_instance
     
     if _service_registry is not None:
         logger_instance.warning("Services already initialized.")
@@ -479,7 +478,6 @@ async def initialize_services(
     
     # Update globals for backward compatibility
     try:
-        feed_manager_instance = _service_registry.feed_manager
         connection_manager_instance = _service_registry.connection_manager
         analytics_service_instance = _service_registry.analytics_service
     except RuntimeError as e:
@@ -488,7 +486,7 @@ async def initialize_services(
 
 async def shutdown_services() -> None:
     """Shutdown all application services."""
-    global _service_registry, feed_manager_instance, connection_manager_instance, analytics_service_instance
+    global _service_registry, connection_manager_instance, analytics_service_instance
     
     if _service_registry is None:
         logger.warning("Services not initialized, nothing to shutdown.")
@@ -498,7 +496,6 @@ async def shutdown_services() -> None:
     _service_registry = None
     
     # Reset globals
-    feed_manager_instance = None
     connection_manager_instance = None
     analytics_service_instance = None
 

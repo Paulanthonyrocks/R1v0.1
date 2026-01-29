@@ -1,9 +1,8 @@
-import logging
 from typing import Dict, Any, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from app.websocket.connection_manager import ConnectionManager
-from app.services.feed_manager import FeedManager, initialize_feed_manager
+from app.services.feed_manager import FeedManager
 from app.database import get_database_manager
 from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
@@ -17,7 +16,6 @@ class DependencyContainer:
     """A lightweight dependency injection container."""
     
     def __init__(self):
-        self._services: Dict[str, Any] = {}
         self._config: Dict[str, Any] = {}
 
     def set_config(self, config: Any):
@@ -27,58 +25,27 @@ class DependencyContainer:
         else:
             self._config = config
 
-    def register(self, name: str, service: Any):
-        """Register a service in the container."""
-        self._services[name] = service
-        logger.debug(f"Service registered: {name}")
-
-    def get(self, name: str) -> Any:
-        """Get a service from the container."""
-        service = self._services.get(name)
-        if service is None:
-            raise RuntimeError(f"Service not found: {name}")
-        return service
-
     # Factory methods for core services
     
     async def get_connection_manager(self) -> ConnectionManager:
-        if "connection_manager" not in self._services:
-            manager = ConnectionManager()
-            # Initialize with default or config values
-            ws_cfg = self._config.get("websocket", {})
-            await manager.init(
-                max_connections=ws_cfg.get("max_connections", 1000),
-                token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
-                ping_interval=ws_cfg.get("ping_interval", 15),
-                pong_timeout=ws_cfg.get("pong_timeout", 60),
-            )
-            self._services["connection_manager"] = manager
-        return self._services["connection_manager"]
+        from app.services import get_connection_manager
+        return get_connection_manager()
 
     async def get_feed_manager(self) -> FeedManager:
-        if "feed_manager" not in self._services:
-            fm = await initialize_feed_manager(self._config)
-            self._services["feed_manager"] = fm
-        return self._services["feed_manager"]
+        from app.services import get_feed_manager
+        return get_feed_manager()
 
     def get_feature_flags(self) -> FeatureFlags:
-        if "feature_flags" not in self._services:
-            self._services["feature_flags"] = FeatureFlags(self._config)
-        return self._services["feature_flags"]
+        from app.core.feature_flags import FeatureFlags
+        return FeatureFlags(self._config)
 
     async def get_analytics_service(self) -> AnalyticsService:
-        if "analytics_service" not in self._services:
-            # We use the global getter from app.services to ensure we use the same instance
-            from app.services import get_analytics_service as get_as_global
-            self._services["analytics_service"] = get_as_global()
-        return self._services["analytics_service"]
+        from app.services import get_analytics_service
+        return get_analytics_service()
 
     async def get_advanced_analytics_service(self) -> AdvancedAnalyticsService:
-        if "advanced_analytics_service" not in self._services:
-            # We use the global getter from app.services
-            from app.services import get_advanced_analytics_service as get_aas_global
-            self._services["advanced_analytics_service"] = get_aas_global()
-        return self._services["advanced_analytics_service"]
+        from app.services import get_advanced_analytics_service
+        return get_advanced_analytics_service()
 
 # Global container instance
 container = DependencyContainer()

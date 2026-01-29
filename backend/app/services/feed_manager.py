@@ -119,17 +119,17 @@ class FeedManager:
 
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
         self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
-        self.redis_url = self.config.get("performance", {}).get("redis_url")
+        redis_cfg = self.config.get("redis", {})
         
         # We divide the QUEUE_MAX_SIZE among workers
         per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
         
-        if self.redis_url:
+        if redis_cfg.get("enabled", False):
             self._inference_input_queues = [
-                RedisQueue(self.redis_url, f"inference_input_{i}", maxsize=per_worker_q_size) 
+                RedisQueue(f"inference_input_{i}", maxsize=per_worker_q_size) 
                 for i in range(self._inference_pool_size)
             ]
-            self._central_output_queue = RedisQueue(self.redis_url, "central_output", maxsize=QUEUE_MAX_SIZE)
+            self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
         else:
             self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
             self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
@@ -1427,17 +1427,3 @@ class FeedManager:
             await asyncio.wait(tasks, timeout=5.0)
 
     # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
-
-# Global Instance Management
-feed_manager_instance: Optional[FeedManager] = None
-
-async def initialize_feed_manager(config: dict):
-    global feed_manager_instance
-    if feed_manager_instance is None:
-        feed_manager_instance = FeedManager(config)
-    return feed_manager_instance
-
-def get_feed_manager() -> FeedManager:
-    if feed_manager_instance is None:
-        raise RuntimeError("FeedManager not initialized.")
-    return feed_manager_instance

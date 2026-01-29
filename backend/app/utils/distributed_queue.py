@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from typing import Any, Optional
-import redis
+from .redis_client import get_redis_client
 
 logger = logging.getLogger("app.utils.redis_queue")
 
@@ -11,11 +11,11 @@ class RedisQueue:
     A simple queue implementation using Redis Lists.
     Matches the basic interface of multiprocessing.Queue for easy swap-in.
     """
-    def __init__(self, redis_url: str, name: str, maxsize: int = 0):
-        self.redis = redis.from_url(redis_url)
+    def __init__(self, name: str, maxsize: int = 0):
+        self.redis = get_redis_client()
         self.key = f"q:{name}"
         self.maxsize = maxsize
-        logger.info(f"Initialized RedisQueue '{name}' at {redis_url}")
+        logger.info(f"Initialized RedisQueue '{name}'")
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the back of the queue."""
