@@ -9,6 +9,17 @@ performance:
   auto_optimize: true # Set to true to auto-export to TensorRT
   batch_size: 4
   inference_timeout: 0.005 # 5ms wait
+  inference_pool_size: 2
+  memory_limit_percent: 95
+  cpu_limit_percent: 90
+  min_global_skip_factor: 1.0
+  max_global_skip_factor: 3.0
+  skip_factor_increase_step: 0.1
+  skip_factor_decrease_step: 0.05
+  cpu_threshold_for_skip_increase: 80
+  queue_fullness_threshold_for_skip_increase: 0.7
+  skip_factor_adjustment_interval: 360.0
+  long_sleep_after_increase: 10
 firebase_admin:
   service_account_key_path: backend/configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
@@ -376,18 +387,14 @@ vehicle_detection:
   static_object_filter_enabled: true
   static_movement_threshold: 25
   static_object_timeout: 20
-  car_classification_enabled: false
+  car_classification_enabled: true
   car_classification_interval_frames: 30
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
   car_classifier_labels_path: backend/models/car_labels.txt
-analytics_service:
-  node_congestion_broadcast:
-    enabled: false
-    interval: 300
   traffic_predictor:
     model_path: backend/models/traffic_predictor_model.h5
   traffic_prediction:
-    enabled: false
+    enabled: true
   frame_resolution:
   - 640
   - 480
@@ -407,6 +414,10 @@ analytics_service:
     3: motorcycle
     5: bus
     7: truck
+analytics_service:
+  node_congestion_broadcast:
+    enabled: true
+    interval: 300
 behavior_analysis:
   stopped_speed_threshold_kmh: 5
   speed_limit: 60
@@ -448,7 +459,7 @@ accel_threshold_mps2: 0.5
 ocr_engine:
   use_gemini_ocr: false
   use_tesseract: true
-  use_gpu_ocr: false
+  use_gpu_ocr: true
   min_roi_size: 600
   sharpen_kernel:
   - - -1
@@ -487,19 +498,6 @@ incident_detection:
   congestion_speed_threshold: 20
 perspective_calibration:
   matrix_path: backend/configs/perspective_matrix.npy
-performance:
-  gpu_acceleration: true
-  inference_pool_size: 2
-  memory_limit_percent: 95
-  cpu_limit_percent: 90
-  min_global_skip_factor: 1.0
-  max_global_skip_factor: 3.0
-  skip_factor_increase_step: 0.1
-  skip_factor_decrease_step: 0.05
-  cpu_threshold_for_skip_increase: 80
-  queue_fullness_threshold_for_skip_increase: 0.7
-  skip_factor_adjustment_interval: 360.0
-  long_sleep_after_increase: 10
 vis_options_default:
 - Grid Overlay
 - Lane Lines

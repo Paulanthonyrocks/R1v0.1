@@ -90,7 +90,7 @@ if __name__ == "__main__":
     )
 
     try:
-        segmenter = EdgeTAMSegmenter(use_gpu=False)
+        segmenter = EdgeTAMSegmenter(use_gpu=True)
         logger.info("EdgeTAMSegmenter initialized successfully.")
         
         # Test segmentation

@@ -154,6 +154,21 @@ def inference_worker(
                     else:
                         logger.warning(f"[Worker {worker_id}] GPU requested but not available.")
                 
+                # Auto-Optimization Logic (only if enabled in config)
+                auto_opt = config.get("performance", {}).get("auto_optimize", False)
+                if device != "cpu" and auto_opt:
+                    try:
+                        logger.info(f"[Worker {worker_id}] Auto-optimization enabled. Checking for optimized model...")
+                        if not engine_path.exists():
+                            logger.info(f"[Worker {worker_id}] No TensorRT engine found. Exporting (this may take a few minutes)...")
+                            temp_model = YOLO(full_model_path)
+                            temp_model.export(format="engine", device=device, half=True, imgsz=640)
+                            if engine_path.exists():
+                                logger.info(f"[Worker {worker_id}] Successfully exported to TensorRT.")
+                                full_model_path = str(engine_path)
+                    except Exception as e:
+                        logger.error(f"[Worker {worker_id}] Auto-optimization failed: {e}. Falling back to .pt")
+
                 shared_model = YOLO(full_model_path)
                 shared_model.to(device)
                 logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
