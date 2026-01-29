@@ -6,6 +6,7 @@ import logging
 from .services import (
     initialize_services,
     shutdown_services,
+    get_connection_manager,
     get_feed_manager,
     get_route_optimization_service,
     get_traffic_signal_service,
@@ -28,6 +29,7 @@ logger.debug("app.services package initialized.")
 __all__ = [
     "initialize_services",
     "shutdown_services",
+    "get_connection_manager",
     "get_feed_manager",
     "get_route_optimization_service",
     "get_traffic_signal_service",

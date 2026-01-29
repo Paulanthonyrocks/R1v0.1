@@ -7,13 +7,6 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Attempt to import tensorflow gracefully
-try:
-    import tensorflow as tf
-except Exception as e:
-    tf = None
-    logger.error(f"Failed to import tensorflow in anomaly_detector. ML features will be disabled. Error: {e}")
-
 class TrafficAnomalyDetector:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -28,8 +21,10 @@ class TrafficAnomalyDetector:
 
     def _initialize_model(self, feature_count: int):
         """Initialize an LSTM Autoencoder for anomaly detection."""
-        if tf is None:
-            logger.error("TensorFlow is not available. Cannot initialize anomaly detection model.")
+        try:
+            import tensorflow as tf
+        except Exception as e:
+            logger.error(f"Failed to import tensorflow in anomaly_detector: {e}")
             return
 
         try:
@@ -139,8 +134,10 @@ class TrafficAnomalyDetector:
         }
 
     def load_model(self, path: str):
-        if tf is None:
-            logger.error("TensorFlow is not available. Cannot load anomaly detection model.")
+        try:
+            import tensorflow as tf
+        except Exception as e:
+            logger.error(f"Failed to import tensorflow in anomaly_detector: {e}")
             return
 
         try:

@@ -411,6 +411,17 @@ async def detailed_health_check():
     except Exception as e:
         health["services"]["mongodb"] = {"status": "error", "message": str(e)}
         health["status"] = "degraded"
+
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        gpu_info = {"status": "ok" if cuda_available else "not_available"}
+        if cuda_available:
+            gpu_info["device"] = torch.cuda.get_device_name(0)
+            gpu_info["count"] = torch.cuda.device_count()
+        health["services"]["gpu"] = gpu_info
+    except Exception as e:
+        health["services"]["gpu"] = {"status": "error", "message": str(e)}
         
     return health
 
