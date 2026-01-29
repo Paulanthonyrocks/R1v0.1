@@ -329,6 +329,12 @@ mongodb:
   # Use 'mongodb://mongodb:27017/' when running in Docker with the mongodb service
   uri: "mongodb://localhost:27017/"
   database_name: "traffic_hub"
+  enabled: true
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  enabled: true
 feed_manager:
   max_concurrent_feeds: 5
   db_write_interval: 0.5

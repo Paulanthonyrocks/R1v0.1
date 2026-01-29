@@ -394,6 +394,27 @@ async def detailed_health_check():
     except Exception as e:
         health["services"]["database"] = {"status": "error", "message": str(e)}
         health["status"] = "degraded"
+
+    try:
+        from app.utils.redis_client import get_redis_client
+        client = get_redis_client()
+        if client.ping():
+            health["services"]["redis"] = {"status": "ok"}
+    except Exception as e:
+        health["services"]["redis"] = {"status": "error", "message": str(e)}
+        health["status"] = "degraded"
+
+    try:
+        db = get_database_manager()
+        if db.mongo_client:
+            db.mongo_client.admin.command("ismaster")
+            health["services"]["mongodb"] = {"status": "ok"}
+        else:
+            health["services"]["mongodb"] = {"status": "not_initialized"}
+    except Exception as e:
+        health["services"]["mongodb"] = {"status": "error", "message": str(e)}
+        health["status"] = "degraded"
+        
     return health
 
 if __name__ == "__main__":

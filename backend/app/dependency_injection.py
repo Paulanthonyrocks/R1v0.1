@@ -97,6 +97,17 @@ async def get_db():
     async with db_manager.get_session() as session:
         yield session
 
+async def get_redis():
+    """Dependency to get an async Redis client."""
+    from app.utils.redis_client import get_async_redis_client
+    return await get_async_redis_client()
+
+async def get_mongodb():
+    """Dependency to get MongoDB database instance."""
+    from app.database import get_database_manager
+    db_manager = get_database_manager()
+    return db_manager.mongo_db
+
 async def get_connection_manager() -> ConnectionManager:
     """Dependency to get the connection manager from the container."""
     # Assuming the container has been initialized/config set during startup

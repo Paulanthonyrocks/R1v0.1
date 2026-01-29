@@ -24,6 +24,18 @@ class DatabaseConfig(BaseModel):
     connection_timeout: int = 30
     query_timeout: int = 60
 
+class RedisConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    password: Optional[str] = None
+    enabled: bool = True
+
+class MongoDBConfig(BaseModel):
+    uri: str = "mongodb://localhost:27017/"
+    database_name: str = "traffic_hub"
+    enabled: bool = True
+
 class PerformanceConfig(BaseModel):
     inference_pool_size: int = 2
     memory_limit_percent: int = 80
@@ -35,6 +47,8 @@ class AppConfig(BaseSettings):
     
     logging: Dict[str, Any] = {}
     database: DatabaseConfig = DatabaseConfig()
+    redis: RedisConfig = RedisConfig()
+    mongodb: MongoDBConfig = MongoDBConfig()
     performance: PerformanceConfig = PerformanceConfig()
     websocket: Dict[str, Any] = {"max_connections": 1000}
     firebase_admin: Dict[str, Any] = {"auth_enabled": False}

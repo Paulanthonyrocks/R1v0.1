@@ -72,13 +72,38 @@ class SystemHealthService:
                     "fps": entry.get("timer").get_fps("loop_total") if entry.get("timer") else 0
                 })
 
+        # Redis status check
+        redis_status = "disabled"
+        try:
+            from app.utils.redis_client import get_redis_client
+            client = get_redis_client()
+            if client.ping():
+                redis_status = "connected"
+        except Exception as e:
+            redis_status = f"error: {str(e)}"
+
+        # MongoDB status check
+        mongo_status = "disabled"
+        try:
+            from app.database import get_database_manager
+            db_manager = get_database_manager()
+            if db_manager.mongo_client:
+                db_manager.mongo_client.admin.command("ismaster")
+                mongo_status = "connected"
+            else:
+                mongo_status = "not initialized"
+        except Exception as e:
+            mongo_status = f"error: {str(e)}"
+
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "system": {
                 "cpu_percent": cpu_usage,
                 "memory_percent": memory.percent,
                 "memory_used_gb": memory.used / (1024**3),
-                "disk_percent": disk.percent
+                "disk_percent": disk.percent,
+                "redis": redis_status,
+                "mongodb": mongo_status
             },
             "application": {
                 "active_feeds": active_feeds,
