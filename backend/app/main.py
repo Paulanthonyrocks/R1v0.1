@@ -85,14 +85,18 @@ async def run_migrations():
 # --- CORS Configuration ---
 def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
-    allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").split(",")
+    allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
     
+    # Always allow local development origins and the specific cloud workstation
     origins = [
         "http://localhost",
         "http://localhost:3000",
         "http://localhost:5173",
         "https://3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
-    ] if env == "development" else [o for o in allowed_origins_env if o]
+    ]
+    
+    if env != "development":
+        origins.extend(allowed_origins_env)
 
     cors_config = config.get("cors", {})
     origins.extend(cors_config.get("allowed_origins", []))
@@ -103,10 +107,11 @@ def setup_cors(app: FastAPI, config: dict):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_origin_regex=r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt",
+        allow_origin_regex=r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev",
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "X-Requested-With", "X-User-ID"],
+        expose_headers=["*"],
     )
 
 # --- Middleware Implementation ---
@@ -334,6 +339,12 @@ async def audit_middleware(request: Request, call_next):
 
 # Initialize CORS
 setup_cors(app, cfg_dict)
+
+@app.middleware("http")
+async def debug_options_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        logger.info(f"PREFLIGHT: Received OPTIONS request for {request.url.path} from origin: {request.headers.get('origin')}")
+    return await call_next(request)
 
 # --- Routers Inclusion ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])

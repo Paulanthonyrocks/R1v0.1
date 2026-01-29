@@ -9,6 +9,7 @@ import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
 import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
+import MetricsPanel from './MetricsPanel';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -318,25 +319,11 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     const renderOverlayControls = () => (
         <>
-            {/* Congestion Gauge Overlay - Integrated here to show in both Dropdown and Fullscreen if needed, 
-                but usually we only want it in the fullscreen panel or as a separate overlay. 
-                Upstream put it inside the panel. */}
-            {metrics && (
-                <div className="flex flex-col items-end gap-1 mb-4 p-2 bg-black/40 rounded border border-lcd-text/20">
-                    <div className="text-[10px] text-lcd-text/70 uppercase tracking-tighter font-lcd">Congestion</div>
-                    <div className="w-24 h-1.5 bg-black/40 border border-lcd-text/20 overflow-hidden">
-                        <div
-                            className={cn(
-                                "h-full transition-all duration-500",
-                                (metrics.congestion_index || 0) > 70 ? "bg-red-500" :
-                                    (metrics.congestion_index || 0) > 40 ? "bg-yellow-500" : "bg-primary"
-                            )}
-                            style={{ width: `${metrics.congestion_index || 0}%` }}
-                        />
-                    </div>
-                    <div className="text-[8px] text-lcd-text/50 font-lcd uppercase">Index: {metrics.congestion_index || 0}%</div>
-                </div>
-            )}
+            <MetricsPanel 
+                metrics={metrics} 
+                isLive={isLive} 
+                className="mb-4 border-primary/20 bg-black/60 shadow-none" 
+            />
             
             <StreamOverlayControls
                 showOverlays={showOverlays}
@@ -435,11 +422,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     {isLive ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
 
-                {metrics && isLive && !isToggling && !isLoading && !error && !minimalControls && (
-                    <div className="absolute top-1.5 right-1.5 text-xs text-lcd-bg group-hover:text-lcd-text bg-black/50 px-1.5 py-0.5 rounded-none backdrop-blur-sm tracking-normal font-lcd matrix-glow flex flex-col items-end z-20">
-                        <span>VEH: {metrics.total_vehicles_cumulative ?? metrics.total_vehicles ?? '--'}</span>
-                        <span>AVG SPEED: {metrics.session_average_speed_kmh ? metrics.session_average_speed_kmh.toFixed(1) : (metrics.average_speed_kmh ? metrics.average_speed_kmh.toFixed(1) : '--')} KM/H</span>
-                    </div>
+                {!minimalControls && (
+                    <MetricsPanel 
+                        metrics={metrics} 
+                        isLive={isLive} 
+                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-300" 
+                    />
                 )}
 
                 {!isToggling && !isLoading && !minimalControls && (

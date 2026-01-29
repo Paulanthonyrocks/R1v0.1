@@ -483,15 +483,23 @@ class CoreModule:
 
     def detect_and_track(
         self,
-        frame: np.ndarray,
+        frame: Optional[np.ndarray],
         frame_index: int,
         confidence_threshold: Optional[float] = None,
         proximity_threshold: Optional[int] = None,
         track_timeout: Optional[int] = None,
         external_detections: Optional[List[Tuple]] = None,
     ) -> Dict[str, Dict]:
+        # Handle skip frames where frame might be None
         if frame is None or frame.size == 0:
+            if external_detections is not None and len(external_detections) == 0:
+                # If we are explicitly skipping detection, we can just use predict_only logic
+                # but we need to ensure _save_vehicle_data is called.
+                vis_tracks, lane_bounds, lane_lines = self.predict_only(frame_index)
+                self._save_vehicle_data(vis_tracks)
+                return vis_tracks, lane_bounds, lane_lines
             return {}
+
         if self.model is None:
             logger.error("Model not loaded, cannot detect vehicles")
             return {}

@@ -31,10 +31,8 @@ class TrafficDataCache:
         logger.debug(f"Adding data point for {location_key}: {data_point}")
         self.location_data[location_key].append(data_point)
 
-        # Clean old data
-        self._clean_old_data(location_key)
         logger.debug(
-            f"Data point added and cleaned for {location_key}. Current points: {len(self.location_data[location_key])}"
+            f"Data point added for {location_key}. Current points: {len(self.location_data[location_key])}"
         )
 
     def _clean_old_data(self, location_key: str):

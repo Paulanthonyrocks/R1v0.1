@@ -294,12 +294,23 @@ def inference_worker(
                     first_detect = not getattr(core, '_first_detection_done', False)
                     should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
 
-                    # Decode
-                    nparr = np.frombuffer(frame_bytes, np.uint8)
-                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    if frame is None:
-                        metrics_obj.errors += 1
-                        continue
+                    # Optimization: Only decode frame if we actually need it for detection or special processing
+                    v_proc_cfg = config.get("video_processing", {})
+                    lane_cfg = config.get("lane_detection", {})
+                    
+                    is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
+                                     (frame_index % lane_cfg.get("lane_detection_interval", 10) == 0))
+                    
+                    # We need the frame if: 1. running detection, 2. doing lane detection, 3. adaptive streaming ROIs (on detection frames)
+                    needs_frame = should_detect or is_lane_frame
+                    
+                    frame = None
+                    if needs_frame:
+                        nparr = np.frombuffer(frame_bytes, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if frame is None:
+                            metrics_obj.errors += 1
+                            continue
                     
                     # Store meta
                     batch_meta.append({
@@ -382,7 +393,10 @@ def inference_worker(
                     frame = meta['frame']
                     f_idx = meta['frame_index']
                     
+                    # If we skip detection, pass empty list to prevent CoreModule from running its own
                     detections = batch_detections_map.get(i, None)
+                    if not meta['should_detect']:
+                        detections = []
                     
                     # If we should detect but have no detections (and no error), it means frame was processed but found nothing
                     # OR we failed inference.
@@ -390,11 +404,6 @@ def inference_worker(
                     # We want to force internal detection ONLY if we didn't run batch (e.g. tracking-only frame)
                     # BUT if we intended to detect (should_detect=True) and batch failed, we might want fallback.
                     # For now: pass detections (empty list if found nothing, None if not run)
-                    
-                    if meta['should_detect'] and i in inference_indices and detections is None:
-                        # Inference ran but returned nothing? Or failed? 
-                        # If failed/not yolo, detections is None. Core will run its own.
-                        pass 
                     
                     vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
                         frame, f_idx, external_detections=detections
@@ -412,7 +421,7 @@ def inference_worker(
                     # Serialize & Output
                     extra = {}
                     v_proc_cfg = config.get("video_processing", {})
-                    if v_proc_cfg.get("adaptive_streaming", False):
+                    if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
                          bg_scale = v_proc_cfg.get("roi_scale", 0.5)
                          bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                          _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
