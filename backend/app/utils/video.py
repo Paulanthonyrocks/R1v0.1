@@ -1,4 +1,5 @@
 import cv2
+import os
 import threading
 import time
 from queue import Queue, Empty
@@ -80,7 +81,20 @@ class FrameReader:
         return True
 
     def _read_frames_continuously(self) -> None:
-        cap = cv2.VideoCapture(self.source)
+        # Check for GPU decoding config
+        from app.config import get_current_config
+        perf_cfg = get_current_config().performance
+        
+        # Select backend and options based on GPU config
+        backend = cv2.CAP_ANY
+        if perf_cfg.video_gpu_acceleration and self.is_file:
+            # Note: This requires OpenCV built with FFMPEG and specific environment setup
+            # We use CAP_FFMPEG to allow for hardware acceleration flags
+            backend = cv2.CAP_FFMPEG
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid" # Example for NVIDIA
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG.")
+
+        cap = cv2.VideoCapture(self.source, backend)
         if not cap.isOpened():
             logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
             self.started_event.set() # Unblock init

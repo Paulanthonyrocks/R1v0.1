@@ -24,10 +24,18 @@ class VideoWriter:
         self.fps = fps
         self.resolution = None
         self.frame_queue = frame_queue
+
+        # Check for GPU config
+        from app.config import get_current_config
+        self.perf_cfg = get_current_config().performance
         
-        # Prepare codec preference list: prioritize H.264 for web compatibility
+        # Prepare codec preference list
         self._codec_candidates = []
-        seen = set()
+        if self.perf_cfg.video_gpu_acceleration:
+            # NVIDIA hardware acceleration candidates
+            self._codec_candidates.extend(['h264_nvenc', 'hevc_nvenc'])
+
+        seen = set(self._codec_candidates)
         for c in [codec, 'avc1', 'H264', 'mp4v', 'XVID', 'MJPG']:
             if c and c not in seen:
                 self._codec_candidates.append(c)

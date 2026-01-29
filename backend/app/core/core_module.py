@@ -4,6 +4,8 @@ import time
 import math
 import numpy as np
 import uuid
+import torch
+import torchvision.transforms.functional as TF
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -148,6 +150,11 @@ class CoreModule:
         self.reid_embedder = None
         self.car_classifier = None
         self.homography_matrix = None
+        
+        # GPU Optimization Flags
+        self.device = self._check_gpu_availability()
+        perf_cfg = self.config.get("performance", {})
+        self.image_gpu_enabled = perf_cfg.get("image_gpu_acceleration", False) and self.device != "cpu"
         self.perspective_matrix = None
         self.roi_mask = None
         self.roi_polygon_points_pixel = None
@@ -284,7 +291,6 @@ class CoreModule:
         
         # Load Model
         try:
-            self.device = self._check_gpu_availability()
             self._load_model(use_gpu=(self.device != "cpu"))
         except Exception as e:
             logger.error(f"Failed to load model in CoreModule __init__: {e}")
@@ -623,28 +629,30 @@ class CoreModule:
         crop_rect = roi_cfg.get("crop_rect", [0, 0, frame.shape[1], frame.shape[0]])
         x1_crop, y1_crop, x2_crop, y2_crop = crop_rect
 
-        # 1. ROI Masking (Optimized)
-        # DISABLE MASKING: It causes partial detections when vehicles cross ROI boundaries.
-        # We detect on the full frame and filter results post-inference instead.
-        if False and roi_enabled and self.roi_mask is not None:
-            # Ensure mask matches frame size (handle resolution changes)
-            if self.roi_mask.shape[:2] != frame.shape[:2]: # Check shape
-                self._initialize_roi_mask((frame.shape[1], frame.shape[0])) # Re-initialize if different
-            
-            # fast bitwise AND
-            processed_frame = cv2.bitwise_and(frame, frame, mask=self.roi_mask)
-            # If we are masking, the frame coordinates remain unchanged.
-            x1_crop, y1_crop = 0, 0
-        elif roi_enabled and not self.roi_polygon_points:
+        # Select target frame
+        if roi_enabled and not self.roi_polygon_points:
             processed_frame = frame[y1_crop:y2_crop, x1_crop:x2_crop]
         else:
-            processed_frame = frame.copy() # Copy only if no slicing occurred
-            # Ensure crops are 0 if no ROI/crop applied
+            processed_frame = frame
             x1_crop, y1_crop = 0, 0
 
-        # 2. CRITICAL FIX: Convert BGR to RGB for Inference
-        # YOLO/ONNX models are trained on RGB. OpenCV gives BGR.
-        processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+        # GPU Accelerated Image Processing
+        if self.image_gpu_enabled:
+            try:
+                # Move to GPU as a tensor (H, W, C)
+                tensor_frame = torch.from_numpy(processed_frame).to(self.device if self.device != "cpu" else "cuda")
+                # BGR to RGB
+                tensor_frame = tensor_frame.flip(-1)
+                # Convert back to numpy for YOLO if it expects it, or keep for later
+                # Most YOLO implementations accept numpy, but some like Ultralytics 
+                # can handle tensors directly if prepared correctly.
+                # For now, let's just do BGR2RGB on GPU and return.
+                processed_frame = tensor_frame.cpu().numpy()
+            except Exception as e:
+                logger.warning(f"GPU image preprocessing failed: {e}. Falling back to CPU.")
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+        else:
+            processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
 
         return processed_frame, roi_enabled, x1_crop, y1_crop
 
