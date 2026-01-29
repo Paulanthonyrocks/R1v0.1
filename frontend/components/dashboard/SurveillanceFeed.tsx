@@ -147,32 +147,29 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
             if (canvasRef.current) {
                 const canvas = canvasRef.current;
                 const ctx = canvas.getContext('2d', { alpha: false });
-                if (ctx) {
-                    const displayWidth = canvas.offsetWidth;
-                    const displayHeight = canvas.offsetHeight;
+                if (ctx && lastFrameRef.current) {
+                    const frame = lastFrameRef.current;
+                    const frameWidth = frame.image?.width || 640;
+                    const frameHeight = frame.image?.height || 480;
 
-                    if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-                        canvas.width = displayWidth;
-                        canvas.height = displayHeight;
+                    // Set internal resolution to match video source
+                    if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
+                        canvas.width = frameWidth;
+                        canvas.height = frameHeight;
                     }
 
-                    // Draw Video
-                    if (lastFrameRef.current) {
-                        drawFrame(ctx, lastFrameRef.current, {
-                            showBoundingBoxes: showBoundingBoxes,
-                            showVehicleDetails: showVehicleDetails,
-                            showTrajectories: showTrajectories
-                        });
-                    } else {
-                        // Clear canvas if not live
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    }
+                    // Draw Video and AI Overlays
+                    drawFrame(ctx, frame, {
+                        showBoundingBoxes: showBoundingBoxes,
+                        showVehicleDetails: showVehicleDetails,
+                        showTrajectories: showTrajectories
+                    });
 
-                    // Draw ROI
+                    // Draw ROI - p.x and p.y are normalized [0, 1]
                     if (roiMode === 'roi' || (showOverlays && showROI && roiPoints.length > 0)) {
                         ctx.save();
                         ctx.strokeStyle = roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
-                        ctx.lineWidth = 1;
+                        ctx.lineWidth = 2; // Fixed width for better visibility
                         ctx.beginPath();
                         roiPoints.forEach((p, i) => {
                             const px = p.x * canvas.width;
@@ -181,7 +178,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                             else ctx.lineTo(px, py);
                             if (roiMode === 'roi') {
                                 ctx.fillStyle = '#00ff00';
-                                ctx.fillRect(px - 2, py - 2, 4, 4);
+                                ctx.fillRect(px - 4, py - 4, 8, 8); // Slightly larger handles
                             }
                         });
                         if (roiPoints.length > 2) ctx.closePath();
@@ -200,7 +197,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         // Draw established zones
                         exclusionZones.forEach(zone => {
                             ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
-                            ctx.lineWidth = 1;
+                            ctx.lineWidth = 2;
                             ctx.beginPath();
                             zone.forEach((p, i) => {
                                 const px = p.x * canvas.width;
@@ -219,7 +216,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         // Draw current being edited zone
                         if (roiMode === 'exclusion') {
                             ctx.strokeStyle = '#ff0000';
-                            ctx.lineWidth = 2;
+                            ctx.lineWidth = 3;
                             ctx.beginPath();
                             currentExclusionPoints.forEach((p, i) => {
                                 const px = p.x * canvas.width;
@@ -227,12 +224,15 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                                 if (i === 0) ctx.moveTo(px, py);
                                 else ctx.lineTo(px, py);
                                 ctx.fillStyle = '#ff0000';
-                                ctx.fillRect(px - 3, py - 3, 6, 6);
+                                ctx.fillRect(px - 5, py - 5, 10, 10);
                             });
                             ctx.stroke();
                         }
                         ctx.restore();
                     }
+                } else if (ctx) {
+                    // Clear canvas if not live
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             }
             animationFrameId = requestAnimationFrame(render);
@@ -374,9 +374,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 {isLive ? (
                     <canvas
                         ref={canvasRef}
-                        className={cn("w-full h-full object-cover image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
-                        width="640"
-                        height="480"
+                        className={cn("w-full h-full object-contain image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
                         onClick={handleCanvasClick}
                     />
                 ) : (

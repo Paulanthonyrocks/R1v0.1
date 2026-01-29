@@ -46,6 +46,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return "default", self.default_config
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        # Skip rate limiting for OPTIONS requests (CORS preflight)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         path = request.url.path
         
         # Skip rate limiting for static files or specific paths if needed

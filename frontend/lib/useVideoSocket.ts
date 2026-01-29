@@ -234,6 +234,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         }
         lastDrawnIndexRef.current = index;
 
+        // Since we set canvas.width/height to imgWidth/height in SurveillanceFeed,
+        // scaleX and scaleY should be 1. But for robustness, we use the actual ratios.
         const scaleX = imgWidth > 0 ? canvasWidth / imgWidth : 1;
         const scaleY = imgHeight > 0 ? canvasHeight / imgHeight : 1;
 
@@ -243,7 +245,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
         if (vehiclesToDraw.length > 0) {
             ctx.lineWidth = 2;
-            ctx.font = 'bold 10px Arial';
+            ctx.font = 'bold 12px Arial'; // Slightly larger font
 
             vehiclesToDraw.forEach(v => {
                 if (v.status && v.status !== 'active' && v.status !== 'predicting') return;
@@ -254,6 +256,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     return;
                 }
 
+                // Coordinates from backend are in frame-space. 
+                // We scale them to canvas-space.
                 const sx1 = x1 * scaleX;
                 const sy1 = y1 * scaleY;
                 const sx2 = x2 * scaleX;
@@ -288,30 +292,34 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     ctx.strokeRect(sx1, sy1, sw, sh);
 
                     // --- Trajectory Projection ---
-                    if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.1 || Math.abs(v.vy ?? 0) > 0.1)) {
+                    if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.01 || Math.abs(v.vy ?? 0) > 0.01)) {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
 
-                        // Project 1.5 seconds ahead
-                        // vx/vy are in pixels/frame (at current FPS)
-                        // We'll normalize to a reasonable length
-                        const projX = cx + (v.vx ?? 0) * 30 * scaleX;
-                        const projY = cy + (v.vy ?? 0) * 30 * scaleY;
+                        // Project ahead by a fixed time (e.g., 1.5 seconds)
+                        // v.vx/vy are in pixels/frame. 
+                        // Use current frameRate if available, fallback to 15.
+                        const currentFps = frameRate > 0 ? frameRate : 15;
+                        const projectionFrames = currentFps * 1.5;
+
+                        const projX = cx + (v.vx ?? 0) * projectionFrames * scaleX;
+                        const projY = cy + (v.vy ?? 0) * projectionFrames * scaleY;
 
                         ctx.beginPath();
                         ctx.moveTo(cx, cy);
                         ctx.lineTo(projX, projY);
-                        ctx.lineWidth = 1;
-                        ctx.setLineDash([5, 5]);
+                        ctx.lineWidth = 1.5;
+                        ctx.setLineDash([4, 4]);
                         ctx.stroke();
 
                         // Arrow head
                         const angle = Math.atan2(projY - cy, projX - cx);
+                        const headLen = 10;
                         ctx.beginPath();
                         ctx.moveTo(projX, projY);
-                        ctx.lineTo(projX - 8 * Math.cos(angle - Math.PI / 6), projY - 8 * Math.sin(angle - Math.PI / 6));
+                        ctx.lineTo(projX - headLen * Math.cos(angle - Math.PI / 6), projY - headLen * Math.sin(angle - Math.PI / 6));
                         ctx.moveTo(projX, projY);
-                        ctx.lineTo(projX - 8 * Math.cos(angle + Math.PI / 6), projY - 8 * Math.sin(angle + Math.PI / 6));
+                        ctx.lineTo(projX - headLen * Math.cos(angle + Math.PI / 6), projY - headLen * Math.sin(angle + Math.PI / 6));
                         ctx.setLineDash([]);
                         ctx.stroke();
 

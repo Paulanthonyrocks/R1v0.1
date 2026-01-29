@@ -1162,12 +1162,8 @@ class FeedManager:
 
             msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
             
-            subscribed_client_ids = self._connection_manager.get_clients_for_feed(feed_id)
-            if not subscribed_client_ids:
-                return
-
-            # 4. Binary Delivery
-            await self._connection_manager.broadcast_realtime_bytes(msg_bytes)
+            # 4. Targeted Binary Delivery (Only to subscribers of this feed)
+            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes)
             
         except Exception as e:
             logger.error(f"Binary broadcast error for {feed_id}: {e}")

@@ -273,6 +273,22 @@ class ConnectionManager:
                     logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
         # No need to gather put_nowait calls
 
+    async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes):
+        """Broadcast fire-and-forget binary message only to subscribers of a specific feed."""
+        subscribed_clients = self.get_clients_for_feed(feed_id)
+        if not subscribed_clients:
+            return
+
+        for client_id in subscribed_clients:
+            if client_id in self.client_queues:
+                try:
+                    self.client_queues[client_id].put_nowait(data)
+                except asyncio.QueueFull:
+                    # Queue is full, drop frame to prevent backing up backend
+                    pass 
+                except Exception as e:
+                    logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
+
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
         for client_id in list(client_ids): 

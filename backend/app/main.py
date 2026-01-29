@@ -39,7 +39,7 @@ from app.database import get_database_manager
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
     incidents, personalized_routes, traffic_data, weather,
-    events, route_history, ws, routes, vehicles,
+    events, route_history, ws, routes, vehicles, signals,
 )
 
 # --- Constants & Setup ---
@@ -91,6 +91,7 @@ def setup_cors(app: FastAPI, config: dict):
         "http://localhost",
         "http://localhost:3000",
         "http://localhost:5173",
+        "https://3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
     ] if env == "development" else [o for o in allowed_origins_env if o]
 
     cors_config = config.get("cors", {})
@@ -102,7 +103,7 @@ def setup_cors(app: FastAPI, config: dict):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_origin_regex=r"https://.*\.ngrok-free\.app",
+        allow_origin_regex=r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -276,9 +277,7 @@ def to_dict(obj):
         return obj.dict()
     return obj
 
-# Initialize CORS
 cfg_dict = to_dict(loaded_config)
-setup_cors(app, cfg_dict)
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
@@ -333,6 +332,9 @@ async def audit_middleware(request: Request, call_next):
             
     return response
 
+# Initialize CORS
+setup_cors(app, cfg_dict)
+
 # --- Routers Inclusion ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
 app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
@@ -346,6 +348,7 @@ app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
 app.include_router(route_history.router, prefix="/api/v1/route-history", tags=["History"])
 app.include_router(traffic_data.router, prefix="/api/v1/traffic-data", tags=["TrafficData"])
 app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"])
+app.include_router(signals.router, prefix="/api/v1", tags=["Signals"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(routes.router, prefix="/api/v1", tags=["General"])
 

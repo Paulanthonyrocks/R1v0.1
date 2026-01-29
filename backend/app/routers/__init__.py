@@ -7,6 +7,7 @@ from . import incidents
 from . import personalized_routes
 from . import route_history
 from . import routes
+from . import signals
 from . import token
 from . import video
 from . import weather
@@ -22,6 +23,7 @@ __all__ = [
     "personalized_routes",
     "route_history",
     "routes",
+    "signals",
     "token",
     "video",
     "weather",
