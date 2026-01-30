@@ -2,14 +2,14 @@ fps: 15
 speed_limit: 60
 video_processing:
   target_fps: 15
-  adaptive_streaming: true
+  adaptive_streaming: false
   roi_scale: 0.5
 performance:
   gpu_acceleration: false
   auto_optimize: false # Set to true to auto-export to TensorRT
   batch_size: 4
   inference_timeout: 0.005 # 5ms wait
-  inference_pool_size: 2
+  inference_pool_size: 3
   memory_limit_percent: 95
   cpu_limit_percent: 90
   min_global_skip_factor: 1.0
@@ -414,7 +414,7 @@ vehicle_detection:
   track_timeout: 20
   max_active_tracks: 50
   yolo_imgsz: 640
-  skip_frames: 0
+  skip_frames: 4
   vehicle_type_map:
     2: car
     3: motorcycle

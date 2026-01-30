@@ -178,6 +178,7 @@ class AnalyticsService:
 
         # Handle Anomalies
         anomalies = metrics.get("anomalies", [])
+        now = time.time()
         for anomaly in anomalies:
             # Trigger Incident/Alert based on anomaly
             severity_map = {
@@ -186,16 +187,24 @@ class AnalyticsService:
                 "INFO": IncidentSeverityEnum.MEDIUM
             }
             
-            # Create incident for significant anomalies
+            # Debounce check
+            inc_key = f"{feed_id}_{anomaly.get('details', 'unknown')}"
+            last_time = self._active_incidents.get(inc_key, 0)
+            
+            # Create incident for significant anomalies if not recently reported
             if anomaly.get("severity") in ["Critical", "Warning"]:
-                asyncio.create_task(self._create_and_save_incident(
-                    location={"latitude": latitude, "longitude": longitude},
-                    incident_type=IncidentTypeEnum.OTHER, # or map based on anomaly type
-                    severity=severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM),
-                    description=f"Automated Alert: {anomaly.get('details')}",
-                    source_feed_id=feed_id,
-                    details=anomaly
-                ))
+                if now - last_time > 300: # 5 minute cooldown
+                    self._active_incidents[inc_key] = now
+                    asyncio.create_task(self._create_and_save_incident(
+                        location={"latitude": latitude, "longitude": longitude},
+                        incident_type=IncidentTypeEnum.OTHER, 
+                        severity=severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM),
+                        description=f"Automated Alert: {anomaly.get('details')}",
+                        source_feed_id=feed_id,
+                        details=anomaly
+                    ))
+                else:
+                    logger.debug(f"Debounced duplicate incident for {feed_id}: {anomaly.get('details')}")
 
         if latitude is not None and longitude is not None:
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)

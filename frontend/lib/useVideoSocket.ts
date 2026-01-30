@@ -55,7 +55,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     }, [client, streamId]);
 
     const handleFrame = useCallback(async (data: VideoFrameMessage) => {
-        if (data.feed_id && data.feed_id !== streamId) {
+        // Strict filtering: If feed_id is missing or mismatch, drop it.
+        if (!data.feed_id || data.feed_id !== streamId) {
             return;
         }
 
@@ -244,8 +245,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         const vehiclesToDraw = currentVehicles || [];
 
         if (vehiclesToDraw.length > 0) {
-            ctx.lineWidth = 2;
-            ctx.font = 'bold 12px Arial'; // Slightly larger font
+            ctx.lineWidth = 1.5;
+            ctx.font = 'bold 10px Arial'; // Slightly smaller font
 
             vehiclesToDraw.forEach(v => {
                 if (v.status && v.status !== 'active' && v.status !== 'predicting') return;
@@ -285,7 +286,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 } else {
                     ctx.setLineDash([]);
                     ctx.globalAlpha = 1.0;
-                    ctx.lineWidth = 2;
+                    ctx.lineWidth = 1.5;
                 }
 
                 if (showBoundingBoxes) {
@@ -296,11 +297,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
 
-                        // Project ahead by a fixed time (e.g., 1.5 seconds)
+                        // Project ahead by a fixed time (e.g., 0.2 seconds)
                         // v.vx/vy are in pixels/frame. 
                         // Use current frameRate if available, fallback to 15.
                         const currentFps = frameRate > 0 ? frameRate : 15;
-                        const projectionFrames = currentFps * 1.5;
+                        const projectionFrames = currentFps * 0.2;
 
                         const projX = cx + (v.vx ?? 0) * projectionFrames * scaleX;
                         const projY = cy + (v.vy ?? 0) * projectionFrames * scaleY;
@@ -308,13 +309,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         ctx.beginPath();
                         ctx.moveTo(cx, cy);
                         ctx.lineTo(projX, projY);
-                        ctx.lineWidth = 1.5;
+                        ctx.lineWidth = 1;
                         ctx.setLineDash([4, 4]);
                         ctx.stroke();
 
                         // Arrow head
                         const angle = Math.atan2(projY - cy, projX - cx);
-                        const headLen = 10;
+                        const headLen = 6;
                         ctx.beginPath();
                         ctx.moveTo(projX, projY);
                         ctx.lineTo(projX - headLen * Math.cos(angle - Math.PI / 6), projY - headLen * Math.sin(angle - Math.PI / 6));
@@ -325,7 +326,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                         // Reset line dash for the box
                         ctx.setLineDash(v.status === 'predicting' ? [2, 2] : []);
-                        ctx.lineWidth = v.status === 'predicting' ? 1 : 2;
+                        ctx.lineWidth = v.status === 'predicting' ? 1 : 1.5;
                     }
 
                     // Only add shadow/glow for active tracks to reduce clutter
@@ -333,7 +334,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         ctx.strokeStyle = 'rgba(0,0,0,0.5)';
                         ctx.lineWidth = 1;
                         ctx.strokeRect(sx1 + 1, sy1 + 1, sw - 2, sh - 2);
-                        ctx.lineWidth = 2;
+                        ctx.lineWidth = 1.5;
                         ctx.strokeStyle = color;
                     }
                 }
@@ -351,7 +352,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         lines.push(v.license_plate);
                     }
 
-                    const lineHeight = 12;
+                    const lineHeight = 10;
                     let textY = sy1 - (lines.length * lineHeight) - 2;
 
                     if (textY < 0) {
@@ -362,11 +363,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         const textWidth = ctx.measureText(line).width;
                         const textX = sx1 + (sw - textWidth) / 2;
 
-                        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // More transparent
                         ctx.fillRect(textX - 2, textY + (i * lineHeight), textWidth + 4, lineHeight);
 
                         ctx.fillStyle = color;
-                        ctx.fillText(line, textX, textY + (i * lineHeight) + 10);
+                        ctx.fillText(line, textX, textY + (i * lineHeight) + 8);
                     });
                 }
             });

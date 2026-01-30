@@ -405,7 +405,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 )}
 
                 {isLive && typeof fps === 'number' && !isToggling && !isLoading && !error && (
-                    <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/50 text-primary-foreground/80 group-hover:text-lcd-text backdrop-blur-sm tracking-normal rounded-none font-lcd matrix-glow">
+                    <Badge variant="outline" className="absolute top-1.5 left-1.5 text-[10px] h-4 px-1.5 bg-black/40 text-primary-foreground/70 backdrop-blur-[2px] rounded-none border-0 font-mono">
                         {fps.toFixed(0)} FPS
                     </Badge>
                 )}
@@ -413,10 +413,10 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 <Badge
                     variant={isLive ? "default" : "outline"}
                     className={cn(
-                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5 tracking-normal rounded-none font-lcd matrix-glow",
+                        "absolute bottom-1.5 right-1.5 text-[10px] h-4 px-1.5 rounded-none font-mono border-0",
                         isLive
-                            ? "bg-primary text-primary-foreground animate-matrix-pulse"
-                            : "bg-lcd-text text-lcd-bg",
+                            ? "bg-primary/80 text-primary-foreground"
+                            : "bg-zinc-800 text-zinc-400",
                     )}
                 >
                     {isLive ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
@@ -426,52 +426,56 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     <MetricsPanel 
                         metrics={metrics} 
                         isLive={isLive} 
-                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-300" 
+                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto scale-95 origin-top-right" 
                     />
                 )}
 
                 {!isToggling && !isLoading && !minimalControls && (
-                    <div className="absolute bottom-1.5 left-1.5 flex gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                        <button
-                            onClick={(e) => { e.stopPropagation(); handleRestartFeed(); }}
-                            title="Restart Feed"
-                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70"
-                        >
-                            <RotateCw className="h-4 w-4" />
-                        </button>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); handleStartFeed(); }}
-                            disabled={isToggling || status === 'running' || status === 'starting'}
-                            title="Start Feed"
-                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70 disabled:opacity-50"
-                        >
-                            <Play className="h-4 w-4" />
-                        </button>
-                        <button
-                            onClick={(e) => { e.stopPropagation(); handleStopFeed(); }}
-                            disabled={isToggling || status === 'stopped' || status === 'error'}
-                            title="Stop Feed"
-                            className="p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70 disabled:opacity-50"
-                        >
-                            <Square className="h-4 w-4" />
-                        </button>
+                    <div className="absolute bottom-1.5 left-1.5 flex gap-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleRestartFeed(); }}
+                                title="Restart Feed"
+                                className="p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors"
+                            >
+                                <RotateCw className="h-3 w-3" />
+                            </button>
+                            <div className="w-px bg-white/10 mx-0.5 my-1" />
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleStartFeed(); }}
+                                disabled={isToggling || status === 'running' || status === 'starting'}
+                                title="Start Feed"
+                                className="p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors disabled:opacity-30"
+                            >
+                                <Play className="h-3 w-3" />
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleStopFeed(); }}
+                                disabled={isToggling || status === 'stopped' || status === 'error'}
+                                title="Stop Feed"
+                                className="p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors disabled:opacity-30"
+                            >
+                                <Square className="h-3 w-3" />
+                            </button>
+                        </div>
+                        
                         {isAdmin && (
-                            <>
+                            <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm ml-1">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'roi' ? null : 'roi'); }}
-                                    title="Set Inclusion ROI"
-                                    className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode === 'roi' && "bg-primary text-primary-foreground")}
+                                    title="Set ROI"
+                                    className={cn("p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors", roiMode === 'roi' && "text-green-400")}
                                 >
-                                    <Square className="h-4 w-4" style={{ transform: 'rotate(45deg)' }} />
+                                    <Square className="h-3 w-3 rotate-45" />
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'exclusion' ? null : 'exclusion'); }}
                                     title="Add Exclusion Zone"
-                                    className={cn("p-1 text-lcd-bg group-hover:text-lcd-text bg-black/50 backdrop-blur-sm rounded-none hover:bg-black/70", roiMode === 'exclusion' && "bg-red-600 text-white")}
+                                    className={cn("p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors", roiMode === 'exclusion' && "text-red-400")}
                                 >
-                                    <AlertTriangle className="h-4 w-4" />
+                                    <AlertTriangle className="h-3 w-3" />
                                 </button>
-                            </>
+                            </div>
                         )}
                     </div>
                 )}
