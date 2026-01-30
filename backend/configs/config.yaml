@@ -1,7 +1,7 @@
 fps: 15
 speed_limit: 60
 video_processing:
-  target_fps: 15
+  target_fps: 5
   adaptive_streaming: false
   roi_scale: 0.5
 performance:
@@ -359,7 +359,7 @@ video_output:
   processing_enabled: true
   output_directory: backend/data/processed_videos
   codec: mp4v
-  fps: 15
+  fps: 5
   frame_resolution:
   - 640
   - 480
@@ -383,8 +383,8 @@ vehicle_detection:
   track_timeout: 3
   reid_timeout: 10
   max_active_tracks: 200
-  yolo_imgsz: 640
-  skip_frames: 4
+  yolo_imgsz: 416
+  skip_frames: 10
   reid_enabled: true
   reid:
     backbone: resnet50
