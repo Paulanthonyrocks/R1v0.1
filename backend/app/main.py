@@ -195,6 +195,16 @@ async def lifespan(app: FastAPI):
     # 4. Core Services
     try:
         connection_manager = await container.get_connection_manager()
+        
+        # Initialize connection manager with config values
+        ws_cfg = cfg_dict.get("websocket", {})
+        await connection_manager.init(
+            max_connections=ws_cfg.get("max_connections", 1000),
+            token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
+            ping_interval=ws_cfg.get("ping_interval", 15),
+            pong_timeout=ws_cfg.get("pong_timeout", 60)
+        )
+        
         app.state.connection_manager = connection_manager
         
         await initialize_services(cfg_dict, logger, connection_manager)

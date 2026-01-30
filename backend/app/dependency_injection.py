@@ -29,8 +29,9 @@ class DependencyContainer:
     # Factory methods for core services
     
     async def get_connection_manager(self) -> ConnectionManager:
-        from app.services import get_connection_manager
-        return get_connection_manager()
+        # Return the singleton instance directly to avoid circular dependency
+        # with ServiceRegistry which requires ConnectionManager to initialize.
+        return ConnectionManager.get_instance()
 
     async def get_feed_manager(self) -> FeedManager:
         from app.services import get_feed_manager
