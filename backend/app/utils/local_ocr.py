@@ -1,6 +1,10 @@
 import cv2
 import numpy as np
 import logging
+from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger("app.ml.ocr")
+
 class LocalOCR:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
