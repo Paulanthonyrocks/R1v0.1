@@ -124,15 +124,29 @@ class FeedManager:
         # We divide the QUEUE_MAX_SIZE among workers
         per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
         
-        if redis_cfg.get("enabled", False):
-            self._inference_input_queues = [
-                RedisQueue(f"inference_input_{i}", maxsize=per_worker_q_size) 
-                for i in range(self._inference_pool_size)
-            ]
-            self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
-        else:
+        use_redis = redis_cfg.get("enabled", False)
+        
+        if use_redis:
+            try:
+                # Test connection specifically before creating queues
+                from app.utils.redis_client import get_redis_client
+                # This will raise ConnectionError if Redis is down
+                get_redis_client().ping()
+                
+                self._inference_input_queues = [
+                    RedisQueue(f"inference_input_{i}", maxsize=per_worker_q_size) 
+                    for i in range(self._inference_pool_size)
+                ]
+                self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
+                logger.info("Using Redis for inference queues.")
+            except Exception as e:
+                logger.warning(f"Redis enabled but connection failed: {e}. Falling back to multiprocessing queues.")
+                use_redis = False
+        
+        if not use_redis:
             self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
             self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+            logger.info("Using Multiprocessing Queues for inference.")
             
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
