@@ -56,6 +56,10 @@ def ingestion_worker(
     video_processing_cfg = config.get("video_processing", {})
     target_fps = video_processing_cfg.get("target_fps", 15)
     
+    # Extract performance config
+    perf_cfg = config.get("performance", {})
+    gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
+    
     # Stream resolution for the raw frame transmission
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
@@ -104,7 +108,8 @@ def ingestion_worker(
                 source, 
                 max_queue_size=50,
                 is_looped=is_looped,
-                target_fps=target_fps
+                target_fps=target_fps,
+                gpu_acceleration=gpu_acceleration
             )
             
             if reader.start():

@@ -16,11 +16,13 @@ class FrameReader:
         target_fps: Optional[int] = None,
         max_queue_size: int = 128,
         is_looped: bool = False,
-        reconnect_delay: int = 5
+        reconnect_delay: int = 5,
+        gpu_acceleration: bool = False
     ):
         self.source = source
         self.source_name = str(source)
         self.is_file = isinstance(source, str) and not str(source).startswith(('rtsp:', 'http:', 'https:', 'tcp:'))
+        self.gpu_acceleration = gpu_acceleration
         
         # Reader State
         self.stop_event = threading.Event()
@@ -81,13 +83,9 @@ class FrameReader:
         return True
 
     def _read_frames_continuously(self) -> None:
-        # Check for GPU decoding config
-        from app.config import get_current_config
-        perf_cfg = get_current_config().performance
-        
         # Select backend and options based on GPU config
         backend = cv2.CAP_ANY
-        if perf_cfg.video_gpu_acceleration and self.is_file:
+        if self.gpu_acceleration and self.is_file:
             # Note: This requires OpenCV built with FFMPEG and specific environment setup
             # We use CAP_FFMPEG to allow for hardware acceleration flags
             backend = cv2.CAP_FFMPEG
