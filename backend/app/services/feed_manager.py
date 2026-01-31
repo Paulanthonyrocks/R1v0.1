@@ -1335,7 +1335,8 @@ class FeedManager:
         if not self._connection_manager:
             return
 
-        total_vehicles = 0
+        total_vehicles_active = 0
+        total_vehicles_cumulative = 0
         total_speed_sum = 0.0
         total_speed_count = 0
         total_congestion_score = 0.0
@@ -1344,24 +1345,34 @@ class FeedManager:
         # Aggregate metrics from all running feeds
         async with self._lock:
             for feed_id, entry in self.process_registry.items():
-                if entry["status"] == FeedOperationalStatusEnum.RUNNING and entry.get("latest_metrics"):
-                    metrics = entry["latest_metrics"]
+                # We include RUNNING feeds, but also STARTING if they have some metrics
+                status = entry.get("status")
+                metrics = entry.get("latest_metrics")
+                
+                if status in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING] and metrics:
+                    # Vehicle Count (Current)
+                    v_active = metrics.get("total_vehicles", 0)
+                    total_vehicles_active += v_active
                     
-                    # Vehicle Count
-                    v_count = metrics.get("total_vehicles", 0)
-                    total_vehicles += v_count
+                    # Vehicle Count (Cumulative)
+                    v_cum = metrics.get("total_vehicles_cumulative", v_active)
+                    total_vehicles_cumulative += v_cum
                     
                     # Speed (Weighted Average)
                     avg_speed = metrics.get("average_speed_kmh", 0.0)
-                    if v_count > 0:
-                        total_speed_sum += avg_speed * v_count
-                        total_speed_count += v_count
+                    if v_active > 0:
+                        total_speed_sum += avg_speed * v_active
+                        total_speed_count += v_active
                     
                     # Congestion
                     congestion = metrics.get("congestion_score", 0.0)
                     total_congestion_score += congestion
                     
                     active_feeds_count += 1
+
+        # If no active feeds have data, don't broadcast 0s which causes UI flickering
+        if active_feeds_count == 0:
+            return
 
         # Calculate Global Averages
         global_avg_speed = (total_speed_sum / total_speed_count) if total_speed_count > 0 else 0.0
@@ -1371,13 +1382,16 @@ class FeedManager:
         kpi_data = GlobalRealtimeMetrics(
             timestamp=datetime.now(timezone.utc).isoformat(),
             metrics_source="aggregated_feeds",
-            total_flow=total_vehicles,
+            total_flow=total_vehicles_cumulative, # Stable cumulative count
             average_speed_kmh=round(global_avg_speed, 1),
             congestion_index=round(global_congestion_index, 1),
-            active_incidents_count=0, # Placeholder until IncidentManager is integrated
+            active_incidents_count=0, # Placeholder
             feed_statuses={
                 "active": active_feeds_count,
                 "total": len(self.process_registry)
+            },
+            custom_metrics={
+                "active_vehicles": total_vehicles_active
             }
         )
 
