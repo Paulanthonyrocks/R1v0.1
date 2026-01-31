@@ -4,7 +4,13 @@ from fastapi import APIRouter, Query, HTTPException, status, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 
-from app.dependency_injection import get_db, get_current_admin, get_current_active_user, get_connection_manager
+from app.dependency_injection import (
+    get_db,
+    get_db_manager,
+    get_current_admin,
+    get_current_active_user,
+    get_connection_manager,
+)
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
 from ..websocket.connection_manager import ConnectionManager
@@ -55,12 +61,12 @@ async def get_alerts(
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
     current_user: dict = Depends(get_current_active_user), # Secure this endpoint
+    db: DatabaseManager = Depends(get_db_manager),
 ) -> AlertsResponse:
     logger.info("GET /alerts endpoint called")
     """
     Endpoint to fetch alerts with filtering and pagination. Requires authentication.
     """
-    db: DatabaseManager = await get_db()
 
     filters = {
         "severity": severity.value if severity else None,
@@ -99,7 +105,7 @@ async def get_alerts(
 )
 async def delete_alert_endpoint(
     alert_id: int,
-    db: DatabaseManager = Depends(get_db),
+    db: DatabaseManager = Depends(get_db_manager),
     current_user: dict = Depends(get_current_admin),  # Only admins can delete alerts
     conn_manager: ConnectionManager = Depends(get_connection_manager),
 ):
@@ -151,7 +157,7 @@ async def delete_alert_endpoint(
 async def acknowledge_alert_endpoint(
     alert_id: int,
     ack_request: AcknowledgeRequest,
-    db: DatabaseManager = Depends(get_db),
+    db: DatabaseManager = Depends(get_db_manager),
     current_user: dict = Depends(
         get_current_admin
     ),  # Only admins can acknowledge/unacknowledge alerts

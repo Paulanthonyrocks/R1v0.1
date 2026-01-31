@@ -66,6 +66,11 @@ async def get_db():
     async with db_manager.get_session() as session:
         yield session
 
+def get_db_manager() -> DatabaseManager:
+    """Dependency to get the database manager."""
+    from app.utils.database import DatabaseManager
+    return get_database_manager()
+
 async def get_redis():
     """Dependency to get an async Redis client."""
     from app.utils.redis_client import get_async_redis_client

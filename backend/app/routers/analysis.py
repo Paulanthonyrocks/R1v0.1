@@ -6,7 +6,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 import pandas as pd
 import time
 
-from app.dependency_injection import get_analytics_service, get_as, get_aas, get_current_active_user, get_db
+from app.dependency_injection import (
+    get_analytics_service,
+    get_as,
+    get_aas,
+    get_current_active_user,
+    get_db,
+    get_db_manager,
+)
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
 from app.services.analytics_service_pro import AdvancedAnalyticsService
@@ -224,7 +231,7 @@ async def get_all_nodes_congestion_data(
 )
 async def get_average_traffic(
     request_data: GetAverageTrafficRequest = Body(...),
-    db: DatabaseManager = Depends(get_db) # Assuming get_db provides DatabaseManager
+    db: DatabaseManager = Depends(get_db_manager) # Assuming get_db provides DatabaseManager
 ) -> APIResponse[AverageTrafficResponse]:
     logger.info(f"POST /analyze/average_traffic endpoint called with sensor_ids: {request_data.sensor_ids}, time range: {request_data.start_time} to {request_data.end_time}")
     try:
@@ -252,7 +259,7 @@ async def get_average_traffic(
 )
 async def identify_traffic_pattern_endpoint(
     request_data: IdentifyTrafficPatternRequest = Body(...),
-    db: DatabaseManager = Depends(get_db) # Assuming get_db provides DatabaseManager
+    db: DatabaseManager = Depends(get_db_manager) # Assuming get_db provides DatabaseManager
 ) -> APIResponse[TrafficPatternResponse]:
     logger.info(f"POST /analyze/pattern endpoint called for sensor_id: {request_data.sensor_id}, time_range: {request_data.time_range}")
     try:
@@ -279,7 +286,7 @@ async def identify_traffic_pattern_endpoint(
 async def detect_simple_anomaly_endpoint(
     request_data: SimpleAnomalyDetectionRequest = Body(...),
  analytics_service: AnalyticsService = Depends(get_as), # Add AnalyticsService dependency
- db: DatabaseManager = Depends(get_db) # Add DatabaseManager dependency
+ db: DatabaseManager = Depends(get_db_manager) # Add DatabaseManager dependency
 ) -> APIResponse[SimpleAnomalyDetectionResponse]:
     logger.info(f"POST /analyze/anomaly endpoint called with threshold: {request_data.threshold}")
 
@@ -336,7 +343,7 @@ async def detect_simple_anomaly_endpoint(
 )
 async def get_time_series_traffic_data(
     request_data: GetTimeSeriesRequest = Body(...),
-    db: DatabaseManager = Depends(get_db)
+    db: DatabaseManager = Depends(get_db_manager)
 ) -> APIResponse[TimeSeriesDataResponse]:
     logger.info(f"POST /analyze/time_series endpoint called with sensor_ids: {request_data.sensor_ids}, time range: {request_data.start_time} to {request_data.end_time}")
     if not request_data.sensor_ids:
@@ -486,7 +493,7 @@ async def get_forecast_vs_actual(
 async def get_feed_history_endpoint(
     feed_id: str,
     hours: int = Query(24, ge=1, le=168),
-    db: DatabaseManager = Depends(get_db)
+    db: DatabaseManager = Depends(get_db_manager)
 ):
     try:
         return await db.get_history_stats(feed_id, hours=hours)

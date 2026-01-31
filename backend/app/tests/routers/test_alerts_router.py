@@ -4,7 +4,12 @@ from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
 from app.main import app  # Assuming main app instance is here
-from app.dependency_injection import get_db, get_current_active_user, get_connection_manager
+from app.dependency_injection import (
+    get_db,
+    get_db_manager,
+    get_current_active_user,
+    get_connection_manager,
+)
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.websocket.connection_manager import ConnectionManager
 from app.models.websocket import (
@@ -35,6 +40,7 @@ async def override_get_connection_manager():
 class TestAlertsRouter(unittest.TestCase):
     def setUp(self):
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_db_manager] = override_get_db
         app.dependency_overrides[get_current_active_user] = (
             override_get_current_active_user
         )
