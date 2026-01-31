@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordBearer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.feed_manager import FeedManager
 from app.database import get_database_manager
+from app.utils.database import DatabaseManager
 from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.core.feature_flags import FeatureFlags
@@ -68,7 +69,6 @@ async def get_db():
 
 def get_db_manager() -> DatabaseManager:
     """Dependency to get the database manager."""
-    from app.utils.database import DatabaseManager
     return get_database_manager()
 
 async def get_redis():
