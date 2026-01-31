@@ -390,6 +390,7 @@ vehicle_detection:
     backbone: resnet50
     input_size: [256, 256]
     embedding_dim: 128
+    similarity_threshold: 0.75
   static_object_filter_enabled: true
   static_movement_threshold: 25
   static_object_timeout: 20

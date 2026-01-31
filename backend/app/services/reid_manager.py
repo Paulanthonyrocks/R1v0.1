@@ -92,6 +92,17 @@ class GlobalReIDManager:
                 return self.local_to_global[feed_id][local_id]
         return None
 
+    def match_only(self, embedding: np.ndarray) -> Optional[str]:
+        """Attempts to match an embedding against the gallery without registering a new one."""
+        embedding = self._normalize(embedding)
+        with self._lock:
+            if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
+                scores = np.dot(self.gallery_matrix, embedding)
+                best_idx = np.argmax(scores)
+                if scores[best_idx] > self.similarity_threshold:
+                    return self.gallery_ids[best_idx]
+        return None
+
     def match_or_register(self, feed_id: str, local_id: str, embedding: np.ndarray, metadata: dict) -> str:
         # Normalize immediately
         embedding = self._normalize(embedding)

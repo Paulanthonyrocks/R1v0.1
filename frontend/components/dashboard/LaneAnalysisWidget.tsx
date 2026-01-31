@@ -7,7 +7,7 @@ const LaneAnalysisWidget: React.FC<MatrixCardProps & {
 }> = ({ title, occupancy, queues, children }) => {
 
     // Convert map to sorted arrays based on keys (Lane 1, Lane 2...)
-    const lanes = Object.keys(occupancy).sort();
+    const lanes = Object.keys(occupancy).sort((a, b) => Number(a) - Number(b));
 
     return (
         <div className="matrix-card p-6 h-[450px] flex flex-col">

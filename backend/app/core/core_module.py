@@ -241,8 +241,12 @@ class CoreModule:
         # Lane detection caching
         self.lane_detection_interval = lane_cfg.get("lane_detection_interval", 10)
         self.last_lane_detection_frame = -1
-        self.cached_lane_boundaries = None
         self.last_detected_lane_lines = None
+        
+        # Initialize default boundaries if dynamic is off or as a starting point
+        self.num_lanes = lane_cfg.get("num_lanes", 4)
+        lane_width = lane_cfg.get("lane_width", 120)
+        self.cached_lane_boundaries = [int(i * lane_width) for i in range(self.num_lanes + 1)]
 
         # Initialize OCR Preprocessor (Gemini)
         if self.ocr_cfg.get("enabled", False) and self.gemini_api_key and self.ocr_cfg.get("use_gemini_ocr", False):
@@ -495,13 +499,14 @@ class CoreModule:
         proximity_threshold: Optional[int] = None,
         track_timeout: Optional[int] = None,
         external_detections: Optional[List[Tuple]] = None,
+        timestamp: Optional[float] = None,
     ) -> Dict[str, Dict]:
         # Handle skip frames where frame might be None
         if frame is None or frame.size == 0:
             if external_detections is not None and len(external_detections) == 0:
                 # If we are explicitly skipping detection, we can just use predict_only logic
                 # but we need to ensure _save_vehicle_data is called.
-                vis_tracks, lane_bounds, lane_lines = self.predict_only(frame_index)
+                vis_tracks, lane_bounds, lane_lines = self.predict_only(frame_index, timestamp=timestamp)
                 self._save_vehicle_data(vis_tracks)
                 return vis_tracks, lane_bounds, lane_lines
             return {}
@@ -525,7 +530,9 @@ class CoreModule:
         used_track_timeout = (
             track_timeout if track_timeout is not None else self.track_timeout
         )
-        current_time = time.time()
+        
+        # USE PROVIDED TIMESTAMP OR FALLBACK TO SYSTEM TIME
+        current_time = timestamp if timestamp is not None else time.time()
         
         # Reset ReID budget for this frame
         self._reid_updates_this_frame = 0
@@ -793,14 +800,14 @@ class CoreModule:
                     detections.append(((x1, y1, x2, y2), float(conf), int(cls)))
         return detections
 
-    def predict_only(self, frame_index: int) -> Tuple[Dict[str, Dict], Optional[List[int]], Optional[List[Tuple[int, int, int, int]]]]:
+    def predict_only(self, frame_index: int, timestamp: Optional[float] = None) -> Tuple[Dict[str, Dict], Optional[List[int]], Optional[List[Tuple[int, int, int, int]]]]:
         """
         Predicts the next state of existing tracks without running detection.
         Useful for maintaining high FPS when detection is skipped.
         """
         self._reid_updates_this_frame = 0  # Reset budget for prediction frames too
         predicted_tracks = {}
-        current_time = time.time()
+        current_time = timestamp if timestamp is not None else time.time()
         
         # We use a shorter timeout for showing 'predicting' tracks to avoid ghosts
         # Reduced from 1.0s to 0.4s for better responsiveness during frame skipping

@@ -96,6 +96,10 @@ def inference_worker(
     metrics_map: Dict[str, WorkerMetrics] = {} # Feed-specific metrics
     shared_model = None
     
+    # Initialize a local ReID manager for visual matching across loops
+    from ..services.reid_manager import GlobalReIDManager
+    local_reid_manager = GlobalReIDManager(config)
+    
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
@@ -261,79 +265,43 @@ def inference_worker(
                 frames_to_infer = [] # List of images for YOLO
                 inference_indices = [] # Indices in batch_meta that correspond to frames_to_infer
 
-                for task in batch_tasks:
-                    feed_id, frame_index, frame_bytes, extra_payload = task
-                    
-                    # --- Lifecycle logic ---
-                    if feed_id not in metrics_map:
-                        metrics_map[feed_id] = WorkerMetrics(feed_id)
-                    
-                    if frame_index == -888:
-                         if feed_id in core_modules: core_modules[feed_id]._first_detection_done = False
-                         continue
-                    if frame_index == -999: # EOS
-                         if feed_id in core_modules:
-                             core_modules[feed_id].cleanup(); del core_modules[feed_id]
-                         if feed_id in traffic_monitors: del traffic_monitors[feed_id]
-                         pending_configs.pop(feed_id, None)
-                         if feed_id in metrics_map: del metrics_map[feed_id]
-                         continue
-                    if frame_index == -1:
-                        continue
+                                for task in batch_tasks:
 
-                    # --- Init Core if needed ---
-                    if feed_id not in core_modules:
-                        core_modules[feed_id] = CoreModule(
-                            feed_id=feed_id, model_path=vehicle_det_cfg.get("model_path"),
-                            config=config, fps=target_fps, db_queue=db_queue,
-                            gemini_api_key=ocr_cfg.get("gemini_api_key"),
-                            model_type=vehicle_det_cfg.get("model_type", "yolo"),
-                            preloaded_model=shared_model if not model_load_failed else None
-                        )
-                        core_modules[feed_id]._first_detection_done = False
-                        if model_load_failed:
-                            logger.warning(f"[Worker {worker_id}] Independent model loaded for {feed_id}")
-                        traffic_monitors[feed_id] = TrafficMonitor(config)
-                        if feed_id in pending_configs:
-                            core_modules[feed_id].update_config(pending_configs.pop(feed_id))
+                                    feed_id, frame_index, frame_bytes, extra_payload = task
 
-                    core = core_modules[feed_id]
-                    monitor = traffic_monitors[feed_id]
-                    metrics_obj = metrics_map[feed_id]
+                                    
 
-                    # --- Adaptive Skip ---
-                    # Simple heuristic: if we gathered a full batch quickly, we might be busy
-                    # But individual skip logic is safer
-                    actual_skip = skip_frames # Could make dynamic later
-                    
-                    first_detect = not getattr(core, '_first_detection_done', False)
-                    should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
+                                    # Capture timestamp from ingestion worker (metadata)
 
-                    # Optimization: Only decode frame if we actually need it for detection or special processing
-                    v_proc_cfg = config.get("video_processing", {})
-                    lane_cfg = config.get("lane_detection", {})
-                    
-                    is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
-                                     (frame_index % lane_cfg.get("lane_detection_interval", 10) == 0))
-                    
-                    # We need the frame if: 1. running detection, 2. doing lane detection, 3. adaptive streaming ROIs (on detection frames)
-                    needs_frame = should_detect or is_lane_frame
-                    
-                    frame = None
-                    if needs_frame:
-                        nparr = np.frombuffer(frame_bytes, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is None:
-                            metrics_obj.errors += 1
-                            continue
-                    
-                    # Store meta
-                    batch_meta.append({
-                        "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
-                        "frame_bytes": frame_bytes,
-                        "core": core, "monitor": monitor, "metrics": metrics_obj,
-                        "should_detect": should_detect, "first_detect": first_detect
-                    })
+                                    timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
+
+                                    
+
+                                    # --- Lifecycle logic ---
+
+                                    if feed_id not in metrics_map:
+
+                                        metrics_map[feed_id] = WorkerMetrics(feed_id)
+
+                                    
+
+                                    if frame_index == -888:
+
+                // ... (lines 273-333 unchanged) ...
+
+                                    # Store meta
+
+                                    batch_meta.append({
+
+                                        "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
+
+                                        "frame_bytes": frame_bytes, "timestamp": timestamp,
+
+                                        "core": core, "monitor": monitor, "metrics": metrics_obj,
+
+                                        "should_detect": should_detect, "first_detect": first_detect
+
+                                    })
 
                     if should_detect:
                         # Preprocess for Inference (Resize/Pad/RGB) done by YOLO usually?
@@ -421,11 +389,33 @@ def inference_worker(
                     # For now: pass detections (empty list if found nothing, None if not run)
                     
                     vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
-                        frame, f_idx, external_detections=detections
+                        frame, f_idx, external_detections=detections,
+                        timestamp=meta.get("timestamp")
                     )
                     
                     if vis_tracks and meta['first_detect']:
                         core._first_detection_done = True
+                    
+                    # --- Loop-Aware ReID Matching ---
+                    # Match tracks visually to existing global identities
+                    for vid, track in vis_tracks.items():
+                        # If we have an embedding, try to find a global ID
+                        emb = track.get("embedding")
+                        if emb:
+                            # Use match_only to see if we've seen this car before
+                            global_id = local_reid_manager.match_only(np.array(emb))
+                            if global_id:
+                                track["global_vehicle_id"] = global_id
+                                # Also update local mapping
+                                if meta['feed_id'] not in local_reid_manager.local_to_global:
+                                    local_reid_manager.local_to_global[meta['feed_id']] = {}
+                                local_reid_manager.local_to_global[meta['feed_id']][vid] = global_id
+                        
+                        # Fallback: check if we already mapped this local ID in this process
+                        if not track.get("global_vehicle_id"):
+                            mapped_id = local_reid_manager.get_global_id(meta['feed_id'], vid)
+                            if mapped_id:
+                                track["global_vehicle_id"] = mapped_id
                         
                     monitor.update_vehicles(vis_tracks)
                     metrics_result = monitor.get_metrics()
