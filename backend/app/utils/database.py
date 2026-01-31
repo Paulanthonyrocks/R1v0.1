@@ -38,6 +38,24 @@ from app.utils.config import ConfigError
 
 logger = logging.getLogger(__name__)
 
+# Register SQLite adapters for numpy types to prevent them from being stored as blobs
+def _register_sqlite_adapters():
+    try:
+        import numpy as np
+        def adapt_numpy_float32(np_float32): return float(np_float32)
+        def adapt_numpy_float64(np_float64): return float(np_float64)
+        def adapt_numpy_int32(np_int32): return int(np_int32)
+        def adapt_numpy_int64(np_int64): return int(np_int64)
+
+        sqlite3.register_adapter(np.float32, adapt_numpy_float32)
+        sqlite3.register_adapter(np.float64, adapt_numpy_float64)
+        sqlite3.register_adapter(np.int32, adapt_numpy_int32)
+        sqlite3.register_adapter(np.int64, adapt_numpy_int64)
+        logger.debug("Registered SQLite adapters for numpy types.")
+    except ImportError:
+        pass
+
+_register_sqlite_adapters()
 
 class DatabaseError(Exception):
     """Custom exception for database operation errors."""
