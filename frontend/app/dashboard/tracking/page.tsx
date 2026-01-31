@@ -15,8 +15,9 @@ import {
 } from "@/components/ui/card";
 import { Badge } from '@/components/ui/badge';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
+import useAuth from '@/lib/hook/useAuth';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 interface GlobalVehicle {
     global_vehicle_id: string;
@@ -39,17 +40,19 @@ export default function TrackingPage() {
     const [history, setHistory] = useState<TrackPoint[]>([]);
     const [loading, setLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const { token } = useAuth();
 
     useEffect(() => {
-        fetchVehicles();
-    }, []);
+        if (token) fetchVehicles();
+    }, [token]);
 
     const fetchVehicles = async () => {
         setLoading(true);
         try {
             const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/list`, {
                 headers: {
-                    'Bypass-Tunnel-Reminder': 'true'
+                    'Bypass-Tunnel-Reminder': 'true',
+                    'Authorization': `Bearer ${token}`
                 }
             });
             if (res.ok) {
@@ -69,7 +72,8 @@ export default function TrackingPage() {
         try {
             const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/${id}/history`, {
                 headers: {
-                    'Bypass-Tunnel-Reminder': 'true'
+                    'Bypass-Tunnel-Reminder': 'true',
+                    'Authorization': `Bearer ${token}`
                 }
             });
             if (res.ok) {

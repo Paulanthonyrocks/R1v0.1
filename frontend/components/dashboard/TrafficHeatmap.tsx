@@ -2,8 +2,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
+import useAuth from '@/lib/hook/useAuth';
 
-const API_BASE_URL = "";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 interface HeatmapProps {
     feed_id?: string;
@@ -16,9 +17,11 @@ interface HeatmapProps {
 export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hours = 1, width = 640, height = 480 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [loading, setLoading] = useState(true);
+    const { token } = useAuth();
 
     useEffect(() => {
         const fetchData = async () => {
+            if (!token) return;
             setLoading(true);
             try {
                 let url = `${API_BASE_URL}/api/v1/analytics/heatmap?hours=${hours}`;
@@ -27,7 +30,8 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
                 
                 const res = await fetch(url, {
                     headers: {
-                        'Bypass-Tunnel-Reminder': 'true'
+                        'Bypass-Tunnel-Reminder': 'true',
+                        'Authorization': `Bearer ${token}`
                     }
                 });
                 if (res.ok) {

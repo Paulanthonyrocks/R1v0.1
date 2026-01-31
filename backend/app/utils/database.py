@@ -1190,12 +1190,34 @@ class DatabaseManager:
             return False
 
     def _execute_query(self, query: str, params: tuple) -> List[Dict]:
-        """Helper for synchronous query execution."""
+        """Helper for synchronous query execution with numeric sanitization."""
         self._validate_query(query, params)
+        import struct
         with self._get_sqlite_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
+            rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                d = dict(row)
+                # Sanitize: Convert any bytes to numbers if they seem to be blobs from numpy
+                # This is necessary for legacy data stored before adapters were registered.
+                for k, v in d.items():
+                    if isinstance(v, bytes):
+                        # Heuristic: try to parse as float/int based on length
+                        try:
+                            if len(v) == 8: # double (REAL in SQLite)
+                                d[k] = struct.unpack('d', v)[0]
+                            elif len(v) == 4: # float or int
+                                # Try int for specific columns, float for others
+                                if k in ['class_id', 'track_id', 'lane', 'frame_index']:
+                                    d[k] = struct.unpack('i', v)[0]
+                                else:
+                                    d[k] = struct.unpack('f', v)[0]
+                        except Exception as e:
+                            logger.warning(f"Failed to sanitize binary blob in column {k}: {e}")
+                results.append(d)
+            return results
 
     async def get_pool_stats(self) -> Dict[str, Any]:
         """Returns statistics about the database connection pools."""

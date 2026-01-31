@@ -114,7 +114,8 @@ class ConnectionManager:
         self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
         # Initialize sender queue and task
-        self.client_queues[client_id] = asyncio.Queue(maxsize=50)
+        # Reduce maxsize to 5 to minimize lag over slow connections (e.g. 142ms latency)
+        self.client_queues[client_id] = asyncio.Queue(maxsize=5)
         self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
 
         logger.info(

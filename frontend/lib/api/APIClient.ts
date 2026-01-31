@@ -22,7 +22,17 @@ export class APIClient {
     private tokenManager: TokenManager;
 
     private constructor(options: APIOptions) {
-        this.baseURL = options.baseURL;
+        // Ensure baseURL is an absolute URL
+        let base = options.baseURL;
+        if (!base || base === '/' || base.startsWith('/')) {
+            if (typeof window !== 'undefined') {
+                base = window.location.origin + (base === '/' ? '' : base);
+            } else {
+                base = 'http://localhost:8000'; // Fallback for SSR if needed
+            }
+        }
+        this.baseURL = base.replace(/\/$/, ''); // Remove trailing slash
+        
         this.timeout = options.timeout || 30000;
         this.headers = {
             'Content-Type': 'application/json',

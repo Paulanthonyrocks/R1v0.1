@@ -17,7 +17,7 @@ import {
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 export default function GalleryPage() {
     const [incidents, setIncidents] = useState<Incident[]>([]);

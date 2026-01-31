@@ -14,7 +14,14 @@ export const useWebSocket = () => {
 };
 
 const getWsUrl = (path: string) => {
-    const baseUrl = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000').replace(/\/$/, '');
+    let baseUrl = process.env.NEXT_PUBLIC_WS_URL;
+    
+    if (!baseUrl && typeof window !== 'undefined') {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        baseUrl = `${protocol}//${window.location.host}`;
+    }
+    
+    baseUrl = (baseUrl || 'ws://localhost:8000').replace(/\/$/, '');
     return `${baseUrl}${path}`;
 }
 
