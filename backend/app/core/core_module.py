@@ -1021,7 +1021,7 @@ class CoreModule:
             # Boost threshold for "young" tracks to allow KF to stabilize velocity
             # Tracks seen < 10 times are more likely to lag due to zero-init velocity
             track_age = len(track.get("class_history", []))
-            effective_thresh = base_matching_thresh * 1.5 if track_age < 10 else base_matching_thresh
+            effective_thresh = base_matching_thresh * 2.0 if track_age < 10 else base_matching_thresh
 
             if cost < effective_thresh:
                 detection_bbox, detection_conf, detection_cls = detections[i]
@@ -1125,7 +1125,7 @@ class CoreModule:
                         cost = 10000.0
                     else:
                         # Normalize distance cost using proximity threshold
-                        dist_cost = dist / proximity_thresh
+                        dist_cost = (dist / proximity_thresh) * 0.5
                         
                         # 3. Class Match Penalty
                         class_penalty = 0 if det_cls == track["class_id"] else 0.4
@@ -1136,10 +1136,10 @@ class CoreModule:
                             cost = iou_cost + class_penalty * 0.3
                         else:
                             # For non-overlapping or tiny-overlap boxes, use distance
-                            # We use a base cost of 0.15 (matching 0 IoU) + distance penalty
-                            # Reduced from 0.2 to be more lenient for fast moving objects
+                            # We use a base cost of 0.1 (matching 0 IoU) + distance penalty
+                            # Reduced from 0.15 to be more lenient for fast moving objects
                             # that are still within reasonable distance.
-                            cost = 0.15 + dist_cost + class_penalty
+                            cost = 0.1 + dist_cost + class_penalty
                         
                         # Add confidence factor: less confident detections are more expensive to match
                         cost += (1.0 - det_conf) * 0.2
