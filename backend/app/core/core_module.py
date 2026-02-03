@@ -1067,8 +1067,8 @@ class CoreModule:
                 det_w = detection_bbox[2] - detection_bbox[0]
                 det_h = detection_bbox[3] - detection_bbox[1]
                 
-                # Dynamic threshold: 25% of box dimension or min 30px
-                dup_thresh = max(30, min(det_w, det_h) * 0.4)
+                # Dynamic threshold: 60% of box dimension or min 50px
+                dup_thresh = max(50, min(det_w, det_h) * 0.6)
                 
                 # Check against ALL tracks (new + existing)
                 all_tracks = {**self.vehicle_data, **new_or_updated_tracks}
@@ -1118,7 +1118,7 @@ class CoreModule:
                     # If the distance is too large relative to the object size, 
                     # we prevent association.
                     obj_diag = math.sqrt((det_bbox[2]-det_bbox[0])**2 + (det_bbox[3]-det_bbox[1])**2)
-                    gate_threshold = obj_diag * 2.5 # Increased from 1.5x to 2.5x to handle low FPS/fast objects
+                    gate_threshold = obj_diag * 3.5 # Increased from 2.5x to 3.5x to handle low FPS/fast objects
                     
                     if dist > gate_threshold and iou < 0.01:
                         # Too far to be the same vehicle if no overlap
@@ -1136,10 +1136,10 @@ class CoreModule:
                             cost = iou_cost + class_penalty * 0.3
                         else:
                             # For non-overlapping or tiny-overlap boxes, use distance
-                            # We use a base cost of 1.0 (matching 0 IoU) + distance penalty
-                            # but reduced base to 0.2 to be more lenient for fast moving objects
+                            # We use a base cost of 0.15 (matching 0 IoU) + distance penalty
+                            # Reduced from 0.2 to be more lenient for fast moving objects
                             # that are still within reasonable distance.
-                            cost = 0.2 + dist_cost + class_penalty
+                            cost = 0.15 + dist_cost + class_penalty
                         
                         # Add confidence factor: less confident detections are more expensive to match
                         cost += (1.0 - det_conf) * 0.2
