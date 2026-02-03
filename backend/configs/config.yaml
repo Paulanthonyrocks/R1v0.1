@@ -387,7 +387,7 @@ vehicle_detection:
   skip_frames: 3 # Process every 4th frame (approx 3.75 detection FPS at 15 FPS video)
   reid_enabled: true
   reid:
-    backbone: resnet50
+    backbone: mobilenet_v3_small
     input_size: [256, 256]
     embedding_dim: 128
     similarity_threshold: 0.75

@@ -134,6 +134,7 @@ class CoreModule:
         gemini_api_key: Optional[str] = None,
         model_type: str = "yolo",
         preloaded_model: Optional[Any] = None,
+        preloaded_reid: Optional[Any] = None,
     ):
         self.feed_id = feed_id
         import copy
@@ -147,7 +148,7 @@ class CoreModule:
         self.model = preloaded_model
         self.preprocessor = None
         self.local_ocr = None
-        self.reid_embedder = None
+        self.reid_embedder = preloaded_reid
         self.car_classifier = None
         self.homography_matrix = None
         
@@ -271,8 +272,7 @@ class CoreModule:
             logger.info("No OCR engine (Gemini or Local) enabled or initialized.")
 
         # Initialize ReID Embedder
-        self.reid_embedder = None
-        if self.config.get("vehicle_detection", {}).get("reid_enabled", True):
+        if self.reid_embedder is None and self.config.get("vehicle_detection", {}).get("reid_enabled", True):
             try:
                 self.reid_embedder = ReIDEmbedder(self.config)
             except Exception as e:

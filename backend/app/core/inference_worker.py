@@ -111,15 +111,16 @@ def inference_worker(
 
     # Shared Model Loading Logic
     model_load_failed = False
+    shared_reid_embedder = None
     if model_path:
         try:
-            logger.info(f"[Worker {worker_id}] Loading shared model from {model_path}...")
+            logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
             full_model_path = str(Path(root_dir) / model_path)
             use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
             
+            # Load YOLO
             engine_path = Path(full_model_path).with_suffix(".engine")
-            
             if engine_path.exists():
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
                 from ultralytics import YOLO
@@ -135,6 +136,14 @@ def inference_worker(
                 shared_model = YOLO(full_model_path)
                 shared_model.to(device)
                 logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
+
+            # Load ReID
+            if vehicle_det_cfg.get("reid_enabled", True):
+                from ..ml.reid_model import ReIDEmbedder
+                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
+                shared_reid_embedder = ReIDEmbedder(config)
+                logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+
         except Exception as e:
             logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
             shared_model = None
@@ -224,7 +233,8 @@ def inference_worker(
                             config=config, fps=target_fps, db_queue=db_queue,
                             gemini_api_key=ocr_cfg.get("gemini_api_key"),
                             model_type=vehicle_det_cfg.get("model_type", "yolo"),
-                            preloaded_model=shared_model if not model_load_failed else None
+                            preloaded_model=shared_model if not model_load_failed else None,
+                            preloaded_reid=shared_reid_embedder
                         )
                         core_modules[feed_id]._first_detection_done = False
                         traffic_monitors[feed_id] = TrafficMonitor(config)
