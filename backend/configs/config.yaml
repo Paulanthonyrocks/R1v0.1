@@ -374,17 +374,17 @@ vehicle_detection:
   - 640
   - 480
   vehicle_class_ids:
-  - 2
-  - 3
-  - 5
-  - 7
-  confidence_threshold: 0.3
-  proximity_threshold: 150
-  track_timeout: 3
-  reid_timeout: 10
-  max_active_tracks: 200
-  yolo_imgsz: 416
-  skip_frames: 10
+  - 2 # car
+  - 3 # motorcycle
+  - 5 # bus
+  - 7 # truck
+  confidence_threshold: 0.35
+  proximity_threshold: 150 # Increased for better high-speed tracking at low FPS
+  track_timeout: 10 # 10 seconds of prediction/coasting
+  reid_timeout: 3600 # 1 hour for long-term ReID
+  max_active_tracks: 100
+  yolo_imgsz: 640
+  skip_frames: 3 # Process every 4th frame (approx 3.75 detection FPS at 15 FPS video)
   reid_enabled: true
   reid:
     backbone: resnet50
@@ -395,32 +395,13 @@ vehicle_detection:
   static_movement_threshold: 25
   static_object_timeout: 20
   car_classification_enabled: false
-  car_classification_interval_frames: 30
+  car_classification_interval_frames: 60
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
   car_classifier_labels_path: backend/models/car_labels.txt
   traffic_predictor:
     model_path: backend/models/traffic_predictor_model.h5
   traffic_prediction:
     enabled: true
-  frame_resolution:
-  - 640
-  - 480
-  vehicle_class_ids:
-  - 2
-  - 3
-  - 5
-  - 7
-  confidence_threshold: 0.4
-  proximity_threshold: 75
-  track_timeout: 20
-  max_active_tracks: 50
-  yolo_imgsz: 640
-  skip_frames: 4
-  vehicle_type_map:
-    2: car
-    3: motorcycle
-    5: bus
-    7: truck
 analytics_service:
   node_congestion_broadcast:
     enabled: true
@@ -435,8 +416,8 @@ kalman_filter_params:
   kf_sigma_px: 5.0
   kf_sigma_py: 5.0
   kf_sigma_pd: 0.5 # Process noise for dimensions
-  kf_sigma_pvx: 10.0 # Increased for better acceleration handling
-  kf_sigma_pvy: 10.0
+  kf_sigma_pvx: 15.0 # Increased further for better acceleration handling
+  kf_sigma_pvy: 15.0
   kf_sigma_mx: 10.0 # Reduced measurement noise for position
   kf_sigma_my: 10.0
   kf_sigma_md: 10.0 # Added measurement noise for dimensions

@@ -829,18 +829,15 @@ class CoreModule:
                 if dt <= 0.001: dt = 1.0 / self.fps
                 
                 # Update F
-                kf.F[0, 2] = dt
-                kf.F[1, 3] = dt
+                kf.F[0, 4] = dt
+                kf.F[1, 5] = dt
+                kf.F[2, 6] = dt
+                kf.F[3, 7] = dt
 
                 kf.predict()
                 track["last_prediction_time"] = current_time
 
-                x, y = float(kf.x[0][0]), float(kf.x[1][0])
-                
-                # Update bbox based on predicted center and original dimensions
-                x1_orig, y1_orig, x2_orig, y2_orig = track["bbox"]
-                w = x2_orig - x1_orig
-                h = y2_orig - y1_orig
+                x, y, w, h = float(kf.x[0][0]), float(kf.x[1][0]), float(kf.x[2][0]), float(kf.x[3][0])
                 
                 new_x1 = int(x - w / 2)
                 new_y1 = int(y - h / 2)
@@ -1094,7 +1091,7 @@ class CoreModule:
         cost_matrix = np.full((num_detections, num_tracks), 10000.0)
 
         track_list = list(tracks.values())
-        proximity_thresh = float(self.proximity_threshold) if self.proximity_threshold > 0 else 100.0
+        proximity_thresh = float(self.proximity_threshold) if self.proximity_threshold > 0 else 150.0
 
         for d_idx, (det_bbox, det_conf, det_cls) in enumerate(detections):
             det_cx = (det_bbox[0] + det_bbox[2]) / 2
@@ -1115,7 +1112,7 @@ class CoreModule:
                     # If the distance is too large relative to the object size, 
                     # we prevent association.
                     obj_diag = math.sqrt((det_bbox[2]-det_bbox[0])**2 + (det_bbox[3]-det_bbox[1])**2)
-                    gate_threshold = obj_diag * 1.5 # Gate at 1.5x object diagonal
+                    gate_threshold = obj_diag * 2.5 # Increased from 1.5x to 2.5x to handle low FPS/fast objects
                     
                     if dist > gate_threshold and iou < 0.01:
                         # Too far to be the same vehicle if no overlap
@@ -1124,21 +1121,22 @@ class CoreModule:
                         # Normalize distance cost using proximity threshold
                         dist_cost = dist / proximity_thresh
                         
-                        # 3. Class Match Penalty (Reduced to allow some flexibility)
-                        class_penalty = 0 if det_cls == track["class_id"] else 0.5 # Was 0.8
+                        # 3. Class Match Penalty
+                        class_penalty = 0 if det_cls == track["class_id"] else 0.4
 
-                        # Combined Cost: Prioritize IoU if overlap exists, else use distance
-                        if iou > 0.05: # Was 0.1
-                            cost = iou_cost + class_penalty * 0.4
+                        # Combined Cost: Smooth transition between IoU and Distance
+                        # If we have some overlap, prioritize IoU.
+                        if iou > 0.05:
+                            cost = iou_cost + class_penalty * 0.3
                         else:
-                            # For non-overlapping boxes, use distance but with a higher base cost
-                            # If class mismatch AND low overlap, punish severely
-                            extra_penalty = 1.0 if class_penalty > 0 else 0.0
-                            # Reduced base cost from 0.9 to 0.5 to allow re-association of fast moving objects
-                            cost = 0.5 + dist_cost + class_penalty + extra_penalty
-
+                            # For non-overlapping or tiny-overlap boxes, use distance
+                            # We use a base cost of 1.0 (matching 0 IoU) + distance penalty
+                            # but reduced base to 0.4 to be more lenient for fast moving objects
+                            # that are still within reasonable distance.
+                            cost = 0.4 + dist_cost + class_penalty
+                        
                         # Add confidence factor: less confident detections are more expensive to match
-                        cost += (1.0 - det_conf) * 0.3
+                        cost += (1.0 - det_conf) * 0.2
                     
                     cost_matrix[d_idx, t_idx] = cost
         return cost_matrix
@@ -1154,7 +1152,7 @@ class CoreModule:
         boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
         boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
 
-        iou = interArea / float(boxAArea + boxBArea - interArea)
+        iou = interArea / float(boxAArea + boxBArea - interArea + 1e-6)
         return iou
 
     def _remove_stale_tracks(self, current_time: float, track_timeout: int):
@@ -1585,11 +1583,12 @@ class CoreModule:
 
             raw_speed_kmph = 0.0
 
+            # State order: [x, y, w, h, vx, vy, vw, vh]
+            cx, cy = kf.x[0][0], kf.x[1][0]
+            vx, vy = kf.x[4][0], kf.x[5][0]
+
             # 1. Prefer Homography-based speed estimation
             if self.homography_matrix is not None:
-                cx, cy = kf.x[0][0], kf.x[1][0]
-                vx, vy = kf.x[2][0], kf.x[3][0]
-
                 # Current position in ground space
                 current_ground = self._pixel_to_ground(cx, cy)
                 
@@ -1610,9 +1609,8 @@ class CoreModule:
 
             # 2. Fallback to constant PPM
             if raw_speed_kmph == 0.0:
-                vx, vy = kf.x[2][0], kf.x[3][0]
                 pixel_speed_per_sec = np.sqrt(vx**2 + vy**2)
-                dynamic_ppm = self._get_dynamic_pixels_per_meter(kf.x[1][0])
+                dynamic_ppm = self._get_dynamic_pixels_per_meter(cy)
                 
                 speed_mps = (pixel_speed_per_sec / dynamic_ppm) if dynamic_ppm > 0 else 0
                 raw_speed_kmph = speed_mps * 3.6
@@ -1901,6 +1899,19 @@ class CoreModule:
                 self.ocr_executor.shutdown(wait=False)
             self.ocr_executor = ThreadPoolExecutor(max_workers=2)
             logger.info(f"[{self.feed_id}] OCR configuration updated and executor restarted.")
+
+        # Update Tracking Parameters
+        if "proximity_threshold" in updates:
+            self.proximity_threshold = float(updates["proximity_threshold"])
+            logger.info(f"[{self.feed_id}] Proximity threshold updated: {self.proximity_threshold}")
+            
+        if "confidence_threshold" in updates:
+            self.confidence_threshold = float(updates["confidence_threshold"])
+            logger.info(f"[{self.feed_id}] Confidence threshold updated: {self.confidence_threshold}")
+            
+        if "track_timeout" in updates:
+            self.track_timeout = float(updates["track_timeout"])
+            logger.info(f"[{self.feed_id}] Track timeout updated: {self.track_timeout}")
 
         # Update Frame Skipping and related dynamic parameters
         if "skip_frames" in updates:
