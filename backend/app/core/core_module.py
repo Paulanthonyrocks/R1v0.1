@@ -1011,14 +1011,20 @@ class CoreModule:
         
         # 3. Process matched tracks
         # Dynamic threshold based on skip_frames (calculated in __init__)
-        MATCHING_THRESHOLD = self.dynamic_matching_threshold 
+        base_matching_thresh = self.dynamic_matching_threshold 
 
         for i, j in zip(row_ind, col_ind):
             cost = cost_matrix[i, j]
-            if cost < MATCHING_THRESHOLD:
+            track_id = list(self.vehicle_data.keys())[j]
+            track = self.vehicle_data[track_id]
+            
+            # Boost threshold for "young" tracks to allow KF to stabilize velocity
+            # Tracks seen < 10 times are more likely to lag due to zero-init velocity
+            track_age = len(track.get("class_history", []))
+            effective_thresh = base_matching_thresh * 1.5 if track_age < 10 else base_matching_thresh
+
+            if cost < effective_thresh:
                 detection_bbox, detection_conf, detection_cls = detections[i]
-                track_id = list(self.vehicle_data.keys())[j]
-                track = self.vehicle_data[track_id]
 
                 self._update_track(track, (detection_bbox, detection_conf, detection_cls), current_time, frame, frame_index)
                 
@@ -1131,9 +1137,9 @@ class CoreModule:
                         else:
                             # For non-overlapping or tiny-overlap boxes, use distance
                             # We use a base cost of 1.0 (matching 0 IoU) + distance penalty
-                            # but reduced base to 0.4 to be more lenient for fast moving objects
+                            # but reduced base to 0.2 to be more lenient for fast moving objects
                             # that are still within reasonable distance.
-                            cost = 0.4 + dist_cost + class_penalty
+                            cost = 0.2 + dist_cost + class_penalty
                         
                         # Add confidence factor: less confident detections are more expensive to match
                         cost += (1.0 - det_conf) * 0.2
@@ -1372,6 +1378,23 @@ class CoreModule:
             [bbox[2] - bbox[0]],
             [bbox[3] - bbox[1]]
         ])
+        
+        # --- Velocity Bootstrapping ---
+        # If this is one of the first few updates, explicitly set velocity 
+        # based on displacement to help KF converge faster.
+        track_age = len(track.get("class_history", []))
+        if track_age >= 1 and track_age <= 5:
+            dt = current_time - track["last_seen"]
+            if dt > 0.001:
+                prev_cx, prev_cy = track["centroid"]
+                curr_cx, curr_cy = measurement[0][0], measurement[1][0]
+                vx = (curr_cx - prev_cx) / dt
+                vy = (curr_cy - prev_cy) / dt
+                # Update state vector [x, y, w, h, vx, vy, vw, vh]
+                kf.x[4][0] = vx
+                kf.x[5][0] = vy
+                logger.debug(f"Bootstrapped velocity for {track['vehicle_id']}: ({vx:.1f}, {vy:.1f})")
+
         kf.update(measurement)
 
         # Update track properties using smoothed state
