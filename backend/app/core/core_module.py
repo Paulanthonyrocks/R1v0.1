@@ -5,7 +5,6 @@ import math
 import numpy as np
 import uuid
 import torch
-import torchvision.transforms.functional as TF
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -182,6 +181,16 @@ class CoreModule:
         self.max_active_tracks = vehicle_cfg.get("max_active_tracks", 50)
         self.max_reid_per_frame = vehicle_cfg.get("max_reid_per_frame", 2)
         self.nms_threshold = vehicle_cfg.get("nms_threshold", 0.45)
+        
+        # Bounding Box Quality Parameters
+        self.bbox_expansion_factor = vehicle_cfg.get("bbox_expansion_factor", 0.08)
+        self.min_bbox_area = vehicle_cfg.get("min_bbox_area", 400)
+        self.max_aspect_ratio = vehicle_cfg.get("max_aspect_ratio", 4.0)
+        self.min_bbox_dimension = vehicle_cfg.get("min_bbox_dimension", 20)
+        
+        # Adaptive Gating Parameters
+        self.base_gate_multiplier = self.kf_params.get("base_gate_multiplier", 5.0)
+        self.velocity_gate_boost = self.kf_params.get("velocity_gate_boost", 1.5)
         self.stationary_cleanup_timeout = behavior_cfg.get("stationary_cleanup_timeout", 14400) # 4 hours default
         
         # Fix #30: Validate yolo_imgsz
@@ -270,6 +279,12 @@ class CoreModule:
 
         if not self.preprocessor and not self.local_ocr:
             logger.info("No OCR engine (Gemini or Local) enabled or initialized.")
+        
+        # Appearance-Based Tracking Configuration (Phase 3)
+        reid_cfg = vehicle_cfg.get("reid", {})
+        self.use_appearance_in_tracking = reid_cfg.get("use_appearance_in_tracking", True)
+        self.appearance_weight = reid_cfg.get("appearance_weight", 0.3)
+        self.min_track_age_for_appearance = reid_cfg.get("min_track_age_for_appearance", 5)
 
         # Initialize ReID Embedder
         if self.reid_embedder is None and self.config.get("vehicle_detection", {}).get("reid_enabled", True):
@@ -739,22 +754,51 @@ class CoreModule:
             width *= scale_x
             height *= scale_y
             
+            # --- IMPROVEMENT: Expand bounding boxes to account for model under-prediction ---
+            expansion = self.bbox_expansion_factor
+            width *= (1.0 + expansion)
+            height *= (1.0 + expansion)
+            
             x1 = x_center - width / 2
             y1 = y_center - height / 2
+            
+            # --- IMPROVEMENT: Quality Filtering ---
+            # Filter out boxes that are too small
+            if width < self.min_bbox_dimension or height < self.min_bbox_dimension:
+                continue
+            
+            # Filter out boxes with extreme aspect ratios
+            aspect_ratio = max(width, height) / max(1, min(width, height))
+            if aspect_ratio > self.max_aspect_ratio:
+                continue
+            
+            # Filter out boxes with insufficient area
+            if (width * height) < self.min_bbox_area:
+                continue
 
             # --- Regional Filtering Optimization ---
             # If lane boundaries are available, filter out detections far outside the road area
-            # to speed up NMS and reduce false positives in irrelevant regions.
+            # Increased buffer from 100 to 150 for better tolerance
             if self.cached_lane_boundaries and len(self.cached_lane_boundaries) > 1:
                 road_min_x = min(self.cached_lane_boundaries)
                 road_max_x = max(self.cached_lane_boundaries)
-                buffer = 100 # Allow some margin for shoulders and lane changes
+                buffer = 150  # Increased buffer for better tolerance
                 
                 # Adjust x1, y1 for ROI if needed for correct comparison
                 actual_x_center = x_center + x1_crop if roi_enabled else x_center
                 
                 if actual_x_center < (road_min_x - buffer) or actual_x_center > (road_max_x + buffer):
                     continue
+            
+            # Clamp to frame boundaries
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(w_orig, x1 + width)
+            y2 = min(h_orig, y1 + height)
+            
+            # Recalculate width and height after clamping
+            width = x2 - x1
+            height = y2 - y1
             
             nms_boxes.append([int(x1), int(y1), int(width), int(height)])
             nms_scores.append(float(scores[i]))
@@ -826,7 +870,8 @@ class CoreModule:
                 # Dynamic dt calculation
                 last_pred = track.get("last_prediction_time", track["last_seen"])
                 dt = current_time - last_pred
-                if dt <= 0.001: dt = 1.0 / self.fps
+                if dt <= 0.001:
+                    dt = 1.0 / self.fps
                 
                 # Update F
                 kf.F[0, 4] = dt
@@ -1018,10 +1063,11 @@ class CoreModule:
             track_id = list(self.vehicle_data.keys())[j]
             track = self.vehicle_data[track_id]
             
-            # Boost threshold for "young" tracks to allow KF to stabilize velocity
+            # --- IMPROVEMENT: Boost threshold for "young" tracks ---
             # Tracks seen < 10 times are more likely to lag due to zero-init velocity
+            # Increased from 2.0x to 3.0x for better initial tracking
             track_age = len(track.get("class_history", []))
-            effective_thresh = base_matching_thresh * 2.0 if track_age < 10 else base_matching_thresh
+            effective_thresh = base_matching_thresh * 3.0 if track_age < 10 else base_matching_thresh
 
             if cost < effective_thresh:
                 detection_bbox, detection_conf, detection_cls = detections[i]
@@ -1105,44 +1151,105 @@ class CoreModule:
             
             for t_idx, track in enumerate(track_list):
                 if "predicted_bbox" in track:
-                    # 1. IoU Cost (Primary)
-                    iou = self._bbox_iou(det_bbox, track["predicted_bbox"])
-                    iou_cost = 1.0 - iou
+                    # --- IMPROVEMENT: Use GIoU instead of standard IoU ---
+                    giou = self._bbox_giou(det_bbox, track["predicted_bbox"])
+                    giou_cost = 1.0 - giou  # Convert to cost (0 = perfect match, 2 = worst)
                     
                     # 2. Distance Cost (Secondary/Fallback)
                     tr_cx, tr_cy = track["centroid"]
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
                     
-                    # --- Gating Optimization ---
-                    # Use a Mahalanobis-inspired distance gate.
-                    # If the distance is too large relative to the object size, 
-                    # we prevent association.
+                    # --- IMPROVEMENT: Adaptive Gating Based on Velocity ---
+                    # Fast-moving tracks get larger search gates
                     obj_diag = math.sqrt((det_bbox[2]-det_bbox[0])**2 + (det_bbox[3]-det_bbox[1])**2)
-                    gate_threshold = obj_diag * 3.5 # Increased from 2.5x to 3.5x to handle low FPS/fast objects
                     
-                    if dist > gate_threshold and iou < 0.01:
+                    # Get track velocity for adaptive gating
+                    kf = track.get("kalman_filter")
+                    if kf is not None:
+                        vx, vy = kf.x[4][0], kf.x[5][0]
+                        velocity_magnitude = math.sqrt(vx**2 + vy**2)
+                        # Normalize velocity by FPS to get pixels per second
+                        velocity_pps = velocity_magnitude * self.fps
+                        # If moving fast (>100 px/s), boost gate
+                        velocity_boost = self.velocity_gate_boost if velocity_pps > 100 else 1.0
+                    else:
+                        velocity_boost = 1.0
+                    
+                    gate_threshold = obj_diag * self.base_gate_multiplier * velocity_boost
+                    
+                    if dist > gate_threshold and giou < -0.5:
                         # Too far to be the same vehicle if no overlap
                         cost = 10000.0
                     else:
                         # Normalize distance cost using proximity threshold
                         dist_cost = (dist / proximity_thresh) * 0.5
                         
-                        # 3. Class Match Penalty
-                        class_penalty = 0 if det_cls == track["class_id"] else 0.4
+                        # --- IMPROVEMENT: Reduced Class Mismatch Penalty ---
+                        # Reduced from 0.4 to 0.2 to allow more flexibility
+                        class_penalty = 0 if det_cls == track["class_id"] else 0.2
+                        
+                        # --- IMPROVEMENT: Velocity Consistency Check ---
+                        # Penalize associations that require unrealistic velocity changes
+                        velocity_penalty = 0.0
+                        if kf is not None and len(track.get("class_history", [])) > 3:
+                            # Expected position based on velocity
+                            expected_cx = tr_cx + (vx * (1.0 / self.fps))
+                            expected_cy = tr_cy + (vy * (1.0 / self.fps))
+                            
+                            # Distance from expected position
+                            prediction_error = math.sqrt((det_cx - expected_cx)**2 + (det_cy - expected_cy)**2)
+                            
+                            # Normalize by object size
+                            normalized_error = prediction_error / max(obj_diag, 1.0)
+                            
+                            # Penalize if prediction error is large (>2x object size)
+                            if normalized_error > 2.0:
+                                velocity_penalty = min(0.3, normalized_error * 0.1)
 
-                        # Combined Cost: Smooth transition between IoU and Distance
-                        # If we have some overlap, prioritize IoU.
-                        if iou > 0.05:
-                            cost = iou_cost + class_penalty * 0.3
+                        # Combined Cost: Prioritize GIoU when available
+                        if giou > -0.5:  # Some overlap or close proximity
+                            # GIoU-based cost with penalties
+                            motion_cost = giou_cost * 0.5 + class_penalty * 0.2 + velocity_penalty
                         else:
-                            # For non-overlapping or tiny-overlap boxes, use distance
-                            # We use a base cost of 0.1 (matching 0 IoU) + distance penalty
-                            # Reduced from 0.15 to be more lenient for fast moving objects
-                            # that are still within reasonable distance.
-                            cost = 0.1 + dist_cost + class_penalty
+                            # Distance-based cost for non-overlapping boxes
+                            motion_cost = 0.15 + dist_cost + class_penalty + velocity_penalty
                         
                         # Add confidence factor: less confident detections are more expensive to match
-                        cost += (1.0 - det_conf) * 0.2
+                        motion_cost += (1.0 - det_conf) * 0.15  # Reduced from 0.2
+                        
+                        # --- PHASE 3: Appearance-Based Re-identification ---
+                        # Use ReID embeddings as tiebreaker for ambiguous cases
+                        appearance_cost = 0.0
+                        track_age = len(track.get("class_history", []))
+                        
+                        # Only use appearance for mature tracks with embeddings
+                        if (self.use_appearance_in_tracking and 
+                            track_age > self.min_track_age_for_appearance and 
+                            track.get("embedding") is not None):
+                            
+                            # Get track embedding
+                            track_embedding = track.get("embedding")
+                            
+                            # For efficiency, we use a cached detection embedding if available
+                            # Otherwise, appearance matching happens in post-processing
+                            det_embedding = track.get(f"_det_embedding_{d_idx}")
+                            
+                            if det_embedding is not None:
+                                # Compute appearance similarity
+                                similarity = self._embedding_similarity(det_embedding, track_embedding)
+                                
+                                # Convert similarity to cost (1 - similarity)
+                                # High similarity = low cost
+                                appearance_cost = 1.0 - similarity
+                                
+                                logger.debug(f"Appearance similarity for track {track.get('vehicle_id')}: {similarity:.3f}")
+                        
+                        # Final cost combines motion and appearance
+                        # Motion dominates (70%), appearance refines (30%)
+                        if appearance_cost > 0:
+                            cost = motion_cost * (1.0 - self.appearance_weight) + appearance_cost * self.appearance_weight
+                        else:
+                            cost = motion_cost
                     
                     cost_matrix[d_idx, t_idx] = cost
         return cost_matrix
@@ -1160,6 +1267,81 @@ class CoreModule:
 
         iou = interArea / float(boxAArea + boxBArea - interArea + 1e-6)
         return iou
+    
+    def _bbox_giou(self, boxA: Tuple, boxB: Tuple) -> float:
+        """
+        Calculate Generalized IoU (GIoU) between two bounding boxes.
+        GIoU extends IoU to account for the distance between non-overlapping boxes.
+        
+        Returns:
+            float: GIoU value in range [-1, 1]
+                   1 = perfect overlap
+                   0 = touching but not overlapping
+                   -1 = far apart
+        """
+        # Calculate standard IoU
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+
+        interArea = max(0, xB - xA) * max(0, yB - yA)
+
+        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        unionArea = boxAArea + boxBArea - interArea
+
+        iou = interArea / float(unionArea + 1e-6)
+        
+        # Calculate the smallest enclosing box
+        enclosing_x1 = min(boxA[0], boxB[0])
+        enclosing_y1 = min(boxA[1], boxB[1])
+        enclosing_x2 = max(boxA[2], boxB[2])
+        enclosing_y2 = max(boxA[3], boxB[3])
+        
+        enclosing_area = (enclosing_x2 - enclosing_x1) * (enclosing_y2 - enclosing_y1)
+        
+        # GIoU = IoU - (enclosing_area - union_area) / enclosing_area
+        giou = iou - ((enclosing_area - unionArea) / (enclosing_area + 1e-6))
+        
+        return giou
+    
+    def _embedding_similarity(self, embedding1: Optional[List[float]], embedding2: Optional[List[float]]) -> float:
+        """
+        Calculate cosine similarity between two ReID embeddings.
+        
+        Args:
+            embedding1: First embedding vector
+            embedding2: Second embedding vector
+            
+        Returns:
+            float: Cosine similarity in range [0, 1]
+                   1 = identical appearance
+                   0 = completely different
+        """
+        if embedding1 is None or embedding2 is None:
+            return 0.0
+        
+        try:
+            # Convert to numpy arrays
+            emb1 = np.array(embedding1)
+            emb2 = np.array(embedding2)
+            
+            # Compute cosine similarity
+            dot_product = np.dot(emb1, emb2)
+            norm1 = np.linalg.norm(emb1)
+            norm2 = np.linalg.norm(emb2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            similarity = dot_product / (norm1 * norm2)
+            
+            # Clamp to [0, 1] range
+            return max(0.0, min(1.0, (similarity + 1.0) / 2.0))
+        except Exception as e:
+            logger.warning(f"Error computing embedding similarity: {e}")
+            return 0.0
 
     def _remove_stale_tracks(self, current_time: float, track_timeout: int):
         stale_tracks = []

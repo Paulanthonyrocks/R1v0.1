@@ -378,22 +378,48 @@ vehicle_detection:
   - 3 # motorcycle
   - 5 # bus
   - 7 # truck
-  confidence_threshold: 0.35
+  # Detection Quality Parameters
+  confidence_threshold: 0.45  # Increased from 0.35 to filter low-quality detections
+  nms_threshold: 0.35  # Decreased from 0.45 for better detection recall
+  
+  # Bounding Box Quality Filters
+  bbox_expansion_factor: 0.08  # Expand boxes by 8% to account for model under-prediction
+  min_bbox_area: 400  # Minimum 20x20 pixels
+  max_aspect_ratio: 4.0  # Reject extreme aspect ratios (e.g., 10:1)
+  min_bbox_dimension: 20  # Minimum width or height in pixels
+  
+  # Tracking Parameters
   proximity_threshold: 150 # Increased for better high-speed tracking at low FPS
   track_timeout: 10 # 10 seconds of prediction/coasting
   reid_timeout: 3600 # 1 hour for long-term ReID
   max_active_tracks: 100
+  max_reid_per_frame: 2
+  reid_interval_frames: 60
+  
+  # Model Configuration
   yolo_imgsz: 640
   skip_frames: 3 # Process every 4th frame (approx 3.75 detection FPS at 15 FPS video)
+  predict_timeout: 0.4
+  
+  # ReID Configuration
   reid_enabled: true
   reid:
     backbone: mobilenet_v3_small
     input_size: [256, 256]
     embedding_dim: 128
     similarity_threshold: 0.75
+    # Appearance-Based Tracking (Phase 3)
+    use_appearance_in_tracking: true  # Integrate ReID into cost matrix
+    appearance_weight: 0.3  # 30% weight for appearance, 70% for motion
+    min_track_age_for_appearance: 5  # Only use appearance for tracks >5 frames
+  
+  # Static Object Filtering
   static_object_filter_enabled: true
   static_movement_threshold: 25
   static_object_timeout: 20
+  occlusion_confidence_threshold: 0.2
+  
+  # Car Classification
   car_classification_enabled: false
   car_classification_interval_frames: 60
   car_classifier_model_path: backend/models/Car_Make_Model.tflite
@@ -413,16 +439,27 @@ behavior_analysis:
   lane_change_buffer: 20
   ewma_alpha: 0.2
 kalman_filter_params:
-  kf_sigma_px: 5.0
+  # Process Noise (Q matrix) - How much we expect the state to change
+  kf_sigma_px: 5.0  # Position process noise
   kf_sigma_py: 5.0
-  kf_sigma_pd: 0.5 # Process noise for dimensions
-  kf_sigma_pvx: 15.0 # Increased further for better acceleration handling
+  kf_sigma_pd: 0.5  # Dimension process noise (boxes change size slowly)
+  kf_sigma_pvx: 15.0  # Velocity process noise (acceleration)
   kf_sigma_pvy: 15.0
-  kf_sigma_mx: 10.0 # Reduced measurement noise for position
+  kf_sigma_pvw: 1.0  # Dimension velocity process noise
+  
+  # Measurement Noise (R matrix) - How much we trust detections
+  kf_sigma_mx: 10.0  # Position measurement noise
   kf_sigma_my: 10.0
-  kf_sigma_md: 10.0 # Added measurement noise for dimensions
-  kf_sigma_ax: 1.0
-  kf_sigma_ay: 1.0
+  kf_sigma_md: 10.0  # Dimension measurement noise
+  
+  # Initial Covariance (P matrix) - Uncertainty in initial state
+  init_covariance_pos: 25  # Reduced from 50 (more confident in initial detection)
+  init_covariance_dim: 100  # Dimension uncertainty
+  init_covariance_vel: 2000  # Increased from 1000 (less confident in zero-init velocity)
+  
+  # Adaptive Gating for Track Association
+  base_gate_multiplier: 5.0  # Increased from 3.5 for better tracking at low FPS
+  velocity_gate_boost: 1.5  # Extra multiplier for fast-moving tracks
 lane_detection:
   dynamic_lane_detection_enabled: false
   num_lanes: 6 # Fallback if dynamic detection fails or is disabled
