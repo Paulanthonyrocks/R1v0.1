@@ -2,12 +2,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import time # Import time for timestamping
-import msgpack
-from typing import Dict, Optional, List, Set
+from enum import IntEnum
+from typing import Dict, Optional, List, Set, Union
 from fastapi import WebSocket
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, PingData # Import necessary models
 
 logger = logging.getLogger(__name__)
+
+class MessagePriority(IntEnum):
+    CRITICAL = 0   # Auth, Errors
+    HIGH = 1       # Alerts, Incidents
+    NORMAL = 2     # KPI Updates, Status
+    LOW = 3        # Video Frames, Metrics
+
+class PrioritizedMessage:
+    def __init__(self, priority: MessagePriority, message: Union[str, bytes]):
+        self.priority = priority
+        self.message = message
+        self.timestamp = time.time()
+    
+    def __lt__(self, other):
+        # Higher priority (lower value) comes first
+        if self.priority != other.priority:
+            return self.priority < other.priority
+        # For same priority, use FIFO (earlier timestamp first)
+        return self.timestamp < other.timestamp
 
 class ConnectionManager:
     _instance: Optional[ConnectionManager] = None
@@ -36,6 +55,7 @@ class ConnectionManager:
         self.feed_subscriptions: Dict[str, Set[str]] = {}
         self.client_id_to_feeds: Dict[str, Set[str]] = {}
         self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
+        self.client_latencies: Dict[str, float] = {}  # Track RTT for adaptive behavior
         
         # Output queues for backpressure management
         self.client_queues: Dict[str, asyncio.Queue] = {}
@@ -113,9 +133,10 @@ class ConnectionManager:
         self.client_id_to_feeds.setdefault(client_id, set())
         self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
-        # Initialize sender queue and task
-        # Reduce maxsize to 5 to minimize lag over slow connections (e.g. 142ms latency)
-        self.client_queues[client_id] = asyncio.Queue(maxsize=5)
+        # Initialize sender queue and task with adaptive sizing and priority
+        queue_size = self._calculate_queue_size(client_id)
+        # Use PriorityQueue to allow alerts to bypass video frames
+        self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=queue_size + 10) # Buffering for priority shifts
         self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
 
         logger.info(
@@ -157,6 +178,7 @@ class ConnectionManager:
             del self.active_connections[client_id]
             self.client_id_to_user_role.pop(client_id, None) # Remove role
             self.last_pong_received_time.pop(client_id, None)
+            self.client_latencies.pop(client_id, None)  # Clean up latency tracking
             
             user_id = self.client_id_to_user_id.pop(client_id, None)
 
@@ -183,14 +205,17 @@ class ConnectionManager:
             )
 
     async def _client_sender(self, client_id: str, websocket: WebSocket):
-        """Background task to send messages from queue to websocket."""
+        """Background task to send prioritized messages from queue to websocket."""
         queue = self.client_queues.get(client_id)
         if not queue:
             return
 
         try:
             while True:
-                message = await queue.get()
+                # PriorityQueue returns the highest priority (lowest value) item
+                prioritized_msg = await queue.get()
+                message = prioritized_msg.message
+                
                 try:
                     # Use a timeout for the actual socket send to detect dead sockets faster
                     if isinstance(message, bytes):
@@ -207,27 +232,50 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"Unexpected error in sender task for {client_id}: {e}")
 
-    def record_pong(self, client_id: str):
+    def _calculate_queue_size(self, client_id: str) -> int:
+        """Calculate adaptive queue size based on client latency."""
+        base_queue_size = 5
+        latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
+        
+        # Higher latency = larger queue to buffer more frames
+        if latency_ms > 200:
+            return 10
+        elif latency_ms > 100:
+            return 7
+        else:
+            return base_queue_size
+    
+    def update_client_latency(self, client_id: str, rtt_ms: float):
+        """Update tracked latency for adaptive behavior."""
+        if client_id in self.active_connections:
+            self.client_latencies[client_id] = rtt_ms
+            logger.debug(f"Updated latency for client {client_id}: {rtt_ms}ms")
+    
+    def record_pong(self, client_id: str, rtt_ms: Optional[float] = None):
         """Record the time a PONG was received from a client."""
         if client_id in self.active_connections:
             self.last_pong_received_time[client_id] = time.time()
+            if rtt_ms is not None:
+                self.update_client_latency(client_id, rtt_ms)
             logger.debug(f"Recorded PONG for client {client_id}")
 
-    async def send_personal_message(self, message: str, client_id: str):
+    async def send_personal_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.NORMAL):
         """
         Send a message reliably (waits for queue space). 
         Use this for control messages (config updates, status changes).
         """
         if client_id in self.client_queues:
             try:
+                # Wrap in prioritized object
+                wrapped_msg = PrioritizedMessage(priority, message)
                 # Wait for slot in queue with timeout to avoid blocking forever
-                await asyncio.wait_for(self.client_queues[client_id].put(message), timeout=0.5)
+                await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=0.5)
             except asyncio.TimeoutError:
-                 logger.warning(f"Client {client_id} queue full. Dropping reliable message to avoid blocking.")
+                 logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) to avoid blocking.")
             except Exception as e:
                  logger.error(f"Failed to enqueue message for {client_id}: {e}")
 
-    async def send_realtime_message(self, message: str, client_id: str):
+    async def send_realtime_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.LOW):
         """
         Send a message with 'fire-and-forget' logic.
         Use this for high-frequency data (video frames).
@@ -235,60 +283,78 @@ class ConnectionManager:
         """
         if client_id in self.client_queues:
             try:
-                self.client_queues[client_id].put_nowait(message)
+                wrapped_msg = PrioritizedMessage(priority, message)
+                self.client_queues[client_id].put_nowait(wrapped_msg)
             except asyncio.QueueFull:
                 # Queue is full, drop frame to prevent backing up backend
-                # Optional: Log sporadically to avoid spam
                 pass 
             except Exception as e:
                 logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
 
-    async def broadcast(self, message: str):
-        """Broadcast reliable message to all."""
+    async def broadcast(self, message: str, priority: MessagePriority = MessagePriority.NORMAL):
+        """Broadcast reliable message to all with specific priority."""
         # Iterate over a copy to allow modification (disconnection) during iteration
         for client_id in list(self.active_connections.keys()):
-            await self.send_personal_message(message, client_id)
+            await self.send_personal_message(message, client_id, priority=priority)
 
-    def get_user_role(self, client_id: str) -> str:
-        """Helper to get user role for authorization."""
-        return self.client_id_to_user_role.get(client_id, "user")
-
-    async def broadcast_realtime(self, message: str):
-        """Broadcast fire-and-forget message to all (JSON)."""
+    async def broadcast_realtime(self, message: str, priority: MessagePriority = MessagePriority.LOW):
+        """Broadcast fire-and-forget message to all with specific priority."""
         tasks = []
         for client_id in list(self.active_connections.keys()):
-            tasks.append(self.send_realtime_message(message, client_id))
+            tasks.append(self.send_realtime_message(message, client_id, priority=priority))
         if tasks:
             await asyncio.gather(*tasks)
 
     async def broadcast_realtime_bytes(self, data: bytes):
-        """Broadcast fire-and-forget binary message to all (Msgpack)."""
-        tasks = []
+        """Broadcast fire-and-forget binary message to all (Msgpack) with LOW priority."""
         for client_id in list(self.active_connections.keys()):
             if client_id in self.client_queues:
                 try:
-                    self.client_queues[client_id].put_nowait(data)
+                    wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
+                    self.client_queues[client_id].put_nowait(wrapped_msg)
                 except asyncio.QueueFull:
                     pass
                 except Exception as e:
                     logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
-        # No need to gather put_nowait calls
 
-    async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes):
-        """Broadcast fire-and-forget binary message only to subscribers of a specific feed."""
+    async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
+        """
+        Broadcast binary frame to subscribers with Graceful Degradation.
+        Skips frames if client queue is heavily backlogged.
+        """
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
             return
 
         for client_id in subscribed_clients:
-            if client_id in self.client_queues:
-                try:
-                    self.client_queues[client_id].put_nowait(data)
-                except asyncio.QueueFull:
-                    # Queue is full, drop frame to prevent backing up backend
-                    pass 
-                except Exception as e:
-                    logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
+            if client_id not in self.client_queues:
+                continue
+
+            # Graceful Degradation: Frame Skipping
+            queue = self.client_queues[client_id]
+            q_size = queue.qsize()
+            q_max = queue.maxsize
+            
+            # Simple skip logic: if 75% full, skip 1/2. if 90% full, skip 2/3.
+            skip_threshold = 0.0
+            if q_size >= q_max * 0.9:
+                skip_threshold = 0.67 # Skip 2 out of 3
+            elif q_size >= q_max * 0.75:
+                skip_threshold = 0.5  # Skip every other
+                
+            if skip_threshold > 0:
+                # Use frame_index to ensure deterministic skipping across connections if needed,
+                # or just use random for simplicity per-client.
+                if (frame_index % int(1/(1-skip_threshold))) != 0:
+                    continue
+
+            try:
+                wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
+                self.client_queues[client_id].put_nowait(wrapped_msg)
+            except asyncio.QueueFull:
+                pass 
+            except Exception as e:
+                logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
 
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
@@ -339,23 +405,29 @@ class ConnectionManager:
             if not self.client_id_to_topics[client_id]:
                 del self.client_id_to_topics[client_id]
 
-    async def broadcast_to_topic(self, message: str, topic: str):
+    async def broadcast_to_topic(self, message: str, topic: str, priority: MessagePriority = MessagePriority.NORMAL):
         if topic in self.topic_subscriptions:
             for client_id in list(self.topic_subscriptions[topic]):
-                await self.send_personal_message(message, client_id)
+                await self.send_personal_message(message, client_id, priority=priority)
 
     async def _ping_clients(self):
         logger.info("Ping task started.")
         while not self._shutdown_event.is_set():
             try:
-                await asyncio.sleep(self.ping_interval)
-                # logger.debug("Ping task waking up.") 
-                ping_message = WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.PING,
-                    data=PingData().model_dump()
-                ).model_dump_json()
-
                 current_time = time.time()
+                # Create a reusable PING message with timestamp for RTT calculation
+                # Generating unique correlation_id per broadcast cycle (or per client if preferred)
+                # For now, one per cycle is enough to detect system-wide lag
+                common_correlation_id = str(int(current_time * 1000))
+                
+                ping_message_obj = WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.PING,
+                    timestamp=current_time * 1000,
+                    correlation_id=common_correlation_id,
+                    data=PingData().model_dump()
+                )
+                ping_message_json = ping_message_obj.model_dump_json()
+
                 clients_to_disconnect = []
 
                 if not self.active_connections:
@@ -374,7 +446,7 @@ class ConnectionManager:
                         continue
 
                     # Send PING via reliable queue
-                    await self.send_personal_message(ping_message, client_id)
+                    await self.send_personal_message(ping_message_json, client_id)
                 
                 for client_id in clients_to_disconnect:
                     await self.disconnect(client_id)
@@ -412,4 +484,5 @@ class ConnectionManager:
         self.topic_subscriptions.clear()
         self.client_id_to_topics.clear()
         self.last_pong_received_time.clear() # New: Clear pong tracking on shutdown
+        self.client_latencies.clear()  # Clear latency tracking
         logger.info("All WebSocket connections closed.")

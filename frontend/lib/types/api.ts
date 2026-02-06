@@ -46,3 +46,36 @@ export interface GlobalMetrics {
     };
     timestamp: string;
 }
+
+// Vehicle & Tracking Types
+export interface VehicleData {
+    vehicle_id: string;
+    bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+    class_id: number;
+    class_name: string;
+    confidence: number;
+    // Enhanced Data
+    vx?: number; // Velocity X (pixels/sec or relative)
+    vy?: number; // Velocity Y
+    gallery_size?: number; // ReID gallery size
+    // Static/Optional fields (omitted in deltas)
+    car_model?: string;
+    car_model_confidence?: number;
+    license_plate?: string;
+    color?: string;
+    behavior?: string;
+    status?: string;
+    is_occluded?: boolean;
+    lane?: number;
+}
+
+export interface WebSocketVideoFrame {
+    t: 'video_frame';
+    f: string; // feed_id
+    i: number; // frame_index
+    ts: number; // timestamp
+    v: VehicleData[];
+    m: any; // metrics
+    bg?: Uint8Array; // background (if adaptive)
+    rois?: any[]; // regions of interest
+}

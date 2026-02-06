@@ -1,0 +1,94 @@
+import { APIClient } from '../api/APIClient';
+import { AlertData } from '../types';
+
+export class IncidentService {
+    private static instance: IncidentService;
+    private apiClient: APIClient;
+
+    private constructor() {
+        this.apiClient = APIClient.getInstance({ baseURL: process.env.NEXT_PUBLIC_API_URL || '' });
+    }
+
+    public static getInstance(): IncidentService {
+        if (!IncidentService.instance) {
+            IncidentService.instance = new IncidentService();
+        }
+        return IncidentService.instance;
+    }
+
+    /**
+     * Acknowledges an incident.
+     */
+    async acknowledgeIncident(incidentId: string): Promise<boolean> {
+        try {
+            await this.apiClient.post(`/api/v1/incidents/${incidentId}/acknowledge`);
+            return true;
+        } catch (error) {
+            console.error(`Failed to acknowledge incident ${incidentId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Resolves an incident with optional notes.
+     */
+    async resolveIncident(incidentId: string, notes?: string): Promise<boolean> {
+        try {
+            await this.apiClient.post(`/api/v1/incidents/${incidentId}/resolve`, {
+                resolution_notes: notes
+            });
+            return true;
+        } catch (error) {
+            console.error(`Failed to resolve incident ${incidentId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Assigns an incident to a user.
+     */
+    async assignIncident(incidentId: string, userId: string): Promise<boolean> {
+        try {
+            await this.apiClient.post(`/api/v1/incidents/${incidentId}/assign`, {
+                user_id: userId
+            });
+            return true;
+        } catch (error) {
+            console.error(`Failed to assign incident ${incidentId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Creates a new incident.
+     */
+    async createIncident(data: {
+        type: string;
+        severity: string;
+        description: string;
+        latitude?: number;
+        longitude?: number;
+        feed_id?: string;
+    }): Promise<AlertData | null> {
+        try {
+            return await this.apiClient.post('/api/v1/incidents/', data);
+        } catch (error) {
+            console.error('Failed to create incident:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Fetches incident statistics.
+     */
+    async getIncidentStats(): Promise<any> {
+        try {
+            return await this.apiClient.get('/api/v1/incidents/stats');
+        } catch (error) {
+            console.error('Failed to fetch incident stats:', error);
+            return null;
+        }
+    }
+}
+
+export const incidentService = IncidentService.getInstance();

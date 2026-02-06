@@ -34,7 +34,6 @@ from app.models.websocket import (
     WebSocketMessageTypeEnum,
     FeedStatusUpdate,
     GlobalRealtimeMetrics,
-    VideoFrameData,
 )
 
 # Import core worker and utilities
@@ -238,6 +237,12 @@ class FeedManager:
     def set_analytics_service(self, service: AnalyticsService):
         self._analytics_service = service
         self.logger.info("AnalyticsService set in FeedManager.")
+        
+        # Connect ReID manager to Database
+        if self._reid_manager and hasattr(service, "_db_manager"):
+            self._reid_manager.set_db_manager(service._db_manager)
+            self.logger.info("ReIDManager connected to DatabaseManager.")
+
         if self._db_reader_task is None:
             self._db_reader_task = asyncio.create_task(self._read_db_queue())
 
@@ -1046,7 +1051,8 @@ class FeedManager:
                         feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
                         
                         entry = self.process_registry.get(feed_id)
-                        if not entry: continue
+                        if not entry:
+                            continue
 
                         if entry["status"] == FeedOperationalStatusEnum.STARTING:
                             entry["status"] = FeedOperationalStatusEnum.RUNNING
@@ -1108,7 +1114,6 @@ class FeedManager:
                         
                         if now - last_broadcast >= min_interval:
                             # Only spawn if previous task for this feed finished (Backpressure)
-                                if feed_id not in self._active_broadcast_tasks or self._active_broadcast_tasks[feed_id].done():
                                     entry["last_broadcast_time"] = now
                                     task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
                                     self._active_broadcast_tasks[feed_id] = task
@@ -1116,7 +1121,7 @@ class FeedManager:
                         # Analytics hook
                         if self._analytics_service:
                             # We can also track analytics tasks or just fire-and-forget if they are fast
-                            asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics))
+                            asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
 
                 # Handle broadcasts and periodic tasks
                 await self._perform_broadcasts(feed_ids_to_update, False, False)
@@ -1148,21 +1153,94 @@ class FeedManager:
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 
+    def _compute_vehicle_deltas(self, feed_id: str, vehicles: List[Dict], frame_idx: int) -> List[Dict]:
+        """
+        Computes delta updates for vehicles to reduce bandwidth.
+        - KEYFRAME (every 30 frames): Send FULL data.
+        - DELTA: Send only changed fields + mandatory (id, bbox, velocity).
+        """
+        KEYFRAME_INTERVAL = 30
+        is_keyframe = (frame_idx % KEYFRAME_INTERVAL == 0)
+        
+        # Access feed entry to store state
+        entry = self.process_registry.get(feed_id)
+        if not entry:
+            return vehicles
+        
+        if "vehicle_states" not in entry:
+            entry["vehicle_states"] = {}
+            
+        last_states = entry["vehicle_states"]
+        current_ids = set()
+        delta_vehicles = []
+        
+        # Fields that are effectively static or low-frequency
+        static_fields = [
+            "class_name", "class_id", "car_model", 
+            "license_plate", "color", "behavior", 
+            "car_model_confidence", "gallery_size" # gallery size changes slowly
+        ]
+        
+        for v in vehicles:
+            vid = v["vehicle_id"]
+            current_ids.add(vid)
+            
+            # If Keyframe or New Vehicle -> Full Update
+            if is_keyframe or vid not in last_states:
+                delta_vehicles.append(v)
+                last_states[vid] = v.copy()
+                continue
+                
+            # Compute Delta
+            last_v = last_states[vid]
+            delta = {
+                "vehicle_id": vid,
+                "bbox": v["bbox"], # Always send position
+                "vx": v.get("vx", 0), # Always send velocity for dead reckoning
+                "vy": v.get("vy", 0)
+            }
+            
+            # Check static fields for changes
+            for field in static_fields:
+                val = v.get(field)
+                if val != last_v.get(field):
+                    delta[field] = val
+            
+            # Add any other dynamic fields if strictly needed, or just status
+            if v.get("status") != last_v.get("status"):
+                delta["status"] = v.get("status")
+            if v.get("is_occluded") != last_v.get("is_occluded"):
+                delta["is_occluded"] = v.get("is_occluded")
+
+            delta_vehicles.append(delta)
+            last_states[vid] = v.copy()
+            
+        # Clean up stale states
+        for missing_id in list(last_states.keys()):
+            if missing_id not in current_ids:
+                del last_states[missing_id]
+                
+        return delta_vehicles
+
     async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
-        if not self._connection_manager or not frame_bytes: return
+        if not self._connection_manager or not frame_bytes:
+            return
         
         try:
-            # 1. Prepare Payload
+            # 1. Compute Deltas (Bandwidth Optimization)
+            optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
+
+            # 2. Prepare Payload
             payload = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
                 "f": feed_id,
                 "i": frame_idx,
                 "ts": time.time(),
-                "v": vehicles,
+                "v": optimized_vehicles,
                 "m": metrics
             }
 
-            # 2. Check for Adaptive Streaming (ROIs)
+            # 3. Check for Adaptive Streaming (ROIs)
             if extra_payload and "bg" in extra_payload:
                 payload["bg"] = extra_payload["bg"]
                 payload["rois"] = extra_payload.get("rois", [])
@@ -1170,7 +1248,7 @@ class FeedManager:
             else:
                 payload["frame"] = frame_bytes
 
-            # 3. Binary Serialization with msgpack
+            # 4. Binary Serialization with msgpack
             # Use raw bytes for performance
             def msgpack_default(obj):
                 if isinstance(obj, datetime):
@@ -1185,8 +1263,9 @@ class FeedManager:
 
             msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
             
-            # 4. Targeted Binary Delivery (Only to subscribers of this feed)
-            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes)
+            # 5. Targeted Binary Delivery (Only to subscribers of this feed)
+            # Pass frame_idx for deterministic frame skipping in ConnectionManager
+            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
             
         except Exception as e:
             logger.error(f"Binary broadcast error for {feed_id}: {e}")
@@ -1405,7 +1484,9 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.KPI_UPDATE,
             data=kpi_data.model_dump()
         )
-        await self._connection_manager.broadcast_realtime(message.model_dump_json())
+        # Use NORMAL priority for KPIs to ensure they bypass high-volume video frames
+        from app.websocket.connection_manager import MessagePriority
+        await self._connection_manager.broadcast_realtime(message.model_dump_json(), priority=MessagePriority.NORMAL)
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:

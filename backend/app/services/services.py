@@ -4,6 +4,7 @@ import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from app.websocket.connection_manager import ConnectionManager
 from app.services.feed_manager import FeedManager as FMClass
@@ -17,6 +18,7 @@ from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.services.retention import RetentionService
 from app.services.notification_service import NotificationService
+from app.services.incident_manager import IncidentManager
 from app.services.node_manager import NodeManager
 from app.ml.traffic_predictor import TrafficPredictor
 
@@ -38,6 +40,7 @@ class ServiceRegistry:
         self._retention_service: Optional[RetentionService] = None
         self._notification_service: Optional[NotificationService] = None
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
+        self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
         self._health_check_lock = asyncio.Lock()
         self._initialized = False
@@ -113,6 +116,12 @@ class ServiceRegistry:
         return self._retention_service
 
     @property
+    def incident_manager(self) -> IncidentManager:
+        if self._incident_manager is None:
+            raise RuntimeError("IncidentManager not initialized.")
+        return self._incident_manager
+
+    @property
     def node_manager(self) -> NodeManager:
         if self._node_manager is None:
             raise RuntimeError("NodeManager not initialized.")
@@ -163,6 +172,9 @@ class ServiceRegistry:
         
         self._initialization_stack.append("core_services")
         try:
+            # Get database manager for dependencies
+            db_manager = get_database_manager()
+            
             # Traffic Signal Service
             self._traffic_signal_service = TrafficSignalService(
                 config=config,
@@ -184,6 +196,15 @@ class ServiceRegistry:
             )
             logger.info("WeatherService initialized.")
 
+            # Incident Manager
+            self._incident_manager = IncidentManager(
+                config=config,
+                db_manager=db_manager,
+                connection_manager=connection_manager,
+                notification_service=self._notification_service
+            )
+            logger.info("IncidentManager initialized.")
+
             # Analytics Service with Traffic Predictor
             traffic_predictor = await self._load_traffic_predictor(config)
             
@@ -194,6 +215,7 @@ class ServiceRegistry:
                 traffic_predictor=traffic_predictor,
                 traffic_signal_service=self._traffic_signal_service,
                 notification_service=self._notification_service,
+                incident_manager=self._incident_manager,
             )
             logger.info("AnalyticsService initialized.")
 
@@ -206,7 +228,10 @@ class ServiceRegistry:
             self._feed_manager = FMClass(config)
             self._feed_manager.set_connection_manager(connection_manager)
             self._feed_manager.set_analytics_service(self._analytics_service)
-            logger.info("FeedManager initialized.")
+            
+            # Link Feed Manager to Incident Manager
+            self._incident_manager.set_feed_manager(self._feed_manager)
+            logger.info("FeedManager initialized and linked to IncidentManager.")
         finally:
             self._initialization_stack.pop()
 
@@ -310,6 +335,7 @@ class ServiceRegistry:
         shutdown_tasks = [
             ("FeedManager", self._shutdown_feed_manager),
             ("RetentionService", self._shutdown_retention_service),
+            ("IncidentManager", self._shutdown_incident_manager),
             ("AnalyticsService", self._shutdown_analytics_service),
             ("NotificationService", self._shutdown_notification_service),
             ("TrafficSignalService", self._shutdown_traffic_signal_service),
@@ -338,6 +364,11 @@ class ServiceRegistry:
         if self._retention_service:
             await self._retention_service.stop()
             logger.info("RetentionService stopped.")
+
+    async def _shutdown_incident_manager(self) -> None:
+        if self._incident_manager:
+            # Add any specific cleanup if needed
+            logger.info("IncidentManager shutdown completed.")
 
     async def _shutdown_analytics_service(self) -> None:
         if self._analytics_service:
@@ -381,6 +412,7 @@ class ServiceRegistry:
         self._retention_service = None
         self._notification_service = None
         self._advanced_analytics_service = None
+        self._incident_manager = None
         self._connection_manager = None
 
     async def health_check(self) -> Dict[str, Any]:
@@ -548,3 +580,7 @@ def get_notification_service() -> NotificationService:
 
 def get_retention_service() -> RetentionService:
     return get_service_registry().retention_service
+
+
+def get_incident_manager() -> IncidentManager:
+    return get_service_registry().incident_manager

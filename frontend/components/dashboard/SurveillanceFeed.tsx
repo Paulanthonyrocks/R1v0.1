@@ -15,6 +15,7 @@ import {
     DropdownMenuContent,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import IdentityGallery from '../feature/IdentityGallery';
 
 const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
@@ -35,6 +36,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
     const [showROI, setShowROI] = useState<boolean>(false);
     const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
+    const [showLaneOverlays, setShowLaneOverlays] = useState<boolean>(false);
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
     const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
 
@@ -43,6 +45,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
     const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);
     const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
+    const [selectedVehicleGlobalId, setSelectedVehicleGlobalId] = useState<string | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,16 +98,47 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     };
 
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!roiMode || !canvasRef.current) return;
+        if (!canvasRef.current) return;
 
         const rect = canvasRef.current.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
+        const xNormalized = (e.clientX - rect.left) / rect.width;
+        const yNormalized = (e.clientY - rect.top) / rect.height;
 
-        if (roiMode === 'roi') {
-            setRoiPoints(prev => [...prev, { x, y }]);
-        } else if (roiMode === 'exclusion') {
-            setCurrentExclusionPoints(prev => [...prev, { x, y }]);
+        if (roiMode) {
+            const point = { x: xNormalized, y: yNormalized };
+            if (roiMode === 'roi') {
+                const newPoints = [...roiPoints, point];
+                setRoiPoints(newPoints);
+                if (newPoints.length === 4) setRoiMode(null);
+            } else if (roiMode === 'exclusion') {
+                setCurrentExclusionPoints([...currentExclusionPoints, point]);
+            }
+            return;
+        }
+
+        // Vehicle Selection Logic (only if not in ROI mode)
+        const frameX = xNormalized * canvasRef.current.width;
+        const frameY = yNormalized * canvasRef.current.height;
+
+        // Find vehicle under cursor
+        const clickedVehicle = vehicles?.find(v => {
+            const [x1, y1, x2, y2] = v.bbox;
+            return frameX >= x1 && frameX <= x2 && frameY >= y1 && frameY <= y2;
+        });
+
+        if (clickedVehicle) {
+            // Note: Use vehicle_id (local) to find its global_id via lookup or if backend sent it.
+            // Earlier I saw backend sends `vehicle_id`.
+            // If we have a global_id mapping in the vehicle object, great.
+            // Let's assume clickedVehicle might have a global feature or we use its ID.
+            // For this UI, we'll try to use its local ID as a key to fetch global gallery.
+            console.log("Selected vehicle:", clickedVehicle.vehicle_id);
+            // Ideally we want GLB_XXX. If not available, we can't show gallery.
+            // Let's assume for now vehicle_id is the key or we have global_vehicle_id.
+            // I'll check if I added it to useVideoTypes.
+            setSelectedVehicleGlobalId(clickedVehicle.vehicle_id);
+        } else {
+            setSelectedVehicleGlobalId(null);
         }
     };
 
@@ -163,7 +197,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     drawFrame(ctx, frame, {
                         showBoundingBoxes: showBoundingBoxes,
                         showVehicleDetails: showVehicleDetails,
-                        showTrajectories: showTrajectories
+                        showTrajectories: showTrajectories,
+                        showLaneOverlays: showLaneOverlays
                     });
 
                     // Draw ROI - p.x and p.y are normalized [0, 1]
@@ -319,12 +354,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
     const renderOverlayControls = () => (
         <>
-            <MetricsPanel 
-                metrics={metrics} 
-                isLive={isLive} 
-                className="mb-4 border-primary/20 bg-black/60 shadow-none" 
+            <MetricsPanel
+                metrics={metrics}
+                isLive={isLive}
+                className="mb-4 border-primary/20 bg-black/60 shadow-none"
             />
-            
+
             <StreamOverlayControls
                 showOverlays={showOverlays}
                 setShowOverlays={setShowOverlays}
@@ -336,6 +371,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                 setShowROI={setShowROI}
                 showTrajectories={showTrajectories}
                 setShowTrajectories={setShowTrajectories}
+                showLaneOverlays={showLaneOverlays}
+                setShowLaneOverlays={setShowLaneOverlays}
                 showExclusionZones={showExclusionZones}
                 setShowExclusionZones={setShowExclusionZones}
                 onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
@@ -422,11 +459,27 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                     {isLive ? "LIVE" : status?.toUpperCase() ?? "UNKNOWN"}
                 </Badge>
 
+                {isLive && metrics?.calibration && (
+                    <Badge
+                        variant="outline"
+                        className={cn(
+                            "absolute bottom-1.5 right-12 text-[10px] h-4 px-1.5 rounded-none font-mono border-0 bg-black/40",
+                            Object.values(metrics.calibration).every((c: any) => c.calibrated)
+                                ? "text-green-400"
+                                : "text-yellow-400"
+                        )}
+                    >
+                        {Object.values(metrics.calibration).every((c: any) => c.calibrated)
+                            ? "OPTIMIZED"
+                            : "CALIBRATING..."}
+                    </Badge>
+                )}
+
                 {!minimalControls && (
-                    <MetricsPanel 
-                        metrics={metrics} 
-                        isLive={isLive} 
-                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto scale-95 origin-top-right" 
+                    <MetricsPanel
+                        metrics={metrics}
+                        isLive={isLive}
+                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto scale-95 origin-top-right"
                     />
                 )}
 
@@ -458,7 +511,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                                 <Square className="h-3 w-3" />
                             </button>
                         </div>
-                        
+
                         {isAdmin && (
                             <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm ml-1">
                                 <button
@@ -482,7 +535,7 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
 
                 {!isToggling && !isLoading && !error && !minimalControls && (
                     <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                         {isFullscreen ? (
+                        {isFullscreen ? (
                             <button
                                 className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
                                 onClick={(e) => { e.stopPropagation(); setShowControlsPanel(!showControlsPanel); }}
@@ -501,8 +554,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                                         <Settings className="h-4 w-4" />
                                     </button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent 
-                                    className="p-0 border-0 bg-transparent shadow-none" 
+                                <DropdownMenuContent
+                                    className="p-0 border-0 bg-transparent shadow-none"
                                     align="end"
                                     side="right"
                                     sideOffset={5}
@@ -520,13 +573,22 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
                         </button>
                     </div>
                 )}
-                
+
                 {isFullscreen && showControlsPanel && (
                     <div className="absolute top-12 right-8 z-30">
                         {renderOverlayControls()}
                     </div>
                 )}
 
+                {/* Identity Gallery Side Panel */}
+                {selectedVehicleGlobalId && (
+                    <div className="absolute top-4 right-4 bottom-4 w-72 z-50 pointer-events-auto">
+                        <IdentityGallery
+                            globalId={selectedVehicleGlobalId}
+                            onClose={() => setSelectedVehicleGlobalId(null)}
+                        />
+                    </div>
+                )}
             </div>
             <CardContent className="p-2 rounded-none">
                 <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>

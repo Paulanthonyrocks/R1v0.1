@@ -206,6 +206,7 @@ class WebSocketMessage(BaseModel):
     data: Optional[Dict[str, Any]] = None 
     client_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    timestamp: Optional[float] = None
 
     model_config = ConfigDict(use_enum_values=True)
 

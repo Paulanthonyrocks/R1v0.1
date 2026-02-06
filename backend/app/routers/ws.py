@@ -52,18 +52,31 @@ async def message_receiver(
 
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
-                    logger.info(f"Received PING from {client_id}")
+                    logger.debug(f"Received PING from {client_id}")
+                    # Echo back the correlation_id for RTT calculation
                     await connection_manager.send_personal_message(
                         WebSocketMessage(
                             type=WebSocketMessageTypeEnum.PONG,
-                            data=PongData().model_dump()
+                            data=PongData().model_dump(),
+                            correlation_id=message.correlation_id
                         ).model_dump_json(),
                         client_id
                     )
                 elif msg_type == WebSocketMessageTypeEnum.PONG:
                     # Client responded to a server PING
                     logger.debug(f"Received PONG from {client_id}")
-                    connection_manager.record_pong(client_id) # Record the pong message
+                    
+                    # Calculate RTT if we have a correlation_id and timestamp
+                    rtt_ms = None
+                    if message.correlation_id and "timestamp" in data:
+                        try:
+                            # If client sends timestamp back, we can calculate RTT
+                            sent_time = float(data["timestamp"])
+                            rtt_ms = (time.time() * 1000) - sent_time
+                        except (ValueError, TypeError):
+                            pass
+                            
+                    connection_manager.record_pong(client_id, rtt_ms=rtt_ms)
                     pass
 
                 elif msg_type == WebSocketMessageTypeEnum.AUTHENTICATE:

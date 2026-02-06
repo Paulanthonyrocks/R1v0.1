@@ -132,6 +132,7 @@ def serialize_tracked_vehicles(
                 "ground_centroid": [make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
                 "car_model": data.get("car_model"),
                 "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),
+                "gallery_size": make_serializable(data.get("gallery_size", 0)),
             })
         except Exception as e:
             logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")

@@ -17,6 +17,8 @@ interface StreamOverlayControlsProps {
   setStaticFilterEnabled?: (value: boolean) => void;
   showTrajectories: boolean;
   setShowTrajectories: (value: boolean) => void;
+  showLaneOverlays: boolean;
+  setShowLaneOverlays: (value: boolean) => void;
   controlId: string;
 }
 
@@ -60,6 +62,8 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   setStaticFilterEnabled,
   showTrajectories,
   setShowTrajectories,
+  showLaneOverlays,
+  setShowLaneOverlays,
   controlId,
 }) => {
   return (
@@ -111,6 +115,15 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
               id={`toggle-trajectories-${controlId}`}
               checked={showTrajectories}
               onCheckedChange={setShowTrajectories}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-lane-flow-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Lane Flow Overlays</Label>
+            <MatrixCheckbox
+              id={`toggle-lane-flow-${controlId}`}
+              checked={showLaneOverlays}
+              onCheckedChange={setShowLaneOverlays}
             />
           </div>
 

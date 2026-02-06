@@ -2,7 +2,6 @@ import logging
 import asyncio
 import json
 import math
-import uuid
 import time
 import pandas as pd
 from typing import Dict, Any, Optional, List
@@ -28,7 +27,6 @@ from app.models.websocket import (
 )
 from app.models.alerts import Alert, AlertSeverityEnum
 from app.models.analytics import (
-    LocationModel,
     PredictionLogModel,
 )
 from app.ml.data_cache import TrafficDataCache
@@ -37,8 +35,11 @@ from app.ml.anomaly_detector import TrafficAnomalyDetector
 from app.websocket.connection_manager import ConnectionManager
 from app.services.traffic_signal_service import TrafficSignalService
 from app.services.notification_service import NotificationService
-from app.models.traffic import IncidentReport, IncidentTypeEnum, IncidentSeverityEnum, IncidentStatusEnum
+from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum
 
+
+from app.services.safety_monitor import SafetyMonitor
+from app.services.incident_manager import IncidentManager
 
 class AnalyticsService:
     def __init__(
@@ -49,16 +50,21 @@ class AnalyticsService:
         traffic_predictor=None,
         traffic_signal_service: Optional[TrafficSignalService] = None,
         notification_service: Optional[NotificationService] = None,
+        incident_manager: Optional[IncidentManager] = None,
     ):
         self.config = config
         self._connection_manager = connection_manager
         self._db_manager = database_manager
         self._traffic_signal_service = traffic_signal_service
         self._notification_service = notification_service
+        self._incident_manager = incident_manager
         self._data_cache = TrafficDataCache()
         self._traffic_predictor_instance = None
         self._anomaly_detector_instance = None
         self._prediction_log_table_initialized = False
+        
+        # [NEW] Safety Monitor
+        self._safety_monitor = SafetyMonitor(config)
 
         self._node_congestion_task: Optional[asyncio.Task] = None
         self._kafka_consumer_task: Optional[asyncio.Task] = None
@@ -166,15 +172,15 @@ class AnalyticsService:
                 )
                 raise
 
-    async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any]):
+    async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]] = None):
         # Placeholder for processing feed metrics
         logger.debug(f"Processing metrics for feed {feed_id}: {metrics}")
         # Extract latitude, longitude, and timestamp from metrics
         latitude = metrics.get("latitude")
         longitude = metrics.get("longitude")
         timestamp = metrics.get(
-            "timestamp", datetime.now(timezone.utc)
-        )  # Use current UTC time if not provided
+            "timestamp", time.time()
+        )
 
         # Handle Anomalies
         anomalies = metrics.get("anomalies", [])
@@ -187,24 +193,36 @@ class AnalyticsService:
                 "INFO": IncidentSeverityEnum.MEDIUM
             }
             
-            # Debounce check
-            inc_key = f"{feed_id}_{anomaly.get('details', 'unknown')}"
-            last_time = self._active_incidents.get(inc_key, 0)
-            
             # Create incident for significant anomalies if not recently reported
             if anomaly.get("severity") in ["Critical", "Warning"]:
-                if now - last_time > 300: # 5 minute cooldown
-                    self._active_incidents[inc_key] = now
-                    asyncio.create_task(self._create_and_save_incident(
-                        location={"latitude": latitude, "longitude": longitude},
-                        incident_type=IncidentTypeEnum.OTHER, 
-                        severity=severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM),
-                        description=f"Automated Alert: {anomaly.get('details')}",
-                        source_feed_id=feed_id,
-                        details=anomaly
-                    ))
-                else:
-                    logger.debug(f"Debounced duplicate incident for {feed_id}: {anomaly.get('details')}")
+                sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
+                asyncio.create_task(self._incident_manager.create_incident(
+                    location={"latitude": latitude, "longitude": longitude},
+                    incident_type=IncidentTypeEnum.OTHER,
+                    severity=sev,
+                    description=f"Automated Alert: {anomaly.get('details')}",
+                    source_feed_id=feed_id,
+                    details=anomaly
+                ))
+
+        # Safety Monitor Checks
+        if vehicles and self._safety_monitor:
+            alerts = self._safety_monitor.update(feed_id, vehicles, timestamp)
+            for alert in alerts:
+                # Convert Safety Alert to Incident
+                inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH
+                asyncio.create_task(self._incident_manager.create_incident(
+                    location={"latitude": latitude, "longitude": longitude},
+                    incident_type=IncidentTypeEnum.ACCIDENT if alert["subtype"] == "stopped_vehicle" else IncidentTypeEnum.OTHER,
+                    severity=inc_sev,
+                    description=alert["description"],
+                    source_feed_id=feed_id,
+                    details=alert["meta"]
+                ))
+        
+        # Include calibration status in metrics for frontend HUD
+        if self._safety_monitor:
+            metrics["calibration"] = self._safety_monitor.lane_calibrator.get_calibration_status(feed_id)
 
         if latitude is not None and longitude is not None:
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)
@@ -259,66 +277,6 @@ class AnalyticsService:
         log_id = await self._db_manager.record_prediction_log(log_data)
         return log_id
 
-    async def _create_and_save_incident(
-        self,
-        location: Dict[str, Any],
-        incident_type: IncidentTypeEnum,
-        severity: IncidentSeverityEnum,
-        description: str,
-        source_feed_id: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
-    ):
-        """Creates and saves a new incident report to the database."""
-        try:
-            # Construct dictionary matching the create_incident expectation
-            now = datetime.now(timezone.utc)
-            incident_data = {
-                "id": str(uuid.uuid4()),
-                "feed_id": source_feed_id,
-                "type": incident_type.value,
-                "severity": severity.value,
-                "description": description,
-                "status": IncidentStatusEnum.REPORTED.value,
-                "timestamp": time.time(),
-                "created_at": now,
-                "updated_at": now,
-                "latitude": location.get("latitude"),
-                "longitude": location.get("longitude"),
-                "snapshot_path": details.get("snapshot_path") if details else None
-            }
-            
-            await self._db_manager.create_incident(incident_data)
-            logger.info(f"Created and saved incident: {incident_data['id']}")
-
-            # Broadcast new incident via WebSocket
-            message = WebSocketMessage(
-                type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, 
-                data={
-                    "message_type": "new_incident",
-                    "title": "New Incident Reported",
-                    "message": description,
-                    "severity": severity.value,
-                    "incident_id": incident_data["id"]
-                }
-            )
-            await self._connection_manager.broadcast_to_topic(
-                message.model_dump_json(), topic="incidents"
-            )
-
-            # External Notifications (Slack/Discord)
-            if self._notification_service:
-                asyncio.create_task(self._notification_service.notify_incident(incident_data))
-
-            # Trigger Snapshot if feed_id is provided
-            if source_feed_id and self._feed_manager:
-                try:
-                    await self._feed_manager.request_snapshot(source_feed_id, incident_data["id"])
-                except Exception as e:
-                    logger.warning(f"Failed to request snapshot for incident {incident_data['id']}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error creating or saving incident: {e}", exc_info=True)
-
     async def update_incident_snapshot(self, incident_id: str, snapshot_path: str):
         """Updates an incident with its snapshot path and broadcasts the update."""
         try:
@@ -334,8 +292,9 @@ class AnalyticsService:
                         "snapshot_path": snapshot_path
                     }
                 )
+                from app.websocket.connection_manager import MessagePriority
                 await self._connection_manager.broadcast_to_topic(
-                    message.model_dump_json(), topic="incidents"
+                    message.model_dump_json(), topic="incidents", priority=MessagePriority.HIGH
                 )
         except Exception as e:
             logger.error(f"Error updating incident snapshot: {e}")
@@ -381,7 +340,7 @@ class AnalyticsService:
                 "longitude": alert.longitude
             }
             
-            await self._create_and_save_incident(
+            await self._incident_manager.create_incident(
                 location=location,
                 incident_type=inc_type,
                 severity=inc_severity,
@@ -612,34 +571,28 @@ class AnalyticsService:
                 latest = traffic_data_points[-1]
                 location_name = latest.get("location_description", "Unknown Location")
                 
-                # Cooldown check: 5 minutes (300 seconds)
-                last_reported = self._active_incidents.get(location_name, 0)
+                anomalies.append({
+                    "type": "pattern_anomaly",
+                    "description": f"AI Detected Anomaly: {result.get('reason')} (Score: {result.get('score'):.2f})",
+                    "location": location_name,
+                    "timestamp": latest.get("timestamp", datetime.now(timezone.utc)).isoformat(),
+                })
                 
-                if (now - last_reported > 300):
-                    self._active_incidents[location_name] = now
-                    
-                    anomalies.append({
-                        "type": "pattern_anomaly",
-                        "description": f"AI Detected Anomaly: {result.get('reason')} (Score: {result.get('score'):.2f})",
-                        "location": location_name,
-                        "timestamp": latest.get("timestamp", datetime.now(timezone.utc)).isoformat(),
-                    })
-                    
-                    # Auto-generate incident
-                    severity = IncidentSeverityEnum.HIGH if result.get("score", 0) > 0.8 else IncidentSeverityEnum.MEDIUM
-                    location_data = {
-                        "latitude": latest.get("latitude"),
-                        "longitude": latest.get("longitude"),
-                        "name": location_name
-                    }
-                    await self._create_and_save_incident(
-                        location=location_data, 
-                        incident_type=IncidentTypeEnum.OTHER, 
-                        severity=severity, 
-                        description=anomalies[-1]["description"], 
-                        source_feed_id=latest.get("feed_id"), 
-                        details={"anomaly_result": result, "data_point": latest}
-                    )
+                # Auto-generate incident
+                severity = IncidentSeverityEnum.HIGH if result.get("score", 0) > 0.8 else IncidentSeverityEnum.MEDIUM
+                location_data = {
+                    "latitude": latest.get("latitude"),
+                    "longitude": latest.get("longitude"),
+                    "name": location_name
+                }
+                await self._incident_manager.create_incident(
+                    location=location_data, 
+                    incident_type=IncidentTypeEnum.OTHER, 
+                    severity=severity, 
+                    description=anomalies[-1]["description"], 
+                    source_feed_id=latest.get("feed_id"), 
+                    details={"anomaly_result": result, "data_point": latest}
+                )
 
         # 2. Hard Threshold Fallback (Rule-based)
         speed_threshold = 10.0  # km/h
@@ -651,10 +604,7 @@ class AnalyticsService:
             location_name = data_point.get("location_description", "Unknown Location")
 
             if speed < speed_threshold and vehicle_count > vehicle_count_threshold:
-                # Check if we already flagged this point via AI or cooldown
-                last_reported = self._active_incidents.get(location_name, 0)
-                if (now - last_reported > 300) and not any(a["location"] == location_name for a in anomalies):
-                    self._active_incidents[location_name] = now
+                if not any(a["location"] == location_name for a in anomalies):
                     anomalies.append({
                         "type": "traffic_anomaly",
                         "description": f"Rule-based detection: Low speed ({speed:.1f} km/h) with high vehicle count ({vehicle_count}) detected.",
@@ -667,7 +617,7 @@ class AnalyticsService:
                         "longitude": data_point.get("longitude"),
                         "name": location_name
                     }
-                    await self._create_and_save_incident(
+                    await self._incident_manager.create_incident(
                         location=location_data, 
                         incident_type=IncidentTypeEnum.CONGESTION, 
                         severity=IncidentSeverityEnum.MEDIUM, 
@@ -724,8 +674,9 @@ class AnalyticsService:
         message = WebSocketMessage(
             type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification.model_dump()
         )
+        from app.websocket.connection_manager import MessagePriority
         await self._connection_manager.broadcast_to_topic(
-            message.model_dump_json(), topic="operational_alerts"
+            message.model_dump_json(), topic="operational_alerts", priority=MessagePriority.HIGH
         )
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):
@@ -982,8 +933,9 @@ class AnalyticsService:
             message = WebSocketMessage(
                 type=WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE, data=payload
             )
+            from app.websocket.connection_manager import MessagePriority
             await self._connection_manager.broadcast_to_topic(
-                message.model_dump_json(), topic="node_congestion"
+                message.model_dump_json(), topic="node_congestion", priority=MessagePriority.NORMAL
             )
             logger.debug(
                 f"Broadcasted {len(nodes_for_broadcast)} node congestion updates."

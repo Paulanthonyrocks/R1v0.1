@@ -46,7 +46,7 @@ from app.database import get_database_manager
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
     incidents, routing, weather,
-    events, ws, vehicles, signals,
+    events, ws, vehicles, signals, ws_monitoring
 )
 
 # --- Constants & Setup ---
@@ -376,6 +376,7 @@ app.include_router(events.router, prefix="/api/v1/events", tags=["Events"])
 app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"])
 app.include_router(signals.router, prefix="/api/v1/signals", tags=["Signals"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
+app.include_router(ws_monitoring.router, prefix="/api/v1/websocket", tags=["WebSocket Monitoring"])
 
 # --- Secure File Serving ---
 @app.get("/api/v1/snapshots/{file_path:path}", tags=["Snapshots"])

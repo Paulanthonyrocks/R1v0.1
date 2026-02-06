@@ -358,7 +358,9 @@ class DatabaseManager:
         required_columns = [
             ("car_model", "TEXT"),
             ("car_model_confidence", "REAL"),
-            ("car_color", "TEXT")
+            ("car_color", "TEXT"),
+            ("appearance_id", "TEXT"),
+            ("reid_gallery", "BLOB")
         ]
         
         for col_name, col_type in required_columns:
@@ -386,6 +388,7 @@ class DatabaseManager:
         )
         cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
                 license_plate TEXT PRIMARY KEY,
+                appearance_id TEXT,
                 vehicle_type TEXT,
                 make TEXT,
                 model TEXT,
@@ -393,10 +396,21 @@ class DatabaseManager:
                 first_seen REAL,
                 last_seen REAL,
                 total_detections INTEGER DEFAULT 1,
+                reid_gallery BLOB,
                 flags TEXT)""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_appearance ON identified_vehicles(appearance_id);"
+        )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
         )
+        cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
+                global_id TEXT PRIMARY KEY,
+                embeddings BLOB, -- Serialized numpy array
+                metadata TEXT,   -- JSON metadata
+                last_seen REAL NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reid_last_seen ON reid_identities(last_seen DESC);")
         cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
@@ -892,13 +906,16 @@ class DatabaseManager:
         """Upserts a vehicle identification record based on license plate."""
         sql = """
         INSERT INTO identified_vehicles (
-            license_plate, vehicle_type, make, model, color, first_seen, last_seen, total_detections, flags
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+            license_plate, appearance_id, vehicle_type, make, model, color, 
+            first_seen, last_seen, reid_gallery, flags, total_detections
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         ON CONFLICT(license_plate) DO UPDATE SET
+            appearance_id = COALESCE(excluded.appearance_id, identified_vehicles.appearance_id),
             vehicle_type = COALESCE(excluded.vehicle_type, identified_vehicles.vehicle_type),
             make = COALESCE(excluded.make, identified_vehicles.make),
             model = COALESCE(excluded.model, identified_vehicles.model),
             color = COALESCE(excluded.color, identified_vehicles.color),
+            reid_gallery = COALESCE(excluded.reid_gallery, identified_vehicles.reid_gallery),
             last_seen = excluded.last_seen,
             total_detections = identified_vehicles.total_detections + 1,
             flags = COALESCE(excluded.flags, identified_vehicles.flags)
@@ -908,17 +925,29 @@ class DatabaseManager:
             if not lp or lp == "Unknown":
                 return False
                 
+            gallery_blob = None
+            gallery = vehicle_data.get("embedding_gallery")
+            if gallery:
+                try:
+                    import numpy as np
+                    gallery_blob = np.array(gallery, dtype=np.float32).tobytes()
+                except Exception as e:
+                    logger.warning(f"Failed to serialize ReID gallery for {lp}: {e}")
+
             now = vehicle_data.get("timestamp", time.time())
             params = (
                 lp,
+                vehicle_data.get("appearance_id") or vehicle_data.get("global_vehicle_id"),
                 vehicle_data.get("vehicle_type"),
                 vehicle_data.get("make"),
                 vehicle_data.get("model"),
                 vehicle_data.get("color"),
-                now, # first_seen (if insert)
+                now, # first_seen
                 now, # last_seen
+                gallery_blob,
                 vehicle_data.get("flags")
             )
+            
             with self.lock:
                 with self._get_sqlite_connection() as conn:
                     conn.execute(sql, params)
@@ -926,6 +955,80 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error upserting identified vehicle {vehicle_data.get('license_plate')}: {e}")
             return False
+
+    @db_write_retry_decorator
+    def save_reid_identity(self, global_id: str, embeddings: Any, metadata: Dict, last_seen: float) -> bool:
+        """Saves a ReID identity with its gallery of embeddings."""
+        sql = """
+        INSERT INTO reid_identities (global_id, embeddings, metadata, last_seen)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(global_id) DO UPDATE SET
+            embeddings = excluded.embeddings,
+            metadata = excluded.metadata,
+            last_seen = excluded.last_seen
+        """
+        try:
+            import numpy as np
+            if isinstance(embeddings, np.ndarray):
+                emb_bytes = embeddings.tobytes()
+            elif isinstance(embeddings, (list, tuple)):
+                emb_bytes = np.array(embeddings, dtype=np.float32).tobytes()
+            else:
+                emb_bytes = bytes(embeddings)
+                
+            params = (
+                global_id,
+                emb_bytes,
+                json.dumps(metadata),
+                last_seen
+            )
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(sql, params)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving ReID identity {global_id}: {e}")
+            return False
+
+    def get_recent_reid_identities(self, limit: int = 1000) -> List[Dict]:
+        """Retrieves recent ReID identities for warm start."""
+        sql = "SELECT * FROM reid_identities ORDER BY last_seen DESC LIMIT ?"
+        try:
+            results = []
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (limit,))
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        results.append({
+                            "global_id": row["global_id"],
+                            "embeddings": row["embeddings"], # bytes
+                            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                            "last_seen": row["last_seen"]
+                        })
+            return results
+        except Exception as e:
+            logger.error(f"Error getting recent ReID identities: {e}")
+            return []
+
+    async def get_reid_identity(self, global_id: str) -> Optional[Dict]:
+        """Retrieves a specific ReID identity by global_id."""
+        sql = "SELECT * FROM reid_identities WHERE global_id = ?"
+        try:
+            results = await asyncio.to_thread(self._execute_query, sql, (global_id,))
+            if results:
+                row = results[0]
+                return {
+                    "global_id": row["global_id"],
+                    "embeddings": row["embeddings"], # bytes
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                    "last_seen": row["last_seen"]
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting ReID identity {global_id}: {e}")
+            return None
 
     async def save_alert(self, alert: Alert):
         """
@@ -1166,7 +1269,8 @@ class DatabaseManager:
 
     async def update_prediction_log(self, log_id: str, updates: Dict) -> bool:
         """Updates an existing prediction log entry (e.g. with outcomes)."""
-        if not updates: return True
+        if not updates:
+            return True
         
         set_clauses = []
         params = []

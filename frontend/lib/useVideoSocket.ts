@@ -17,6 +17,8 @@ interface VehicleFrontendData {
     status?: string;
     vx?: number;
     vy?: number;
+    is_wrong_way?: boolean;
+    is_stopped?: boolean;
 }
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -283,6 +285,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     ctx.setLineDash([2, 2]);
                     ctx.globalAlpha = 0.3; // Much more subtle
                     ctx.lineWidth = 1;
+                } else if (v.is_wrong_way || v.is_stopped) {
+                    // Flashing red effect for safety alerts
+                    const isEven = Math.floor(performance.now() / 200) % 2 === 0;
+                    color = isEven ? '#FF0000' : '#FFFFFF';
+                    ctx.setLineDash([]);
+                    ctx.globalAlpha = 1.0;
+                    ctx.lineWidth = 3;
                 } else {
                     ctx.setLineDash([]);
                     ctx.globalAlpha = 1.0;
@@ -375,6 +384,64 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             // Final style reset to prevent leaks to next frame/call
             ctx.globalAlpha = 1.0;
             ctx.setLineDash([]);
+        }
+
+        // --- Lane Calibration Overlays ---
+        if (options.showLaneOverlays && frameDataObj.metrics?.calibration) {
+            const calibration = frameDataObj.metrics.calibration as Record<string, { calibrated: boolean, confidence: number, consensus: [number, number] }>;
+
+            ctx.save();
+            ctx.font = 'bold 12px monospace';
+
+            Object.entries(calibration).forEach(([laneId, data]) => {
+                const lid = parseInt(laneId);
+                if (lid === -1) return; // Skip global for overlays, or draw it in a corner
+
+                // If not calibrated, we could draw "Calibrating..." but let's just focus on flow
+                if (data.calibrated && data.consensus) {
+                    // Try to find a vehicle in this lane to find where to draw the arrow
+                    // Fallback to a grid if no vehicle
+                    const laneVehicles = (frameDataObj.vehicles || []).filter(v => v.lane === lid);
+                    let anchorX, anchorY;
+
+                    if (laneVehicles.length > 0) {
+                        const v = laneVehicles[0];
+                        anchorX = (v.bbox[0] + v.bbox[2]) / 2 * (ctx.canvas.width / image.width);
+                        anchorY = (v.bbox[1] + v.bbox[3]) / 2 * (ctx.canvas.height / image.height);
+                    } else {
+                        // Static positions based on lane ID (heuristic for visualization)
+                        anchorX = (ctx.canvas.width / 4) * (lid % 3 + 1);
+                        anchorY = (ctx.canvas.height / 4) * (Math.floor(lid / 3) + 1);
+                    }
+
+                    const [cvx, cvy] = data.consensus;
+                    const arrowLen = 30;
+                    const endX = anchorX + cvx * arrowLen;
+                    const endY = anchorY + cvy * arrowLen;
+
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.fillStyle = '#00FF00';
+                    ctx.lineWidth = 2;
+                    ctx.globalAlpha = 0.6;
+
+                    // Draw Arrow
+                    ctx.beginPath();
+                    ctx.moveTo(anchorX, anchorY);
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+
+                    const angle = Math.atan2(cvy, cvx);
+                    ctx.beginPath();
+                    ctx.moveTo(endX, endY);
+                    ctx.lineTo(endX - 8 * Math.cos(angle - Math.PI / 6), endY - 8 * Math.sin(angle - Math.PI / 6));
+                    ctx.lineTo(endX - 8 * Math.cos(angle + Math.PI / 6), endY - 8 * Math.sin(angle + Math.PI / 6));
+                    ctx.closePath();
+                    ctx.fill();
+
+                    ctx.fillText(`L${lid}`, anchorX - 10, anchorY - 5);
+                }
+            });
+            ctx.restore();
         }
     }, [streamId]);
 

@@ -70,6 +70,13 @@ export interface WebSocketMessage<T = unknown> {
     timestamp?: number;
 }
 
+export interface ConnectionQuality {
+    latency: number;           // Current RTT in ms
+    averageLatency: number;    // Moving average
+    packetLoss: number;        // Estimated packet loss %
+    quality: 'excellent' | 'good' | 'fair' | 'poor';
+}
+
 export interface IWebSocketClient {
     activate(): void;
     connect(token: string): Promise<void>;
@@ -78,6 +85,7 @@ export interface IWebSocketClient {
     subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void;
     unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
     reconnectWithNewToken(token: string): Promise<void>;
+    getConnectionQuality(): ConnectionQuality;
 }
 
 enum ConnectionState {
@@ -118,6 +126,12 @@ export class WebSocketClient implements IWebSocketClient {
     private videoWorker: Worker | null = null;
     private requiresClientId: boolean;
     private clientId: string | null = null;
+    private latencyHistory: number[] = [];
+    private maxLatencyHistory = 10;
+    private sentPingTimestamps: Map<string, number> = new Map();
+    private qualityListeners: Set<(quality: ConnectionQuality) => void> = new Set();
+    private networkChangeHandler: (() => void) | null = null;
+    private networkOfflineHandler: (() => void) | null = null;
 
     constructor(baseUrl: string, requiresClientId = true) {
         this.url = baseUrl;
@@ -166,6 +180,28 @@ export class WebSocketClient implements IWebSocketClient {
                 });
             });
         }
+
+        // Setup network change detection
+        if (!this.networkChangeHandler) {
+            this.networkChangeHandler = () => {
+                console.log(`[WebSocketClient ${this.instanceId}] Network back online, reconnecting...`);
+
+                if (!this.isConnected() && this.isInstanceActive()) {
+                    this.reconnectAttempts = 0; // Reset attempts on network change
+                    this.connect(this.currentToken).catch(e => {
+                        console.error(`[WebSocketClient ${this.instanceId}] Reconnect after network change failed:`, e);
+                    });
+                }
+            };
+
+            this.networkOfflineHandler = () => {
+                console.log(`[WebSocketClient ${this.instanceId}] Network offline detected`);
+                this.setState(ConnectionState.DISCONNECTED, 'Network offline');
+            };
+
+            window.addEventListener('online', this.networkChangeHandler);
+            window.addEventListener('offline', this.networkOfflineHandler);
+        }
     }
 
     public getInstanceId(): string {
@@ -191,6 +227,50 @@ export class WebSocketClient implements IWebSocketClient {
                 console.error(`[WebSocketClient ${this.instanceId}] Error in status listener:`, error);
             }
         });
+    }
+
+    private calculateConnectionQuality(): ConnectionQuality {
+        const avgLatency = this.latencyHistory.length > 0
+            ? this.latencyHistory.reduce((a, b) => a + b, 0) / this.latencyHistory.length
+            : 0;
+
+        let quality: ConnectionQuality['quality'];
+        if (avgLatency < 50) quality = 'excellent';
+        else if (avgLatency < 150) quality = 'good';
+        else if (avgLatency < 300) quality = 'fair';
+        else quality = 'poor';
+
+        return {
+            latency: this.latencyHistory[this.latencyHistory.length - 1] || 0,
+            averageLatency: avgLatency,
+            packetLoss: 0, // Can be enhanced to track missed pongs
+            quality
+        };
+    }
+
+    private notifyQualityListeners(quality: ConnectionQuality) {
+        this.qualityListeners.forEach(listener => {
+            try {
+                listener(quality);
+            } catch (error) {
+                console.error(`[WebSocketClient ${this.instanceId}] Error in quality listener:`, error);
+            }
+        });
+    }
+
+    public onQualityChange(listener: (quality: ConnectionQuality) => void): () => void {
+        this.qualityListeners.add(listener);
+        // Immediately notify with current quality
+        try {
+            listener(this.calculateConnectionQuality());
+        } catch (error) {
+            console.error(`[WebSocketClient ${this.instanceId}] Error in initial quality notification:`, error);
+        }
+        return () => this.qualityListeners.delete(listener);
+    }
+
+    public getConnectionQuality(): ConnectionQuality {
+        return this.calculateConnectionQuality();
     }
 
     public onStatusChange(listener: (status: string, message?: string) => void): () => void {
@@ -413,9 +493,25 @@ export class WebSocketClient implements IWebSocketClient {
                 return;
             }
 
+            // Generate correlation ID for RTT tracking
+            const pingId = crypto.randomUUID();
+            const now = Date.now();
+            this.sentPingTimestamps.set(pingId, now);
+
             // Sending a PING to the server, expecting a PONG back
-            console.debug(`[WebSocketClient ${this.instanceId}] Sending PING`);
-            this.send({ type: WebSocketMessageType.PING, timestamp: Date.now() });
+            console.debug(`[WebSocketClient ${this.instanceId}] Sending PING with correlation_id: ${pingId}`);
+            this.send({
+                type: WebSocketMessageType.PING,
+                timestamp: now,
+                correlation_id: pingId
+            });
+
+            // Cleanup old ping timestamps (older than 2 minutes)
+            for (const [id, timestamp] of this.sentPingTimestamps.entries()) {
+                if (now - timestamp > 120000) {
+                    this.sentPingTimestamps.delete(id);
+                }
+            }
 
             // If no pong is received within 120 seconds, consider connection timed out
             const timeSinceLastPong = Date.now() - this.lastPongTime;
@@ -449,12 +545,37 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.PING) {
                     console.debug(`[WebSocketClient ${this.instanceId}] Received PING, sending PONG`);
-                    this.send({ type: WebSocketMessageType.PONG, correlation_id: message.correlation_id });
+                    this.send({
+                        type: WebSocketMessageType.PONG,
+                        correlation_id: message.correlation_id,
+                        timestamp: message.timestamp // Echo back the server's timestamp
+                    });
                     return;
                 }
 
                 if (message.type === WebSocketMessageType.PONG || message.type === WebSocketMessageType.INTERNAL_PONG) {
                     console.debug(`[WebSocketClient ${this.instanceId}] Received PONG`);
+
+                    // Calculate RTT if we have a correlation_id
+                    if (message.correlation_id) {
+                        const sentTime = this.sentPingTimestamps.get(message.correlation_id);
+                        if (sentTime) {
+                            const rtt = Date.now() - sentTime;
+                            this.latencyHistory.push(rtt);
+
+                            // Keep only recent history
+                            if (this.latencyHistory.length > this.maxLatencyHistory) {
+                                this.latencyHistory.shift();
+                            }
+
+                            this.sentPingTimestamps.delete(message.correlation_id);
+
+                            // Calculate and notify quality
+                            const quality = this.calculateConnectionQuality();
+                            console.debug(`[WebSocketClient ${this.instanceId}] RTT: ${rtt}ms, Quality: ${quality.quality}`);
+                            this.notifyQualityListeners(quality);
+                        }
+                    }
                     return;
                 }
 
@@ -614,9 +735,22 @@ export class WebSocketClient implements IWebSocketClient {
         this.listeners.clear();
         this.errorListeners.clear();
         this.statusListeners.clear();
+        this.qualityListeners.clear();
         this.unsubscribeTokenRefresh?.();
         this.videoWorker?.terminate();
         this.messageQueue.length = 0;
+
+        // Cleanup network event listeners
+        if (typeof window !== 'undefined') {
+            if (this.networkChangeHandler) {
+                window.removeEventListener('online', this.networkChangeHandler);
+                this.networkChangeHandler = null;
+            }
+            if (this.networkOfflineHandler) {
+                window.removeEventListener('offline', this.networkOfflineHandler);
+                this.networkOfflineHandler = null;
+            }
+        }
     }
 
     public isConnected(): boolean {

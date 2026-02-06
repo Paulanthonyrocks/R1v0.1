@@ -17,6 +17,7 @@ from .services import (
     get_advanced_analytics_service,
     analytics_service_instance,
     connection_manager_instance,
+    get_incident_manager,
 )
 # Optional: Import specific classes if they are needed elsewhere directly
 # from .feed_manager import FeedManager # If FeedManager class is in its own file
@@ -40,6 +41,7 @@ __all__ = [
     "get_advanced_analytics_service",
     "analytics_service_instance",
     "connection_manager_instance",
+    "get_incident_manager",
     # Add class names here if you want them included in '*' import
     # "FeedManager",
 ]

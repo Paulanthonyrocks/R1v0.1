@@ -23,27 +23,28 @@ import { Label } from "@/components/ui/label"; // Use standard quote ' or "
 import { AlertTriangle } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { ReportAnomalyModalProps, SeverityLevel } from '@/lib/types'
-import { useSession } from 'next-auth/react';
+import { incidentService } from '@/lib/services/incidentService';
+
 // Define severity options available for reporting
 const severityOptions: { value: SeverityLevel; label: string }[] = [
   { value: 'Critical', label: 'Critical' },
   { value: 'Warning', label: 'Warning' },
-  { value: 'Anomaly', label: 'Anomaly' },
-  { value: 'INFO', label: 'Info' },
+  { value: 'Anomaly', label: 'General Anomaly' },
+  { value: 'INFO', label: 'Information' },
 ];
-
 
 const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModalProps) => {
   // Initial form state
   const initialFormData = useMemo(() => ({
-    message: '',
+    type: '',
     severity: 'Anomaly' as SeverityLevel, // Default severity
     description: '',
     location: '',
- }), []);
- const [formData, setFormData] = useState(initialFormData);
+  }), []);
+
+  const [formData, setFormData] = useState(initialFormData);
   const [error, setError] = useState<string | null>(null);
-  const { data: session } = useSession();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Reset form when modal opens/closes
   useEffect(() => {
@@ -55,84 +56,88 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
 
   // Generic handler for input/textarea changes
   const handleInputChange = (field: keyof typeof formData) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
- setFormData((prev: typeof formData) => ({ ...prev, [field]: event.target.value }));
+    setFormData((prev: typeof formData) => ({ ...prev, [field]: event.target.value }));
     // Clear error if the required field is being typed into
-    if (field === 'message' && event.target.value.trim()) {
+    if (field === 'type' && event.target.value.trim()) {
       setError(null);
     }
   };
 
   // Handler for Select component change
   const handleSelectChange = (value: string) => {
-     // Assert value is a SeverityLevel - use guard if necessary
- setFormData((prev: typeof formData) => ({ ...prev, severity: value as SeverityLevel }));
+    setFormData((prev: typeof formData) => ({ ...prev, severity: value as SeverityLevel }));
   };
 
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Basic validation
-    if (!formData.message.trim()) {
-      setError('Message field is required.');
+    if (!formData.type.trim()) {
+      setError('Incident type/title is required.');
       return;
     }
-    setError(null); // Clear error on successful validation
 
-    const userId = session?.user?.email; // Assuming session?.user?.id contains the user ID
-    // Prepare data for submission (omit empty optional fields)
+    setIsSubmitting(true);
+    setError(null);
+
     const submissionData = {
-      message: formData.message.trim(),
+      type: formData.type.trim(),
       severity: formData.severity,
-      ...(formData.description.trim() && { description: formData.description.trim() }),
-      ...(userId && { reported_by_user_email: userId }), // Include userId if available
-      ...(formData.location.trim() && { location: formData.location.trim() }),
+      description: formData.description.trim() || `Manual report: ${formData.type}`,
+      // In a real app, we might parse location or get coordinates from a map
+      latitude: 0,
+      longitude: 0,
     };
 
-    console.log('Reporting anomaly (frontend):', submissionData);
-    // Call the onSubmit prop if provided (this would trigger the API call)
-    if (onSubmit) {
-      onSubmit(submissionData);
+    try {
+      const result = await incidentService.createIncident(submissionData);
+      if (result && onSubmit) {
+        // Trigger local update if needed, though WebSocket should handle it
+        onSubmit({
+          message: submissionData.type,
+          severity: submissionData.severity as SeverityLevel,
+          description: submissionData.description,
+          location: formData.location
+        });
+      }
+      onOpenChange(false);
+    } catch (err) {
+      setError('Failed to submit incident. Please try again.');
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Close the modal after submission attempt
-    onOpenChange(false);
-    // Form state will be reset by useEffect when `open` becomes false
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] bg-card border-border text-foreground p-6">
-        <DialogHeader className="mb-4 text-left"> {/* Ensure left alignment */}
+        <DialogHeader className="mb-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
-            <AlertTriangle className="h-5 w-5 text-primary" />
-            Report Traffic Anomaly
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            Report New Incident
           </DialogTitle>
           <DialogDescription className="text-muted-foreground pt-1">
-            Submit details about a traffic event or observation. Provide a clear message.
+            Manually trigger an incident report for operator review.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Message Field (Required) */}
           <div className="space-y-1.5">
-            <Label htmlFor="message">Message <span className="text-destructive">*</span></Label>
+            <Label htmlFor="type">Incident Type / Title <span className="text-destructive">*</span></Label>
             <Input
-              id="message"
-              value={formData.message}
-              onChange={handleInputChange('message')}
-              placeholder="e.g., Standstill traffic on Main St southbound"
+              id="type"
+              value={formData.type}
+              onChange={handleInputChange('type')}
+              placeholder="e.g., Road Blockage, Signal Failure"
               required
-              aria-required="true"
+              disabled={isSubmitting}
               className={cn(error && 'border-destructive focus-visible:ring-destructive')}
             />
             {error && <p className="text-xs text-destructive pt-1">{error}</p>}
           </div>
 
-          {/* Severity Field */}
           <div className="space-y-1.5">
-            <Label htmlFor="severity">Severity</Label>
-            {/* Ensure Select component from Shadcn is correctly imported and used */}
-            <Select value={formData.severity} onValueChange={handleSelectChange}>
+            <Label htmlFor="severity">Severity Level</Label>
+            <Select value={formData.severity} onValueChange={handleSelectChange} disabled={isSubmitting}>
               <SelectTrigger id="severity" className="w-full">
                 <SelectValue placeholder="Select severity..." />
               </SelectTrigger>
@@ -146,36 +151,37 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
             </Select>
           </div>
 
-          {/* Description Field (Optional) */}
           <div className="space-y-1.5">
-            <Label htmlFor="description">Description (Optional)</Label>
+            <Label htmlFor="description">Detailed Description</Label>
             <Textarea
               id="description"
               value={formData.description}
               onChange={handleInputChange('description')}
-              placeholder="Add any extra details..."
+              placeholder="Provide specific details about the observed incident..."
               rows={3}
-              className="resize-y min-h-[60px]" // Allow vertical resize
+              disabled={isSubmitting}
+              className="resize-y min-h-[80px]"
             />
           </div>
 
-          {/* Location Field (Optional) */}
           <div className="space-y-1.5">
-            <Label htmlFor="location">Location (Optional)</Label>
+            <Label htmlFor="location">Location Reference</Label>
             <Input
               id="location"
               value={formData.location}
               onChange={handleInputChange('location')}
-              placeholder="e.g., Near Main St & 5th Ave intersection"
+              placeholder="e.g., Junction 4, Southbound"
+              disabled={isSubmitting}
             />
           </div>
 
-          {/* Footer Buttons */}
-          <DialogFooter className="mt-6 sm:justify-end"> {/* Adjusted spacing and alignment */}
+          <DialogFooter className="mt-6 sm:justify-end gap-2">
             <DialogClose asChild>
-              <Button type="button" variant="secondary">Cancel</Button>
+              <Button type="button" variant="secondary" disabled={isSubmitting}>Cancel</Button>
             </DialogClose>
-            <Button type="submit" variant="default">Submit Report</Button>
+            <Button type="submit" variant="destructive" disabled={isSubmitting}>
+              {isSubmitting ? 'Submitting...' : 'Broadcast Incident'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

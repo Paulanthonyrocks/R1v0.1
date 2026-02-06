@@ -1,124 +1,156 @@
-// components/dashboard/AnomalyDetailsModal.tsx
-import React from 'react';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-  DialogClose,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, Calendar, Clock, MessageSquare, MapPin, Video } from 'lucide-react';
-import { cn } from "@/lib/utils";
-import { AnomalyDetailsModalProps, SeverityLevel } from '@/lib/types';
+import { incidentService } from '@/lib/services/incidentService';
 
-// Severity config (can be moved to shared utils if needed elsewhere)
-const severityConfig: Record<SeverityLevel, { color: string; text: string; icon: React.ElementType }> = {
-  Critical: { color: 'bg-destructive text-destructive-foreground', text: 'Critical', icon: AlertTriangle },
-  ERROR: { color: 'bg-destructive text-destructive-foreground', text: 'Error', icon: AlertTriangle },
-  Warning: { color: 'bg-amber-500 text-black', text: 'Warning', icon: AlertTriangle },
-  Anomaly: { color: 'bg-purple-500 text-white', text: 'Anomaly', icon: AlertTriangle },
-  INFO: { color: 'bg-blue-500 text-white', text: 'Info', icon: AlertTriangle },
-};
+// ... (existing imports and severityConfig) ...
 
 const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: AnomalyDetailsModalProps) => {
+  const [isUpdating, setIsUpdating] = React.useState(false);
+  const [notes, setNotes] = React.useState('');
+  const [showResolveInput, setShowResolveInput] = React.useState(false);
+
   if (!anomaly) {
     return null;
   }
 
-  const config = severityConfig[anomaly.severity] || severityConfig.Anomaly;
-  const SeverityIcon = config.icon;
-  let formattedDate = 'Invalid Date';
-  let formattedTime = 'Invalid Time';
+  // ... (date formatting logic) ...
 
-  // Safely format date/time
-  try {
-      const date = new Date(anomaly.timestamp);
-      if (!isNaN(date.getTime())) {
-        formattedDate = date.toLocaleDateString('en-CA'); // YYYY-MM-DD
-        formattedTime = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-      }
-  } catch (e) {
-      console.error("Error parsing anomaly timestamp:", anomaly.timestamp, e);
-  }
-
-
-  // Handler for the Acknowledge button
-  const handleAcknowledgeClick = () => {
-    console.log(`Acknowledging anomaly (frontend): ID=${anomaly.id || 'N/A'}, Message=${anomaly.message}`);
-    if (onAcknowledge) {
-      onAcknowledge(anomaly); // Pass the full anomaly data back
+  const handleAcknowledge = async () => {
+    if (!anomaly.id) return;
+    setIsUpdating(true);
+    const success = await incidentService.acknowledgeIncident(String(anomaly.id));
+    if (success) {
+      if (onAcknowledge) onAcknowledge(anomaly);
+      // We don't close the modal yet, let WebSocket update the state or we close it here
+      onOpenChange(false);
     }
-    onOpenChange(false); // Close modal after acknowledging
+    setIsUpdating(false);
+  };
+
+  const handleResolve = async () => {
+    if (!anomaly.id) return;
+    setIsUpdating(true);
+    const success = await incidentService.resolveIncident(String(anomaly.id), notes);
+    if (success) {
+      onOpenChange(false);
+      setShowResolveInput(false);
+      setNotes('');
+    }
+    setIsUpdating(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(val) => {
+      onOpenChange(val);
+      if (!val) {
+        setShowResolveInput(false);
+        setNotes('');
+      }
+    }}>
       <DialogContent className="sm:max-w-[500px] bg-card border-border text-foreground p-6">
         <DialogHeader className="mb-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold" id="anomaly-dialog-title">
-            {/* Adjust icon color based on background for contrast */}
             <SeverityIcon className={cn("h-5 w-5", config.color.includes('amber') ? 'text-black' : 'text-white')} />
-            Anomaly Details
+            Incident Details
           </DialogTitle>
           <DialogDescription id="anomaly-dialog-desc" className="text-muted-foreground pt-1">
-            Detailed information about the detected event.
+            {anomaly.id ? `ID: ${anomaly.id}` : 'Anonymous Event'}
           </DialogDescription>
         </DialogHeader>
 
-        {/* Details Grid */}
-        <div className="grid gap-4 py-4 text-sm border-t border-b border-border"> {/* Added borders */}
-           {/* Severity and Message */}
-           <div className="flex items-center gap-3">
-                <Badge variant="default" className={cn(config.color, 'h-6 px-2 font-semibold flex-shrink-0')}>
-                    {config.text}
-                </Badge>
-                <span className="font-medium text-foreground leading-snug">{anomaly.message}</span>
+        <div className="grid gap-4 py-4 text-sm border-t border-b border-border">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Badge variant="default" className={cn(config.color, 'h-6 px-2 font-semibold flex-shrink-0')}>
+                {config.text}
+              </Badge>
+              <span className="font-bold text-foreground leading-snug">{anomaly.message}</span>
             </div>
+            {anomaly.status && (
+              <Badge variant="outline" className="font-mono text-[10px] h-5">
+                {anomaly.status}
+              </Badge>
+            )}
+          </div>
 
-            {/* Metadata */}
-            <div className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-3 text-muted-foreground pl-2"> {/* Indent metadata slightly */}
-                <Calendar className="h-4 w-4 mt-0.5" />
-                <span>{formattedDate}</span>
+          <div className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-3 text-muted-foreground pl-2">
+            <Calendar className="h-4 w-4 mt-0.5" />
+            <span>{formattedDate}</span>
 
-                <Clock className="h-4 w-4 mt-0.5" />
-                <span>{formattedTime}</span>
+            <Clock className="h-4 w-4 mt-0.5" />
+            <span>{formattedTime}</span>
 
-                {anomaly.description && (
-                   <>
-                     <MessageSquare className="h-4 w-4 mt-0.5" />
-                     <span className="text-foreground italic">{anomaly.description}</span>
-                   </>
-                )}
+            {anomaly.description && (
+              <>
+                <MessageSquare className="h-4 w-4 mt-0.5" />
+                <span className="text-foreground italic">{anomaly.description}</span>
+              </>
+            )}
 
-                {anomaly.location && (
-                  <>
-                    <MapPin className="h-4 w-4 mt-0.5" />
-                    <span>{anomaly.location}</span>
-                  </>
-                )}
+            {anomaly.location && (
+              <>
+                <MapPin className="h-4 w-4 mt-0.5" />
+                <span>{anomaly.location}</span>
+              </>
+            )}
 
-                {anomaly.feed_id && (
-                  <>
-                    <Video className="h-4 w-4 mt-0.5" />
-                    <span>Feed: {anomaly.feed_id}</span>
-                  </>
-                )}
+            {anomaly.feed_id && (
+              <>
+                <Video className="h-4 w-4 mt-0.5" />
+                <span>Feed: {anomaly.feed_id}</span>
+              </>
+            )}
+          </div>
+
+          {showResolveInput && (
+            <div className="mt-2 space-y-2">
+              <label className="text-[10px] uppercase font-bold text-muted-foreground">Resolution Notes</label>
+              <textarea
+                className="w-full bg-background border border-border p-2 rounded text-xs min-h-[60px]"
+                placeholder="Enter resolution details..."
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
             </div>
+          )}
         </div>
 
-        {/* Footer with Acknowledge Button */}
-        <DialogFooter className="mt-6 gap-2 sm:justify-end"> {/* Added gap for spacing */}
+        <DialogFooter className="mt-6 gap-2 sm:justify-end">
           <DialogClose asChild>
-              <Button type="button" variant="secondary">Close</Button>
-           </DialogClose>
-           {/* Only show Acknowledge if handler is provided? Or always show? Showing always for now. */}
-           <Button type="button" variant="default" onClick={handleAcknowledgeClick}>
-                Acknowledge
-           </Button>
+            <Button type="button" variant="secondary" disabled={isUpdating}>Close</Button>
+          </DialogClose>
+
+          {!showResolveInput && anomaly.status !== 'RESOLVED' && (
+            <>
+              {anomaly.status === 'REPORTED' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleAcknowledge}
+                  disabled={isUpdating}
+                >
+                  Acknowledge
+                </Button>
+              )}
+              <Button
+                type="button"
+                className="bg-matrix text-matrix-foreground hover:bg-matrix/90"
+                onClick={() => setShowResolveInput(true)}
+                disabled={isUpdating}
+              >
+                Resolve
+              </Button>
+            </>
+          )}
+
+          {showResolveInput && (
+            <Button
+              type="button"
+              className="bg-matrix text-matrix-foreground hover:bg-matrix/90"
+              onClick={handleResolve}
+              disabled={isUpdating || !notes.trim()}
+            >
+              Submit Resolution
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

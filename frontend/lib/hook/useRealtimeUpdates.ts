@@ -27,7 +27,7 @@ interface RealtimeUpdates {
     unsubscribeFromFeed: (feedId: string) => void;
 }
 
-export const useRealtimeUpdates = (): RealtimeUpdates & { 
+export const useRealtimeUpdates = (): RealtimeUpdates & {
     feeds: FeedStatusData[],
     startFeed: (feedId: string) => void,
     stopFeed: (feedId: string) => void,
@@ -62,7 +62,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         // Connection is managed by WebSocketProvider
         // This is kept for compatibility, but acts as a no-op regarding connection initiation
         if (!client.isConnected()) {
-             console.log("startWebSocket called. Client state:", client.getConnectionState());
+            console.log("startWebSocket called. Client state:", client.getConnectionState());
         }
     }, [client]);
 
@@ -78,7 +78,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         };
 
         const connected = updateConnectionState();
-        
+
         if (connected && !hasRequestedInitialFeeds.current) {
             console.log("[useRealtimeUpdates] WebSocket already connected on mount, requesting initial feed statuses.");
             client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
@@ -131,12 +131,40 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
                 return [...prevFeeds, statusData];
             });
         }));
-        
+
         subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
 
         subscriptions.push(client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
             if (data?.alert_data) {
-                setAlerts(prevAlerts => [...prevAlerts, data.alert_data].slice(-10));
+                setAlerts(prevAlerts => {
+                    // Prevent duplicates if also receiving as GENERAL_NOTIFICATION
+                    if (prevAlerts.some(a => a.id === data.alert_data.id)) return prevAlerts;
+                    return [...prevAlerts, data.alert_data].slice(-20);
+                });
+            }
+        }));
+
+        subscriptions.push(client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
+            if (data?.message_type === 'new_incident') {
+                const newIncident: AlertData = {
+                    id: data.incident_id,
+                    timestamp: new Date(),
+                    severity: data.severity,
+                    feed_id: data.feed_id,
+                    message: data.title || "New Incident",
+                    description: data.message,
+                    status: 'REPORTED'
+                };
+                setAlerts(prevAlerts => {
+                    if (prevAlerts.some(a => a.id === newIncident.id)) return prevAlerts;
+                    return [...prevAlerts, newIncident].slice(-20);
+                });
+            } else if (data?.message_type === 'incident_update') {
+                setAlerts(prevAlerts => prevAlerts.map(alert =>
+                    alert.id === data.incident_id || String(alert.id) === String(data.incident_id)
+                        ? { ...alert, status: data.status, resolution_notes: data.notes, updated_at: new Date().toISOString() }
+                        : alert
+                ));
             }
         }));
 
@@ -172,14 +200,14 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         sendMessage(WebSocketMessageType.RESTART_FEED, { feed_id: feedId });
     }, [sendMessage]);
 
-    return { 
-        kpis, 
-        alerts, 
+    return {
+        kpis,
+        alerts,
         // nodeCongestionData, 
-        isConnected, 
-        isReady, 
-        error, 
-        feeds, 
+        isConnected,
+        isReady,
+        error,
+        feeds,
         sendMessage,
         subscribeToFeed,
         unsubscribeFromFeed,

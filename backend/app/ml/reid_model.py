@@ -3,8 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as T
 import numpy as np
-import cv2
-from typing import List, Optional, Union
+from typing import List, Optional
 import logging
 
 logger = logging.getLogger("app.ml.reid")
@@ -106,6 +105,55 @@ class ReIDEmbedder:
         except Exception as e:
             logger.error(f"ReID embedding failed: {e}")
             return None
+
+    @torch.no_grad()
+    def get_batch_embeddings(self, images: List[np.ndarray]) -> List[Optional[np.ndarray]]:
+        """
+        Generates normalized embedding vectors for a batch of cropped vehicle images.
+        """
+        if not images:
+            return []
+
+        valid_images = []
+        indices = []
+        embeddings_map = {}
+
+        # Pre-filter invalid images
+        for idx, img in enumerate(images):
+            if img is not None and img.size > 0:
+                valid_images.append(img)
+                indices.append(idx)
+            else:
+                embeddings_map[idx] = None
+
+        if not valid_images:
+            return [None] * len(images)
+
+        try:
+            # Batch transform
+            batch_tensors = []
+            for img in valid_images:
+                batch_tensors.append(self.transform(img))
+            
+            input_tensor = torch.stack(batch_tensors).to(self.device)
+
+            # Forward pass
+            embeddings = self.backbone(input_tensor)
+
+            # L2 Normalize
+            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+            embeddings_np = embeddings.cpu().numpy()
+
+            # Map back to original indices
+            for i, idx in enumerate(indices):
+                embeddings_map[idx] = embeddings_np[i]
+
+            # Construct result list in order
+            return [embeddings_map.get(i) for i in range(len(images))]
+
+        except Exception as e:
+            logger.error(f"ReID batch embedding failed: {e}")
+            return [None] * len(images)
 
     def compute_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
         """

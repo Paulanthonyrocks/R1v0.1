@@ -153,3 +153,51 @@ async def get_vehicle_global_history(
         raise HTTPException(status_code=404, detail="No history found for this global ID")
 
     return history
+
+class ReIDGalleryResponse(BaseModel):
+    global_id: str
+    gallery_size: int
+    last_seen: float
+    metadata: Dict[str, Any]
+    # We'll return embeddings as list of lists if small, or just count for now
+    # For a real gallery, we'd probably store reference images too.
+    # Since we only have embeddings, we'll return them.
+    embeddings: List[List[float]]
+
+@router.get("/global/{global_id}/gallery", response_model=ReIDGalleryResponse)
+async def get_vehicle_reid_gallery(
+    global_id: str,
+    db: DatabaseManager = Depends(get_database_manager)
+):
+    """
+    Returns the collection of appearance embeddings for a vehicle.
+    """
+    identity = await db.get_reid_identity(global_id)
+    if not identity:
+        raise HTTPException(status_code=404, detail="ReID identity not found")
+    
+    import numpy as np
+    emb_bytes = identity["embeddings"]
+    # Reconstruct 2D array (assuming 512 dimensions)
+    # Ideally dimensions should come from config, but 512 is common for ReID.
+    # Let's check reid_manager to be sure or just use the whole buffer.
+    embeddings = np.frombuffer(emb_bytes, dtype=np.float32)
+    
+    # Heuristic: find rows by dividing total size by 512
+    # If it doesn't divide evenly, it might be 128 or 256.
+    # We'll try to be robust.
+    for dim in [512, 256, 128]:
+        if len(embeddings) % dim == 0:
+            embeddings = embeddings.reshape(-1, dim)
+            break
+    else:
+        # Fallback to single row if unknown dims
+        embeddings = embeddings.reshape(1, -1)
+
+    return ReIDGalleryResponse(
+        global_id=identity["global_id"],
+        gallery_size=len(embeddings),
+        last_seen=identity["last_seen"],
+        metadata=identity["metadata"],
+        embeddings=embeddings.tolist()
+    )

@@ -37,6 +37,8 @@ export interface FeedStatusData {
   latest_vehicles?: any[]; // Array of vehicle data
 }
 
+export type IncidentStatus = 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED';
+
 export interface AlertData {
   id?: string | number;
   timestamp: string | Date;
@@ -47,6 +49,10 @@ export interface AlertData {
   latitude?: number; // Added latitude
   longitude?: number; // Added longitude
   location?: string; // This is a simple string; backend might send structured location in details.
+  status?: IncidentStatus; // New: stateful status
+  assigned_to?: string | null; // New: operator assignment
+  resolution_notes?: string | null; // New: notes upon resolution
+  updated_at?: string; // New: last change timestamp
   acknowledged?: boolean; // For WebSocket updates on acknowledgement status
   details?: Record<string, unknown>; // To capture full details from WebSocket if needed
 }
