@@ -23,8 +23,9 @@ class DetectionEngine:
         try:
             if self.model_type == "yolo":
                 self.model = YOLO(self.model_path)
-                self.model.to(self.device)
-                logger.info(f"YOLO model loaded on {self.device}")
+                if self.model_path.endswith(".pt"):
+                    self.model.to(self.device)
+                logger.info(f"YOLO model loaded from {self.model_path} on {self.device}")
             # Placeholder for other model types (RT-DETR, etc.)
         except Exception as e:
             logger.error(f"Failed to load model: {e}")

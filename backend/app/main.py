@@ -220,9 +220,17 @@ async def lifespan(app: FastAPI):
             p_enabled = p_cfg.get("enabled", True) if isinstance(p_cfg, dict) else getattr(p_cfg, "enabled", True)
             if p_enabled:
                 auto_start = loaded_config.get("auto_start_processing", True) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", True)
-                if not auto_start:
+                if auto_start:
                     await fm.start_processing()
-                    logger.info("Feed Manager started processing manually.")
+                    logger.info("Feed Manager started processing automatically.")
+            
+            # Post-Startup Processing (Start sample feeds)
+            psp_cfg = cfg_dict.get("post_startup_processing", {})
+            if psp_cfg.get("enabled", False):
+                sample_feeds = psp_cfg.get("sample_feeds", [])
+                if sample_feeds:
+                    logger.info(f"Starting {len(sample_feeds)} sample feeds from config...")
+                    create_background_task(fm.start_multiple_feeds(sample_feeds))
     except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
@@ -439,4 +447,4 @@ async def detailed_health_check():
 if __name__ == "__main__":
     import uvicorn
     # Use standard uvicorn runner for development
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False, log_level="info")

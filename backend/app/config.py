@@ -70,6 +70,8 @@ class AppConfig(BaseSettings):
     
     class Config:
         env_file = ".env"
+        env_nested_delimiter = "__"
+        env_file_encoding = "utf-8"
         extra = "allow"
 
 # Module-level variable to hold the loaded configuration

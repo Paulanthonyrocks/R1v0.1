@@ -21,10 +21,14 @@ performance:
   skip_factor_adjustment_interval: 360.0
   long_sleep_after_increase: 10
 firebase_admin:
-  service_account_key_path: backend/configs/firebase/service-account-key.json
+  service_account_key_path: configs/firebase/service-account-key.json
   project_id: gen-lang-client-0230118708
   auth_enabled: true
   storage_bucket: r1v0-1.appspot.com
+traffic_predictor_model_path: models/traffic_predictor_model.h5
+anomaly_detection:
+  enabled: false
+  model_path: models/anomaly_detector_model.h5
 logging:
   version: 1
   disable_existing_loggers: false
@@ -304,7 +308,7 @@ logging:
 database:
   db_path: /tmp/vehicle_data.db
   timescaledb:
-    enabled: true
+    enabled: false
     url: "postgresql+asyncpg://postgres:password@localhost:5432/traffic_hub"
   chunk_size: 100
   cache_size: 128
@@ -329,12 +333,12 @@ mongodb:
   # Use 'mongodb://mongodb:27017/' when running in Docker with the mongodb service
   uri: "mongodb://localhost:27017/"
   database_name: "traffic_hub"
-  enabled: true
+  enabled: false
 redis:
   host: "localhost"
   port: 6379
   db: 0
-  enabled: true
+  enabled: false
 feed_manager:
   max_concurrent_feeds: 5
   db_write_interval: 0.5
@@ -349,7 +353,7 @@ video_input:
 post_startup_processing:
   enabled: true
   sample_feeds:
-    - path: "backend/data/sample_traffic.mp4"
+    - path: "data/sample_traffic_2.mp4"
       is_looped: true
       latitude: 34.0522
       longitude: -118.2437
@@ -357,7 +361,7 @@ post_startup_processing:
 video_output:
   enabled: false
   processing_enabled: true
-  output_directory: backend/data/processed_videos
+  output_directory: data/processed_videos
   codec: mp4v
   fps: 5
   frame_resolution:
@@ -369,7 +373,7 @@ video_output:
 vehicle_detection:
   enabled: true
   model_type: yolo
-  model_path: backend/models/yolov8n.pt
+  model_path: models/yolov8n.pt
   frame_resolution:
   - 640
   - 480
@@ -422,10 +426,10 @@ vehicle_detection:
   # Car Classification
   car_classification_enabled: false
   car_classification_interval_frames: 60
-  car_classifier_model_path: backend/models/Car_Make_Model.tflite
-  car_classifier_labels_path: backend/models/car_labels.txt
+  car_classifier_model_path: models/Car_Make_Model.tflite
+  car_classifier_labels_path: models/car_labels.txt
   traffic_predictor:
-    model_path: backend/models/traffic_predictor_model.h5
+    model_path: models/traffic_predictor_model.h5
   traffic_prediction:
     enabled: true
 analytics_service:
@@ -523,7 +527,7 @@ incident_detection:
   density_threshold: 10
   congestion_speed_threshold: 20
 perspective_calibration:
-  matrix_path: backend/configs/perspective_matrix.npy
+  matrix_path: configs/perspective_matrix.npy
 vis_options_default:
 - Grid Overlay
 - Lane Lines
@@ -539,12 +543,12 @@ roi_processing:
   polygon_points: null
 pavement_analysis:
   camera_calibration:
-    calibration_file: backend/calibration_params.npz
+    calibration_file: calibration_params.npz
 ml_model:
-  model_path: backend/models/pavement/pavement_model.pt
+  model_path: models/pavement/pavement_model.pt
 storage:
-  image_output_dir: backend/data/pavement_images
-  report_output_dir: backend/data/pavement_reports
+  image_output_dir: data/pavement_images
+  report_output_dir: data/pavement_reports
 log_files:
   allowed_log_files:
     - backend_main.log
@@ -578,7 +582,7 @@ prediction_scheduler:
     name: Atlanta Centennial Park
 file_watcher:
   enabled: true
-  watch_directory: backend/data/new_sample_videos
+  watch_directory: data/new_sample_videos
 websocket:
   max_connections: 1000
   token_refresh_interval: 300

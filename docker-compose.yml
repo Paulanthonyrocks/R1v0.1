@@ -1,4 +1,5 @@
-version: '3'
+version: '3.8'
+
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
@@ -7,6 +8,8 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - traffic-net
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -22,13 +25,18 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - traffic-net
+
   mongodb:
     image: mongo:latest
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-    command: mongod --auth --bind_ip_all
+    command: mongod --bind_ip_all
+    networks:
+      - traffic-net
 
   timescaledb:
     image: timescale/timescaledb:latest-pg15
@@ -40,6 +48,8 @@ services:
       - POSTGRES_DB=traffic_hub
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
+    networks:
+      - traffic-net
 
   redis:
     image: redis:latest
@@ -47,6 +57,49 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - traffic-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS__HOST=redis
+      - MONGODB__URI=mongodb://mongodb:27017/
+      - TIMESCALEDB__URL=postgresql+asyncpg://postgres:password@timescaledb:5432/traffic_hub
+      - MONGODB__ENABLED=true
+      - TIMESCALEDB__ENABLED=true
+      - DATA_DIR=/app/data
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/configs:/app/configs
+      - ./backend/models:/app/models
+    depends_on:
+      - redis
+      - mongodb
+      - timescaledb
+    networks:
+      - traffic-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - traffic-net
+
+networks:
+  traffic-net:
+    driver: bridge
 
 volumes:
   mongo_data:

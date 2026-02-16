@@ -208,11 +208,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         };
     }, [client, streamId, token, subscribeToFeed, handleFrame]);
 
-    const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frameDataObj: { image: ImageBitmap | HTMLImageElement | null, index: number, vehicles: VehicleFrontendData[] | null }, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean; showTrajectories?: boolean } = {}) => {
+    const drawFrame = useCallback((ctx: CanvasRenderingContext2D, frameDataObj: { image: ImageBitmap | HTMLImageElement | null, index: number, vehicles: VehicleFrontendData[] | null, metrics: SurveillanceFeedMessage | null }, options: { showBoundingBoxes?: boolean; showVehicleDetails?: boolean; showTrajectories?: boolean; showLaneOverlays?: boolean } = {}) => {
         const { image, index, vehicles: currentVehicles } = frameDataObj;
         if (!image) return;
 
-        const { showBoundingBoxes = true, showVehicleDetails = true, showTrajectories = true } = options;
+        const { showBoundingBoxes = true, showVehicleDetails = true, showTrajectories = true, showLaneOverlays = false } = options;
 
         const canvasWidth = ctx.canvas.width;
         const canvasHeight = ctx.canvas.height;

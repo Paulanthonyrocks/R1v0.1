@@ -1,6 +1,38 @@
+import React from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { AnomalyDetailsModalProps, SeverityLevel } from '@/lib/types';
 import { incidentService } from '@/lib/services/incidentService';
+import {
+  AlertTriangle,
+  Bomb,
+  XOctagon,
+  Sigma,
+  InfoIcon,
+  Calendar,
+  Clock,
+  MessageSquare,
+  MapPin,
+  Video,
+} from 'lucide-react';
 
-// ... (existing imports and severityConfig) ...
+const severityConfig: Record<SeverityLevel, { color: string; text: string; icon: React.ElementType }> = {
+  Critical: { color: 'bg-destructive text-destructive-foreground', text: 'Critical', icon: Bomb },
+  ERROR: { color: 'bg-destructive text-destructive-foreground', text: 'Error', icon: XOctagon },
+  Warning: { color: 'bg-yellow-500 text-white', text: 'Warning', icon: AlertTriangle },
+  Anomaly: { color: 'bg-blue-500 text-white', text: 'Anomaly', icon: Sigma },
+  INFO: { color: 'bg-blue-400 text-white', text: 'Info', icon: InfoIcon },
+};
 
 const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: AnomalyDetailsModalProps) => {
   const [isUpdating, setIsUpdating] = React.useState(false);
@@ -11,7 +43,21 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
     return null;
   }
 
-  // ... (date formatting logic) ...
+  const config = severityConfig[anomaly.severity] || severityConfig.Anomaly;
+  const SeverityIcon = config.icon;
+
+  const dateObj = new Date(anomaly.timestamp);
+  const formattedDate = dateObj.toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  const formattedTime = dateObj.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 
   const handleAcknowledge = async () => {
     if (!anomaly.id) return;
@@ -48,7 +94,7 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
       <DialogContent className="sm:max-w-[500px] bg-card border-border text-foreground p-6">
         <DialogHeader className="mb-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold" id="anomaly-dialog-title">
-            <SeverityIcon className={cn("h-5 w-5", config.color.includes('amber') ? 'text-black' : 'text-white')} />
+            <SeverityIcon className={cn("h-5 w-5", config.color.includes('yellow') || config.color.includes('amber') ? 'text-black' : 'text-white')} />
             Incident Details
           </DialogTitle>
           <DialogDescription id="anomaly-dialog-desc" className="text-muted-foreground pt-1">

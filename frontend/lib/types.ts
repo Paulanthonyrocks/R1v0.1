@@ -227,6 +227,7 @@ export interface SurveillanceFeedMessage {
   congestion_level_percent?: number;
   congestion_index?: number; // Alias or alternative naming
   is_congested?: boolean;
+  calibration?: Record<string, { calibrated: boolean, confidence: number, consensus: [number, number] }>;
 
   // Individual vehicle data is now sent directly in VideoFrameMessage.vehicles
 }

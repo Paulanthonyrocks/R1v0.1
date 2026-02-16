@@ -1,6 +1,7 @@
 import cv2
 import logging
 import time
+import math
 import numpy as np
 import torch
 import queue
@@ -227,6 +228,11 @@ class CoreModule:
             if ground_pos:
                 track["ground_coordinates"] = ground_pos
             
+            # Estimate Speed
+            prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps))
+            track["speed"] = self._estimate_speed_kalman(track, current_time, prev_time)
+            track["last_speed_update_time"] = current_time
+
             # Simple Filtering for Visualization
             if track["status"] == "active":
                 vis_tracks[tid] = track
@@ -238,6 +244,85 @@ class CoreModule:
         self._process_ocr_results()
 
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
+
+    def _estimate_speed_kalman(self, track: Dict, current_time: float, prev_time: float) -> float:
+        kf = track.get("kalman_filter")
+        if not kf:
+            return 0.0
+        
+        try:
+            time_diff = current_time - prev_time
+            
+            # Fix #17: Clamp time_diff to reasonable bounds
+            min_dt = 1.0 / (self.fps * 2)  # At least half frame time
+            max_dt = 2.0  # Max 2 seconds
+            
+            time_diff = max(min_dt, min(max_dt, time_diff))
+
+            raw_speed_kmph = 0.0
+
+            # State order: [x, y, w, h, vx, vy, vw, vh]
+            cx, cy = kf.x[0][0], kf.x[1][0]
+            vx, vy = kf.x[4][0], kf.x[5][0]
+
+            # 1. Prefer Homography-based speed estimation
+            if self.homography_matrix is not None:
+                # Current position in ground space
+                # We use the transformer wrapper which handles the homography internally
+                current_ground = self.transformer.pixel_to_ground(cx, cy)
+                
+                # Estimated previous position in ground space
+                # We use the velocity from Kalman Filter to backtrack one step
+                prev_ground = self.transformer.pixel_to_ground(cx - vx * time_diff, cy - vy * time_diff)
+
+                if current_ground and prev_ground:
+                    dx = current_ground[0] - prev_ground[0]
+                    dy = current_ground[1] - prev_ground[1]
+                    dist_meters = math.sqrt(dx**2 + dy**2)
+                    speed_mps = dist_meters / time_diff
+                    raw_speed_kmph = speed_mps * 3.6
+                
+                # Store ground position for analytics
+                if current_ground:
+                    track["ground_centroid"] = current_ground
+
+            # 2. Fallback to constant PPM
+            if raw_speed_kmph == 0.0:
+                pixel_speed_per_sec = np.sqrt(vx**2 + vy**2)
+                dynamic_ppm = self._get_dynamic_pixels_per_meter(cy)
+                
+                speed_mps = (pixel_speed_per_sec / dynamic_ppm) if dynamic_ppm > 0 else 0
+                raw_speed_kmph = speed_mps * 3.6
+
+            # --- EWMA Smoothing ---
+            prev_smoothed = track.get("smoothed_speed", 0.0)
+            if prev_smoothed == 0.0 and raw_speed_kmph > 0:
+                new_smoothed = raw_speed_kmph
+            else:
+                new_smoothed = (self.ewma_alpha * raw_speed_kmph) + ((1 - self.ewma_alpha) * prev_smoothed)
+
+            # Update state
+            track["smoothed_speed"] = new_smoothed
+            if "speed_history" in track:
+                track["speed_history"].append(new_smoothed)
+
+            return round(float(max(0, new_smoothed)), 1)
+        except Exception as e:
+            logger.warning(f"Speed estimation error: {e}")
+            return 0.0
+
+    def _get_dynamic_pixels_per_meter(self, y_pixel: float) -> float:
+        """
+        Calculates dynamic Pixels Per Meter (PPM) based on the Y-coordinate to account for perspective.
+        """
+        frame_height = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])[1]
+        
+        # Calibration point is usually at the bottom (near camera)
+        # We assume PPM decreases as we go up the frame (towards the horizon)
+        # Simple linear model: PPM(y) = baseline_PPM * (y / frame_height)
+        # Clamped to at least 20% of baseline to avoid division by zero or extreme speeds
+        factor = max(0.2, y_pixel / frame_height)
+        return self.pixels_per_meter * factor
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
         for vehicle_id, data in tracked_vehicles.items():
@@ -278,6 +363,30 @@ class CoreModule:
         if self.ocr_executor:
             self.ocr_executor.shutdown(wait=True)
 
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
+        """
+        Prepares the frame for inference. If ROI is enabled, it returns a cropped
+        version of the frame to the ROI's bounding box to optimize detection.
+        """
+        roi_cfg = self.config.get("roi_processing", {})
+        if not roi_cfg.get("enabled", True) or self.roi_polygon_points is None:
+            return frame, False, 0, 0
+
+        # Calculate bounding box of the ROI
+        pts = np.array(self.roi_polygon_points, np.int32)
+        x, y, w, h = cv2.boundingRect(pts)
+        
+        # Ensure it's within frame bounds
+        fh, fw = frame.shape[:2]
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(fw, x + w), min(fh, y + h)
+        
+        if x2 <= x1 or y2 <= y1:
+            return frame, False, 0, 0
+            
+        cropped_frame = frame[y1:y2, x1:x2]
+        return cropped_frame, True, x1, y1
+
     def update_config(self, updates: Dict[str, Any]):
         """Dynamically updates configuration."""
         if "vehicle_detection" in updates:
@@ -288,5 +397,29 @@ class CoreModule:
                 self.transformer.update_calibration(v_cfg["calibration"])
         
         if "roi" in updates:
-            # Handle ROI updates
-            pass
+            # Handle ROI updates from frontend (usually normalized list of dicts)
+            roi_data = updates["roi"]
+            if isinstance(roi_data, list):
+                new_points = []
+                res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
+                for pt in roi_data:
+                    if isinstance(pt, dict) and 'x' in pt and 'y' in pt:
+                        new_points.append([pt['x'] * res[0], pt['y'] * res[1]])
+                    elif isinstance(pt, (list, tuple)) and len(pt) == 2:
+                        # Assume normalized if values <= 1.0
+                        if pt[0] <= 1.0 and pt[1] <= 1.0:
+                            new_points.append([pt[0] * res[0], pt[1] * res[1]])
+                        else:
+                            new_points.append(list(pt))
+                
+                if new_points:
+                    self.roi_polygon_points = new_points
+                    # Update internal config copy
+                    if "roi_processing" not in self.config:
+                        self.config["roi_processing"] = {}
+                    self.config["roi_processing"]["polygon_points"] = new_points
+                    
+                    # Re-initialize ROI masks
+                    self._initialize_roi_mask(res)
+                    self.detector.initialize_roi(res, new_points)
+                    logger.info(f"[{self.feed_id}] ROI updated with {len(new_points)} points.")

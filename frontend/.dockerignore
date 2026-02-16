@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+build/
+.git/
+.gitignore
+.dockerignore
+.vscode/
+.idx/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env*
+frontend/.next/
+frontend/node_modules/

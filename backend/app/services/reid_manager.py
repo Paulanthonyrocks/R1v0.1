@@ -41,13 +41,16 @@ class GlobalReIDManager:
                     password=self.redis_cfg.get("password"),
                     decode_responses=False
                 )
+                # Verify connection before claiming success
+                self.redis.ping()
                 logger.info(f"Connected to Redis for ReID at {self.redis_cfg.get('host')}:{self.redis_cfg.get('port')}")
                 
                 # Start Pub/Sub listener for real-time sync
                 self._sub_thread = threading.Thread(target=self._listen_for_updates, daemon=True)
                 self._sub_thread.start()
             except Exception as e:
-                logger.error(f"Failed to connect to Redis: {e}")
+                logger.warning(f"Failed to connect to Redis (falling back to local mode): {e}")
+                self.redis = None
 
         # Initialize internal state (Local fallback/cache)
         self.metadata_store: Dict[str, Dict] = {}

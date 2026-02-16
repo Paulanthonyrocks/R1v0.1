@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import logging
+from collections import deque, Counter
 from typing import Dict, List, Tuple, Optional, Any
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -171,11 +172,44 @@ class TrackingManager:
     def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
         track["bbox"] = bbox
+        
+        # --- Velocity Bootstrapping ---
+        # If track is young (<= 5 frames), boost velocity estimate using simple displacement
+        # This helps the KF converge faster than waiting for Q/R to settle
+        track_age = len(track.get("class_history", []))
+        if 1 <= track_age <= 5:
+            dt = current_time - track.get("last_seen", current_time)
+            if dt > 0.001:
+                prev_cx, prev_cy = track["centroid"]
+                curr_cx, curr_cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+                vx = (curr_cx - prev_cx) / dt
+                vy = (curr_cy - prev_cy) / dt
+                
+                kf = track.get("kalman_filter")
+                if kf:
+                    # State: [x, y, w, h, vx, vy, vw, vh]
+                    kf.x[4][0] = vx
+                    kf.x[5][0] = vy
+                    
         track["last_seen"] = current_time
         track["status"] = "active"
         track["confidence"] = conf
-        track["class_id"] = cls
         
+        # --- Class Stabilization ---
+        # Instead of instant switching, use voting window
+        if "class_history" not in track:
+            track["class_history"] = deque([track["class_id"]], maxlen=10)
+        track["class_history"].append(cls)
+        
+        # Simple majority vote
+        counts = Counter(track["class_history"])
+        most_common = counts.most_common(1)
+        if most_common:
+            # Only switch if we have a strong lead or enough samples
+            winner, count = most_common[0]
+            if count >= 3: # minimal stability
+                track["class_id"] = winner
+
         # Update Kalman
         kf = track.get("kalman_filter")
         if kf:
@@ -196,7 +230,11 @@ class TrackingManager:
             "status": "active",
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
-            "class_history": [cls]
+            "class_history": deque([cls], maxlen=10),
+            "speed_history": deque(maxlen=5),
+            "smoothed_speed": 0.0,
+            "speed": 0.0,
+            "last_speed_update_time": current_time,
         }
 
     def _bbox_giou(self, boxA, boxB):

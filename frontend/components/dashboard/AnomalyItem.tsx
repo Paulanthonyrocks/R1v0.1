@@ -36,6 +36,13 @@ const AnomalyItem = React.memo((props: AnomalyItemProps) => {
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleSelect();
+    }
+  };
+
   const statusColors: Record<string, string> = {
     REPORTED: 'text-destructive border-destructive/30',
     ACKNOWLEDGED: 'text-warning border-warning/30',

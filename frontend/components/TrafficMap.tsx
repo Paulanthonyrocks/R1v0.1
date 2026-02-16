@@ -8,7 +8,7 @@ const TrafficMap: React.FC = () => {
   const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
   const [wsClient, setWsClient] = useState<WebSocketClient | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
 
   // Connect to WebSocket
