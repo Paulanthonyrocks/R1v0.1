@@ -214,7 +214,7 @@ class CoreModule:
                 x1, y1, x2, y2 = map(int, bbox)
                 roi = frame[y1:y2, x1:x2]
                 if roi.size > 0:
-                    emb = self.reid_embedder.extract(roi)
+                    emb = self.reid_embedder.get_embedding(roi)
             enriched_detections.append((bbox, cls, dconf, emb))
 
         # 4. Tracking

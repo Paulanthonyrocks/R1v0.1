@@ -26,13 +26,18 @@ def ingestion_worker(
     """
     Lightweight process that only captures frames and pushes them to a central queue.
     """
+    print(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}", flush=True)
+    
     # Initialize logging for the child process
     import logging.config
     try:
-        logging.config.dictConfig(config["logging"])
+        if "logging" in config:
+            logging.config.dictConfig(config["logging"])
+        else:
+            logging.basicConfig(level=logging.INFO)
     except Exception as e:
-        # Cannot use logger here as it may not be configured
-        pass  # Logging config failed, will use default
+        print(f"[Ingestion-{feed_id}] Logging config failed: {e}", flush=True)
+        logging.basicConfig(level=logging.INFO)
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
@@ -43,11 +48,9 @@ def ingestion_worker(
     signal.signal(signal.SIGINT, signal_handler)
 
     pid = os.getpid()
-    logger.debug(f"Ingestion process {pid} for {feed_id} entering initialization...")
     logger.info(f"Ingestion process {pid} started for {feed_id}")
     
     # Start parent monitor to avoid zombies
-    logger.debug(f"[{feed_id}] Starting parent monitor...")
     start_parent_monitor(stop_event, f"Ingestion-{feed_id}")
     
     metrics = WorkerMetrics(feed_id)
@@ -77,7 +80,6 @@ def ingestion_worker(
     logger.info(f"[{feed_id}] Ingestion Config: FPS={target_fps}, Resolution={stream_res}")
 
     # 2. Performance Metrics Initialization
-    # frame_count, dropped_frames, start_time are tracked in metrics object now
     last_fps_log = time.time()
     last_metrics_log = time.time()
 
@@ -104,6 +106,7 @@ def ingestion_worker(
                 except (IndexError, ValueError): 
                     source = 0
             
+            logger.info(f"[{feed_id}] Creating FrameReader for source: {source} (Attempt {attempt+1})")
             reader = FrameReader(
                 source, 
                 max_queue_size=50,
@@ -130,6 +133,7 @@ def ingestion_worker(
     if reader is None:
         logger.error(f"[{feed_id}] Failed to initialize FrameReader after {max_retries} attempts")
         return
+
 
     consecutive_errors = 0
     max_consecutive_errors = 300  # ~3 seconds at 100Hz polling (was 30)

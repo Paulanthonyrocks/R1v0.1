@@ -353,7 +353,7 @@ video_input:
 post_startup_processing:
   enabled: true
   sample_feeds:
-    - path: "data/sample_traffic_2.mp4"
+    - path: "data/sample_traffic.mp4"
       is_looped: true
       latitude: 34.0522
       longitude: -118.2437
@@ -433,6 +433,8 @@ vehicle_detection:
   traffic_prediction:
     enabled: true
 analytics_service:
+  traffic_prediction:
+    enabled: false
   node_congestion_broadcast:
     enabled: true
     interval: 300

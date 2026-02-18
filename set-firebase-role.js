@@ -1,28 +1,23 @@
-// Usage: node set-firebase-role.js <UID> <role>
-// Example: node set-firebase-role.js some-uid admin
 
-const admin = require('firebase-admin');
+const { IAM } = require('@google-cloud/iam');
 
-// Path to your Firebase service account key JSON file
-const serviceAccount = require('./backend/configs/firebase/service-account-key.json');
+async function setDefaultRole() {
+  const projectId = process.env.GCLOUD_PROJECT;
+  const member = `serviceAccount:${projectId}@gcp-sa-firebase.iam.gserviceaccount.com`;
+  const role = 'roles/firebase.sdkAdmin';
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+  const iam = new IAM();
 
-const [,, uid, role] = process.argv;
+  const policy = await iam.getProjectIamPolicy({ project: projectId });
 
-if (!uid || !role) {
-  console.error('Usage: node set-firebase-role.js <UID> <role>');
-  process.exit(1);
+  policy.bindings.push({
+    role: role,
+    members: [member],
+  });
+
+  await iam.setProjectIamPolicy({ project: projectId, policy: policy });
+
+  console.log(`Successfully set role ${role} for ${member} on project ${projectId}`);
 }
 
-admin.auth().setCustomUserClaims(uid, { role })
-  .then(() => {
-    console.log(`Custom claim 'role: ${role}' set for user ${uid}`);
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error('Error setting custom claim:', error);
-    process.exit(1);
-  });
+setDefaultRole().catch(console.error);

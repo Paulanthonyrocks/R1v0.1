@@ -188,6 +188,8 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
     UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
+    GET_USER_ROLE = "get_user_role"
+    USER_ROLE = "user_role"
     
     # Snapshot / Incident Notifications
     SNAPSHOT_READY = "snapshot_ready"

@@ -93,10 +93,15 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
             setIsConnected(isNowConnected);
             setIsReady(isNowConnected);
 
-            if (isNowConnected && !hasRequestedInitialFeeds.current) {
-                console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses.");
-                client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
-                hasRequestedInitialFeeds.current = true;
+            if (isNowConnected) {
+                if (!hasRequestedInitialFeeds.current) {
+                    console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses.");
+                    client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
+                    hasRequestedInitialFeeds.current = true;
+                }
+            } else {
+                // Reset flag on disconnection so it requests again on reconnect
+                hasRequestedInitialFeeds.current = false;
             }
         }));
 

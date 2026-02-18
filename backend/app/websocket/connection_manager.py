@@ -393,6 +393,10 @@ class ConnectionManager:
     def get_clients_for_feed(self, feed_id: str) -> List[str]:
         return list(self.feed_subscriptions.get(feed_id, set()))
 
+    def get_user_role(self, client_id: str) -> str:
+        """Get the role of a connected client."""
+        return self.client_id_to_user_role.get(client_id, "user")
+
     async def unsubscribe_from_topic(self, client_id: str, topic: str):
         if topic in self.topic_subscriptions and client_id in self.topic_subscriptions[topic]:
             self.topic_subscriptions[topic].remove(client_id)

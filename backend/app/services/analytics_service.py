@@ -59,7 +59,7 @@ class AnalyticsService:
         self._notification_service = notification_service
         self._incident_manager = incident_manager
         self._data_cache = TrafficDataCache()
-        self._traffic_predictor_instance = None
+        self._traffic_predictor_instance = traffic_predictor
         self._anomaly_detector_instance = None
         self._prediction_log_table_initialized = False
         
@@ -90,8 +90,15 @@ class AnalyticsService:
     @property
     def _traffic_predictor(self):
         if self._traffic_predictor_instance is None:
-            logger.info("Lazy-loading TrafficPredictor...")
-            self._traffic_predictor_instance = TrafficPredictor(config=self.config)
+            analytics_cfg = self.config.get("analytics_service", {})
+            prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
+            
+            if prediction_enabled:
+                logger.info("Lazy-loading TrafficPredictor...")
+                self._traffic_predictor_instance = TrafficPredictor(config=self.config)
+            else:
+                logger.debug("Traffic predictor requested but disabled in config.")
+                return None
         return self._traffic_predictor_instance
 
     @property

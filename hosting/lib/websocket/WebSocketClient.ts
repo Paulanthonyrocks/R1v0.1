@@ -59,7 +59,9 @@ export enum WebSocketMessageType {
     STOP_FEED = 'stop_feed',
     RESTART_FEED = 'restart_feed',
     SNAPSHOT_READY = 'snapshot_ready',
-    INTERNAL_PONG = '__internal_pong'
+    INTERNAL_PONG = '__internal_pong',
+    GET_USER_ROLE = 'get_user_role',
+    USER_ROLE = 'user_role'
 }
 
 export interface WebSocketMessage<T = unknown> {
@@ -599,7 +601,18 @@ export class WebSocketClient implements IWebSocketClient {
                 if (message.type === WebSocketMessageType.AUTH_FAILURE) {
                     console.warn(`[WebSocketClient ${this.instanceId}] Authentication failed:`, message.data);
                     this.currentToken = null;
-                    this.tokenManager.refreshToken().catch(e => console.error(`[WebSocketClient ${this.instanceId}] Token refresh failed:`, e));
+                    
+                    // Attempt to refresh token and reconnect
+                    setTimeout(() => {
+                        if (this.isInstanceActive() && this.shouldReconnect) {
+                            console.log(`[WebSocketClient ${this.instanceId}] Attempting token refresh after AUTH_FAILURE...`);
+                            this.tokenManager.refreshToken()
+                                .then(token => {
+                                    if (token) this.reconnectWithNewToken(token);
+                                })
+                                .catch(e => console.error(`[WebSocketClient ${this.instanceId}] Token refresh failed:`, e));
+                        }
+                    }, 5000); // 5s delay before retry
                 }
 
                 if (message.type === WebSocketMessageType.INITIAL_FEED_STATUSES) {

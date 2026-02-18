@@ -139,10 +139,19 @@ def inference_worker(
 
             # Load ReID
             if vehicle_det_cfg.get("reid_enabled", True):
-                from ..ml.reid_model import ReIDEmbedder
-                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
-                shared_reid_embedder = ReIDEmbedder(config)
-                logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+                try:
+                    from ..ml.reid_model import ReIDEmbedder
+                    logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
+                    for h in logger.handlers: h.flush()
+                    
+                    shared_reid_embedder = ReIDEmbedder(config)
+                    
+                    logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+                    for h in logger.handlers: h.flush()
+                except Exception as e:
+                    logger.error(f"[Worker {worker_id}] ReID pre-load failed: {e}", exc_info=True)
+                    shared_reid_embedder = None
+                    for h in logger.handlers: h.flush()
 
         except Exception as e:
             logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
@@ -312,7 +321,7 @@ def inference_worker(
                     
                     for vid, track in vis_tracks.items():
                         emb = track.get("embedding")
-                        if emb:
+                        if emb is not None:
                             global_id = local_reid_manager.match_only(np.array(emb))
                             if global_id:
                                 track["global_vehicle_id"] = global_id

@@ -7,6 +7,11 @@ runConfig:
   # cpu: 1
   # memoryMiB: 512
 
+healthCheck:
+  startupProbe:
+    httpGet:
+      path: /health/detailed
+
 # Environment variables and secrets.
 # env:
   # Configure environment variables.

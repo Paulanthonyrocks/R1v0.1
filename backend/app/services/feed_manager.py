@@ -932,16 +932,23 @@ class FeedManager:
             entry.get("is_looped_feed", False),
         )
 
+        logger.debug(f"Creating Ingestion process for {feed_id} with source {source}")
         process = Process(
             target=ingestion_worker,
             args=worker_args,
             daemon=True,
             name=f"Ingestion-{feed_id}",
         )
-        process.start()
-        entry["process"] = process
-        entry["start_time"] = time.time()
-        logger.info(f"Launched ingestion PID {process.pid} for '{feed_id}'")
+        
+        try:
+            logger.info(f"Starting ingestion process for {feed_id}...")
+            process.start()
+            entry["process"] = process
+            entry["start_time"] = time.time()
+            logger.info(f"Launched ingestion PID {process.pid} for '{feed_id}'")
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to start ingestion process for {feed_id}: {e}", exc_info=True)
+            raise
 
     def _detach_resources(self, feed_id: str) -> Optional[Dict[str, Any]]:
         """

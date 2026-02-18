@@ -229,6 +229,14 @@ async def lifespan(app: FastAPI):
             if psp_cfg.get("enabled", False):
                 sample_feeds = psp_cfg.get("sample_feeds", [])
                 if sample_feeds:
+                    # Resolve relative paths relative to BASE_DIR
+                    for sf in sample_feeds:
+                        p = sf.get("path") or sf.get("source")
+                        if p and not Path(p).is_absolute():
+                            resolved_p = str((BASE_DIR / p).resolve())
+                            if "path" in sf: sf["path"] = resolved_p
+                            if "source" in sf: sf["source"] = resolved_p
+                            
                     logger.info(f"Starting {len(sample_feeds)} sample feeds from config...")
                     create_background_task(fm.start_multiple_feeds(sample_feeds))
     except Exception as e:
@@ -236,37 +244,37 @@ async def lifespan(app: FastAPI):
         raise
 
     # 5. Optional Services
-    try:
-        # 5.1 Health Service
-        health_service = SystemHealthService(cfg_dict, fm, connection_manager)
-        health_service.start()
-        app.state.health_service = health_service
+    # try:
+    #     # 5.1 Health Service
+    #     health_service = SystemHealthService(cfg_dict, fm, connection_manager)
+    #     health_service.start()
+    #     app.state.health_service = health_service
         
-        # 5.2 File Watcher
-        fw_cfg = loaded_config.get("file_watcher", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "file_watcher", {})
-        if fw_cfg.get("enabled", False) if isinstance(fw_cfg, dict) else getattr(fw_cfg, "enabled", False):
-            watch_dir = Path(fw_cfg.get("watch_directory") if isinstance(fw_cfg, dict) else fw_cfg.watch_directory)
-            if not watch_dir.is_absolute(): watch_dir = BASE_DIR.parent / watch_dir
-            watch_dir.mkdir(parents=True, exist_ok=True)
+    #     # 5.2 File Watcher
+    #     fw_cfg = loaded_config.get("file_watcher", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "file_watcher", {})
+    #     if fw_cfg.get("enabled", False) if isinstance(fw_cfg, dict) else getattr(fw_cfg, "enabled", False):
+    #         watch_dir = Path(fw_cfg.get("watch_directory") if isinstance(fw_cfg, dict) else fw_cfg.watch_directory)
+    #         if not watch_dir.is_absolute(): watch_dir = BASE_DIR / watch_dir
+    #         watch_dir.mkdir(parents=True, exist_ok=True)
 
-            def on_new_video(p_str):
-                create_background_task(fm.add_and_start_feed(
-                    source=p_str, is_looped=True, name_hint=Path(p_str).name,
-                    latitude=34.05 + (random.random()-0.5)*0.01, 
-                    longitude=-118.24 + (random.random()-0.5)*0.01
-                ))
+    #         def on_new_video(p_str):
+    #             create_background_task(fm.add_and_start_feed(
+    #                 source=p_str, is_looped=True, name_hint=Path(p_str).name,
+    #                 latitude=34.05 + (random.random()-0.5)*0.01, 
+    #                 longitude=-118.24 + (random.random()-0.5)*0.01
+    #             ))
 
-            watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
-            watcher.start()
-            app.state.file_watcher = watcher
+    #         watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
+    #         watcher.start()
+    #         app.state.file_watcher = watcher
             
-            # Scan existing
-            for vf in watch_dir.glob("*"):
-                if vf.is_file() and watcher.event_handler._is_video_file(vf):
-                    on_new_video(str(vf))
+    #         # Scan existing
+    #         for vf in watch_dir.glob("*"):
+    #             if vf.is_file() and watcher.event_handler._is_video_file(vf):
+    #                 on_new_video(str(vf))
 
-    except Exception as e:
-        logger.error(f"Optional Services Failed: {e}")
+    # except Exception as e:
+    #     logger.error(f"Optional Services Failed: {e}")
 
     yield # --- App Running ---
 

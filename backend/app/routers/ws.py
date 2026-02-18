@@ -115,6 +115,14 @@ async def message_receiver(
                     )
                     await connection_manager.send_personal_message(response.model_dump_json(), client_id)
 
+                elif msg_type == WebSocketMessageTypeEnum.GET_USER_ROLE:
+                    role = connection_manager.get_user_role(client_id)
+                    response = WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.USER_ROLE,
+                        data={"role": role}
+                    )
+                    await connection_manager.send_personal_message(response.model_dump_json(), client_id)
+
                 elif msg_type in [
                     WebSocketMessageTypeEnum.START_FEED,
                     WebSocketMessageTypeEnum.STOP_FEED,

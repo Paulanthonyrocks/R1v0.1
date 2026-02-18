@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as T
 import numpy as np
+import sys
 from typing import List, Optional
 import logging
 
@@ -20,17 +21,74 @@ class ReIDEmbedder:
         self.embedding_dim = self.reid_cfg.get("embedding_dim", 128)
         
         logger.info(f"Initializing ReID Embedder ({self.backbone_name}) on {self.device}...")
+        for h in logger.handlers: h.flush()
         
+        # Helper to load backbone with timeout to prevent hang
+        def _load_backbone_safe(name, weights_enum, use_weights: bool):
+            import threading
+            result_container = {}
+            
+            def _load():
+                try:
+                    logger.info(f"Attempting to load {name} (weights={use_weights})...")
+                    for h in logger.handlers: h.flush()
+                    if name == "resnet50":
+                        w = weights_enum.DEFAULT if use_weights else None
+                        result_container['model'] = models.resnet50(weights=w)
+                    elif name == "mobilenet_v3_small":
+                        w = weights_enum.DEFAULT if use_weights else None
+                        result_container['model'] = models.mobilenet_v3_small(weights=w)
+                    logger.info(f"Thread: Loaded {name} successfully.")
+                    for h in logger.handlers: h.flush()
+                except Exception as e:
+                    logger.error(f"Thread: Error loading {name}: {e}")
+                    result_container['error'] = e
+
+            # Start loading in a thread
+            t = threading.Thread(target=_load, daemon=True)
+            t.start()
+            t.join(timeout=30) # 30s timeout for download/load
+            
+            if t.is_alive():
+                logger.error(f"Timeout loading {name} weights! Network might be blocked. Fallback to random weights.")
+                # We can't kill the thread, but we can return a fresh model with random weights
+                if name == "resnet50":
+                    return models.resnet50(weights=None)
+                elif name == "mobilenet_v3_small":
+                    return models.mobilenet_v3_small(weights=None)
+            
+            if 'error' in result_container:
+                logger.error(f"Error loading {name}: {result_container['error']}. Fallback to random weights.")
+                if name == "resnet50":
+                    return models.resnet50(weights=None)
+                elif name == "mobilenet_v3_small":
+                    return models.mobilenet_v3_small(weights=None)
+            
+            if 'model' in result_container:
+                logger.info(f"Successfully loaded {name}.")
+                for h in logger.handlers: h.flush()
+                return result_container['model']
+            
+            return None
+
         # Load backbone
+        use_pretrained = not self.reid_cfg.get("model_path")
+        
         if self.backbone_name == "resnet50":
-            self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT if not self.reid_cfg.get("model_path") else None)
+            self.backbone = _load_backbone_safe("resnet50", models.ResNet50_Weights, use_pretrained)
+            if self.backbone is None: # Should not happen with fallback
+                 self.backbone = models.resnet50(weights=None)
+            
             num_features = self.backbone.fc.in_features
             self.backbone.fc = nn.Sequential(
                 nn.Linear(num_features, self.embedding_dim),
                 nn.BatchNorm1d(self.embedding_dim)
             )
         elif self.backbone_name == "mobilenet_v3_small":
-            self.backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT if not self.reid_cfg.get("model_path") else None)
+            self.backbone = _load_backbone_safe("mobilenet_v3_small", models.MobileNet_V3_Small_Weights, use_pretrained)
+            if self.backbone is None:
+                 self.backbone = models.mobilenet_v3_small(weights=None)
+
             num_features = self.backbone.classifier[0].in_features
             self.backbone.classifier = nn.Sequential(
                 nn.Linear(num_features, self.embedding_dim),
@@ -52,6 +110,7 @@ class ReIDEmbedder:
                 project_root = Path(config.get("project_root_dir", ""))
                 full_weights_path = project_root / weights_path
                 if full_weights_path.exists():
+                    logger.info(f"Loading custom weights from {full_weights_path}...")
                     state_dict = torch.load(full_weights_path, map_location=self.device)
                     # Filter out 'classifier.' or 'embedding_head.' prefixes if they come from train_reid.py
                     # and map them to our backbone structure
@@ -72,16 +131,25 @@ class ReIDEmbedder:
             except Exception as e:
                 logger.error(f"Failed to load ReID weights: {e}")
         
+        logger.info(f"Moving backbone to device: {self.device}")
+        for h in logger.handlers: h.flush()
         self.backbone.to(self.device)
+        
+        logger.info("Setting backbone to eval mode")
+        for h in logger.handlers: h.flush()
         self.backbone.eval()
         
         # Standard ImageNet normalization for pre-trained models
+        logger.info("Creating transforms")
+        for h in logger.handlers: h.flush()
         self.transform = T.Compose([
             T.ToPILImage(),
             T.Resize(self.input_size),
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
+        logger.info("ReID Embedder initialization complete.")
+        for h in logger.handlers: h.flush()
 
     @torch.no_grad()
     def get_embedding(self, image: np.ndarray) -> Optional[np.ndarray]:
