@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 
 from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum, IncidentStatusEnum
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum
-from app.websocket.connection_manager import ConnectionManager, MessagePriority
+from app.websocket.connection_manager import ConnectionManager
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("app.services.incident_manager")
@@ -117,8 +117,7 @@ class IncidentManager:
             )
             await self._connection_manager.broadcast_to_topic(
                 message.model_dump_json(),
-                topic="incidents",
-                priority=MessagePriority.HIGH
+                topic="incidents"
             )
 
             # 6. External Notifications
@@ -147,7 +146,9 @@ class IncidentManager:
         user_id: str = "SYSTEM",
         notes: Optional[str] = None
     ) -> bool:
-        """Updates the status of an incident and logs the transition."""
+        """
+        Updates the status of an incident and logs the transition.
+        """
         try:
             existing = await self._db_manager.get_incident_by_id(incident_id)
             if not existing:
@@ -187,8 +188,7 @@ class IncidentManager:
                 )
                 await self._connection_manager.broadcast_to_topic(
                     message.model_dump_json(),
-                    topic="incidents",
-                    priority=MessagePriority.NORMAL
+                    topic="incidents"
                 )
                 return True
             return False

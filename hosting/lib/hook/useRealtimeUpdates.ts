@@ -95,8 +95,9 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
 
             if (isNowConnected) {
                 if (!hasRequestedInitialFeeds.current) {
-                    console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses.");
+                    console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses and subscribing to topics.");
                     client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
+                    client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'kpi' } });
                     hasRequestedInitialFeeds.current = true;
                 }
             } else {

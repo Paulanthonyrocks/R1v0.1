@@ -1,492 +1,215 @@
-from __future__ import annotations
 import asyncio
 import logging
-import time # Import time for timestamping
-from enum import IntEnum
-from typing import Dict, Optional, List, Set, Union
+import time
+from collections import defaultdict
+from typing import Dict, List, Set
+
 from fastapi import WebSocket
-from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, PingData # Import necessary models
+
+from app.models.user import User
+from app.models.feeds import FeedStatus, FeedStatusData
+from app.models.websocket import (FeedStatusUpdate, WebSocketMessage,
+                                  WebSocketMessageTypeEnum)
 
 logger = logging.getLogger(__name__)
 
-class MessagePriority(IntEnum):
-    CRITICAL = 0   # Auth, Errors
-    HIGH = 1       # Alerts, Incidents
-    NORMAL = 2     # KPI Updates, Status
-    LOW = 3        # Video Frames, Metrics
-
-class PrioritizedMessage:
-    def __init__(self, priority: MessagePriority, message: Union[str, bytes]):
-        self.priority = priority
-        self.message = message
-        self.timestamp = time.time()
-    
-    def __lt__(self, other):
-        # Higher priority (lower value) comes first
-        if self.priority != other.priority:
-            return self.priority < other.priority
-        # For same priority, use FIFO (earlier timestamp first)
-        return self.timestamp < other.timestamp
-
 class ConnectionManager:
-    _instance: Optional[ConnectionManager] = None
-
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super(ConnectionManager, cls).__new__(cls)
-        return cls._instance
-
-    def __init__(
-        self,
-        max_connections: int = 1000,
-        token_refresh_interval: int = 300,
-        ping_interval: int = 15,
-        pong_timeout: int = 60, # New: seconds to wait for a pong after a ping
-    ):
-        if hasattr(self, "_initialized") and self._initialized:
-            return
-        self._initialized = True
+    def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        self.client_id_to_user_id: Dict[str, str] = {}
-        self.client_id_to_user_role: Dict[str, str] = {} # New: Track user roles
-        self.user_id_to_client_ids: Dict[str, List[str]] = {}
-        self.topic_subscriptions: Dict[str, Set[str]] = {}
-        self.client_id_to_topics: Dict[str, Set[str]] = {}
-        self.feed_subscriptions: Dict[str, Set[str]] = {}
-        self.client_id_to_feeds: Dict[str, Set[str]] = {}
-        self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
-        self.client_latencies: Dict[str, float] = {}  # Track RTT for adaptive behavior
-        
-        # Output queues for backpressure management
-        self.client_queues: Dict[str, asyncio.Queue] = {}
-        self.client_tasks: Dict[str, asyncio.Task] = {}
-        
-        self.max_connections = max_connections
-        self.token_refresh_interval = token_refresh_interval
-        self.ping_interval = ping_interval
-        self.pong_timeout = pong_timeout # New: store pong timeout
-        self._shutdown_event = asyncio.Event()
+        self.client_user_map: Dict[str, str] = {}
+        self.user_client_map: Dict[str, Set[str]] = defaultdict(set)
+        self.client_pings: Dict[str, dict] = {}
+        self.topic_subscriptions: Dict[str, Set[str]] = defaultdict(set)
+        self.feed_subscriptions: Dict[str, Set[str]] = defaultdict(set)
+        self.client_roles: Dict[str, str] = {}
+        self.keepalive_task = None
+        self.last_ping_time = 0
 
-    async def init(
-        self,
-        max_connections: int,
-        token_refresh_interval: int,
-        ping_interval: int,
-        pong_timeout: int, # New: include pong_timeout in init
-    ):
-        # Update config even if already initialized
-        self.max_connections = max_connections
-        self.token_refresh_interval = token_refresh_interval
-        self.ping_interval = ping_interval
-        self.pong_timeout = pong_timeout # New: set pong_timeout
-        
-        # Only start ping task if not already running
-        if not hasattr(self, "_ping_task") or self._ping_task.done():
-            self._ping_task = asyncio.create_task(self._ping_clients())
-            
-        logger.info(
-            f"ConnectionManager initialized with max_connections={max_connections}, "
-            f"token_refresh_interval={token_refresh_interval}, ping_interval={ping_interval}, "
-            f"pong_timeout={pong_timeout}"
-        )
-
-    @classmethod
-    def get_instance(cls) -> "ConnectionManager":
-        if cls._instance is None:
-             # Fallback: create instance if accessed before explicit init (should rarely happen in strict flow)
-             cls._instance = ConnectionManager()
-        return cls._instance
-
-    async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user"):
-        if len(self.active_connections) >= self.max_connections:
-            logger.warning(
-                f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
-            )
-            await websocket.close(code=4000, reason="Connection limit exceeded")
-            return
-
-        # ... (Collision logic) ...
-        # Handle reconnection: Close existing connection if present
+    async def connect(self, websocket: WebSocket, client_id: str, user_id: str, role: str):
+        # Aggressively close existing connections with the same client_id to prevent zombies
         if client_id in self.active_connections:
-            logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
             old_ws = self.active_connections[client_id]
-            # Force disconnect the old socket structure
-            await self.disconnect(client_id, old_ws)
-            try:
-                # Ensure the old socket is actually closed
-                await old_ws.close(code=1000, reason="Reconnected")
-            except Exception:
-                pass
-
-        # websocket.accept() is now handled by the endpoint router before calling connect
-        self.active_connections[client_id] = websocket
-        self.client_id_to_user_id[client_id] = user_id
-        self.client_id_to_user_role[client_id] = user_role # Store role
-
-        if user_id not in self.user_id_to_client_ids:
-            self.user_id_to_client_ids[user_id] = []
-        
-        if client_id not in self.user_id_to_client_ids[user_id]:
-            self.user_id_to_client_ids[user_id].append(client_id)
-            
-        self.client_id_to_topics.setdefault(client_id, set())
-        self.client_id_to_feeds.setdefault(client_id, set())
-        self.last_pong_received_time[client_id] = time.time() # Initialize on connect
-
-        # Initialize sender queue and task with adaptive sizing and priority
-        queue_size = self._calculate_queue_size(client_id)
-        # Use PriorityQueue to allow alerts to bypass video frames
-        self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=queue_size + 10) # Buffering for priority shifts
-        self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
-
-        logger.info(
-            f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
-            f"Total connections: {len(self.active_connections)}"
-        )
-
-    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None):
-        if client_id in self.active_connections:
-            # Prevent removing a NEW connection if the OLD one is disconnecting
-            if websocket and self.active_connections[client_id] != websocket:
-                logger.info(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
-                return
-
-            # 1. Handle Task Cancellation (Safely)
-            task = self.client_tasks.pop(client_id, None)
-            if task:
-                if task != asyncio.current_task():
-                    task.cancel()
-                    try:
-                        # Awaiting task might yield control
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                else:
-                    logger.debug(f"Task {client_id} disconnecting itself. Skipping cancel/await.")
-            
-            # 2. Remove queue (Idempotent)
-            self.client_queues.pop(client_id, None)
-
-            # 3. Remove from active connections (Idempotent)
-            # Check again because control might have been yielded during task await
-            if client_id not in self.active_connections:
-                return
-                
-            if websocket and self.active_connections[client_id] != websocket:
-                return
-
-            del self.active_connections[client_id]
-            self.client_id_to_user_role.pop(client_id, None) # Remove role
-            self.last_pong_received_time.pop(client_id, None)
-            self.client_latencies.pop(client_id, None)  # Clean up latency tracking
-            
-            user_id = self.client_id_to_user_id.pop(client_id, None)
-
-            if user_id and user_id in self.user_id_to_client_ids:
-                if client_id in self.user_id_to_client_ids[user_id]:
-                    self.user_id_to_client_ids[user_id].remove(client_id)
-                if not self.user_id_to_client_ids[user_id]:
-                    del self.user_id_to_client_ids[user_id]
-            
-            # 4. Clean up subscriptions (Check presence before iterating)
-            topics_set = self.client_id_to_topics.pop(client_id, None)
-            if topics_set:
-                for topic in list(topics_set):
-                    await self.unsubscribe_from_topic(client_id, topic)
-
-            feeds_set = self.client_id_to_feeds.pop(client_id, None)
-            if feeds_set:
-                for feed_id in list(feeds_set):
-                    await self.unsubscribe_from_feed(client_id, feed_id)
-
-            logger.info(
-                f"WebSocket connection closed: client_id={client_id}. "
-                f"Total connections: {len(self.active_connections)}"
-            )
-
-    async def _client_sender(self, client_id: str, websocket: WebSocket):
-        """Background task to send prioritized messages from queue to websocket."""
-        queue = self.client_queues.get(client_id)
-        if not queue:
-            return
-
-        try:
-            while True:
-                # PriorityQueue returns the highest priority (lowest value) item
-                prioritized_msg = await queue.get()
-                message = prioritized_msg.message
-                
+            if old_ws != websocket:
+                logger.info(f"Closing existing connection for client {client_id} to prevent zombies.")
                 try:
-                    # Use a timeout for the actual socket send to detect dead sockets faster
-                    if isinstance(message, bytes):
-                        await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
-                    else:
-                        await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
-                    queue.task_done()
-                except (asyncio.TimeoutError, Exception) as e:
-                    logger.warning(f"Error sending to {client_id}: {e}. Disconnecting.")
-                    await self.disconnect(client_id, websocket)
-                    break
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Unexpected error in sender task for {client_id}: {e}")
-
-    def _calculate_queue_size(self, client_id: str) -> int:
-        """Calculate adaptive queue size based on client latency."""
-        base_queue_size = 5
-        latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
-        
-        # Higher latency = larger queue to buffer more frames
-        if latency_ms > 200:
-            return 10
-        elif latency_ms > 100:
-            return 7
-        else:
-            return base_queue_size
-    
-    def update_client_latency(self, client_id: str, rtt_ms: float):
-        """Update tracked latency for adaptive behavior."""
-        if client_id in self.active_connections:
-            self.client_latencies[client_id] = rtt_ms
-            logger.debug(f"Updated latency for client {client_id}: {rtt_ms}ms")
-    
-    def record_pong(self, client_id: str, rtt_ms: Optional[float] = None):
-        """Record the time a PONG was received from a client."""
-        if client_id in self.active_connections:
-            self.last_pong_received_time[client_id] = time.time()
-            if rtt_ms is not None:
-                self.update_client_latency(client_id, rtt_ms)
-            logger.debug(f"Recorded PONG for client {client_id}")
-
-    async def send_personal_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.NORMAL):
-        """
-        Send a message reliably (waits for queue space). 
-        Use this for control messages (config updates, status changes).
-        """
-        if client_id in self.client_queues:
-            try:
-                # Wrap in prioritized object
-                wrapped_msg = PrioritizedMessage(priority, message)
-                # Wait for slot in queue with timeout to avoid blocking forever
-                await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=0.5)
-            except asyncio.TimeoutError:
-                 logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) to avoid blocking.")
-            except Exception as e:
-                 logger.error(f"Failed to enqueue message for {client_id}: {e}")
-
-    async def send_realtime_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.LOW):
-        """
-        Send a message with 'fire-and-forget' logic.
-        Use this for high-frequency data (video frames).
-        Drops the message if the client is slow (queue full).
-        """
-        if client_id in self.client_queues:
-            try:
-                wrapped_msg = PrioritizedMessage(priority, message)
-                self.client_queues[client_id].put_nowait(wrapped_msg)
-            except asyncio.QueueFull:
-                # Queue is full, drop frame to prevent backing up backend
-                pass 
-            except Exception as e:
-                logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
-
-    async def broadcast(self, message: str, priority: MessagePriority = MessagePriority.NORMAL):
-        """Broadcast reliable message to all with specific priority."""
-        # Iterate over a copy to allow modification (disconnection) during iteration
-        for client_id in list(self.active_connections.keys()):
-            await self.send_personal_message(message, client_id, priority=priority)
-
-    async def broadcast_realtime(self, message: str, priority: MessagePriority = MessagePriority.LOW):
-        """Broadcast fire-and-forget message to all with specific priority."""
-        tasks = []
-        for client_id in list(self.active_connections.keys()):
-            tasks.append(self.send_realtime_message(message, client_id, priority=priority))
-        if tasks:
-            await asyncio.gather(*tasks)
-
-    async def broadcast_realtime_bytes(self, data: bytes):
-        """Broadcast fire-and-forget binary message to all (Msgpack) with LOW priority."""
-        for client_id in list(self.active_connections.keys()):
-            if client_id in self.client_queues:
-                try:
-                    wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
-                    self.client_queues[client_id].put_nowait(wrapped_msg)
-                except asyncio.QueueFull:
-                    pass
+                    await old_ws.close(code=1000, reason="New connection established with same ID")
                 except Exception as e:
-                    logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
+                    logger.debug(f"Error closing old WebSocket for {client_id}: {e}")
 
-    async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
-        """
-        Broadcast binary frame to subscribers with Graceful Degradation.
-        Skips frames if client queue is heavily backlogged.
-        """
-        subscribed_clients = self.get_clients_for_feed(feed_id)
-        if not subscribed_clients:
+        self.active_connections[client_id] = websocket
+        self.client_user_map[client_id] = user_id
+        self.user_client_map[user_id].add(client_id)
+        self.client_roles[client_id] = role
+        self.client_pings[client_id] = {"last_pong": time.time(), "rtt": None, "missed_pings": 0}
+        logger.info(f"Client {client_id} (user: {user_id}, role: {role}) connected from {websocket.client.host}")
+
+    async def disconnect(self, client_id: str, websocket: WebSocket = None):
+        # Identity-aware disconnect: only clean up if this is the active connection
+        if websocket and self.active_connections.get(client_id) != websocket:
+            logger.info(f"Ignoring disconnect for client {client_id} as it is not the active connection.")
             return
 
-        for client_id in subscribed_clients:
-            if client_id not in self.client_queues:
-                continue
+        logger.info(f"Disconnecting and cleaning up client {client_id}")
+        
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
 
-            # Graceful Degradation: Frame Skipping
-            queue = self.client_queues[client_id]
-            q_size = queue.qsize()
-            q_max = queue.maxsize
-            
-            # Simple skip logic: if 75% full, skip 1/2. if 90% full, skip 2/3.
-            skip_threshold = 0.0
-            if q_size >= q_max * 0.9:
-                skip_threshold = 0.67 # Skip 2 out of 3
-            elif q_size >= q_max * 0.75:
-                skip_threshold = 0.5  # Skip every other
-                
-            if skip_threshold > 0:
-                # Use frame_index to ensure deterministic skipping across connections if needed,
-                # or just use random for simplicity per-client.
-                if (frame_index % int(1/(1-skip_threshold))) != 0:
-                    continue
+        user_id = self.client_user_map.pop(client_id, None)
+        if user_id and user_id in self.user_client_map:
+            self.user_client_map[user_id].discard(client_id)
+            if not self.user_client_map[user_id]:
+                del self.user_client_map[user_id]
 
+        self.client_pings.pop(client_id, None)
+        self.client_roles.pop(client_id, None)
+
+        # Optimize subscription cleanup: remove keys if sets are empty
+        for topic in list(self.topic_subscriptions.keys()):
+            self.topic_subscriptions[topic].discard(client_id)
+            if not self.topic_subscriptions[topic]:
+                del self.topic_subscriptions[topic]
+
+        for feed_id in list(self.feed_subscriptions.keys()):
+            self.feed_subscriptions[feed_id].discard(client_id)
+            if not self.feed_subscriptions[feed_id]:
+                del self.feed_subscriptions[feed_id]
+
+        # Close the WebSocket connection if it's still open and we are the owner
+        if websocket and websocket.client_state.name == 'CONNECTED':
             try:
-                wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
-                self.client_queues[client_id].put_nowait(wrapped_msg)
-            except asyncio.QueueFull:
-                pass 
-            except Exception as e:
-                logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
-
-    async def send_to_user(self, user_id: str, message: str):
-        client_ids = self.user_id_to_client_ids.get(user_id, [])
-        for client_id in list(client_ids): 
-            await self.send_personal_message(message, client_id)
+                await websocket.close()
+                logger.info(f"Successfully closed WebSocket for client {client_id}")
+            except RuntimeError as e:
+                logger.warning(f"Error closing WebSocket for {client_id}: {e}")
+        
+        logger.info(f"Client {client_id} cleanup complete.")
+        
+    def get_user_role(self, client_id: str) -> str:
+        return self.client_roles.get(client_id, "user")
 
     async def subscribe_to_topic(self, client_id: str, topic: str):
-        if client_id not in self.active_connections:
-            return
-
-        if topic not in self.topic_subscriptions:
-            self.topic_subscriptions[topic] = set()
         self.topic_subscriptions[topic].add(client_id)
-        self.client_id_to_topics.setdefault(client_id, set()).add(topic)
         logger.info(f"Client {client_id} subscribed to topic: {topic}")
 
+    async def unsubscribe_from_topic(self, client_id: str, topic: str):
+        if topic in self.topic_subscriptions:
+            self.topic_subscriptions[topic].discard(client_id)
+            logger.info(f"Client {client_id} unsubscribed from topic: {topic}")
+
     async def subscribe_to_feed(self, client_id: str, feed_id: str):
-        if feed_id not in self.feed_subscriptions:
-            self.feed_subscriptions[feed_id] = set()
         self.feed_subscriptions[feed_id].add(client_id)
-        self.client_id_to_feeds.setdefault(client_id, set()).add(feed_id)
         logger.info(f"Client {client_id} subscribed to feed: {feed_id}")
 
     async def unsubscribe_from_feed(self, client_id: str, feed_id: str):
-        if feed_id in self.feed_subscriptions and client_id in self.feed_subscriptions[feed_id]:
-            self.feed_subscriptions[feed_id].remove(client_id)
-            if not self.feed_subscriptions[feed_id]:
-                del self.feed_subscriptions[feed_id]
+        if feed_id in self.feed_subscriptions:
+            self.feed_subscriptions[feed_id].discard(client_id)
             logger.info(f"Client {client_id} unsubscribed from feed: {feed_id}")
-        
-        if client_id in self.client_id_to_feeds and feed_id in self.client_id_to_feeds[client_id]:
-            self.client_id_to_feeds[client_id].remove(feed_id)
-            if not self.client_id_to_feeds[client_id]:
-                del self.client_id_to_feeds[client_id]
 
-    def get_clients_for_feed(self, feed_id: str) -> List[str]:
-        return list(self.feed_subscriptions.get(feed_id, set()))
-
-    def get_user_role(self, client_id: str) -> str:
-        """Get the role of a connected client."""
-        return self.client_id_to_user_role.get(client_id, "user")
-
-    async def unsubscribe_from_topic(self, client_id: str, topic: str):
-        if topic in self.topic_subscriptions and client_id in self.topic_subscriptions[topic]:
-            self.topic_subscriptions[topic].remove(client_id)
-            if not self.topic_subscriptions[topic]:
-                del self.topic_subscriptions[topic]
-            logger.info(f"Client {client_id} unsubscribed from topic: {topic}")
-        
-        if client_id in self.client_id_to_topics and topic in self.client_id_to_topics[client_id]:
-            self.client_id_to_topics[client_id].remove(topic)
-            if not self.client_id_to_topics[client_id]:
-                del self.client_id_to_topics[client_id]
-
-    async def broadcast_to_topic(self, message: str, topic: str, priority: MessagePriority = MessagePriority.NORMAL):
-        if topic in self.topic_subscriptions:
-            for client_id in list(self.topic_subscriptions[topic]):
-                await self.send_personal_message(message, client_id, priority=priority)
-
-    async def _ping_clients(self):
-        logger.info("Ping task started.")
-        while not self._shutdown_event.is_set():
+    async def send_personal_message(self, message: str, client_id: str):
+        if client_id in self.active_connections:
             try:
-                current_time = time.time()
-                # Create a reusable PING message with timestamp for RTT calculation
-                # Generating unique correlation_id per broadcast cycle (or per client if preferred)
-                # For now, one per cycle is enough to detect system-wide lag
-                common_correlation_id = str(int(current_time * 1000))
-                
-                ping_message_obj = WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.PING,
-                    timestamp=current_time * 1000,
-                    correlation_id=common_correlation_id,
-                    data=PingData().model_dump()
-                )
-                ping_message_json = ping_message_obj.model_dump_json()
+                # Add a small timeout to avoid blocking the entire broadcast for one slow client
+                await asyncio.wait_for(self.active_connections[client_id].send_text(message), timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout sending message to {client_id}")
+            except Exception as e:
+                logger.error(f"Failed to send message to {client_id}: {e}")
+        else:
+            logger.warning(f"Attempted to send message to disconnected client {client_id}")
 
-                clients_to_disconnect = []
+    async def send_personal_bytes(self, message: bytes, client_id: str):
+        if client_id in self.active_connections:
+            websocket = self.active_connections[client_id]
+            if websocket.client_state.name == 'CONNECTED':
+                try:
+                    # Add a small timeout to avoid blocking the entire broadcast for one slow client
+                    await asyncio.wait_for(websocket.send_bytes(message), timeout=1.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout sending bytes to client {client_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send bytes to client {client_id}: {e}")
 
-                if not self.active_connections:
+    async def broadcast(self, message: str):
+        client_ids = list(self.active_connections.keys())
+        tasks = [self.send_personal_message(message, client_id) for client_id in client_ids]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def broadcast_to_topic(self, message: str, topic: str):
+        if topic in self.topic_subscriptions:
+            client_ids = list(self.topic_subscriptions[topic])
+            for client_id in client_ids:
+                await self.send_personal_message(message, client_id)
+
+    async def broadcast_to_feed(self, message: str, feed_id: str):
+        if feed_id in self.feed_subscriptions:
+            client_ids = list(self.feed_subscriptions[feed_id])
+            for client_id in client_ids:
+                await self.send_personal_message(message, client_id)
+    
+    async def broadcast_bytes_to_feed(self, feed_id: str, message: bytes):
+        if feed_id in self.feed_subscriptions:
+            client_ids = list(self.feed_subscriptions[feed_id])
+            if client_ids:
+                tasks = [self.send_personal_bytes(message, client_id) for client_id in client_ids]
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def broadcast_status_update(self, feed_id: str, status: FeedStatus):
+        status_data = FeedStatusData(feed_id=feed_id, status=status)
+        message = WebSocketMessage(
+            type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
+            data=FeedStatusUpdate(feed_status_data=status_data)
+        )
+        await self.broadcast_to_feed(message.model_dump_json(), feed_id)
+        # Also send to the general 'feed_statuses' topic for overview listeners
+        await self.broadcast_to_topic(message.model_dump_json(), "feed_statuses")
+
+    def record_pong(self, client_id: str, rtt_ms: float | None = None):
+        if client_id in self.client_pings:
+            self.client_pings[client_id]["last_pong"] = time.time()
+            self.client_pings[client_id]["missed_pings"] = 0
+            if rtt_ms is not None:
+                self.client_pings[client_id]["rtt"] = rtt_ms
+            logger.debug(f"PONG received from {client_id}. RTT: {rtt_ms}ms")
+
+    async def _keepalive_check(self, ping_interval: int = 10, timeout: int = 30):
+        while True:
+            await asyncio.sleep(ping_interval)
+            
+            # Use a copy of client_ids to avoid issues with disconnections during iteration
+            client_ids = list(self.active_connections.keys())
+            now = time.time()
+            self.last_ping_time = now
+
+            for client_id in client_ids:
+                # If connection has been removed, skip.
+                if client_id not in self.client_pings:
                     continue
 
-                for client_id, connection in list(self.active_connections.items()):
-                    if connection.client_state == 2: # WebSocketState.DISCONNECTED
-                        clients_to_disconnect.append(client_id)
-                        continue
-
-                    # Check if PONG was received within timeout
-                    last_pong_time = self.last_pong_received_time.get(client_id, 0)
-                    if current_time - last_pong_time > self.pong_timeout + self.ping_interval: 
-                        logger.warning(f"Client {client_id} timed out (no PONG received). Last pong: {last_pong_time}, Now: {current_time}. Disconnecting.")
-                        clients_to_disconnect.append(client_id)
-                        continue
-
-                    # Send PING via reliable queue
-                    await self.send_personal_message(ping_message_json, client_id)
+                stats = self.client_pings[client_id]
+                if now - stats["last_pong"] > timeout:
+                    logger.warning(f"Client {client_id} timed out. Last pong was {now - stats['last_pong']:.2f}s ago.")
+                    # Grab the WebSocket object before calling disconnect
+                    websocket = self.active_connections.get(client_id)
+                    await self.disconnect(client_id, websocket)
+                    continue
                 
-                for client_id in clients_to_disconnect:
-                    await self.disconnect(client_id)
+                # Send PING with a unique ID for RTT calculation
+                correlation_id = f"ping-{client_id}-{int(now * 1000)}"
+                ping_message = WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.PING,
+                    correlation_id=correlation_id,
+                    data={"timestamp": now * 1000}
+                ).model_dump_json()
 
-            except asyncio.CancelledError:
-                logger.info("Ping task cancelled.")
-                break
-            except Exception as e:
-                logger.error(f"Error in ping task: {e}", exc_info=True)
+                await self.send_personal_message(ping_message, client_id)
 
-    async def shutdown(self):
-        logger.info("Shutting down ConnectionManager...")
-        self._shutdown_event.set()
-        
-        # Cancel all sender tasks
-        tasks = list(self.client_tasks.values())
-        for task in tasks:
-            task.cancel()
-        
-        if tasks:
-            # Wait for all tasks to cancel to avoid "Task destroyed but pending"
-            await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for ws in self.active_connections.values():
-            try:
-                await ws.close()
-            except Exception:
-                pass
-                
-        self.active_connections.clear()
-        self.client_queues.clear()
-        self.client_tasks.clear()
-        self.client_id_to_user_id.clear()
-        self.user_id_to_client_ids.clear()
-        self.topic_subscriptions.clear()
-        self.client_id_to_topics.clear()
-        self.last_pong_received_time.clear() # New: Clear pong tracking on shutdown
-        self.client_latencies.clear()  # Clear latency tracking
-        logger.info("All WebSocket connections closed.")
+    def start_keepalive(self, ping_interval: int = 10, timeout: int = 30):
+        if self.keepalive_task is None:
+            self.keepalive_task = asyncio.create_task(self._keepalive_check(ping_interval, timeout))
+            logger.info("Keepalive check task started.")
+
+    def stop_keepalive(self):
+        if self.keepalive_task:
+            self.keepalive_task.cancel()
+            self.keepalive_task = None
+            logger.info("Keepalive check task stopped.")

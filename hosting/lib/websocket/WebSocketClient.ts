@@ -373,10 +373,9 @@ export class WebSocketClient implements IWebSocketClient {
                 const url = new URL(this.url);
 
                 if (clientId) {
-                    // Safely join path segments
-                    url.pathname = [url.pathname.replace(/\/$/, ''), clientId]
-                        .filter(Boolean)
-                        .join('/');
+                    // Ensure the path starts with /api/v1/ws and ends with the clientId
+                    const pathParts = ['api', 'v1', 'ws', clientId].filter(Boolean);
+                    url.pathname = '/' + pathParts.join('/');
                 }
 
                 url.searchParams.set('token', token as string);

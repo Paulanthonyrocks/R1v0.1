@@ -185,13 +185,26 @@ class AnalyticsService:
         # Extract latitude, longitude, and timestamp from metrics
         latitude = metrics.get("latitude")
         longitude = metrics.get("longitude")
-        timestamp = metrics.get(
-            "timestamp", time.time()
-        )
+        
+        # Ensure timestamp is a datetime object for internal use (DataCache)
+        raw_timestamp = metrics.get("timestamp")
+        if raw_timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        elif isinstance(raw_timestamp, (int, float)):
+            timestamp = datetime.fromtimestamp(raw_timestamp, tz=timezone.utc)
+        elif isinstance(raw_timestamp, datetime):
+            timestamp = raw_timestamp
+        else:
+            try:
+                # Try to parse string if it's one
+                timestamp = pd.to_datetime(raw_timestamp)
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+            except:
+                timestamp = datetime.now(timezone.utc)
 
         # Handle Anomalies
         anomalies = metrics.get("anomalies", [])
-        now = time.time()
         for anomaly in anomalies:
             # Trigger Incident/Alert based on anomaly
             severity_map = {
@@ -214,7 +227,9 @@ class AnalyticsService:
 
         # Safety Monitor Checks
         if vehicles and self._safety_monitor:
-            alerts = self._safety_monitor.update(feed_id, vehicles, timestamp)
+            # SafetyMonitor expects float timestamp for internal calculations
+            safety_timestamp = timestamp.timestamp()
+            alerts = self._safety_monitor.update(feed_id, vehicles, safety_timestamp)
             for alert in alerts:
                 # Convert Safety Alert to Incident
                 inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH

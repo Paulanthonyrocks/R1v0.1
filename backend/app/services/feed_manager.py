@@ -18,7 +18,7 @@ from multiprocessing import (
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import queue  # For queue.Empty exception
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Import custom exceptions
 from app.services.exceptions import FeedNotFoundError, FeedOperationError, ResourceLimitError
@@ -1121,9 +1121,11 @@ class FeedManager:
                         
                         if now - last_broadcast >= min_interval:
                             # Only spawn if previous task for this feed finished (Backpressure)
-                                    entry["last_broadcast_time"] = now
-                                    task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
-                                    self._active_broadcast_tasks[feed_id] = task
+                            prev_task = self._active_broadcast_tasks.get(feed_id)
+                            if prev_task is None or prev_task.done():
+                                entry["last_broadcast_time"] = now
+                                task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                                self._active_broadcast_tasks[feed_id] = task
 
                         # Analytics hook
                         if self._analytics_service:
@@ -1266,13 +1268,14 @@ class FeedManager:
                     return float(obj)
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
+                if isinstance(obj, timedelta):
+                    return obj.total_seconds() 
                 return str(obj)
 
             msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
             
             # 5. Targeted Binary Delivery (Only to subscribers of this feed)
-            # Pass frame_idx for deterministic frame skipping in ConnectionManager
-            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
+            await self._connection_manager.broadcast_bytes_to_feed(feed_id, msg_bytes)
             
         except Exception as e:
             logger.error(f"Binary broadcast error for {feed_id}: {e}")
@@ -1491,9 +1494,7 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.KPI_UPDATE,
             data=kpi_data.model_dump()
         )
-        # Use NORMAL priority for KPIs to ensure they bypass high-volume video frames
-        from app.websocket.connection_manager import MessagePriority
-        await self._connection_manager.broadcast_realtime(message.model_dump_json(), priority=MessagePriority.NORMAL)
+        await self._connection_manager.broadcast_to_topic(message.model_dump_json(), "kpi")
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:

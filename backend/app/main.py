@@ -196,13 +196,11 @@ async def lifespan(app: FastAPI):
     try:
         connection_manager = await container.get_connection_manager()
         
-        # Initialize connection manager with config values
+        # Start the keepalive task for the connection manager
         ws_cfg = cfg_dict.get("websocket", {})
-        await connection_manager.init(
-            max_connections=ws_cfg.get("max_connections", 1000),
-            token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
+        connection_manager.start_keepalive(
             ping_interval=ws_cfg.get("ping_interval", 15),
-            pong_timeout=ws_cfg.get("pong_timeout", 60)
+            timeout=ws_cfg.get("pong_timeout", 60)
         )
         
         app.state.connection_manager = connection_manager
@@ -239,42 +237,51 @@ async def lifespan(app: FastAPI):
                             
                     logger.info(f"Starting {len(sample_feeds)} sample feeds from config...")
                     create_background_task(fm.start_multiple_feeds(sample_feeds))
+            
+            # File Watcher Initialization
+            fw_cfg = cfg_dict.get("file_watcher", {})
+            if fw_cfg.get("enabled", False):
+                watch_dir = fw_cfg.get("watch_directory", "data/new_sample_videos")
+                # Resolve relative path
+                watch_path = Path(watch_dir)
+                if not watch_path.is_absolute():
+                    watch_path = (BASE_DIR / watch_dir).resolve()
+                
+                # Ensure directory exists
+                watch_path.mkdir(parents=True, exist_ok=True)
+                
+                def on_new_video(file_path):
+                    logger.info(f"FileWatcher: Adding new video feed: {file_path}")
+                    # Use a background task for the async call
+                    create_background_task(fm.add_and_start_feed(
+                        source=str(file_path),
+                        latitude=None,
+                        longitude=None,
+                        is_looped=True
+                    ))
+
+                watcher = FileSystemWatcher(str(watch_path), on_new_video)
+                watcher.start()
+                app.state.file_watcher = watcher
+                logger.info(f"FileSystemWatcher started on {watch_path}")
+
+                # [NEW] Also check for existing videos in that directory on startup
+                for ext in ['.mp4', '.avi', '.mov', '.mkv']:
+                    for existing_file in watch_path.glob(f"*{ext}"):
+                        # Avoid double-adding if already in sample_feeds (simple path check)
+                        # fm.add_and_start_feed handles duplicate sources internally, but we can be polite
+                        logger.info(f"Found existing video in watch directory: {existing_file}")
+                        create_background_task(fm.add_and_start_feed(
+                            source=str(existing_file),
+                            latitude=None,
+                            longitude=None,
+                            is_looped=True
+                        ))
+            else:
+                app.state.file_watcher = None
     except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
-
-    # 5. Optional Services
-    # try:
-    #     # 5.1 Health Service
-    #     health_service = SystemHealthService(cfg_dict, fm, connection_manager)
-    #     health_service.start()
-    #     app.state.health_service = health_service
-        
-    #     # 5.2 File Watcher
-    #     fw_cfg = loaded_config.get("file_watcher", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "file_watcher", {})
-    #     if fw_cfg.get("enabled", False) if isinstance(fw_cfg, dict) else getattr(fw_cfg, "enabled", False):
-    #         watch_dir = Path(fw_cfg.get("watch_directory") if isinstance(fw_cfg, dict) else fw_cfg.watch_directory)
-    #         if not watch_dir.is_absolute(): watch_dir = BASE_DIR / watch_dir
-    #         watch_dir.mkdir(parents=True, exist_ok=True)
-
-    #         def on_new_video(p_str):
-    #             create_background_task(fm.add_and_start_feed(
-    #                 source=p_str, is_looped=True, name_hint=Path(p_str).name,
-    #                 latitude=34.05 + (random.random()-0.5)*0.01, 
-    #                 longitude=-118.24 + (random.random()-0.5)*0.01
-    #             ))
-
-    #         watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
-    #         watcher.start()
-    #         app.state.file_watcher = watcher
-            
-    #         # Scan existing
-    #         for vf in watch_dir.glob("*"):
-    #             if vf.is_file() and watcher.event_handler._is_video_file(vf):
-    #                 on_new_video(str(vf))
-
-    # except Exception as e:
-    #     logger.error(f"Optional Services Failed: {e}")
 
     yield # --- App Running ---
 
@@ -289,7 +296,19 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*background_tasks, return_exceptions=True)
 
     await shutdown_services()
-    if hasattr(app.state, "connection_manager"): await app.state.connection_manager.shutdown()
+    
+    # Custom shutdown for ConnectionManager
+    if hasattr(app.state, "connection_manager"):
+        cm = app.state.connection_manager
+        cm.stop_keepalive()
+        client_ids = list(cm.active_connections.keys())
+        if client_ids:
+            logger.info(f"Shutting down {len(client_ids)} active WebSocket connections.")
+            # Create disconnect tasks
+            tasks = [cm.disconnect(client_id, cm.active_connections.get(client_id)) for client_id in client_ids]
+            # Run tasks concurrently
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     await close_database()
     
     remaining = multiprocessing.active_children()

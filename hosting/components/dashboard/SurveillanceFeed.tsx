@@ -100,12 +100,49 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return;
 
-        const rect = canvasRef.current.getBoundingClientRect();
-        const xNormalized = (e.clientX - rect.left) / rect.width;
-        const yNormalized = (e.clientY - rect.top) / rect.height;
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+
+        // Get intrinsic dimensions of the video content
+        const contentWidth = canvas.width;
+        const contentHeight = canvas.height;
+
+        if (contentWidth === 0 || contentHeight === 0) return;
+
+        // Get displayed dimensions of the canvas element
+        const containerWidth = rect.width;
+        const containerHeight = rect.height;
+
+        const contentRatio = contentWidth / contentHeight;
+        const containerRatio = containerWidth / containerHeight;
+
+        let actualWidth, actualHeight, offsetX, offsetY;
+
+        // Calculate the actual dimensions and offsets of the "contained" video
+        if (containerRatio > contentRatio) {
+            // Pillarbox (black bars on left/right)
+            actualHeight = containerHeight;
+            actualWidth = containerHeight * contentRatio;
+            offsetX = (containerWidth - actualWidth) / 2;
+            offsetY = 0;
+        } else {
+            // Letterbox (black bars on top/bottom)
+            actualWidth = containerWidth;
+            actualHeight = containerWidth / contentRatio;
+            offsetX = 0;
+            offsetY = (containerHeight - actualHeight) / 2;
+        }
+
+        // Calculate normalized coordinates relative to the actual video content
+        const xNormalized = (e.clientX - rect.left - offsetX) / actualWidth;
+        const yNormalized = (e.clientY - rect.top - offsetY) / actualHeight;
+
+        // Clamp to [0, 1] to ensure we stay within video bounds
+        const xClamped = Math.max(0, Math.min(1, xNormalized));
+        const yClamped = Math.max(0, Math.min(1, yNormalized));
 
         if (roiMode) {
-            const point = { x: xNormalized, y: yNormalized };
+            const point = { x: xClamped, y: yClamped };
             if (roiMode === 'roi') {
                 const newPoints = [...roiPoints, point];
                 setRoiPoints(newPoints);
@@ -117,8 +154,8 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         }
 
         // Vehicle Selection Logic (only if not in ROI mode)
-        const frameX = xNormalized * canvasRef.current.width;
-        const frameY = yNormalized * canvasRef.current.height;
+        const frameX = xClamped * contentWidth;
+        const frameY = yClamped * contentHeight;
 
         // Find vehicle under cursor
         const clickedVehicle = vehicles?.find(v => {
