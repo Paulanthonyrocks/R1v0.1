@@ -19,7 +19,7 @@ class TrackingManager:
         self.proximity_threshold = tracking_cfg.get("proximity_threshold", 150)
         self.track_timeout = tracking_cfg.get("track_timeout", 30)
         self.dynamic_matching_threshold = tracking_cfg.get("dynamic_matching_threshold", 0.7)
-        self.appearance_weight = tracking_cfg.get("appearance_weight", 0.5)
+        self.appearance_weight = tracking_cfg.get("appearance_weight") or 0.5
         self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
         self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
         self.use_appearance_in_tracking = tracking_cfg.get("use_appearance_in_tracking", True)
@@ -163,7 +163,7 @@ class TrackingManager:
                     if giou > -0.5 or dist < 150: # Gate
                         motion_cost = 1.0 - giou
                         reid_cost = 0.0
-                        if use_reid and det_emb is not None and "embedding" in track:
+                        if use_reid and det_emb is not None and track.get("embedding") is not None:
                             reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight
                         
                         costs[d, t] = motion_cost + reid_cost
@@ -172,6 +172,19 @@ class TrackingManager:
     def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
         track["bbox"] = bbox
+        
+        # Update embedding with EMA if available
+        if emb is not None:
+            if track.get("embedding") is None:
+                track["embedding"] = emb
+            else:
+                # EMA update
+                alpha = 0.1
+                track["embedding"] = alpha * emb + (1 - alpha) * track["embedding"]
+                # Re-normalize
+                norm = np.linalg.norm(track["embedding"])
+                if norm > 0:
+                    track["embedding"] /= norm
         
         # --- Velocity Bootstrapping ---
         # If track is young (<= 5 frames), boost velocity estimate using simple displacement

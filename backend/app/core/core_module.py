@@ -70,6 +70,7 @@ class CoreModule:
         self.proximity_threshold = v_cfg.get("proximity_threshold", 60)
         self.predict_timeout = v_cfg.get("predict_timeout", 0.4)
         self.max_active_tracks = v_cfg.get("max_active_tracks", 50)
+        self.reid_interval = v_cfg.get("reid_interval_frames", 30)
 
         # 3. Modular Engines Init
         self.device = self._check_gpu_availability()
@@ -208,14 +209,53 @@ class CoreModule:
         
         # 3. Enrichment (ReID Embeddings)
         enriched_detections = []
-        for bbox, cls, dconf in detections:
-            emb = None
-            if self.reid_embedder:
+        
+        should_run_reid = (
+            self.reid_embedder is not None 
+            and (frame_index % self.reid_interval == 0)
+        )
+
+        if should_run_reid and detections:
+            rois_for_batch = []
+            valid_indices = []
+            embeddings_map = {}
+
+            # Collect ROIs
+            for idx, (bbox, cls, dconf) in enumerate(detections):
                 x1, y1, x2, y2 = map(int, bbox)
-                roi = frame[y1:y2, x1:x2]
-                if roi.size > 0:
-                    emb = self.reid_embedder.get_embedding(roi)
-            enriched_detections.append((bbox, cls, dconf, emb))
+                # Ensure coordinates are within frame bounds
+                h, w = frame.shape[:2]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                
+                if x2 > x1 and y2 > y1:
+                    roi = frame[y1:y2, x1:x2]
+                    if roi.size > 0:
+                        rois_for_batch.append(roi)
+                        valid_indices.append(idx)
+            
+            # Batch Inference
+            if rois_for_batch:
+                try:
+                    if hasattr(self.reid_embedder, 'get_batch_embeddings'):
+                        batch_embeddings = self.reid_embedder.get_batch_embeddings(rois_for_batch)
+                    else:
+                        batch_embeddings = [self.reid_embedder.get_embedding(r) for r in rois_for_batch]
+                    
+                    # Map back to original indices
+                    for i, original_idx in enumerate(valid_indices):
+                        embeddings_map[original_idx] = batch_embeddings[i]
+                except Exception as e:
+                    logger.error(f"ReID batch error: {e}")
+
+            # Merge results
+            for idx, (bbox, cls, dconf) in enumerate(detections):
+                emb = embeddings_map.get(idx)
+                enriched_detections.append((bbox, cls, dconf, emb))
+        else:
+            # Fast path: Skip ReID
+            for bbox, cls, dconf in detections:
+                enriched_detections.append((bbox, cls, dconf, None))
 
         # 4. Tracking
         self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
@@ -392,6 +432,7 @@ class CoreModule:
         if "vehicle_detection" in updates:
             v_cfg = updates["vehicle_detection"]
             self.confidence_threshold = v_cfg.get("confidence_threshold", self.confidence_threshold)
+            self.reid_interval = v_cfg.get("reid_interval_frames", self.reid_interval)
             if "calibration" in v_cfg:
                 self._update_homography(v_cfg["calibration"])
                 self.transformer.update_calibration(v_cfg["calibration"])

@@ -51,6 +51,8 @@ export enum WebSocketMessageType {
     AUTHENTICATE = 'authenticate',
     INTERNAL_PING = '__internal_ping',
     PING = 'ping',
+    SUBSCRIBE = 'subscribe',
+    UNSUBSCRIBE = 'unsubscribe',
     SUBSCRIBE_TO_FEED = 'subscribe_to_feed',
     UNSUBSCRIBE_FROM_FEED = 'unsubscribe_from_feed',
     UPDATE_FEED_CONFIG = 'update_feed_config',
