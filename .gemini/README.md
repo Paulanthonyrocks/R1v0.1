@@ -1,0 +1,1 @@
+# Undoes the changes from the commit 'Delete .gemini directory':\nThis commit restores the deleted .gemini directory based on the previous commit state.
