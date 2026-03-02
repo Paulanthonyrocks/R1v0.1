@@ -98,6 +98,7 @@ class IncidentStatusEnum(str, enum.Enum):
     RESOLVED = "RESOLVED"
     CLEARED = "CLEARED" # match old enum if needed
     FALSE_ALARM = "FALSE_ALARM"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
     REPORTED = "REPORTED" # match old enum if needed
 
 

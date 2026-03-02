@@ -26,6 +26,7 @@ class IncidentUpdate(BaseModel):
     description: Optional[str] = None
     assigned_to: Optional[str] = None
     resolution_notes: Optional[str] = None
+    metadata: Optional[Dict] = None
 
 class Incident(IncidentBase):
     id: str

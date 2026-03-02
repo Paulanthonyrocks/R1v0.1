@@ -266,13 +266,26 @@ async def lifespan(app: FastAPI):
                 logger.info(f"FileSystemWatcher started on {watch_path}")
 
                 # [NEW] Also check for existing videos in that directory on startup
+                # Build a set of already configured sources to avoid double-adding
+                configured_sources = set()
+                if psp_cfg.get("enabled", False):
+                    for sf in psp_cfg.get("sample_feeds", []):
+                        p = sf.get("path") or sf.get("source")
+                        if p:
+                            configured_sources.add(str(p))
+
                 for ext in ['.mp4', '.avi', '.mov', '.mkv']:
                     for existing_file in watch_path.glob(f"*{ext}"):
+                        file_path_str = str(existing_file)
+                        if file_path_str in configured_sources:
+                            logger.info(f"Skipping existing video in watch directory (already in config): {existing_file}")
+                            continue
+
                         # Avoid double-adding if already in sample_feeds (simple path check)
                         # fm.add_and_start_feed handles duplicate sources internally, but we can be polite
                         logger.info(f"Found existing video in watch directory: {existing_file}")
                         create_background_task(fm.add_and_start_feed(
-                            source=str(existing_file),
+                            source=file_path_str,
                             latitude=None,
                             longitude=None,
                             is_looped=True

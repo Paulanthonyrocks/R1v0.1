@@ -256,6 +256,12 @@ class GlobalReIDManager:
                         self.redis.rpush("reid:gallery", global_id)
                         # Broadcast NEW identity
                         self.redis.publish("reid:new_identity", global_id)
+                        
+                        # --- Bound Redis Gallery ---
+                        # If Redis gallery grows too large, trim the oldest from the list
+                        # Note: This only trims the list, meta/emb keys will expire via TTL
+                        if self.redis.llen("reid:gallery") > self.max_gallery_size * 2:
+                            self.redis.lpop("reid:gallery")
                     except Exception as e:
                         logger.error(f"Failed to sync new ReID to Redis: {e}")
                 
@@ -421,6 +427,15 @@ class GlobalReIDManager:
             else:
                 self.gallery_matrix = None
             logger.info(f"ReID Cleanup: Removed {len(expired_gids)} vehicles.")
+
+            # CLEANUP REDIS
+            if self.redis:
+                try:
+                    for gid in expired_gids:
+                        self.redis.delete(f"reid:meta:{gid}", f"reid:emb:{gid}")
+                        self.redis.lrem("reid:gallery", 0, gid)
+                except Exception as e:
+                    logger.error(f"Failed to cleanup Redis ReID: {e}")
 
             # CLEANUP MAPPINGS (Fixes the memory leak)
             for feed_id in list(self.local_to_global.keys()):

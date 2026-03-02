@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, forwardRef } from 'react';
+import React, { useState, useEffect, useRef, forwardRef, memo } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Play, Square, Maximize } from 'lucide-react';
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import IdentityGallery from '../feature/IdentityGallery';
 
-const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
+const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token, userRole } = useAuth();
@@ -164,16 +164,14 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
         });
 
         if (clickedVehicle) {
-            // Note: Use vehicle_id (local) to find its global_id via lookup or if backend sent it.
-            // Earlier I saw backend sends `vehicle_id`.
-            // If we have a global_id mapping in the vehicle object, great.
-            // Let's assume clickedVehicle might have a global feature or we use its ID.
-            // For this UI, we'll try to use its local ID as a key to fetch global gallery.
-            console.log("Selected vehicle:", clickedVehicle.vehicle_id);
-            // Ideally we want GLB_XXX. If not available, we can't show gallery.
-            // Let's assume for now vehicle_id is the key or we have global_vehicle_id.
-            // I'll check if I added it to useVideoTypes.
-            setSelectedVehicleGlobalId(clickedVehicle.vehicle_id);
+            const gid = clickedVehicle.global_vehicle_id;
+            console.log("Selected vehicle:", gid || clickedVehicle.vehicle_id);
+            if (gid) {
+                setSelectedVehicleGlobalId(gid);
+            } else {
+                console.warn("Vehicle selected but no global_vehicle_id available yet.");
+                setSelectedVehicleGlobalId(null);
+            }
         } else {
             setSelectedVehicleGlobalId(null);
         }
@@ -633,6 +631,12 @@ const SurveillanceFeed = forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ fe
             </CardContent>
         </Card>
     );
+}), (prevProps, nextProps) => {
+    // Custom equality check to prevent re-renders when only metrics in the feed object change
+    // (since we use useVideoSocket for live metrics)
+    return prevProps.feed.feed_id === nextProps.feed.feed_id && 
+           prevProps.feed.status === nextProps.feed.status &&
+           prevProps.minimalControls === nextProps.minimalControls;
 });
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';

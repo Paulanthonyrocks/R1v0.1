@@ -87,6 +87,10 @@ class ConnectionManager:
     def get_user_role(self, client_id: str) -> str:
         return self.client_roles.get(client_id, "user")
 
+    def has_subscribers(self, feed_id: str) -> bool:
+        """Check if a feed has any active subscribers."""
+        return bool(self.feed_subscriptions.get(feed_id))
+
     async def subscribe_to_topic(self, client_id: str, topic: str):
         self.topic_subscriptions[topic].add(client_id)
         logger.info(f"Client {client_id} subscribed to topic: {topic}")

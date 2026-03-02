@@ -1,70 +1,59 @@
 # backend/requirements.txt
+
+# PyTorch (CPU) - index URL ensures CPU-only wheels
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchvision>=0.15.0
+
 # Core FastAPI
 fastapi>=0.68.0
 uvicorn[standard]>=0.15.0
 python-multipart>=0.0.5
-httpx>=0.25.0 # For async HTTP calls
+httpx>=0.25.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
-# Configuration & Utilities
+# Utilities
 pyyaml>=6.0
 psutil>=5.9.0
-numpy<2.0
 tenacity>=8.2.0
-watchdog>=2.1.0 # For file system monitoring
+watchdog>=2.1.0
 
-
-# ML/CV Dependencies
-# For CPU-only: standard torch package works but might download CUDA libs.
-# For a smaller CPU-only install, use: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-torch>=2.0.0
-
+# ML/CV
 ultralytics>=8.0.0
 opencv-python-headless==4.8.0.74
 scipy>=1.8.0
 filterpy>=1.4.5
+numpy<2.0
+scikit-learn>=1.0.0
 
-# TensorFlow (Used for car classification and traffic prediction)
-# For CPU-only:
+# TensorFlow (CPU)
 tensorflow-cpu>=2.16.1
 
-ml-dtypes>=0.5.0
-scikit-learn>=1.0.0  # For StandardScaler and other ML utilities
-
-# ONNX Runtime (For optimized inference)
-# For CPU-only:
+# ONNX Runtime (CPU)
 onnxruntime>=1.15.1
 
-# Pavement Analysis Dependencies
+# Data
 pandas>=1.3.0
-torchvision>=0.15.0  # If not already included
-
-# Optional Dependencies (Commented out as tasks are disabled in config)
-# OCR Dependencies
-# pillow>=9.0.0
-# pytesseract>=0.3.10
-# google-genai>=0.1.0
-# easyocr>=1.7.0
 
 # Database
 sqlalchemy
 asyncpg
-psycopg2-binary
 aiosqlite
+pymongo>=4.0.0
+aiokafka>=0.8.0
 
-pymongo>=4.0.0 # For MongoDB support
-aiokafka>=0.8.0 # For async Kafka messaging support
-
-# Firebase Admin
+# Firebase
 firebase-admin>=5.0.0
 
-# Redis & Caching
+# Redis
 redis>=5.0.0
 
-# Additional Dependencies
-aiohttp>=3.8.0  # For async HTTP requests
+# Async HTTP
+aiohttp>=3.8.0
+
+# Testing
 pytest>=7.4.0
 pytest-asyncio>=0.23.0

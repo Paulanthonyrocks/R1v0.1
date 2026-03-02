@@ -1,6 +1,6 @@
 
-let canvas = null;
-let ctx = null;
+const canvases = new Map();
+const contexts = new Map();
 
 self.onmessage = async function (e) {
     const { binaryFrame, frameData, feed_id, originalData } = e.data;
@@ -21,10 +21,15 @@ self.onmessage = async function (e) {
                 const bgBlob = new Blob([background], { type: 'image/jpeg' });
                 const bgBitmap = await createImageBitmap(bgBlob);
 
-                // Initialize OffscreenCanvas if needed
+                // Initialize OffscreenCanvas for this specific feed if needed
+                let canvas = canvases.get(feed_id);
+                let ctx = contexts.get(feed_id);
+
                 if (!canvas || canvas.width !== bgBitmap.width || canvas.height !== bgBitmap.height) {
                     canvas = new OffscreenCanvas(bgBitmap.width, bgBitmap.height);
-                    ctx = canvas.getContext('2d');
+                    ctx = canvas.getContext('2d', { alpha: false }); // Disable alpha for perf
+                    canvases.set(feed_id, canvas);
+                    contexts.set(feed_id, ctx);
                 }
 
                 // Draw background

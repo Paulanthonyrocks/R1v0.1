@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { AlertData, FeedStatusData } from '@/lib/types';
+import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
@@ -10,6 +10,7 @@ interface KPIData {
     average_speed_kmh?: number | null; // Matches backend GlobalRealtimeMetrics
     active_incidents_count?: number | null; // Matches backend GlobalRealtimeMetrics
     total_flow?: number | null; // Matches backend GlobalRealtimeMetrics
+    global_health_score?: number | null; // Matches backend GlobalRealtimeMetrics
     feed_statuses?: { [key: string]: number } | null; // Matches backend GlobalRealtimeMetrics
     custom_metrics?: { [key: string]: unknown }; // Matches backend GlobalRealtimeMetrics
     [key: string]: unknown; // Allow for other potential metrics not explicitly defined
@@ -18,7 +19,7 @@ interface KPIData {
 interface RealtimeUpdates {
     kpis: KPIData | null;
     alerts: AlertData[];
-    // nodeCongestionData: BackendCongestionNodeData[];
+    nodeCongestionData: BackendCongestionNodeData[];
     isConnected: boolean;
     isReady: boolean;
     error: string | null;
@@ -38,7 +39,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     const [kpis, setKpis] = useState<KPIData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
-    // const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
+    const [nodeCongestionData, setNodeCongestionData] = useState<BackendCongestionNodeData[]>([]);
     const [isConnected, setIsConnected] = useState(client.isConnected());
     const [isReady, setIsReady] = useState(client.isConnected());
     const [error, setError] = useState<string | null>(null);
@@ -98,6 +99,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
                     console.log("[useRealtimeUpdates] WebSocket connected (event), requesting initial feed statuses and subscribing to topics.");
                     client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
                     client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'kpi' } });
+                    client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'node_congestion' } });
                     hasRequestedInitialFeeds.current = true;
                 }
             } else {
@@ -139,6 +141,12 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
         }));
 
         subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
+
+        subscriptions.push(client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: BackendCongestionNodeData[] }) => {
+            if (data && Array.isArray(data.nodes)) {
+                setNodeCongestionData(data.nodes);
+            }
+        }));
 
         subscriptions.push(client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
             if (data?.alert_data) {
@@ -209,7 +217,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     return {
         kpis,
         alerts,
-        // nodeCongestionData, 
+        nodeCongestionData, 
         isConnected,
         isReady,
         error,

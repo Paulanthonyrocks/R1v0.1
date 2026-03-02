@@ -48,6 +48,7 @@ class GlobalRealtimeMetrics(BaseModel):
     average_speed_kmh: Optional[float] = Field(None, example=30.2)
     active_incidents_count: Optional[int] = Field(None, example=3)
     total_flow: Optional[int] = Field(None, example=1250)
+    global_health_score: Optional[float] = Field(None, example=98.5)
     feed_statuses: Optional[Dict[str, int]] = Field(
         None, example={"running": 5, "stopped": 2, "error": 1}
     )
@@ -148,6 +149,11 @@ class UpdateFeedConfigData(BaseModel):
     feed_id: str
     updates: Dict[str, Any]
 
+class SetSignalPhaseData(BaseModel):
+    signal_id: str
+    phase: str
+    duration_seconds: Optional[int] = None
+
 # --- 5. WebSocket Message Wrapper ---
 
 class WebSocketMessageTypeEnum(str, enum.Enum):
@@ -190,6 +196,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
     GET_USER_ROLE = "get_user_role"
     USER_ROLE = "user_role"
+    SET_SIGNAL_PHASE = "set_signal_phase"
     
     # Snapshot / Incident Notifications
     SNAPSHOT_READY = "snapshot_ready"

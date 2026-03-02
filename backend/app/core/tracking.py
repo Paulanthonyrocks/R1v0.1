@@ -1,4 +1,5 @@
 import math
+import uuid
 import numpy as np
 import logging
 from collections import deque, Counter
@@ -16,14 +17,17 @@ class TrackingManager:
         
         # Configuration parameters
         tracking_cfg = config.get("tracking", {})
-        self.proximity_threshold = tracking_cfg.get("proximity_threshold", 150)
-        self.track_timeout = tracking_cfg.get("track_timeout", 30)
+        vd_cfg = config.get("vehicle_detection", {})
+        self.proximity_threshold = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
+        self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
         self.dynamic_matching_threshold = tracking_cfg.get("dynamic_matching_threshold", 0.7)
         self.appearance_weight = tracking_cfg.get("appearance_weight") or 0.5
         self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
         self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
         self.use_appearance_in_tracking = tracking_cfg.get("use_appearance_in_tracking", True)
         self.stationary_cleanup_timeout = tracking_cfg.get("stationary_cleanup_timeout", 300)
+        self.probation_threshold = tracking_cfg.get("probation_threshold", 3)
+        self.occlusion_threshold = tracking_cfg.get("occlusion_threshold", 0.7)
         
         self.global_id_counter = 0
 
@@ -61,11 +65,20 @@ class TrackingManager:
         new_or_updated_tracks = {}
         h, w = frame_shape[:2]
         
+        # Configuration parameters
+        tracking_cfg = self.config.get("tracking", {})
+        vd_cfg = self.config.get("vehicle_detection", {})
+        self.proximity_threshold = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
+        self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
+        self.probation_threshold = tracking_cfg.get("probation_threshold") or vd_cfg.get("probation_threshold") or 3
+        
         # 1. Separate detections
         high_conf_dets = []
         low_conf_dets = []
-        CONF_THRESH = self.config.get("confidence_threshold", 0.3)
-        LOW_CONF_THRESH = 0.1
+        
+        vd_cfg = self.config.get("vehicle_detection", {})
+        CONF_THRESH = vd_cfg.get("confidence_threshold", self.config.get("confidence_threshold", 0.3))
+        LOW_CONF_THRESH = vd_cfg.get("low_confidence_threshold", 0.1)
         
         for det in detections:
             bbox, cls, conf, emb = det
@@ -114,10 +127,11 @@ class TrackingManager:
         matched_tracks_2 = set()
         if low_conf_dets and unmatched_tracks_1:
             cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False)
+            second_pass_thresh = self.config.get("tracking", {}).get("second_pass_threshold", 0.5)
             if cost_matrix_2.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_2)
                 for r, c in zip(row_ind, col_ind):
-                    if cost_matrix_2[r, c] < 0.5: # Fixed low conf thresh
+                    if cost_matrix_2[r, c] < second_pass_thresh:
                         track = unmatched_tracks_1[c]
                         self._update_track(track, low_conf_dets[r], current_time)
                         matched_tracks_2.add(track["vehicle_id"])
@@ -127,6 +141,10 @@ class TrackingManager:
         final_matched = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
             if tid not in final_matched:
+                # Tentative tracks that are missed are immediately dropped
+                if track.get("status") == "tentative":
+                    continue
+                    
                 if (current_time - track["last_seen"]) < self.track_timeout:
                     track["status"] = "predicting"
                     if "predicted_bbox" in track:
@@ -141,7 +159,30 @@ class TrackingManager:
             new_track = self._create_new_track(det, current_time)
             new_or_updated_tracks[new_track["vehicle_id"]] = new_track
             
-        self.vehicle_data = new_or_updated_tracks
+        # 7. Stationary Cleanup
+        final_active_tracks = {}
+        for tid, track in new_or_updated_tracks.items():
+            if "start_centroid" not in track:
+                track["start_centroid"] = track["centroid"]
+                track["first_seen"] = current_time
+            
+            displacement = math.sqrt((track["centroid"][0] - track["start_centroid"][0])**2 + 
+                                     (track["centroid"][1] - track["start_centroid"][1])**2)
+            
+            age = current_time - track["first_seen"]
+            if age > self.stationary_cleanup_timeout and displacement < 50:
+                 continue
+            
+            final_active_tracks[tid] = track
+
+        self.vehicle_data = final_active_tracks
+        self._check_occlusions()
+        
+        # Run behavior analytics
+        for tid, track in self.vehicle_data.items():
+            if track["status"] == "active":
+                self._classify_behavior(track)
+                
         return self.vehicle_data
 
     def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
@@ -164,14 +205,17 @@ class TrackingManager:
                         motion_cost = 1.0 - giou
                         reid_cost = 0.0
                         if use_reid and det_emb is not None and track.get("embedding") is not None:
-                            reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight
+                            # Re-scale ReID to match motion cost magnitude
+                            reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight * 2.0
                         
                         costs[d, t] = motion_cost + reid_cost
         return costs
 
     def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
+        prev_centroid = track["centroid"]
         track["bbox"] = bbox
+        track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
         
         # Update embedding with EMA if available
         if emb is not None:
@@ -193,8 +237,8 @@ class TrackingManager:
         if 1 <= track_age <= 5:
             dt = current_time - track.get("last_seen", current_time)
             if dt > 0.001:
-                prev_cx, prev_cy = track["centroid"]
-                curr_cx, curr_cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+                prev_cx, prev_cy = prev_centroid
+                curr_cx, curr_cy = track["centroid"]
                 vx = (curr_cx - prev_cx) / dt
                 vy = (curr_cy - prev_cy) / dt
                 
@@ -205,7 +249,13 @@ class TrackingManager:
                     kf.x[5][0] = vy
                     
         track["last_seen"] = current_time
-        track["status"] = "active"
+        
+        # --- Probation Logic ---
+        track["hits"] = track.get("hits", 0) + 1
+        if track["hits"] >= self.probation_threshold:
+            track["status"] = "active"
+        # If not yet active, status remains 'tentative' (as set in _create_new_track)
+        
         track["confidence"] = conf
         
         # --- Class Stabilization ---
@@ -220,43 +270,168 @@ class TrackingManager:
         if most_common:
             # Only switch if we have a strong lead or enough samples
             winner, count = most_common[0]
-            if count >= 3: # minimal stability
+            if count >= 5: # minimal stability (majority)
                 track["class_id"] = winner
 
         # Update Kalman
         kf = track.get("kalman_filter")
+        innovation_mag = 0.0
         if kf:
             cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
             w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            kf.update(np.array([[cx], [cy], [w], [h]]))
+            
+            # Calculate innovation (residual) before update for quality scoring
+            # z = [cx, cy, w, h]
+            z = np.array([[cx], [cy], [w], [h]])
+            innovation = z - np.dot(kf.H, kf.x)
+            innovation_mag = float(np.linalg.norm(innovation[:2])) # only pos innovation
+            
+            kf.update(z)
+            
+            # Update history for behavior analytics
+            track["position_history"].append((cx, cy))
+            track["velocity_history"].append((kf.x[4][0], kf.x[5][0]))
+
+        self._update_quality_score(track, conf, innovation_mag)
 
     def _create_new_track(self, det, current_time):
         bbox, cls, conf, emb = det
         self.global_id_counter += 1
+        # Use a combination of counter and short UUID to avoid collisions on reload
+        track_id = f"TRK_{self.global_id_counter}_{uuid.uuid4().hex[:4].upper()}"
         return {
-            "vehicle_id": f"TRK_{self.global_id_counter}",
+            "vehicle_id": track_id,
             "bbox": bbox,
             "centroid": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
             "class_id": cls,
             "confidence": conf,
             "last_seen": current_time,
-            "status": "active",
+            "status": "tentative",
+            "hits": 1,
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
             "class_history": deque([cls], maxlen=10),
             "speed_history": deque(maxlen=5),
+            "position_history": deque(maxlen=20),
+            "velocity_history": deque(maxlen=20),
+            "plate_candidates": deque(maxlen=10),
+            "acceleration": 0.0,
+            "behavior": "normal",
+            "quality_score": 1.0,
             "smoothed_speed": 0.0,
             "speed": 0.0,
-            "last_speed_update_time": current_time,
+            "last_speed_update_time": None,
         }
 
     def _bbox_giou(self, boxA, boxB):
         xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])
         inter = max(0, xB - xA) * max(0, yB - yA)
-        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        areaA = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
+        areaB = max(0, boxB[2] - boxB[0]) * max(0, boxB[3] - boxB[1])
         union = areaA + areaB - inter
+        if union <= 0:
+            return 0.0
         iou = inter / (union + 1e-6)
         ex, ey, ex2, ey2 = min(boxA[0], boxB[0]), min(boxA[1], boxB[1]), max(boxA[2], boxB[2]), max(boxA[3], boxB[3])
         e_area = (ex2 - ex) * (ey2 - ey)
+        if e_area <= 0:
+            return iou
         return iou - (e_area - union) / (e_area + 1e-6)
+
+    def _bbox_iou(self, boxA, boxB):
+        xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        areaA = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
+        areaB = max(0, boxB[2] - boxB[0]) * max(0, boxB[3] - boxB[1])
+        union = areaA + areaB - inter
+        if union <= 0:
+            return 0.0
+        return inter / union
+
+    def _check_occlusions(self):
+        """Identifies tracks that are likely occluded by each other."""
+        tids = list(self.vehicle_data.keys())
+        # Reset occlusion status
+        for tid in tids:
+            self.vehicle_data[tid]["is_occluded"] = False
+
+        for i in range(len(tids)):
+            for j in range(i + 1, len(tids)):
+                t1 = self.vehicle_data[tids[i]]
+                t2 = self.vehicle_data[tids[j]]
+                
+                b1 = t1.get("predicted_bbox") or t1["bbox"]
+                b2 = t2.get("predicted_bbox") or t2["bbox"]
+                
+                iou = self._bbox_iou(b1, b2)
+                if iou > self.occlusion_threshold:
+                    t1["is_occluded"] = True
+                    t2["is_occluded"] = True
+
+    def _classify_behavior(self, track: Dict):
+        """Classifies vehicle behavior (hard braking, turning) based on history."""
+        v_hist = list(track["velocity_history"])
+        if len(v_hist) < 5:
+            return
+
+        # 1. Acceleration (change in speed)
+        # Using simple finite difference on last 2 velocity states
+        vx1, vy1 = v_hist[-2]
+        vx2, vy2 = v_hist[-1]
+        s1 = math.sqrt(vx1**2 + vy1**2)
+        s2 = math.sqrt(vx2**2 + vy2**2)
+        dt = 1.0 / self.fps
+        accel = (s2 - s1) / dt
+        track["acceleration"] = round(accel, 2)
+
+        # 2. Behavior Classification
+        behavior = "normal"
+        
+        # Hard Braking detection
+        # Threshold: -5.0 m/s^2 (approximate, pixel-based needs calibration but relative works)
+        # Since we are in pixels, we should use a relative threshold or smoothed value
+        if accel < -100: # Heuristic for pixel-based speed drop
+            behavior = "hard_braking"
+        
+        # Turning detection
+        if len(v_hist) >= 10:
+            # Check angle change between start and end of window
+            vx_start, vy_start = v_hist[-10]
+            vx_end, vy_end = v_hist[-1]
+            angle_start = math.atan2(vy_start, vx_start)
+            angle_end = math.atan2(vy_end, vx_end)
+            angle_diff = abs(angle_end - angle_start)
+            if angle_diff > math.pi / 6: # > 30 degrees
+                behavior = "turning"
+        
+        # Stationary detection (if smoothed speed is very low but hits are high)
+        if s2 < 5 and track["hits"] > 10:
+            behavior = "stationary"
+
+        track["behavior"] = behavior
+
+    def _update_quality_score(self, track: Dict, conf: float, kf_innovation: Optional[float] = None):
+        """Refines the track quality score based on surprise and confidence."""
+        prev_q = track.get("quality_score", 1.0)
+        
+        # 1. Base confidence component (40%)
+        conf_score = conf
+        
+        # 2. Innovation component (Surprise) (40%)
+        # Lower surprise (innovation) -> higher quality
+        # normalized_innovation: 0 (perfect match) to 1+ (high surprise)
+        inn_score = 1.0
+        if kf_innovation is not None:
+            # Heuristic mapping: innovation > 100 pixels is "very high surprise"
+            inn_score = max(0, 1.0 - (kf_innovation / 150.0))
+            
+        # 3. Occlusion/Predicting penalty (20%)
+        occ_penalty = 1.0
+        if track.get("is_occluded"):
+            occ_penalty = 0.7
+        elif track.get("status") == "predicting":
+            occ_penalty = 0.5
+            
+        # Update using EWMA
+        instant_q = (conf_score * 0.4 + inn_score * 0.4 + occ_penalty * 0.2)
+        track["quality_score"] = round(0.1 * instant_q + 0.9 * prev_q, 3)

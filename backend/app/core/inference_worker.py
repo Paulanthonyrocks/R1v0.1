@@ -28,7 +28,7 @@ def _serialize_tracked_vehicles_with_map(
     return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
 
 def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], scale: float = 1.0) -> List[Dict[str, Any]]:
-    """Extracts high-res JPEG patches for active vehicles."""
+    """Extracts high-res PNG patches for active vehicles (better for OCR)."""
     rois = []
     h, w = frame.shape[:2]
     for v in tracked_vehicles:
@@ -43,7 +43,7 @@ def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], sca
         if x2 <= x1 or y2 <= y1: continue
         
         crop = frame[y1:y2, x1:x2]
-        _, crop_bytes = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        _, crop_bytes = cv2.imencode(".png", crop) # Switched to PNG
         
         rois.append({
             "b": crop_bytes.tobytes(),
@@ -84,10 +84,6 @@ def inference_worker(
     logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
     logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
     
-    # Start parent monitor to avoid zombies
-    logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
-    start_parent_monitor(stop_event, f"Inference-{worker_id}")
-    
     logger.debug(f"[Worker {worker_id}] Initializing state containers...")
     # Per-feed CoreModules and Monitors (lazy initialized)
     core_modules: Dict[str, CoreModule] = {}
@@ -100,6 +96,15 @@ def inference_worker(
     from ..services.reid_manager import GlobalReIDManager
     local_reid_manager = GlobalReIDManager(config)
     
+    # Data Collection for Hard Negative Mining
+    collection_cfg = config.get("data_collection", {})
+    collect_hard_negatives = collection_cfg.get("enabled", False)
+    collection_dir = Path(config.get("project_root_dir", "")) / "backend/data/hard_negatives"
+    if collect_hard_negatives:
+        collection_dir.mkdir(parents=True, exist_ok=True)
+    last_collection_time = 0.0
+    collection_cooldown = collection_cfg.get("cooldown_seconds", 60.0)
+
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
@@ -114,6 +119,7 @@ def inference_worker(
     shared_reid_embedder = None
     if model_path:
         try:
+            if stop_event.is_set(): return
             logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
             full_model_path = str(Path(root_dir) / model_path)
@@ -125,6 +131,7 @@ def inference_worker(
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
                 from ultralytics import YOLO
                 import torch
+                if stop_event.is_set(): return
                 device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
                 shared_model = YOLO(str(engine_path))
                 shared_model.to(device) 
@@ -132,6 +139,7 @@ def inference_worker(
             else:
                 from ultralytics import YOLO
                 import torch
+                if stop_event.is_set(): return
                 device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
                 shared_model = YOLO(full_model_path)
                 shared_model.to(device)
@@ -140,6 +148,7 @@ def inference_worker(
             # Load ReID
             if vehicle_det_cfg.get("reid_enabled", True):
                 try:
+                    if stop_event.is_set(): return
                     from ..ml.reid_model import ReIDEmbedder
                     logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
                     for h in logger.handlers: h.flush()
@@ -158,6 +167,16 @@ def inference_worker(
             shared_model = None
             model_load_failed = True
 
+    # Start parent monitor AFTER model loading to avoid premature triggers
+    logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
+    start_parent_monitor(stop_event, f"Inference-{worker_id}")
+
+    # Per-feed model overrides
+    model_overrides: Dict[str, YOLO] = {}
+    
+    def get_model_for_feed(f_id: str) -> YOLO:
+        return model_overrides.get(f_id, shared_model)
+
     def handle_command(cmd):
         if not cmd: return
         try:
@@ -165,6 +184,19 @@ def inference_worker(
             if cmd_type == "config_update":
                 data = cmd.get("data", {})
                 feed_id_cmd = data.get("feed_id") or cmd.get("feed_id")
+                
+                # Check for model path override
+                if "model_path" in data and feed_id_cmd:
+                    try:
+                        logger.info(f"[Worker {worker_id}] Overriding model for feed {feed_id_cmd}: {data['model_path']}")
+                        override_path = str(Path(config.get("project_root_dir", "")) / data["model_path"])
+                        model_overrides[feed_id_cmd] = YOLO(override_path)
+                        # Move to same device as shared
+                        if shared_model:
+                            model_overrides[feed_id_cmd].to(next(shared_model.parameters()).device)
+                    except Exception as e:
+                        logger.error(f"Failed to load model override for {feed_id_cmd}: {e}")
+
                 if feed_id_cmd:
                     if feed_id_cmd not in core_modules:
                         if feed_id_cmd not in pending_configs:
@@ -172,6 +204,13 @@ def inference_worker(
                         pending_configs[feed_id_cmd].update(data)
                     else:
                         core_modules[feed_id_cmd].update_config(data)
+            elif cmd_type == "save_snapshot":
+                data = cmd.get("data", {})
+                feed_id_cmd = cmd.get("feed_id")
+                if feed_id_cmd and feed_id_cmd in core_modules:
+                    # We can't save it here immediately because we don't have the current frame
+                    # Set a flag on the CoreModule to save the next processed frame
+                    core_modules[feed_id_cmd]._pending_snapshot_incident_id = data.get("incident_id")
         except Exception as e:
             logger.error(f"[Worker {worker_id}] Command error: {e}")
 
@@ -188,6 +227,20 @@ def inference_worker(
                 pass
 
             try:
+                # --- Adaptive Frame Skipping ---
+                # Dynamically adjust skip_frames based on queue fullness
+                q_size = central_input_queue.qsize()
+                q_max = config.get("performance", {}).get("queue_max_size", 500)
+                
+                # If queue is more than 50% full, start increasing skip
+                if q_size > q_max * 0.5:
+                    # Scale skip_frames up to 2x base value or 10 max
+                    load_factor = (q_size - (q_max * 0.5)) / (q_max * 0.5)
+                    adaptive_skip = int(skip_frames + (load_factor * 8))
+                    current_skip = min(10, adaptive_skip)
+                else:
+                    current_skip = skip_frames
+
                 # Collect batch of frames
                 batch_tasks = []
                 batch_size = config.get("performance", {}).get("batch_size", 1)
@@ -254,7 +307,8 @@ def inference_worker(
                     monitor = traffic_monitors[feed_id]
                     metrics_obj = metrics_map[feed_id]
 
-                    actual_skip = skip_frames
+                    # Use adaptive skip calculated from queue fullness
+                    actual_skip = current_skip
                     first_detect = not getattr(core, '_first_detection_done', False)
                     should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
 
@@ -287,21 +341,62 @@ def inference_worker(
                 
                 # Run Batch Inference
                 batch_detections_map = {}
-                if frames_to_infer and shared_model is not None:
+                if frames_to_infer:
                     try:
-                        results = shared_model(frames_to_infer, verbose=False, stream=False)
-                        for i, res in enumerate(results):
-                            meta_idx = inference_indices[i]
-                            meta = batch_meta[meta_idx]
-                            boxes_data = res.boxes.data.cpu().numpy()
-                            formatted_dets = []
-                            x_off, y_off = meta.get("crop_offsets", (0, 0))
-                            for row in boxes_data:
-                                rx1, ry1, rx2, ry2, conf, cls_id = row
-                                fx1, fy1 = rx1 + x_off, ry1 + y_off
-                                fx2, fy2 = rx2 + x_off, ry2 + y_off
-                                formatted_dets.append(((fx1, fy1, fx2, fy2), conf, cls_id))
-                            batch_detections_map[meta_idx] = formatted_dets
+                        now = time.time()
+                        # Optimization: Check if all feeds in this batch use the same model
+                        models_in_batch = [get_model_for_feed(batch_meta[idx]['feed_id']) for idx in inference_indices]
+                        
+                        if all(m == models_in_batch[0] for m in models_in_batch) and models_in_batch[0] is not None:
+                            # Standard fast path: all same model
+                            conf_min = vehicle_det_cfg.get("low_confidence_threshold", 0.15)
+                            results = models_in_batch[0](frames_to_infer, verbose=False, stream=False, conf=conf_min)
+                            for i, res in enumerate(results):
+                                meta_idx = inference_indices[i]
+                                meta = batch_meta[meta_idx]
+                                boxes_data = res.boxes.data.cpu().numpy()
+                                formatted_dets = []
+                                x_off, y_off = meta.get("crop_offsets", (0, 0))
+                                
+                                has_uncertain = False
+                                conf_max = vehicle_det_cfg.get("confidence_threshold", 0.30)
+
+                                for row in boxes_data:
+                                    rx1, ry1, rx2, ry2, conf, cls_id = row
+                                    fx1, fy1 = rx1 + x_off, ry1 + y_off
+                                    fx2, fy2 = rx2 + x_off, ry2 + y_off
+                                    formatted_dets.append(((fx1, fy1, fx2, fy2), conf, cls_id))
+                                    
+                                    if conf_min < conf < conf_max:
+                                        has_uncertain = True
+                                
+                                # Hard Negative Mining logic
+                                if collect_hard_negatives and has_uncertain and (now - last_collection_time > collection_cooldown):
+                                    try:
+                                        fname = f"hard_neg_{meta['feed_id']}_{meta['frame_index']}_{int(now)}.jpg"
+                                        fpath = collection_dir / fname
+                                        cv2.imwrite(str(fpath), meta['frame'])
+                                        last_collection_time = now
+                                        logger.info(f"[Worker {worker_id}] Saved hard negative sample: {fname}")
+                                    except Exception as e:
+                                        logger.error(f"Failed to save hard negative: {e}")
+
+                                batch_detections_map[meta_idx] = formatted_dets
+                        else:
+                            # Mixed models or overrides present: process individually
+                            conf_min = vehicle_det_cfg.get("low_confidence_threshold", 0.15)
+                            for i, meta_idx in enumerate(inference_indices):
+                                meta = batch_meta[meta_idx]
+                                model_to_use = get_model_for_feed(meta['feed_id'])
+                                if model_to_use:
+                                    res = model_to_use(frames_to_infer[i], verbose=False, stream=False, conf=conf_min)[0]
+                                    boxes_data = res.boxes.data.cpu().numpy()
+                                    formatted_dets = []
+                                    x_off, y_off = meta.get("crop_offsets", (0, 0))
+                                    for row in boxes_data:
+                                        rx1, ry1, rx2, ry2, conf, cls_id = row
+                                        formatted_dets.append(((rx1+x_off, ry1+y_off, rx2+x_off, ry2+y_off), conf, cls_id))
+                                    batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
 
@@ -311,7 +406,7 @@ def inference_worker(
                     frame, f_idx = meta['frame'], meta['frame_index']
                     
                     detections = batch_detections_map.get(i, []) if meta['should_detect'] else []
-                    vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
+                    vis_tracks, lane_bounds, lane_lines, calib_status = core.detect_and_track(
                         frame, f_idx, external_detections=detections,
                         timestamp=meta.get("timestamp")
                     )
@@ -338,7 +433,7 @@ def inference_worker(
                     
                     serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks)
                     
-                    extra = {}
+                    extra = {"calibration": calib_status}
                     v_proc_cfg = config.get("video_processing", {})
                     if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
                          bg_scale = v_proc_cfg.get("roi_scale", 0.5)

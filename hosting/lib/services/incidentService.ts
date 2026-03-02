@@ -34,12 +34,23 @@ export class IncidentService {
      */
     async resolveIncident(incidentId: string, notes?: string): Promise<boolean> {
         try {
-            await this.apiClient.post(`/api/v1/incidents/${incidentId}/resolve`, {
-                resolution_notes: notes
-            });
+            await this.apiClient.post(`/api/v1/incidents/${incidentId}/resolve?notes=${encodeURIComponent(notes || '')}`);
             return true;
         } catch (error) {
             console.error(`Failed to resolve incident ${incidentId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Marks an incident as a false positive.
+     */
+    async markFalsePositive(incidentId: string, notes?: string): Promise<boolean> {
+        try {
+            await this.apiClient.post(`/api/v1/incidents/${incidentId}/false-positive?notes=${encodeURIComponent(notes || '')}`);
+            return true;
+        } catch (error) {
+            console.error(`Failed to mark incident ${incidentId} as false positive:`, error);
             return false;
         }
     }

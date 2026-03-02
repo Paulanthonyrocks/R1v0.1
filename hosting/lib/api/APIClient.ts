@@ -71,9 +71,10 @@ export class APIClient {
         }
     }
 
-    private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+    private async fetchWithTimeout(url: string, options: RequestInit & { timeout?: number }): Promise<Response> {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const timeout = options.timeout || this.timeout;
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
 
         try {
             const response = await fetch(url, {
@@ -86,7 +87,7 @@ export class APIClient {
         }
     }
 
-    private async handleResponse<T>(response: Response, originalRequestOptions: RequestInit): Promise<T> {
+    private async handleResponse<T>(response: Response, originalRequestOptions: RequestInit & { timeout?: number }): Promise<T> {
         if (!response.ok) {
             if (response.status === 401) {
                 // Token might be expired, try to refresh with firebase user
@@ -108,18 +109,19 @@ export class APIClient {
             const error = new Error(`API Error: ${response.status} ${response.statusText}`) as APIError;
             error.status = response.status;
             error.statusText = response.statusText;
+            const text = await response.text();
             try {
-                error.data = await response.json();
+                error.data = JSON.parse(text);
             } catch {
-                // If response isn't JSON, use text
-                error.data = await response.text();
+                // If response isn't JSON, use raw text
+                error.data = text;
             }
             throw error;
         }
         return response.json();
     }
 
-    async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    async request<T>(path: string, options: RequestInit & { timeout?: number } = {}): Promise<T> {
         const url = new URL(path, this.baseURL).toString();
         const token = this.tokenManager.getCurrentToken();
         
@@ -127,7 +129,7 @@ export class APIClient {
             this.headers['Authorization'] = `Bearer ${token}`;
         }
 
-        const fetchOptions: RequestInit = {
+        const fetchOptions: RequestInit & { timeout?: number } = {
             ...options,
             headers: {
                 ...this.headers,
@@ -155,14 +157,14 @@ export class APIClient {
     }
 
     // Convenience methods
-    async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+    async get<T>(path: string, params?: Record<string, string>, options: RequestInit & { timeout?: number } = {}): Promise<T> {
         const url = new URL(path, this.baseURL);
         if (params) {
             Object.entries(params).forEach(([key, value]) => {
                 url.searchParams.append(key, value);
             });
         }
-        return this.request<T>(url.toString(), { method: 'GET' });
+        return this.request<T>(url.toString(), { ...options, method: 'GET' });
     }
 
     async post<T, D = unknown>(path: string, data?: D): Promise<T> {

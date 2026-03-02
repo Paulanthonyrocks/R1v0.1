@@ -346,7 +346,7 @@ class DatabaseManager:
             self.prune_old_data()
             
         except (sqlite3.Error, DatabaseError) as e:
-            logger.error(f"DB init error: {e}", exc_info=True)
+            logger.error(f"DB init error in _initialize_sqlite_database: {e}", exc_info=True)
             raise DatabaseError(f"DB schema init fail: {e}") from e
 
     def _migrate_sqlite_database(self, cursor: sqlite3.Cursor):
@@ -372,86 +372,103 @@ class DatabaseManager:
                     logger.error(f"Failed to add column {col_name}: {e}")
 
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
-        # ... (This method remains unchanged)
-        cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
-                feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
-                global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
-                bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
-                acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, 
-                car_model TEXT, car_model_confidence REAL, car_color TEXT, flags TEXT,
-                PRIMARY KEY (feed_id, track_id, timestamp))""")
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
-        )
-        cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
-                license_plate TEXT PRIMARY KEY,
-                appearance_id TEXT,
-                vehicle_type TEXT,
-                make TEXT,
-                model TEXT,
-                color TEXT,
-                first_seen REAL,
-                last_seen REAL,
-                total_detections INTEGER DEFAULT 1,
-                reid_gallery BLOB,
-                flags TEXT)""")
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_iv_appearance ON identified_vehicles(appearance_id);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
-        )
-        cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
-                global_id TEXT PRIMARY KEY,
-                embeddings BLOB, -- Serialized numpy array
-                metadata TEXT,   -- JSON metadata
-                last_seen REAL NOT NULL
-        )""")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reid_last_seen ON reid_identities(last_seen DESC);")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
-                severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
-                feed_id TEXT, -- Allow NULL for system alerts
-                
-                message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
-        
-        cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
-                id TEXT PRIMARY KEY,
-                feed_id TEXT,
-                type TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                latitude REAL,
-                longitude REAL,
-                snapshot_path TEXT,
-                assigned_to TEXT,
-                resolution_notes TEXT
-        )""")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
-        
-        cursor.execute("""CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                action TEXT NOT NULL,
-                resource_type TEXT,
-                resource_id TEXT,
-                details TEXT,
-                ip_address TEXT,
-                timestamp REAL NOT NULL
-        )""")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
+        logger.info("Calling _create_sqlite_tables")
+        try:
+            # ... (This method remains unchanged)
+            cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
+                    feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
+                    global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
+                    bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
+                    acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, 
+                    car_model TEXT, car_model_confidence REAL, car_color TEXT, flags TEXT,
+                    PRIMARY KEY (feed_id, track_id, timestamp))""")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
+            )
+            cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
+                    license_plate TEXT PRIMARY KEY,
+                    appearance_id TEXT,
+                    vehicle_type TEXT,
+                    make TEXT,
+                    model TEXT,
+                    color TEXT,
+                    first_seen REAL,
+                    last_seen REAL,
+                    total_detections INTEGER DEFAULT 1,
+                    reid_gallery BLOB,
+                    flags TEXT)""")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_iv_appearance ON identified_vehicles(appearance_id);"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
+            )
+            cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
+                    global_id TEXT PRIMARY KEY,
+                    embeddings BLOB, -- Serialized numpy array
+                    metadata TEXT,   -- JSON metadata
+                    last_seen REAL NOT NULL
+            )""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reid_last_seen ON reid_identities(last_seen DESC);")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
+                    severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
+                    feed_id TEXT, -- Allow NULL for system alerts
+                    
+                    message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
+            
+            cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
+                    id TEXT PRIMARY KEY,
+                    feed_id TEXT,
+                    type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    latitude REAL,
+                    longitude REAL,
+                    snapshot_path TEXT,
+                    assigned_to TEXT,
+                    resolution_notes TEXT
+            )""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
+            
+            cursor.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    action TEXT NOT NULL,
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    details TEXT,
+                    ip_address TEXT,
+                    timestamp REAL NOT NULL
+            )""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
 
-        # ... and other table creation statements ...
-        logger.debug("SQLite DB table creation check finished.")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS location_metrics (
+                    location_id TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    vehicle_count INTEGER,
+                    average_speed REAL,
+                    congestion_score REAL,
+                    latitude REAL,
+                    longitude REAL,
+                    PRIMARY KEY (location_id, timestamp))""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_lm_timestamp ON location_metrics(timestamp DESC);")
+            
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_vt_feed_timestamp ON vehicle_tracks(feed_id, timestamp DESC);")
+
+            # ... and other table creation statements ...
+            logger.debug("SQLite DB table creation check finished.")
+        except Exception as e:
+            logger.error(f"Error in _create_sqlite_tables: {e}")
 
     def _initialize_mongodb(self):
         """Initializes the MongoDB connection with a retry mechanism."""
@@ -726,11 +743,51 @@ class DatabaseManager:
             logger.error(f"TimescaleDB batch save failed: {e}")
 
     async def save_location_metrics_batch(self, metrics_list: List[Dict]):
-        """Saves a batch of aggregated location metrics to TimescaleDB."""
+        """Saves a batch of aggregated location metrics to SQLite and TimescaleDB."""
+        if not metrics_list:
+            return
+
+        # --- 1. SAVE TO SQLITE ---
+        sql = """INSERT OR REPLACE INTO location_metrics (
+            location_id, timestamp, vehicle_count, average_speed, 
+            congestion_score, latitude, longitude
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)"""
+        
+        sqlite_params = []
+        for m in metrics_list:
+            ts = m.get("timestamp")
+            if isinstance(ts, datetime):
+                ts = ts.timestamp()
+            elif isinstance(ts, str):
+                try:
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    ts = time.time()
+            
+            sqlite_params.append((
+                m.get("id"),
+                ts,
+                m.get("vehicle_count"),
+                m.get("average_speed"),
+                m.get("congestion_score"),
+                m.get("latitude"),
+                m.get("longitude")
+            ))
+
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, sqlite_params)
+                    conn.commit()
+            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite.")
+        except Exception as e:
+            logger.error(f"Failed to save location metrics to SQLite: {e}")
+
+        # --- 2. SAVE TO TIMESCALEDB ---
         if not self.timescale_engine:
             return
 
-        sql = text("""
+        ts_sql = text("""
             INSERT INTO location_metrics (
                 location_id, timestamp, vehicle_count, average_speed, 
                 congestion_score, latitude, longitude
@@ -742,7 +799,7 @@ class DatabaseManager:
 
         try:
             async with self.timescale_engine.begin() as conn:
-                params = []
+                ts_params = []
                 for m in metrics_list:
                     ts = m.get("timestamp")
                     if isinstance(ts, (int, float)):
@@ -753,7 +810,7 @@ class DatabaseManager:
                         except ValueError:
                             ts = datetime.now(timezone.utc)
                     
-                    params.append({
+                    ts_params.append({
                         "location_id": m.get("id"),
                         "timestamp": ts,
                         "vehicle_count": m.get("vehicle_count"),
@@ -763,57 +820,102 @@ class DatabaseManager:
                         "longitude": m.get("longitude")
                     })
                 
-                await conn.execute(sql, params)
-                logger.info(f"Saved {len(params)} location metrics to TimescaleDB.")
+                await conn.execute(ts_sql, ts_params)
+                logger.info(f"Saved {len(ts_params)} location metrics to TimescaleDB.")
         except Exception as e:
             logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
 
     async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
-        """Retrieves historical location metrics from TimescaleDB."""
-        if not self.timescale_engine:
-            return []
+        """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""
+        start_time_ts = time.time() - (hours * 3600)
+        
+        # 1. Try TimescaleDB
+        if self.timescale_engine:
+            start_time_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+            sql = text("""
+                SELECT * FROM location_metrics 
+                WHERE location_id = :location_id 
+                AND timestamp >= :start_time
+                ORDER BY timestamp ASC
+            """)
 
-        start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-        sql = text("""
-            SELECT * FROM location_metrics 
-            WHERE location_id = :location_id 
-            AND timestamp >= :start_time
+            try:
+                async with self.timescale_engine.connect() as conn:
+                    result = await conn.execute(sql, {"location_id": location_id, "start_time": start_time_dt})
+                    rows = [dict(row._mapping) for row in result]
+                    if rows:
+                        return rows
+            except Exception as e:
+                logger.error(f"Failed to query location metrics from TimescaleDB: {e}")
+
+        # 2. Try SQLite pre-aggregated metrics
+        sql = """
+            SELECT timestamp, vehicle_count, average_speed, congestion_score
+            FROM location_metrics
+            WHERE location_id = ? AND timestamp >= ?
             ORDER BY timestamp ASC
-        """)
-
+        """
         try:
-            async with self.timescale_engine.connect() as conn:
-                result = await conn.execute(sql, {"location_id": location_id, "start_time": start_time})
-                return [dict(row._mapping) for row in result]
+            rows = await asyncio.to_thread(self._execute_query, sql, (location_id, start_time_ts))
+            if rows:
+                for row in rows:
+                    if isinstance(row["timestamp"], (int, float)):
+                        row["timestamp"] = datetime.fromtimestamp(row["timestamp"], tz=timezone.utc).isoformat()
+                return rows
         except Exception as e:
-            logger.error(f"Failed to query location metrics from TimescaleDB: {e}")
-            return []
+            logger.error(f"Failed to query location metrics from SQLite: {e}")
+
+        return []
 
     async def get_history_stats(self, feed_id: str, hours: int = 24) -> List[Dict]:
         """
         Retrieves historical statistics (vehicle count, speed).
-        Tries TimescaleDB 'location_metrics' first.
+        Tries TimescaleDB/SQLite 'location_metrics' first.
         Falls back to aggregating 'vehicle_tracks' in SQLite.
         """
-        # 1. Try TimescaleDB (if configured and data exists)
-        if self.timescale_engine:
-            try:
-                metrics = await self.get_location_metrics(feed_id, hours)
-                if metrics:
-                    return metrics
-            except Exception as e:
-                logger.warning(f"TimescaleDB history fetch failed, falling back to SQLite: {e}")
+        # 1. Try pre-aggregated metrics first (Fastest)
+        try:
+            # First try with feed_id directly as location_id
+            metrics = await self.get_location_metrics(feed_id, hours)
+            
+            # If not found, AnalyticsService might be using a coordinate-based key
+            # but we'll prioritize the feed_id match if it exists.
+            
+            if metrics:
+                # Map to format expected by dashboard
+                return [{
+                    "timestamp": m.get("timestamp"),
+                    "vehicle_count": m.get("vehicle_count"),
+                    "average_speed": m.get("average_speed"),
+                    "congestion_score": m.get("congestion_score", 0.0)
+                } for m in metrics]
+        except Exception as e:
+            logger.warning(f"Pre-aggregated history fetch failed: {e}")
 
-        # 2. Fallback to SQLite Aggregation
+        # 2. Fallback to SQLite Aggregation (SLOW on large tables)
         if not self.sqlite_db_path:
              return []
 
         # Calculate start timestamp
         start_ts = time.time() - (hours * 3600)
         
+        # Optimization: Use COUNT(track_id) instead of COUNT(DISTINCT track_id)
+        # In this context (per-hour buckets), the difference is usually negligible 
+        # but the performance gain is massive because SQLite doesn't need a temporary table for distinct values.
         sql = """
             SELECT 
                 cast(timestamp / 3600 as int) * 3600 as time_bucket, -- Group by hour
+                count(track_id) / 3600.0 as vehicle_count, -- Approximate count per second * 3600 (actually just counts update rows)
+                avg(speed) as average_speed
+            FROM vehicle_tracks
+            WHERE feed_id = ? AND timestamp >= ?
+            GROUP BY time_bucket
+            ORDER BY time_bucket ASC
+        """
+        # Better query for unique vehicles:
+        sql_refined = """
+            SELECT 
+                cast(timestamp / 3600 as int) * 3600 as time_bucket,
                 count(distinct track_id) as vehicle_count,
                 avg(speed) as average_speed
             FROM vehicle_tracks
@@ -821,32 +923,41 @@ class DatabaseManager:
             GROUP BY time_bucket
             ORDER BY time_bucket ASC
         """
+        # We'll use the refined one but with a strict timeout
         
         try:
-            results = []
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(sql, (feed_id, start_ts))
-                    rows = cursor.fetchall()
-                    
-                    for row in rows:
-                        # Row keys depend on row_factory, usually case-insensitive or index
-                        # Using numeric indices is safer if row_factory varies
-                        ts = row[0]
-                        count = row[1]
-                        speed = row[2] if row[2] is not None else 0.0
-                        
-                        results.append({
-                            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc),
-                            "vehicle_count": count,
-                            "average_speed": speed,
-                            "congestion_score": 0.0 # Not easily calculable from raw tracks
-                        })
-            return results
+            # Use a smaller timeout for the aggregation fallback to avoid 500 errors
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._execute_history_query, sql_refined, (feed_id, start_ts)),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"History aggregation timed out for {feed_id} after 15s")
+            return []
         except Exception as e:
             logger.error(f"SQLite aggregation failed: {e}")
             return []
+
+    def _execute_history_query(self, sql: str, params: tuple) -> List[Dict]:
+        results = []
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+                
+                for row in rows:
+                    ts = row[0]
+                    count = row[1]
+                    speed = row[2] if row[2] is not None else 0.0
+                    
+                    results.append({
+                        "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                        "vehicle_count": count,
+                        "average_speed": speed,
+                        "congestion_score": 0.0
+                    })
+        return results
 
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:

@@ -391,27 +391,29 @@ vehicle_detection:
   - 5 # bus
   - 7 # truck
   # Detection Quality Parameters
-  confidence_threshold: 0.45  # Increased from 0.35 to filter low-quality detections
-  nms_threshold: 0.35  # Decreased from 0.45 for better detection recall
+  confidence_threshold: 0.20  # Reduced to capture more daytime vehicles
+  low_confidence_threshold: 0.10 # Candidates for tracking maintenance
+  nms_threshold: 0.45  # Increased from 0.35 to avoid suppressing overlapping cars in distance
   
   # Bounding Box Quality Filters
-  bbox_expansion_factor: 0.08  # Expand boxes by 8% to account for model under-prediction
-  min_bbox_area: 400  # Minimum 20x20 pixels
-  max_aspect_ratio: 4.0  # Reject extreme aspect ratios (e.g., 10:1)
-  min_bbox_dimension: 20  # Minimum width or height in pixels
+  bbox_expansion_factor: 0.05
+  min_bbox_area: 256  # Minimum 16x16 pixels (capture smaller cars in distance)
+  max_aspect_ratio: 4.0
+  min_bbox_dimension: 16
   
   # Tracking Parameters
-  proximity_threshold: 150 # Increased for better high-speed tracking at low FPS
-  track_timeout: 10 # 10 seconds of prediction/coasting
-  reid_timeout: 3600 # 1 hour for long-term ReID
+  proximity_threshold: 250 # Increased from 150 for better high-speed tracking at low FPS
+  track_timeout: 30 # Increased to allow more coasting for fast vehicles
+  probation_threshold: 2 # Number of hits before track becomes active
+  reid_timeout: 3600
   max_active_tracks: 100
   max_reid_per_frame: 2
-  reid_interval_frames: 60
+  reid_interval_frames: 30 # More frequent ReID for better identity stability
   
   # Model Configuration
-  yolo_imgsz: 640
-  skip_frames: 3 # Process every 4th frame (approx 3.75 detection FPS at 15 FPS video)
-  predict_timeout: 0.4
+  yolo_imgsz: 640 # Keep 640 for speed, but consider 960 if hardware allows
+  skip_frames: 1 # Process every 2nd frame (7.5 FPS @ 15 FPS) for much better continuity
+  predict_timeout: 0.5
   
   # ReID Configuration
   reid_enabled: true

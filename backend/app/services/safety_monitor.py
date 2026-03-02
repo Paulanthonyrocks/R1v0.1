@@ -21,6 +21,7 @@ class SafetyMonitor:
         self.stopped_speed_threshold = self.safety_config.get("stopped_speed_kmh", 5.0)
         self.stopped_duration_threshold = self.safety_config.get("stopped_duration_sec", 10.0)
         self.wrong_way_cosine_threshold = self.safety_config.get("wrong_way_cosine_threshold", -0.8)
+        self.wrong_way_duration_threshold = self.safety_config.get("wrong_way_duration_sec", 1.5)
         
         # Lane Calibrator (Operational Autonomy)
         self.lane_calibrator = LaneCalibrator(
@@ -98,6 +99,13 @@ class SafetyMonitor:
         for missing_id in list(self.vehicle_states.keys()):
             if missing_id not in current_ids:
                 del self.vehicle_states[missing_id]
+        
+        # Periodic cleanup of alert cooldowns (every 1000 frames roughly)
+        if timestamp % 100 < 1.0: # simplistic throttle
+            now = time.time()
+            for key in list(self.alert_cooldowns.keys()):
+                if now - self.alert_cooldowns[key] > 3600: # 1 hour
+                    del self.alert_cooldowns[key]
                 
         return alerts
 
@@ -140,7 +148,7 @@ class SafetyMonitor:
         return None
 
     def _check_wrong_way(self, feed_id: str, vehicle: Dict, lane_vector: List[float], timestamp: float) -> Optional[Dict]:
-        # Requires explicit velocity vector
+        vid = vehicle["vehicle_id"]
         vx = vehicle.get("vx")
         vy = vehicle.get("vy")
         if vx is None or vy is None:
@@ -148,27 +156,37 @@ class SafetyMonitor:
         
         # Normalize vehicle vector
         mag = math.sqrt(vx*vx + vy*vy)
-        if mag < 1.0:
-            return None # Too slow to determine direction accurately
+        if mag < 2.0: # Higher threshold for wrong-way to avoid noise at low speeds
+            return None 
         
         norm_vx, norm_vy = vx/mag, vy/mag
         
         # Dot product
-        # lane_vector should be normalized
         dot = norm_vx * lane_vector[0] + norm_vy * lane_vector[1]
         
+        state = self.vehicle_states.get(vid, {})
+        
         if dot < self.wrong_way_cosine_threshold:
-             if self._should_alert(vehicle["vehicle_id"], "wrong_way", timestamp):
-                 return {
-                    "type": "safety_alert",
-                    "subtype": "wrong_way",
-                    "severity": "critical",
-                    "feed_id": feed_id,
-                    "vehicle_id": vehicle["vehicle_id"],
-                    "description": f"Vehicle {vehicle['vehicle_id']} traveling wrong way (alignment {dot:.2f})",
-                    "timestamp": timestamp,
-                    "meta": {"alignment": dot, "velocity": [vx, vy]}
-                }
+            if "wrong_way_since" not in state:
+                state["wrong_way_since"] = timestamp
+            
+            duration = timestamp - state["wrong_way_since"]
+            if duration > self.wrong_way_duration_threshold:
+                if self._should_alert(vid, "wrong_way", timestamp):
+                    return {
+                        "type": "safety_alert",
+                        "subtype": "wrong_way",
+                        "severity": "critical",
+                        "feed_id": feed_id,
+                        "vehicle_id": vid,
+                        "description": f"Vehicle {vid} sustained wrong-way driving ({duration:.1f}s)",
+                        "timestamp": timestamp,
+                        "meta": {"alignment": dot, "duration": duration, "velocity": [vx, vy]}
+                    }
+        else:
+            state.pop("wrong_way_since", None)
+            
+        self.vehicle_states[vid] = state
         return None
 
     def _should_alert(self, vehicle_id: str, alert_type: str, timestamp: float) -> bool:

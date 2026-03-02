@@ -13,6 +13,6 @@ export const analyticsService = {
         const baseURL = process.env.NEXT_PUBLIC_API_BASE_URL || '/';
         const client = APIClient.getInstance({ baseURL });
 
-        return client.get<HistoryStats[]>(`/api/v1/analytics/history/${feedId}`, { hours: hours.toString() });
+        return client.get<HistoryStats[]>(`/api/v1/analytics/history/${feedId}`, { hours: hours.toString() }, { timeout: 60000 });
     }
 };

@@ -5,6 +5,7 @@ import { SurveillanceFeedMessage, VideoFrameMessage } from './types';
 
 interface VehicleFrontendData {
     vehicle_id: string;
+    global_vehicle_id?: string;
     bbox: [number, number, number, number];
     speed: number;
     license_plate: string;
@@ -38,6 +39,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const lastFrameTimeRef = useRef<number>(0);
     const smoothedFrameTimeRef = useRef<number>(0);
     const lastFpsUpdateRef = useRef<number>(0);
+    const lastStateUpdateRef = useRef<number>(0);
+    const lastVehiclesUpdateTimeRef = useRef<number>(0);
+    const STATE_UPDATE_INTERVAL = 200; // Update UI state at most every 200ms (5fps)
+    const ANNOTATION_PERSISTENCE_MS = 500; // Retain annotations for 500ms during lag
     const FPS_EMA_ALPHA = 0.1;
 
     const frameCountRef = useRef<number>(0);
@@ -78,12 +83,29 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
         frameCountRef.current += 1;
 
-        // Update metrics state for side-panels
-        if (data.metrics) {
-            setMetrics(data.metrics);
+        // Update metrics and vehicles state for side-panels (Throttled)
+        let now = performance.now();
+        
+        // --- Annotation Persistence Logic ---
+        // If we have new vehicle data, update the ref and timestamp
+        if (data.vehicles && data.vehicles.length > 0) {
+            lastVehiclesUpdateTimeRef.current = now;
         }
-        if (data.vehicles) {
-            setVehicles(data.vehicles);
+
+        if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
+            if (data.metrics) {
+                setMetrics(data.metrics);
+            }
+            
+            // If data.vehicles is missing/empty, check if we should persist the previous set
+            if (data.vehicles && data.vehicles.length > 0) {
+                setVehicles(data.vehicles);
+            } else if (now - lastVehiclesUpdateTimeRef.current > ANNOTATION_PERSISTENCE_MS) {
+                // Only clear if we haven't seen updates for a while
+                setVehicles(null);
+            }
+            
+            lastStateUpdateRef.current = now;
         }
 
         let decodedImage: ImageBitmap | HTMLImageElement | null = null;
@@ -135,15 +157,23 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 frameRef.current.image.close();
             }
 
+            // Persistence for canvas drawing
+            let vehiclesToStore = data.vehicles || null;
+            if (!vehiclesToStore || vehiclesToStore.length === 0) {
+                if (now - lastVehiclesUpdateTimeRef.current < ANNOTATION_PERSISTENCE_MS) {
+                    vehiclesToStore = frameRef.current?.vehicles || null;
+                }
+            }
+
             frameRef.current = {
                 image: decodedImage,
                 index: data.frame_index || 0,
-                vehicles: data.vehicles || null,
+                vehicles: vehiclesToStore,
                 metrics: data.metrics || null
             };
         }
 
-        const now = performance.now();
+        now = performance.now();
         if (lastFrameTimeRef.current > 0) {
             const frameTime = now - lastFrameTimeRef.current;
             if (smoothedFrameTimeRef.current === 0) {
@@ -353,9 +383,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                 // Only show labels for ACTIVE detections to reduce screen occlusion
                 if (showVehicleDetails && v.status === 'active') {
+                    const speed = v.speed !== undefined && v.speed !== null ? v.speed.toFixed(0) : "0";
                     const lines = [
                         `${v.vehicle_id.split('_').pop()}: ${v.class_name}`,
-                        `${v.speed.toFixed(0)} km/h`
+                        `${speed} km/h`
                     ];
                     if (v.license_plate && v.license_plate !== "Unknown") {
                         lines.push(v.license_plate);

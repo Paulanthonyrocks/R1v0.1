@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import ThreeGrid from '@/components/CesiumGlobe';
+import LeafletMap from '@/components/map/LeafletMap';
 import { WebSocketClient, WebSocketMessageType, WebSocketMessage } from '../lib/websocket/WebSocketClient';
 import { useVehicleTracking } from '../lib/hooks/useVehicleTracking';
 import { WebSocketVideoFrame } from '../lib/types/api';
@@ -90,18 +90,18 @@ const TrafficMap: React.FC = () => {
   }, [vehicles]); // Re-bind when vehicle list changes (or use Ref for vehicles to avoid re-binding)
 
   return (
-    <section className="col-span-2 border border-gray-300 rounded-md relative h-[600px]">
-      {/* Background 3D/Map */}
-      <ThreeGrid />
+    <section className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden">
+      {/* Background Map */}
+      <LeafletMap />
 
       {/* Overlay for Vehicle Visualization */}
       <canvas
         ref={canvasRef}
-        className="absolute top-0 left-0 w-full h-full pointer-events-none"
+        className="absolute top-0 left-0 w-full h-full pointer-events-none z-[1001]"
         width={800} // Should be dynamic based on container
         height={600}
       />
-      <div className="absolute top-2 right-2 bg-black/50 text-white p-2 text-xs">
+      <div className="absolute top-2 right-2 bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono z-[1002]">
         Active Vehicles: {vehicles.length}
       </div>
     </section>

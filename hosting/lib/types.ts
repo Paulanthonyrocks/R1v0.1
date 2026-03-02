@@ -37,7 +37,7 @@ export interface FeedStatusData {
   latest_vehicles?: any[]; // Array of vehicle data
 }
 
-export type IncidentStatus = 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED';
+export type IncidentStatus = 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'FALSE_POSITIVE';
 
 export interface AlertData {
   id?: string | number;
@@ -62,12 +62,14 @@ export interface TrendDataPoint {
   total_vehicles: number;
   avg_speed: number;
   congestion_index: number;
+  health_score?: number;
 }
 
 export interface KpiData {
   average_speed_kmh?: number | null; // Aligned with backend GlobalRealtimeMetrics, made optional to match backend
   congestion_index?: number | null;  // Aligned with backend GlobalRealtimeMetrics, made optional
   active_incidents_count?: number | null; // Aligned with backend GlobalRealtimeMetrics, made optional
+  global_health_score?: number | null; // Aligned with backend GlobalRealtimeMetrics
   feed_statuses?: { [key: string]: number } | null; // Aligned with backend, e.g. { "running": N, "error": M, "stopped": P }
   total_flow?: number | null; // Already present and matches, made optional
   // Add any other fields from GlobalRealtimeMetrics if needed by the frontend kpis object

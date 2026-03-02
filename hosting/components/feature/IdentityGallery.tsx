@@ -28,7 +28,7 @@ const IdentityGallery: React.FC<IdentityGalleryProps> = ({ globalId, onClose }) 
             setLoading(true);
             try {
                 // Assuming API_BASE_URL is handled by your fetch wrapper or relative
-                const response = await fetch(`/api/vehicles/global/${globalId}/gallery`);
+                const response = await fetch(`/api/v1/vehicles/global/${globalId}/gallery`);
                 if (!response.ok) throw new Error('Failed to fetch identity gallery');
                 const result = await response.json();
                 setData(result);

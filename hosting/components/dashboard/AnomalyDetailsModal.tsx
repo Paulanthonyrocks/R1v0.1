@@ -71,10 +71,16 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
     setIsUpdating(false);
   };
 
-  const handleResolve = async () => {
+  const handleUpdateStatus = async (status: 'RESOLVED' | 'FALSE_POSITIVE') => {
     if (!anomaly.id) return;
     setIsUpdating(true);
-    const success = await incidentService.resolveIncident(String(anomaly.id), notes);
+    let success = false;
+    if (status === 'RESOLVED') {
+      success = await incidentService.resolveIncident(String(anomaly.id), notes);
+    } else {
+      success = await incidentService.markFalsePositive(String(anomaly.id), notes);
+    }
+    
     if (success) {
       onOpenChange(false);
       setShowResolveInput(false);
@@ -146,6 +152,22 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
             )}
           </div>
 
+          {anomaly.details?.snapshot_path && (
+            <div className="mt-4 border-2 border-lcd-text/20 bg-black overflow-hidden">
+              <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase">
+                Incident Snapshot // High-Res Capture
+              </div>
+              <img 
+                src={`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/snapshots/${anomaly.details.snapshot_path}`} 
+                alt="Incident Snapshot"
+                className="w-full h-auto object-contain max-h-[300px]"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            </div>
+          )}
+
           {showResolveInput && (
             <div className="mt-2 space-y-2">
               <label className="text-[10px] uppercase font-bold text-muted-foreground">Resolution Notes</label>
@@ -155,6 +177,23 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
               />
+              <div className="flex gap-2 pt-2">
+                <Button 
+                  className="flex-1 bg-matrix text-matrix-foreground hover:bg-matrix/90 font-bold text-xs"
+                  onClick={() => handleUpdateStatus('RESOLVED')}
+                  disabled={isUpdating}
+                >
+                  RESOLVE
+                </Button>
+                <Button 
+                  variant="destructive"
+                  className="flex-1 font-bold text-xs"
+                  onClick={() => handleUpdateStatus('FALSE_POSITIVE')}
+                  disabled={isUpdating}
+                >
+                  FALSE POSITIVE
+                </Button>
+              </div>
             </div>
           )}
         </div>

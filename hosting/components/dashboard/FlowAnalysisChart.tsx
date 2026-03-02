@@ -56,7 +56,7 @@ const CustomTooltipComponent = ({ active, payload, label, timeRange }: CustomToo
           <p className="label text-muted-foreground">{`Time: ${formatXAxis(label, timeRange)}`}</p>
           {payload.map((entry: { name: string; value: number; color: string; dataKey: string }, index: number) => (
              <p key={`item-${index}`} style={{ color: entry.color }} className="font-medium">
-                {`${entry.name}: ${entry.value?.toFixed(1)} ${entry.dataKey === 'avg_speed' ? 'km/h' : entry.dataKey === 'congestion_index' ? '%' : ''}`}
+                {`${entry.name}: ${entry.value?.toFixed(1)} ${entry.dataKey === 'avg_speed' ? 'km/h' : (entry.dataKey === 'congestion_index' || entry.dataKey === 'health_score') ? '%' : ''}`}
              </p>
           ))}
         </div>
@@ -91,12 +91,14 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
         const totalVehiclesSum = group.reduce((sum, item) => sum + (item.total_vehicles ?? 0), 0);
         const avgSpeedSum = group.reduce((sum, item) => sum + (item.avg_speed ?? 0), 0);
         const congestionIndexSum = group.reduce((sum, item) => sum + (item.congestion_index ?? 0), 0);
+        const healthScoreSum = group.reduce((sum, item) => sum + (item.health_score ?? 100), 0);
 
         aggregatedData.push({
           timestamp: new Date(key + (interval === 'hour' ? ':00' : '')).toISOString(),
           total_vehicles: totalVehiclesSum / group.length,
           avg_speed: avgSpeedSum / group.length,
           congestion_index: congestionIndexSum / group.length,
+          health_score: healthScoreSum / group.length,
         });
       }
 
@@ -194,9 +196,7 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 5, strokeWidth: 1, fill: secondaryColor }}
-          isAnimationActive={true}
-          animationDuration={1000}
-          animationEasing="ease-out"
+          isAnimationActive={false}
         />
 
         <Line
@@ -208,9 +208,7 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 5, strokeWidth: 1, fill: primaryColor }}
-          isAnimationActive={true}
-          animationDuration={1000}
-          animationEasing="ease-out"
+          isAnimationActive={false}
         />
         
         <Line
@@ -222,9 +220,19 @@ const FlowAnalysisChart = ({ data, isLoading, timeRange }: FlowAnalysisChartProp
           strokeWidth={2}
           dot={false}
           activeDot={{ r: 5, strokeWidth: 1, fill: tertiaryColor }}
-          isAnimationActive={true}
-          animationDuration={1000}
-          animationEasing="ease-out"
+          isAnimationActive={false}
+        />
+
+        <Line
+          yAxisId="right"
+          type="monotone"
+          dataKey="health_score"
+          name="System Health (%)"
+          stroke="#ef4444" // red-500
+          strokeWidth={2}
+          dot={false}
+          activeDot={{ r: 5, strokeWidth: 1, fill: "#ef4444" }}
+          isAnimationActive={false}
         />
       </LineChart>
     </ResponsiveContainer>
