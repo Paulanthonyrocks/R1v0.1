@@ -51,9 +51,28 @@ export class APIClient {
         } else {
             // If an instance already exists, ensure the options are the same
             if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
-                console.warn("APIClient.getInstance called with different options than initial instantiation. Ignoring new options.");
-                // Optionally, you could throw an error here if strict singleton behavior is desired:
-                // throw new Error("APIClient already instantiated with different options.");
+                console.log(`APIClient.getInstance called with different options. Updating instance...`);
+                
+                // Update baseURL if it changed
+                if (options.baseURL !== APIClient._options.baseURL) {
+                    let base = options.baseURL;
+                    if (!base || base === '/' || base.startsWith('/')) {
+                        if (typeof window !== 'undefined') {
+                            base = window.location.origin + (base === '/' ? '' : base);
+                        } else {
+                            base = 'http://localhost:8000';
+                        }
+                    }
+                    APIClient.instance.baseURL = base.replace(/\/$/, '');
+                    console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
+                }
+                
+                // Update timeout if it changed
+                if (options.timeout !== undefined && options.timeout !== APIClient._options.timeout) {
+                    APIClient.instance.timeout = options.timeout;
+                }
+                
+                APIClient._options = options;
             }
         }
         return APIClient.instance;

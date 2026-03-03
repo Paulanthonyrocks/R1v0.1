@@ -6,7 +6,7 @@ export class IncidentService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: process.env.NEXT_PUBLIC_API_URL || '' });
+        this.apiClient = APIClient.getInstance({ baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || '' });
     }
 
     public static getInstance(): IncidentService {

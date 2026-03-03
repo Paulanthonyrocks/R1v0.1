@@ -277,13 +277,12 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
                       </div>
 
                       {selectedIncident.details?.snapshot_path ? (
-                        <img 
-                          src={`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/snapshots/${selectedIncident.details.snapshot_path}`} 
+                        <img
+                          src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/snapshots/${selectedIncident.details.snapshot_path}`}
                           alt="Incident Snapshot"
                           className="w-full h-full object-contain filter grayscale contrast-125"
                         />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-lcd-text/40">
+                      ) : (                        <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-lcd-text/40">
                           <Video className="h-12 w-12 opacity-20" />
                           <span className="text-[10px] font-bold uppercase tracking-[0.3em]">No Visual Log Available</span>
                         </div>

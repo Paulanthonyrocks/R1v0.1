@@ -163,15 +163,14 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
               <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase">
                 Incident Snapshot // High-Res Capture
               </div>
-              <img 
-                src={`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/snapshots/${snapshotPath}`} 
+              <img
+                src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/snapshots/${snapshotPath}`}
                 alt="Incident Snapshot"
                 className="w-full h-auto object-contain max-h-[300px]"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}
-              />
-            </div>
+              />            </div>
           )}
 
           {showResolveInput && (
