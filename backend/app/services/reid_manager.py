@@ -150,6 +150,16 @@ class GlobalReIDManager:
         except Exception as e:
             logger.error(f"Failed to load ReID state from pickle: {e}")
 
+    def _normalize(self, vector: np.ndarray) -> np.ndarray:
+        norm = np.linalg.norm(vector)
+        return vector / norm if norm > 1e-6 else vector
+
+    def get_global_id(self, feed_id: str, local_id: str) -> Optional[str]:
+        with self._lock:
+            if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
+                return self.local_to_global[feed_id][local_id]
+        return None
+
     def _sync_gpu_matrix(self):
         """Moves the local gallery matrix to GPU for high-speed matching."""
         if self.device.type == "cpu" or self.gallery_matrix is None:
