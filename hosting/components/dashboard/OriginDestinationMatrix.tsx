@@ -1,12 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ArrowRight, ArrowRightLeft, Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useAPI } from '@/lib/hooks/useAPI';
 import useAuth from '@/lib/hook/useAuth';
-
-const API_BASE_URL = "";
 
 interface ODMatrixProps {
     hours?: number;
@@ -14,31 +13,28 @@ interface ODMatrixProps {
 
 export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) => {
     const { token } = useAuth();
+    const api = useAPI();
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            if (!token) return;
-            setLoading(true);
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/v1/analytics/od-matrix?hours=${hours}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Bypass-Tunnel-Reminder': 'true'
-                    }
-                });
-                if (res.ok) {
-                    const json = await res.json();
-                    setData(json);
+    const fetchData = useCallback(async () => {
+        if (!token) return;
+        setLoading(true);
+        try {
+            const response = await api.get<any>(`/api/v1/analytics/od-matrix?hours=${hours}`, undefined, {
+                headers: {
+                    'Bypass-Tunnel-Reminder': 'true'
                 }
-            } catch (e) {
-                console.error("OD Matrix fetch failed:", e);
-            } finally {
-                setLoading(false);
-            }
-        };
-        
+            });
+            setData(response);
+        } catch (e) {
+            console.error("OD Matrix fetch failed:", e);
+        } finally {
+            setLoading(false);
+        }
+    }, [api, hours, token]);
+
+    useEffect(() => {
         if (token) {
             fetchData();
         }
@@ -48,7 +44,7 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
         }, 30000);
         
         return () => clearInterval(interval);
-    }, [hours, token]);
+    }, [token, fetchData]);
 
     if (loading && !data) return <div className="h-64 flex items-center justify-center font-lcd opacity-50">CALCULATING MATRIX...</div>;
     if (!data || !data.matrix) return <div className="h-64 flex items-center justify-center font-lcd opacity-50 border border-dashed border-lcd-text/20">NO CROSS-FEED DATA AVAILABLE</div>;

@@ -289,12 +289,12 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     return;
                 }
 
-                // Coordinates from backend are in frame-space. 
-                // We scale them to canvas-space.
-                const sx1 = x1 * scaleX;
-                const sy1 = y1 * scaleY;
-                const sx2 = x2 * scaleX;
-                const sy2 = y2 * scaleY;
+                // Coordinates from backend are now normalized [0, 1].
+                // We scale them directly to canvas-space.
+                const sx1 = x1 * canvasWidth;
+                const sy1 = y1 * canvasHeight;
+                const sx2 = x2 * canvasWidth;
+                const sy2 = y2 * canvasHeight;
                 const sw = sx2 - sx1;
                 const sh = sy2 - sy1;
 
@@ -332,18 +332,17 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     ctx.strokeRect(sx1, sy1, sw, sh);
 
                     // --- Trajectory Projection ---
-                    if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.01 || Math.abs(v.vy ?? 0) > 0.01)) {
+                    if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.0001 || Math.abs(v.vy ?? 0) > 0.0001)) {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
 
                         // Project ahead by a fixed time (e.g., 0.2 seconds)
-                        // v.vx/vy are in pixels/frame. 
-                        // Use current frameRate if available, fallback to 15.
+                        // v.vx/vy are now normalized units per frame.
                         const currentFps = frameRate > 0 ? frameRate : 15;
                         const projectionFrames = currentFps * 0.2;
 
-                        const projX = cx + (v.vx ?? 0) * projectionFrames * scaleX;
-                        const projY = cy + (v.vy ?? 0) * projectionFrames * scaleY;
+                        const projX = cx + (v.vx ?? 0) * projectionFrames * canvasWidth;
+                        const projY = cy + (v.vy ?? 0) * projectionFrames * canvasHeight;
 
                         ctx.beginPath();
                         ctx.moveTo(cx, cy);

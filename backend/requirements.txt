@@ -1,7 +1,6 @@
 # backend/requirements.txt
 
-# PyTorch (CPU) - index URL ensures CPU-only wheels
---extra-index-url https://download.pytorch.org/whl/cpu
+# PyTorch
 torch>=2.0.0
 torchvision>=0.15.0
 
@@ -29,11 +28,11 @@ filterpy>=1.4.5
 numpy<2.0
 scikit-learn>=1.0.0
 
-# TensorFlow (CPU)
-tensorflow-cpu>=2.16.1
+# TensorFlow (with GPU support)
+tensorflow>=2.16.1
 
-# ONNX Runtime (CPU)
-onnxruntime>=1.15.1
+# ONNX Runtime (with GPU support)
+onnxruntime-gpu>=1.15.1
 
 # Data
 pandas>=1.3.0

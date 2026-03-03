@@ -168,6 +168,39 @@ async def lifespan(app: FastAPI):
         logger.critical(f"Database Init Failed: {e}")
         raise
 
+    # 2b. Model Optimization (Background)
+    # This might take a while, so we run it in the background or at least separate thread
+    # but since the first worker might start immediately, we should at least check.
+    # We call it as a separate process to avoid any CUDA context pollution
+    if cfg_dict.get("performance", {}).get("auto_optimize", False):
+        try:
+            logger.info("Checking for model auto-optimization...")
+            # Use subprocess to run the script
+            import subprocess
+            def run_optimization():
+                # Locate the model path correctly
+                vd_cfg = cfg_dict.get("vehicle_detection", {})
+                model_rel = vd_cfg.get("model_path", "models/yolov8n.pt")
+                # Handle both relative paths
+                if model_rel.startswith("backend/"):
+                     model_rel = model_rel[8:]
+                
+                # Check if it already has an engine
+                full_model_path = BASE_DIR / model_rel
+                engine_path = full_model_path.with_suffix(".engine")
+                
+                if not engine_path.exists():
+                    logger.info(f"YOLO engine missing for {full_model_path}. Starting optimization script...")
+                    # We use sys.executable to ensure we use the same Python environment
+                    import sys
+                    subprocess.run([sys.executable, str(BASE_DIR / "scripts/optimize_model.py"), "--model", str(full_model_path)], check=True)
+            
+            # Start in a separate thread but we don't await it to avoid blocking startup
+            # Actually, inference workers might start before it finishes, which is fine, they fall back to .pt
+            create_background_task(asyncio.to_thread(run_optimization))
+        except Exception as e:
+            logger.error(f"Failed to trigger model optimization: {e}")
+
     # 3. Firebase (Critical if enabled)
     fb_cfg = to_dict(getattr(loaded_config, "firebase_admin", {}))
     try:

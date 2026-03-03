@@ -6,7 +6,7 @@ export function useAPI() {
     const { token } = useUser();
     
     const api = useMemo(() => APIClient.getInstance({
-        baseURL: '/'
+        baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || '/'
     }), []);
 
     useEffect(() => {
