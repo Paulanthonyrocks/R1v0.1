@@ -77,13 +77,6 @@ services:
       - ./backend/data:/app/data
       - ./backend/configs:/app/configs
       - ./backend/models:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     depends_on:
       - redis
       - mongodb

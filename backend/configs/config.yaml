@@ -5,9 +5,9 @@ video_processing:
   adaptive_streaming: false
   roi_scale: 0.5
 performance:
-  gpu_acceleration: true
-  video_gpu_acceleration: true # Enable HW accelerated decoding
-  image_gpu_acceleration: true # Enable GPU-based image ops
+  gpu_acceleration: false
+  video_gpu_acceleration: false # Enable HW accelerated decoding
+  image_gpu_acceleration: false # Enable GPU-based image ops
   auto_optimize: true # Auto-export to TensorRT
   batch_size: 8
   inference_timeout: 0.005 # 5ms wait

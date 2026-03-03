@@ -37,7 +37,7 @@ class MongoDBConfig(BaseModel):
     enabled: bool = True
 
 class PerformanceConfig(BaseModel):
-    gpu_acceleration: bool = True
+    gpu_acceleration: bool = False
     video_gpu_acceleration: bool = False  # For HW accelerated decoding/encoding
     image_gpu_acceleration: bool = False  # For GPU-based image ops (resizing, etc.)
     inference_pool_size: int = 2

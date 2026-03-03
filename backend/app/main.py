@@ -1,7 +1,7 @@
 import os
 # --- Hardware Optimization Flags ---
-# Force TensorFlow to only allocate memory as needed, preventing conflicts with PyTorch
-os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+# Globally disable GPU usage for all ML frameworks (TensorFlow, PyTorch, etc.)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # Suppress excessive TensorFlow logging
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
