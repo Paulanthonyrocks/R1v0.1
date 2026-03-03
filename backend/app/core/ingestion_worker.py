@@ -8,6 +8,8 @@ import signal
 import json
 from typing import Dict, Any, Optional
 from multiprocessing import Queue as MPQueue, Event
+import torch
+import torch.nn.functional as F
 
 from ..utils.video import FrameReader
 from ..utils.process import start_parent_monitor
@@ -67,6 +69,10 @@ def ingestion_worker(
     perf_cfg = config.get("performance", {})
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
     
+    # Device setup for GPU preprocessing
+    device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
+    logger.info(f"[{feed_id}] Ingestion Preprocessing device: {device}")
+
     # Stream resolution for the raw frame transmission
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
@@ -208,8 +214,20 @@ def ingestion_worker(
                 try:
                     # total_frames_attempted tracked implicitly via metrics
                     
-                    # Resize and encode to bytes for efficient queue transport
-                    resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
+                    # --- GPU Accelerated Resizing ---
+                    if device.type == "cuda":
+                        # Convert NumPy (H, W, C) BGR -> PyTorch (1, C, H, W) RGB/BGR
+                        # We keep BGR for consistency with OpenCV
+                        frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1).float().unsqueeze(0)
+                        # Resize (Interpolate)
+                        # stream_res is (W, H), F.interpolate expects (target_H, target_W)
+                        resized_tensor = F.interpolate(frame_tensor, size=(stream_res[1], stream_res[0]), mode='bilinear', align_corners=False)
+                        # Convert back to NumPy (H, W, C) uint8
+                        resized = resized_tensor.squeeze(0).permute(1, 2, 0).byte().cpu().numpy()
+                    else:
+                        # Fallback to CPU-based cv2.resize
+                        resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
+
                     success, buffer = cv2.imencode(".jpg", resized, encode_params)
                     
                     if success:

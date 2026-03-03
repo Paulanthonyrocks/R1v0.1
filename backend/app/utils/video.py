@@ -85,12 +85,14 @@ class FrameReader:
     def _read_frames_continuously(self) -> None:
         # Select backend and options based on GPU config
         backend = cv2.CAP_ANY
-        if self.gpu_acceleration and self.is_file:
+        if self.gpu_acceleration:
             # Note: This requires OpenCV built with FFMPEG and specific environment setup
             # We use CAP_FFMPEG to allow for hardware acceleration flags
             backend = cv2.CAP_FFMPEG
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid" # Example for NVIDIA
-            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG.")
+            # Set comprehensive hardware acceleration options for NVIDIA GPUs
+            # 'hwaccel;cuvid|video_codec;h264_cuvid' is the standard way to trigger this in OpenCV-FFMPEG
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "hwaccel;cuvid|video_codec;h264_cuvid"
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (cuvid).")
 
         cap = cv2.VideoCapture(self.source, backend)
         if not cap.isOpened():

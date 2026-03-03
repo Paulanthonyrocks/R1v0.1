@@ -145,6 +145,19 @@ class CoreModule:
             for zone in exclusion:
                 zone_np = (np.array(zone, dtype=np.float32) * [w, h]).astype(np.int32)
                 cv2.fillPoly(self.roi_mask, [zone_np], 0)
+        
+        # Move mask to GPU if available
+        if torch.cuda.is_available() and self.device != "cpu":
+            try:
+                # Use the same device index as the model
+                device_idx = int(self.device) if self.device.isdigit() else 0
+                self.roi_mask_gpu = torch.from_numpy(self.roi_mask).to(f"cuda:{device_idx}")
+                logger.info(f"[{self.feed_id}] ROI Mask moved to GPU (cuda:{device_idx})")
+            except Exception as e:
+                logger.warning(f"[{self.feed_id}] Failed to move ROI mask to GPU: {e}")
+                self.roi_mask_gpu = None
+        else:
+            self.roi_mask_gpu = None
 
     def _update_homography(self, calibration_cfg: Dict):
         """Perspective transformation for distance/speed math."""
@@ -287,16 +300,32 @@ class CoreModule:
                 if ratio > max_ratio: continue
 
                 # 2. ROI Mask Filtering
-                if self.roi_mask is not None:
+                if self.roi_mask_gpu is not None:
                     # Clamp coordinates to mask bounds
                     cx1, cy1 = max(0, x1), max(0, y1)
                     cx2, cy2 = min(fw, x2), min(fh, y2)
                     
                     if cx2 > cx1 and cy2 > cy1:
-                        box_area = w * h
+                        box_area = (x2 - x1) * (y2 - y1)
+                        # Slice the GPU tensor
+                        roi_crop_gpu = self.roi_mask_gpu[cy1:cy2, cx1:cx2]
+                        # Sum values on GPU, then bring to CPU for comparison
+                        overlap_area = torch.sum(roi_crop_gpu > 0).item()
+                        
+                        # If at least 30% of the box is inside the ROI, keep it
+                        if (overlap_area / box_area) < 0.3:
+                            continue
+                    else:
+                        continue
+                elif self.roi_mask is not None:
+                    # Fallback to CPU-based ROI filtering
+                    cx1, cy1 = max(0, x1), max(0, y1)
+                    cx2, cy2 = min(fw, x2), min(fh, y2)
+                    
+                    if cx2 > cx1 and cy2 > cy1:
+                        box_area = (x2 - x1) * (y2 - y1)
                         roi_crop = self.roi_mask[cy1:cy2, cx1:cx2]
                         overlap_area = np.sum(roi_crop > 0)
-                        # If at least 30% of the box is inside the ROI, keep it
                         if (overlap_area / box_area) < 0.3:
                             continue
                     else:

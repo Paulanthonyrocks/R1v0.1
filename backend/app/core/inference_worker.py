@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from multiprocessing import Queue as MPQueue, Event
+import torch
+import torch.nn.functional as F
 
 from ..core.core_module import CoreModule
 from ..utils.monitoring import TrafficMonitor
@@ -27,10 +29,19 @@ def _serialize_tracked_vehicles_with_map(
     v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
     return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
 
-def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], scale: float = 1.0) -> List[Dict[str, Any]]:
+def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
     """Extracts high-res PNG patches for active vehicles (better for OCR)."""
     rois = []
     h, w = frame.shape[:2]
+    
+    # Optimization: Use GPU for cropping if available
+    frame_tensor = None
+    if device and device.type == "cuda":
+        try:
+            frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1) # (C, H, W)
+        except Exception as e:
+            logger.warning(f"Failed to move frame to GPU for ROI extraction: {e}")
+
     for v in tracked_vehicles:
         bbox = v.get("bbox")
         if not bbox or len(bbox) != 4: continue
@@ -42,7 +53,14 @@ def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], sca
         
         if x2 <= x1 or y2 <= y1: continue
         
-        crop = frame[y1:y2, x1:x2]
+        if frame_tensor is not None:
+            # GPU Crop
+            crop_tensor = frame_tensor[:, y1:y2, x1:x2]
+            crop = crop_tensor.permute(1, 2, 0).byte().cpu().numpy()
+        else:
+            # CPU Crop
+            crop = frame[y1:y2, x1:x2]
+            
         _, crop_bytes = cv2.imencode(".png", crop) # Switched to PNG
         
         rois.append({
@@ -115,6 +133,12 @@ def inference_worker(
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
     
+    # Device setup for GPU acceleration
+    perf_cfg = config.get("performance", {})
+    use_gpu = perf_cfg.get("gpu_acceleration", False)
+    device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+    logger.info(f"[Worker {worker_id}] Inference device: {device}")
+
     model_path = vehicle_det_cfg.get("model_path")
 
     # Shared Model Loading Logic
@@ -126,24 +150,19 @@ def inference_worker(
             logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
             full_model_path = str(Path(root_dir) / model_path)
-            use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
             
             # Load YOLO
             engine_path = Path(full_model_path).with_suffix(".engine")
             if engine_path.exists():
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
                 from ultralytics import YOLO
-                import torch
                 if stop_event.is_set(): return
-                device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
                 shared_model = YOLO(str(engine_path))
                 shared_model.to(device) 
                 logger.info(f"[Worker {worker_id}] Shared TensorRT engine loaded on {device}.")
             else:
                 from ultralytics import YOLO
-                import torch
                 if stop_event.is_set(): return
-                device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
                 shared_model = YOLO(full_model_path)
                 shared_model.to(device)
                 logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
@@ -468,7 +487,7 @@ def inference_worker(
                          bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                          _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                          extra["bg"] = bg_bytes.tobytes()
-                         extra["rois"] = _extract_rois(frame, serialized_v)
+                         extra["rois"] = _extract_rois(frame, serialized_v, device=device)
                     
                     try:
                         central_output_queue.put_nowait((

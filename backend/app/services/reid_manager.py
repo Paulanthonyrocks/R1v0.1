@@ -12,6 +12,7 @@ except ImportError:
     redis = None
     aredis = None
 import threading
+import torch
 
 logger = logging.getLogger("app.services.reid")
 
@@ -23,6 +24,12 @@ class GlobalReIDManager:
         self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 1000)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)
         self.persistence_path = self.reid_cfg.get("persistence_path", "backend/data/reid_gallery.pkl")
+        
+        # GPU Setup
+        perf_cfg = config.get("performance", {})
+        self.use_gpu = perf_cfg.get("gpu_acceleration", False)
+        self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
+        self.gallery_matrix_gpu = None
         
         # Thread safety lock
         self._lock = Lock()
@@ -143,21 +150,42 @@ class GlobalReIDManager:
         except Exception as e:
             logger.error(f"Failed to load ReID state from pickle: {e}")
 
-    def _normalize(self, vector: np.ndarray) -> np.ndarray:
-        norm = np.linalg.norm(vector)
-        return vector / norm if norm > 1e-6 else vector
+    def _sync_gpu_matrix(self):
+        """Moves the local gallery matrix to GPU for high-speed matching."""
+        if self.device.type == "cpu" or self.gallery_matrix is None:
+            self.gallery_matrix_gpu = None
+            return
 
-    def get_global_id(self, feed_id: str, local_id: str) -> Optional[str]:
-        with self._lock:
-            if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
-                return self.local_to_global[feed_id][local_id]
-        return None
+        try:
+            # Only sync if sizes changed or if we don't have a GPU matrix yet
+            if self.gallery_matrix_gpu is None or self.gallery_matrix_gpu.shape[0] != self.gallery_matrix.shape[0]:
+                self.gallery_matrix_gpu = torch.from_numpy(self.gallery_matrix).to(self.device)
+        except Exception as e:
+            logger.error(f"Failed to sync ReID gallery to GPU: {e}")
+            self.gallery_matrix_gpu = None
 
     def match_only(self, embedding: np.ndarray) -> Optional[str]:
         """Attempts to match an embedding against the gallery without registering a new one."""
         embedding = self._normalize(embedding)
         with self._lock:
             if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
+                # Try GPU Matching First
+                self._sync_gpu_matrix()
+                if self.gallery_matrix_gpu is not None:
+                    try:
+                        emb_tensor = torch.from_numpy(embedding).to(self.device).unsqueeze(1)
+                        # Perform dot product (Matrix Multiplication) on GPU
+                        scores = torch.mm(self.gallery_matrix_gpu, emb_tensor).squeeze(1)
+                        best_idx = torch.argmax(scores).item()
+                        best_score = scores[best_idx].item()
+                        if best_score > self.similarity_threshold:
+                            return self.gallery_ids[best_idx]
+                        return None
+                    except Exception as e:
+                        logger.error(f"GPU ReID matching failed: {e}")
+                        # Fallback to CPU
+
+                # CPU Fallback
                 scores = np.dot(self.gallery_matrix, embedding)
                 best_idx = np.argmax(scores)
                 if scores[best_idx] > self.similarity_threshold:
@@ -201,19 +229,36 @@ class GlobalReIDManager:
             best_score = -1.0
 
             if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
-                scores = np.dot(self.gallery_matrix, embedding)
-                best_idx = np.argmax(scores)
-                best_score = scores[best_idx]
+                # GPU Matching
+                self._sync_gpu_matrix()
+                if self.gallery_matrix_gpu is not None:
+                    try:
+                        emb_tensor = torch.from_numpy(embedding).to(self.device).unsqueeze(1)
+                        scores_tensor = torch.mm(self.gallery_matrix_gpu, emb_tensor).squeeze(1)
+                        best_idx = torch.argmax(scores_tensor).item()
+                        best_score = scores_tensor[best_idx].item()
+                    except Exception as e:
+                        logger.error(f"GPU match in register failed: {e}")
+                        # CPU Fallback
+                        scores = np.dot(self.gallery_matrix, embedding)
+                        best_idx = np.argmax(scores)
+                        best_score = scores[best_idx]
+                else:
+                    # Pure CPU Matching
+                    scores = np.dot(self.gallery_matrix, embedding)
+                    best_idx = np.argmax(scores)
+                    best_score = scores[best_idx]
 
                 if best_score > self.similarity_threshold:
                     best_match_id = self.gallery_ids[best_idx]
                     logger.debug(f"ReID Match: {local_id} -> {best_match_id} (Score: {best_score:.3f})")
                 elif self.redis:
-                    # Last-ditch effort: sync from Redis to see if another node registered it recently
-                    # only if we haven't synced in the last few seconds to avoid overhead
-                    if time.time() - self.last_cleanup_time > 1.0: # Re-using cleanup timer logic or similar
+                    # Last-ditch effort: sync from Redis
+                    if time.time() - self.last_cleanup_time > 1.0: 
                          self._sync_from_redis()
-                         # Re-score after sync
+                         # Re-sync GPU matrix after Redis sync
+                         self._sync_gpu_matrix()
+                         # Re-score after sync (CPU for simplicity in retry)
                          if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
                              scores = np.dot(self.gallery_matrix, embedding)
                              best_idx = np.argmax(scores)
