@@ -21,11 +21,15 @@ def ingestion_worker(
     central_input_queue: MPQueue,
     stop_event: Event,
     config: Dict[str, Any],
-    is_looped: bool = False
+    is_looped: bool = False,
+    shared_skip_array: Optional[Any] = None, # Shared skip array from FeedManager
+    worker_idx: int = 0 # Index of the inference worker this feed is routed to
 ):
     """
     Lightweight process that only captures frames and pushes them to a central queue.
     """
+    # Start parent monitor to avoid zombie processes
+    start_parent_monitor(stop_event)
     print(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}", flush=True)
     
     # Initialize logging for the child process
@@ -159,18 +163,46 @@ def ingestion_worker(
                 consecutive_errors = 0
                 frame_index, frame = result
 
+                # --- Early Skipping (Shared Skip) ---
+                # Check if we should skip this frame BEFORE expensive resizing/encoding
+                if shared_skip_array is not None:
+                    try:
+                        current_skip = shared_skip_array[worker_idx]
+                        
+                        # Exceptions to skipping:
+                        # 1. First few frames (to initialize state)
+                        is_initial = frame_index < 10
+                        
+                        # 2. Lane detection frames (if enabled)
+                        lane_cfg = config.get("lane_detection", {})
+                        is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
+                                         (frame_index % lane_cfg.get("lane_detection_interval", 10) == 0))
+                        
+                        # 3. Detection interval
+                        should_process = (frame_index % (current_skip + 1) == 0)
+                        
+                        if not (is_initial or is_lane_frame or should_process):
+                            # Skip this frame early
+                            metrics.frames_dropped += 1
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"[{feed_id}] Error reading shared skip: {e}")
+
                 # --- Backpressure-Aware Capture ---
                 # If the AI queue is filling up, drop frames BEFORE expensive resize/encode
-                # We target a threshold of 50-70% of QUEUE_MAX_SIZE (500)
+                # Use a threshold percentage of the configured max size (default 500)
                 try:
+                    q_max = config.get("performance", {}).get("queue_max_size", 500)
                     q_size = central_input_queue.qsize()
-                    if q_size > 300: # Congestion threshold
+                    
+                    if q_size > q_max * 0.6: # 60% congestion threshold
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:
-                            logger.warning(f"[{feed_id}] High congestion ({q_size} in queue). Dropping frame {frame_index} EARLY.")
+                            logger.warning(f"[{feed_id}] High congestion ({q_size}/{q_max}). Dropping frame {frame_index} EARLY.")
                         continue
                 except (AttributeError, NotImplementedError):
-                    # qsize() not available on some platforms/types
+                    # qsize() not available on some platforms
                     pass
 
                 try:

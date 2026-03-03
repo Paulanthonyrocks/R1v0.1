@@ -41,11 +41,26 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     if (kpis) {
       setKpiHistory(prev => {
+        const lastPoint = prev.length > 0 ? prev[prev.length - 1] : null;
+        
+        // Frontend local smoothing (alpha = 0.4) to further stabilize visuals
+        const alpha = 0.4;
+        const currentCongestion = kpis.congestion_index ?? 0;
+        const currentSpeed = kpis.average_speed_kmh ?? 0;
+        
+        const smoothedCongestion = lastPoint 
+            ? (alpha * currentCongestion + (1 - alpha) * lastPoint.congestion_index)
+            : currentCongestion;
+            
+        const smoothedSpeed = lastPoint
+            ? (alpha * currentSpeed + (1 - alpha) * lastPoint.avg_speed)
+            : currentSpeed;
+
         const newPoint: TrendDataPoint = {
           timestamp: new Date().toISOString(),
           total_vehicles: kpis.total_flow ?? 0,
-          avg_speed: kpis.average_speed_kmh ?? 0,
-          congestion_index: kpis.congestion_index ?? 0,
+          avg_speed: Math.round(smoothedSpeed * 10) / 10,
+          congestion_index: Math.round(smoothedCongestion * 10) / 10,
           health_score: kpis.global_health_score ?? 100
         };
 

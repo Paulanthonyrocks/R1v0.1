@@ -13,10 +13,12 @@ from app.dependency_injection import (
     get_current_active_user,
     get_db,
     get_db_manager,
+    get_feed_manager,
 )
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
 from app.services.analytics_service_pro import AdvancedAnalyticsService
+from app.services.feed_manager import FeedManager
 from app.models.analysis import (
  AnomalyDetectionRequest,
  AllNodesCongestionResponse,
@@ -493,12 +495,23 @@ async def get_forecast_vs_actual(
 async def get_feed_history_endpoint(
     feed_id: str,
     hours: int = Query(24, ge=1, le=168),
-    db: DatabaseManager = Depends(get_db_manager)
+    db: DatabaseManager = Depends(get_db_manager),
+    fm: FeedManager = Depends(get_feed_manager)
 ):
     try:
-        return await db.get_history_stats(feed_id, hours=hours)
+        # Try to find coordinates for this feed to enable optimized lookup
+        lat, lon = None, None
+        try:
+            feed_config = await fm.get_feed_config(feed_id)
+            if feed_config:
+                lat = feed_config.latitude
+                lon = feed_config.longitude
+        except Exception as e:
+            logger.warning(f"Could not resolve coordinates for feed {feed_id}: {e}")
+
+        return await db.get_history_stats(feed_id, hours=hours, latitude=lat, longitude=lon)
     except Exception as e:
-        logger.error(f"Error fetching history for {feed_id}: {e}")
+        logger.error(f"Error fetching history for {feed_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch history")
 
 

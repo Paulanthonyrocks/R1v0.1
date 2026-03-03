@@ -251,8 +251,16 @@ class AnalyticsService:
             timestamp = datetime.now(timezone.utc)
         elif isinstance(raw_timestamp, (int, float)):
             timestamp = datetime.fromtimestamp(raw_timestamp, tz=timezone.utc)
+        elif isinstance(raw_timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(raw_timestamp)
+            except ValueError:
+                timestamp = datetime.now(timezone.utc)
         else:
             timestamp = datetime.now(timezone.utc)
+
+        # Update metrics with the normalized datetime object to ensure consistency across the system
+        metrics["timestamp"] = timestamp
 
         # 2. Async Analytics Pipeline (Separated from process loop)
         asyncio.create_task(self._async_analytics_pipeline(feed_id, metrics, vehicles, timestamp))

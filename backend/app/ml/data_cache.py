@@ -26,14 +26,37 @@ class TrafficDataCache:
         """Add a new data point for a location"""
         location_key = self._get_location_key(latitude, longitude)
 
-        # Add new data point
-        data_point = {"timestamp": timestamp, **data}
+        # Add new data point, ensuring we use the datetime timestamp argument 
+        # and it's not overwritten by anything in the 'data' dict
+        data_point = {**data, "timestamp": timestamp}
         logger.debug(f"Adding data point for {location_key}: {data_point}")
         self.location_data[location_key].append(data_point)
 
         logger.debug(
             f"Data point added for {location_key}. Current points: {len(self.location_data[location_key])}"
         )
+        
+        # Clean old data for this location to prevent memory leak
+        self._clean_old_data(location_key)
+
+    def _is_later_than(self, ts: Any, cutoff: datetime) -> bool:
+        """Safely compare a timestamp (which could be float/str) with a cutoff datetime."""
+        if not isinstance(ts, datetime):
+            try:
+                if isinstance(ts, (int, float)):
+                    ts = datetime.fromtimestamp(ts, tz=timezone.utc)
+                elif isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                else:
+                    return False
+            except (ValueError, TypeError, OSError):
+                return False
+        
+        # Ensure ts has timezone if cutoff has timezone
+        if ts.tzinfo is None and cutoff.tzinfo is not None:
+            ts = ts.replace(tzinfo=timezone.utc)
+            
+        return ts > cutoff
 
     def _clean_old_data(self, location_key: str):
         """Remove data points older than max_history_hours"""
@@ -44,7 +67,7 @@ class TrafficDataCache:
         self.location_data[location_key] = [
             point
             for point in self.location_data[location_key]
-            if point["timestamp"] > cutoff_time
+            if self._is_later_than(point.get("timestamp"), cutoff_time)
         ]
 
     def get_recent_data(
@@ -59,7 +82,7 @@ class TrafficDataCache:
 
         if hours is not None:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-            data = [point for point in data if point["timestamp"] > cutoff_time]
+            data = [point for point in data if self._is_later_than(point.get("timestamp"), cutoff_time)]
 
         if num_points is not None:
             data = data[-num_points:]
@@ -141,14 +164,11 @@ class TrafficDataCache:
                 continue
 
             summary = {
+                **latest_point,
                 "id": location_key,
                 "name": f"Node at ({latitude:.4f}, {longitude:.4f})",
                 "latitude": latitude,
                 "longitude": longitude,
-                "timestamp": latest_point.get("timestamp", datetime.now(timezone.utc)),
-                "vehicle_count": latest_point.get("vehicle_count", 0),
-                "average_speed": latest_point.get("average_speed", 0.0),
-                "congestion_score": latest_point.get("congestion_score", 0.0),
             }
             summaries.append(summary)
         logger.debug(f"Returning {len(summaries)} location summaries.")

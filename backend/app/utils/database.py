@@ -742,6 +742,10 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"TimescaleDB batch save failed: {e}")
 
+    def _get_location_key(self, latitude: float, longitude: float) -> str:
+        """Create a unique key for a location, rounding to 4 decimal places for nearby grouping"""
+        return f"{round(latitude, 4)},{round(longitude, 4)}"
+
     async def save_location_metrics_batch(self, metrics_list: List[Dict]):
         """Saves a batch of aggregated location metrics to SQLite and TimescaleDB."""
         if not metrics_list:
@@ -752,7 +756,7 @@ class DatabaseManager:
             location_id, timestamp, vehicle_count, average_speed, 
             congestion_score, latitude, longitude
         ) VALUES (?, ?, ?, ?, ?, ?, ?)"""
-        
+
         sqlite_params = []
         for m in metrics_list:
             ts = m.get("timestamp")
@@ -763,7 +767,7 @@ class DatabaseManager:
                     ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
                 except ValueError:
                     ts = time.time()
-            
+
             sqlite_params.append((
                 m.get("id"),
                 ts,
@@ -775,10 +779,8 @@ class DatabaseManager:
             ))
 
         try:
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    conn.executemany(sql, sqlite_params)
-                    conn.commit()
+            # FIX: Use asyncio.to_thread to avoid blocking the event loop with self.lock
+            await asyncio.to_thread(self._sync_save_location_metrics, sql, sqlite_params)
             logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite.")
         except Exception as e:
             logger.error(f"Failed to save location metrics to SQLite: {e}")
@@ -809,7 +811,7 @@ class DatabaseManager:
                             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         except ValueError:
                             ts = datetime.now(timezone.utc)
-                    
+
                     ts_params.append({
                         "location_id": m.get("id"),
                         "timestamp": ts,
@@ -819,16 +821,23 @@ class DatabaseManager:
                         "latitude": m.get("latitude"),
                         "longitude": m.get("longitude")
                     })
-                
+
                 await conn.execute(ts_sql, ts_params)
                 logger.info(f"Saved {len(ts_params)} location metrics to TimescaleDB.")
         except Exception as e:
             logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
 
+    def _sync_save_location_metrics(self, sql: str, params: List[tuple]):
+        """Synchronous helper for save_location_metrics_batch to hold the lock."""
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                conn.executemany(sql, params)
+                conn.commit()
+
     async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
         """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""
         start_time_ts = time.time() - (hours * 3600)
-        
+
         # 1. Try TimescaleDB
         if self.timescale_engine:
             start_time_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -856,6 +865,7 @@ class DatabaseManager:
             ORDER BY timestamp ASC
         """
         try:
+            # FIX: Use asyncio.to_thread for queries too if they might be slow or block on lock
             rows = await asyncio.to_thread(self._execute_query, sql, (location_id, start_time_ts))
             if rows:
                 for row in rows:
@@ -867,7 +877,7 @@ class DatabaseManager:
 
         return []
 
-    async def get_history_stats(self, feed_id: str, hours: int = 24) -> List[Dict]:
+    async def get_history_stats(self, feed_id: str, hours: int = 24, latitude: Optional[float] = None, longitude: Optional[float] = None) -> List[Dict]:
         """
         Retrieves historical statistics (vehicle count, speed).
         Tries TimescaleDB/SQLite 'location_metrics' first.
@@ -877,10 +887,14 @@ class DatabaseManager:
         try:
             # First try with feed_id directly as location_id
             metrics = await self.get_location_metrics(feed_id, hours)
-            
-            # If not found, AnalyticsService might be using a coordinate-based key
-            # but we'll prioritize the feed_id match if it exists.
-            
+
+            # Fallback: AnalyticsService uses coordinate-based keys. Try that too.
+            if not metrics and latitude is not None and longitude is not None:
+                coord_id = self._get_location_key(latitude, longitude)
+                if coord_id != feed_id:
+                    logger.info(f"Retrying history fetch with coordinate-based ID: {coord_id}")
+                    metrics = await self.get_location_metrics(coord_id, hours)
+
             if metrics:
                 # Map to format expected by dashboard
                 return [{
@@ -898,7 +912,7 @@ class DatabaseManager:
 
         # Calculate start timestamp
         start_ts = time.time() - (hours * 3600)
-        
+
         # Optimization: Use COUNT(track_id) instead of COUNT(DISTINCT track_id)
         # In this context (per-hour buckets), the difference is usually negligible 
         # but the performance gain is massive because SQLite doesn't need a temporary table for distinct values.
@@ -924,20 +938,20 @@ class DatabaseManager:
             ORDER BY time_bucket ASC
         """
         # We'll use the refined one but with a strict timeout
-        
+
         try:
             # Use a smaller timeout for the aggregation fallback to avoid 500 errors
+            # Reduced from 15s to 5s to ensure event loop remains responsive and proxy doesn't timeout
             return await asyncio.wait_for(
                 asyncio.to_thread(self._execute_history_query, sql_refined, (feed_id, start_ts)),
-                timeout=15.0
+                timeout=5.0
             )
         except asyncio.TimeoutError:
-            logger.warning(f"History aggregation timed out for {feed_id} after 15s")
+            logger.warning(f"History aggregation timed out for {feed_id} after 5s")
             return []
         except Exception as e:
             logger.error(f"SQLite aggregation failed: {e}")
             return []
-
     def _execute_history_query(self, sql: str, params: tuple) -> List[Dict]:
         results = []
         with self.lock:

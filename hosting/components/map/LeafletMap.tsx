@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2 } from 'lucide-react';
+import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search } from 'lucide-react';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
@@ -34,6 +34,7 @@ const LeafletMap: React.FC = () => {
   const signalsLayer = useRef<L.LayerGroup>(L.layerGroup());
   
   const markersRef = useRef<Record<string, L.Marker>>({});
+  const feedMarkersRef = useRef<Record<string, L.Marker>>({});
   const segmentRef = useRef<Record<string, L.Polyline>>({});
   const incidentMarkersRef = useRef<Record<string, L.Marker>>({});
   const signalMarkersRef = useRef<Record<string, L.Marker>>({});
@@ -52,6 +53,16 @@ const LeafletMap: React.FC = () => {
   const [selectedNode, setSelectedNode] = useState<any>(null);
   const [signalStates, setSignalStates] = useState<Record<string, any>>({});
   const [isChangingPhase, setIsChangingPhase] = useState(false);
+
+  // Search State
+  interface SearchResult {
+    type: 'feed' | 'node';
+    data: any;
+    label: string;
+  }
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     fixLeafletIcons();
@@ -117,12 +128,63 @@ const LeafletMap: React.FC = () => {
     activeLayers.signals ? signalsLayer.current.addTo(leafletMap.current) : signalsLayer.current.remove();
   }, [activeLayers]);
 
+  // Update Feeds Layer
+  useEffect(() => {
+    if (!leafletMap.current || !feeds) return;
+
+    feeds.forEach(feed => {
+      // Use config coords if available, otherwise fallback to top-level
+      const lat = feed.config?.latitude || feed.latitude;
+      const lng = feed.config?.longitude || feed.longitude;
+
+      if (lat && lng) {
+        const id = feed.feed_id;
+        const statusColor = feed.status === 'running' ? '#00ff41' : feed.status === 'error' ? '#ff3e3e' : '#facc15';
+        
+        const icon = L.divIcon({
+          className: 'feed-marker',
+          html: `<div style="
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            width: 24px; 
+            height: 24px; 
+            background-color: #000; 
+            border: 2px solid ${statusColor}; 
+            border-radius: 4px; 
+            box-shadow: 0 0 10px ${statusColor};
+          ">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${statusColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
+          </div>`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+
+        if (feedMarkersRef.current[id]) {
+          feedMarkersRef.current[id].setLatLng([lat, lng]);
+          feedMarkersRef.current[id].setIcon(icon);
+        } else {
+          const marker = L.marker([lat, lng], { icon }).addTo(feedsLayer.current);
+          marker.bindPopup(`
+            <div style="font-family: monospace; color: #00ff41; background: #000; padding: 5px;">
+              <div style="font-weight: bold; border-bottom: 1px solid #333; margin-bottom: 5px;">${feed.name || feed.feed_id}</div>
+              <div style="font-size: 10px; opacity: 0.8;">${feed.source}</div>
+              <div style="font-size: 10px; margin-top: 5px;">STATUS: <span style="color: ${statusColor}">${feed.status.toUpperCase()}</span></div>
+            </div>
+          `);
+          feedMarkersRef.current[id] = marker;
+        }
+      }
+    });
+  }, [feeds]);
+
   // Update Node Congestion, Road Network & Signals
   useEffect(() => {
     if (!leafletMap.current || !nodeCongestionData) return;
 
     nodeCongestionData.forEach(node => {
-      const { id, latitude: lat, longitude: lon, congestion_score: score, signal_id } = node;
+      const { id, latitude: lat, longitude: lon, congestion_score, signal_id } = node;
+      const score = congestion_score || 0;
       const color = score > 0.7 ? '#ff3e3e' : score > 0.4 ? '#facc15' : '#00ff41';
       const size = 10 + (score * 10);
 
@@ -193,7 +255,7 @@ const LeafletMap: React.FC = () => {
 
   const handleSetPhase = (signalId: string, phase: string) => {
       setIsChangingPhase(true);
-      sendMessage(WebSocketMessageType.SET_SIGNAL_PHASE as any, {
+      sendMessage(WebSocketMessageType.SET_SIGNAL_PHASE, {
           signal_id: signalId,
           phase: phase,
           duration_seconds: 30
@@ -202,10 +264,99 @@ const LeafletMap: React.FC = () => {
       setTimeout(() => setIsChangingPhase(false), 1000);
   };
 
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const lowerQuery = query.toLowerCase();
+    const results: SearchResult[] = [];
+
+    // Search Feeds
+    if (feeds) {
+      feeds.forEach(feed => {
+        if ((feed.name || feed.feed_id).toLowerCase().includes(lowerQuery) || 
+            feed.source.toLowerCase().includes(lowerQuery)) {
+          results.push({ type: 'feed', data: feed, label: feed.name || feed.feed_id });
+        }
+      });
+    }
+
+    // Search Nodes
+    if (nodeCongestionData) {
+      nodeCongestionData.forEach(node => {
+        if (node.id.toLowerCase().includes(lowerQuery) || 
+            node.name.toLowerCase().includes(lowerQuery)) {
+          results.push({ type: 'node', data: node, label: `NODE: ${node.id}` });
+        }
+      });
+    }
+
+    setSearchResults(results.slice(0, 10)); // Limit to 10 results
+  };
+
+  const selectResult = (result: any) => {
+    setSearchQuery(result.label);
+    setSearchResults([]);
+    
+    let lat, lng;
+    if (result.type === 'feed') {
+      lat = result.data.config?.latitude || result.data.latitude;
+      lng = result.data.config?.longitude || result.data.longitude;
+    } else if (result.type === 'node') {
+      lat = result.data.latitude;
+      lng = result.data.longitude;
+      setSelectedNode(result.data);
+    }
+
+    if (lat && lng && leafletMap.current) {
+      leafletMap.current.flyTo([lat, lng], 18, { duration: 1.5 });
+    }
+  };
+
   return (
     <div className="w-full h-full relative bg-[#0a0a0a] overflow-hidden">
       <div ref={mapRef} className="absolute inset-0 z-0" />
       
+      {/* Search Bar */}
+      <div className="absolute top-4 left-4 z-[1002] w-72 font-mono">
+        <div className="relative group">
+          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+            <Search className="w-4 h-4 text-[#00ff41]/50 group-focus-within:text-[#00ff41]" />
+          </div>
+          <input 
+            type="text" 
+            className="block w-full p-2 pl-10 text-xs text-[#00ff41] bg-black/80 border border-[#00ff41]/30 focus:ring-1 focus:ring-[#00ff41] focus:border-[#00ff41] placeholder-[#00ff41]/30 backdrop-blur-sm" 
+            placeholder="QUERY FEED OR NODE ID..." 
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            onFocus={() => setIsSearching(true)}
+            onBlur={() => setTimeout(() => setIsSearching(false), 200)}
+          />
+        </div>
+        
+        {/* Search Results Dropdown */}
+        {searchResults.length > 0 && isSearching && (
+          <div className="absolute mt-1 w-full bg-black/95 border border-[#00ff41]/30 shadow-xl max-h-60 overflow-y-auto">
+            {searchResults.map((result, idx) => (
+              <button
+                key={idx}
+                className="w-full text-left px-4 py-2 text-xs text-[#00ff41] hover:bg-[#00ff41]/20 flex items-center justify-between group border-b border-[#00ff41]/10 last:border-0"
+                onClick={() => selectResult(result)}
+              >
+                <div className="flex items-center gap-2">
+                  {result.type === 'feed' ? <Video size={12} /> : <Activity size={12} />}
+                  <span className="truncate">{result.label}</span>
+                </div>
+                <ChevronRight size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* HUD Overlays */}
       <div className="absolute top-4 right-4 z-[1002] flex flex-col gap-2">
         <button onClick={() => setShowLayerControl(!showLayerControl)} className="bg-black/80 border border-[#00ff41]/30 p-2 text-[#00ff41] hover:bg-[#00ff41]/10 transition-colors">
@@ -334,6 +485,12 @@ const LeafletMap: React.FC = () => {
                   <div className="w-1.5 h-1.5 bg-[#ff3e3e] rounded-full"></div>
               </div>
               <span>SIGNAL</span>
+            </div>
+             <div className="flex items-center gap-2">
+              <div className="w-3 h-3 border border-[#00ff41] rounded-sm flex items-center justify-center text-[7px] font-bold text-[#00ff41]">
+                 <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-sm"></div>
+              </div>
+              <span>FEED</span>
             </div>
         </div>
       </div>

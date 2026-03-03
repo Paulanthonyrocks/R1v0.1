@@ -152,6 +152,10 @@ class FeedManager:
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
         self._inference_stop_event = Event()
+
+        # Initialize shared values before starting pool
+        self.initialize_shared_values()
+
         self._start_inference_pool()
 
         # Decoupled Analytics Process
@@ -161,10 +165,8 @@ class FeedManager:
         self._analytics_stop_event = Event()
         self._analytics_heartbeat = Value("d", time.time())
         self._analytics_start_time = time.time()
+        self._dropped_analytics_count = 0
         self._start_analytics_worker()
-
-        # Initialize shared values
-        self.initialize_shared_values()
 
         self._initialize_available_feeds()
 
@@ -357,7 +359,10 @@ class FeedManager:
         if self._global_fps is None:
             manager = multiprocessing.Manager()
             self._global_fps = manager.Value("i", self.config.get("fps", 30))
-            logger.info("FeedManager shared values initialized.")
+            # Shared array for adaptive skip: one entry per inference worker
+            # Size = self._inference_pool_size
+            self._shared_skip_array = multiprocessing.Array("i", self._inference_pool_size)
+            logger.info(f"FeedManager shared values initialized. Skip array size: {self._inference_pool_size}")
 
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
@@ -403,7 +408,8 @@ class FeedManager:
                     self._inference_command_queues[i],
                     self._inference_stop_event,
                     self.config,
-                    self._db_queue
+                    self._db_queue,
+                    self._shared_skip_array # New shared skip array
                 ),
                 daemon=True,
                 name=f"InferenceWorker-{i}"
@@ -999,6 +1005,8 @@ class FeedManager:
             entry["stop_event"],
             self.config,
             entry.get("is_looped_feed", False),
+            self._shared_skip_array, # New shared skip array
+            worker_idx # Index of the inference worker this feed is routed to
         )
 
         logger.debug(f"Creating Ingestion process for {feed_id} with source {source}")
@@ -1163,7 +1171,8 @@ class FeedManager:
                     try:
                         self._analytics_input_queue.put_nowait(analytics_item)
                     except queue.Full:
-                        pass # Drop analytics for this frame if backed up
+                        self._dropped_analytics_count += 1
+                        # Drop analytics for this frame if backed up
 
                     # 2. Immediate Frame Distribution (For video subscribers)
                     if feed_id in self.frame_subscriber_queues:
@@ -1242,11 +1251,24 @@ class FeedManager:
                         entry["latest_metrics"] = feed_metrics
                         entry["last_frame_time"] = time.time()
                         
+                        # FIX: Pass metrics to AnalyticsService for DB persistence
+                        if self._analytics_service:
+                            asyncio.create_task(self._analytics_service.process_feed_metrics(
+                                feed_id, feed_metrics, vehicles
+                            ))
+
                         # Enrich metrics with coordinates from registry if missing
-                        if "latitude" not in feed_metrics and "latitude" in entry:
-                            feed_metrics["latitude"] = entry["latitude"]
-                        if "longitude" not in feed_metrics and "longitude" in entry:
-                            feed_metrics["longitude"] = entry["longitude"]
+                        if "latitude" not in feed_metrics:
+                            if "latitude" in entry:
+                                feed_metrics["latitude"] = entry["latitude"]
+                            elif entry.get("config_info"):
+                                feed_metrics["latitude"] = entry["config_info"].latitude
+                                
+                        if "longitude" not in feed_metrics:
+                            if "longitude" in entry:
+                                feed_metrics["longitude"] = entry["longitude"]
+                            elif entry.get("config_info"):
+                                feed_metrics["longitude"] = entry["config_info"].longitude
 
                         # Enrich with global IDs before broadcast
                         if vehicles and self._reid_manager:
@@ -1507,6 +1529,18 @@ class FeedManager:
 
                     self._start_analytics_worker()
                     self._analytics_heartbeat.value = time.time()
+
+                # --- Periodic Summary Logging ---
+                if (now - getattr(self, "_last_watchdog_log_time", 0)) > 30:
+                    self._last_watchdog_log_time = now
+                    if self._dropped_analytics_count > 0:
+                        logger.warning(f"[Watchdog] Cumulative dropped analytics events: {self._dropped_analytics_count}")
+                    
+                    # Log active worker count for health monitoring
+                    async with self._lock:
+                        active_count = sum(1 for e in self.process_registry.values() if e.get("status") == FeedOperationalStatusEnum.RUNNING)
+                        if active_count > 0:
+                            logger.info(f"[Watchdog] Pipeline Healthy: {active_count} active ingestion workers.")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -1572,6 +1606,14 @@ class FeedManager:
 
     # --- Helper Methods ---
     
+    async def get_feed_config(self, feed_id: str) -> Optional[FeedConfigInfo]:
+        """Retrieves the configuration for a specific feed."""
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if entry:
+                return entry.get("config_info")
+        return None
+
     async def get_all_statuses(self) -> List[FeedStatusData]:
         statuses = []
         async with self._lock:

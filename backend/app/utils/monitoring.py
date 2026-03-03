@@ -113,6 +113,8 @@ class TrafficMonitor:
         self.health_history = deque(maxlen=100)
         self.track_continuity_samples = deque(maxlen=100)
         self.last_update_time = time.time()
+        self.smoothed_congestion_score = 0.0
+        self.congestion_alpha = config.get("behavior_analysis", {}).get("ewma_alpha", 0.1)
 
     def update_vehicles(self, vehicles: Dict[str, Dict[str, Any]]):
         self.tracked_vehicles = vehicles
@@ -250,15 +252,36 @@ class TrafficMonitor:
 
         congestion_score = 0.0
         if current_vehicle_count > 0:
-            speed_factor = 1 - (avg_speed_kmh / self.speed_limit_kmh) if self.speed_limit_kmh > 0 else 0
-            speed_factor = max(0, min(1, speed_factor))
-            density_factor = current_vehicle_count / 100.0
-            density_factor = max(0, min(1, density_factor))
-            congestion_score = (speed_factor * 0.7 + density_factor * 0.3) * 100
-            congestion_score = round(congestion_score, 1)
+            # Speed penalty: 0 if at limit, 1 if stopped
+            speed_penalty = 1.0 - (avg_speed_kmh / self.speed_limit_kmh) if self.speed_limit_kmh > 0 else 1.0
+            speed_penalty = max(0, min(1, speed_penalty))
+            
+            # Density: normalized to 40 vehicles for a "packed" state
+            density = current_vehicle_count / 40.0
+            
+            # Calculate raw score: combines density with a speed-based penalty.
+            # This ensures that a single stopped vehicle doesn't trigger high congestion.
+            # Max score of 100 reached when 40+ vehicles are stopped.
+            raw_congestion_score = min(100.0, (density * speed_penalty * 80.0) + (density * 20.0))
+            
+            # Apply EWMA Smoothing
+            if self.smoothed_congestion_score == 0.0:
+                self.smoothed_congestion_score = raw_congestion_score
+            else:
+                self.smoothed_congestion_score = (self.congestion_alpha * raw_congestion_score) + \
+                                                ((1 - self.congestion_alpha) * self.smoothed_congestion_score)
+            
+            congestion_score = round(self.smoothed_congestion_score, 1)
             
             self.session_metrics["congestion_score_sum"] += congestion_score
             self.session_metrics["congestion_score_samples"] += 1
+        else:
+            # If no vehicles, slowly decay congestion score rather than jumping to 0
+            # This handles transient detection drops
+            self.smoothed_congestion_score *= (1 - self.congestion_alpha)
+            if self.smoothed_congestion_score < 0.1:
+                self.smoothed_congestion_score = 0.0
+            congestion_score = round(self.smoothed_congestion_score, 1)
 
         session_avg_congestion_score = self.session_metrics["congestion_score_sum"] / self.session_metrics["congestion_score_samples"] if self.session_metrics["congestion_score_samples"] > 0 else 0.0
 

@@ -58,12 +58,15 @@ def inference_worker(
     command_queue: MPQueue,
     stop_event: Event,
     config: Dict[str, Any],
-    db_queue: Optional[MPQueue] = None
+    db_queue: Optional[MPQueue] = None,
+    shared_skip_array: Optional[Any] = None # Shared array for early skipping
 ):
     """
     Heavyweight AI process that processes frames from the central queue.
     Can handle frames from multiple feeds interleaved.
     """
+    # Start parent monitor to avoid zombie processes
+    start_parent_monitor(stop_event)
     # Initialize logging for the child process
     import logging.config
     try:
@@ -235,11 +238,20 @@ def inference_worker(
                 # If queue is more than 50% full, start increasing skip
                 if q_size > q_max * 0.5:
                     # Scale skip_frames up to 2x base value or 10 max
+                    # load_factor is 0.0 at 50% full, 1.0 at 100% full
                     load_factor = (q_size - (q_max * 0.5)) / (q_max * 0.5)
-                    adaptive_skip = int(skip_frames + (load_factor * 8))
-                    current_skip = min(10, adaptive_skip)
+                    # Use a more gradual scaling: base + (load_factor * 12) up to 15
+                    adaptive_skip = int(skip_frames + (load_factor * 12))
+                    current_skip = min(15, adaptive_skip)
                 else:
                     current_skip = skip_frames
+
+                # Update shared array for Ingestion Workers to see
+                if shared_skip_array is not None:
+                    try:
+                        shared_skip_array[worker_id] = current_skip
+                    except Exception as e:
+                        logger.error(f"[Worker {worker_id}] Error updating shared skip: {e}")
 
                 # Collect batch of frames
                 batch_tasks = []
@@ -311,6 +323,20 @@ def inference_worker(
                     actual_skip = current_skip
                     first_detect = not getattr(core, '_first_detection_done', False)
                     should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
+
+                    # --- Force Detection (Continuity Safety) ---
+                    # If we have active tracks, but haven't detected in a while, force it
+                    if not should_detect and core.vehicle_data:
+                        # Find the oldest last_detection_time among active tracks
+                        now = time.time()
+                        # core.tracker.vehicle_data tracks might have 'last_detection_time'
+                        # but CoreModule usually keeps state. 
+                        # Let's use a simpler heuristic: if skip is large, and we have many tracks
+                        # check if it's been more than 0.5s since ANY detection update
+                        last_update = getattr(core, '_last_detection_time', 0)
+                        if (now - last_update) > 0.5: # More than 500ms
+                            should_detect = True
+                            # logger.debug(f"[{feed_id}] Force detection triggered (latency: {now-last_update:.2f}s)")
 
                     lane_cfg = config.get("lane_detection", {})
                     is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
@@ -411,8 +437,10 @@ def inference_worker(
                         timestamp=meta.get("timestamp")
                     )
                     
-                    if vis_tracks and meta['first_detect']:
-                        core._first_detection_done = True
+                    if meta['should_detect']:
+                        core._last_detection_time = time.time()
+                        if vis_tracks and meta['first_detect']:
+                            core._first_detection_done = True
                     
                     for vid, track in vis_tracks.items():
                         emb = track.get("embedding")

@@ -173,6 +173,7 @@ export interface BackendCongestionNodeData {
   vehicle_count?: number | null;   // Optional
   average_speed?: number | null;  // Optional
   timestamp: string; // ISO datetime string
+  signal_id?: string; // Added signal_id
 }
 
 export interface AllNodesCongestionResponse {

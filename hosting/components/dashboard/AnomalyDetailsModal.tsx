@@ -89,6 +89,12 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
     setIsUpdating(false);
   };
 
+  const handleResolve = () => {
+    handleUpdateStatus('RESOLVED');
+  };
+
+  const snapshotPath = (anomaly.details as any)?.snapshot_path;
+
   return (
     <Dialog open={open} onOpenChange={(val) => {
       onOpenChange(val);
@@ -152,13 +158,13 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
             )}
           </div>
 
-          {anomaly.details?.snapshot_path && (
+          {snapshotPath && (
             <div className="mt-4 border-2 border-lcd-text/20 bg-black overflow-hidden">
               <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase">
                 Incident Snapshot // High-Res Capture
               </div>
               <img 
-                src={`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/snapshots/${anomaly.details.snapshot_path}`} 
+                src={`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/snapshots/${snapshotPath}`} 
                 alt="Incident Snapshot"
                 className="w-full h-auto object-contain max-h-[300px]"
                 onError={(e) => {

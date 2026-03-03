@@ -61,6 +61,7 @@ export enum WebSocketMessageType {
     STOP_FEED = 'stop_feed',
     RESTART_FEED = 'restart_feed',
     SNAPSHOT_READY = 'snapshot_ready',
+    SET_SIGNAL_PHASE = 'set_signal_phase',
     INTERNAL_PONG = '__internal_pong',
     GET_USER_ROLE = 'get_user_role',
     USER_ROLE = 'user_role'
