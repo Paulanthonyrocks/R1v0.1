@@ -125,6 +125,9 @@ def inference_worker(
         collection_dir.mkdir(parents=True, exist_ok=True)
     last_collection_time = 0.0
     collection_cooldown = collection_cfg.get("cooldown_seconds", 60.0)
+    collection_sample_counts: Dict[str, int] = {}
+    collection_max_samples = config.get("hard_negative_max_samples_per_feed", 1000)
+    collection_quality = config.get("hard_negative_quality", 70)
 
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
@@ -417,14 +420,23 @@ def inference_worker(
                                 
                                 # Hard Negative Mining logic
                                 if collect_hard_negatives and has_uncertain and (now - last_collection_time > collection_cooldown):
-                                    try:
-                                        fname = f"hard_neg_{meta['feed_id']}_{meta['frame_index']}_{int(now)}.jpg"
-                                        fpath = collection_dir / fname
-                                        cv2.imwrite(str(fpath), meta['frame'])
-                                        last_collection_time = now
-                                        logger.info(f"[Worker {worker_id}] Saved hard negative sample: {fname}")
-                                    except Exception as e:
-                                        logger.error(f"Failed to save hard negative: {e}")
+                                    feed_id_hn = meta['feed_id']
+                                    current_count = collection_sample_counts.get(feed_id_hn, 0)
+                                    if current_count < collection_max_samples:
+                                        try:
+                                            fname = f"hard_neg_{feed_id_hn}_{meta['frame_index']}_{int(now)}.jpg"
+                                            fpath = collection_dir / fname
+                                            # Use lower quality for collection samples to save space
+                                            cv2.imwrite(str(fpath), meta['frame'], [int(cv2.IMWRITE_JPEG_QUALITY), collection_quality])
+                                            last_collection_time = now
+                                            collection_sample_counts[feed_id_hn] = current_count + 1
+                                            logger.info(f"[Worker {worker_id}] Saved hard negative sample for {feed_id_hn}: {fname} (Total: {current_count+1})")
+                                        except Exception as e:
+                                            logger.error(f"Failed to save hard negative: {e}")
+                                    else:
+                                        if current_count == collection_max_samples:
+                                             logger.info(f"[Worker {worker_id}] Hard negative limit reached for {feed_id_hn} ({collection_max_samples})")
+                                             collection_sample_counts[feed_id_hn] += 1 # Avoid repeated logging
 
                                 batch_detections_map[meta_idx] = formatted_dets
                         else:

@@ -468,15 +468,28 @@ class CoreModule:
     def _save_snapshot(self, frame: np.ndarray, incident_id: str):
         """Saves a high-res snapshot of an incident."""
         try:
+            from app.config import get_current_config
+            cfg = get_current_config()
+            
             timestamp = int(time.time())
             filename = f"snapshot_{self.feed_id}_{incident_id}_{timestamp}.jpg"
             # Root is backend/
-            output_dir = Path("data/snapshots")
+            output_dir = Path(cfg.snapshots_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             filepath = output_dir / filename
             
-            # Use lower compression for high quality snapshot
-            cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            # 1. Resize if frame is too large (to save space)
+            h, w = frame.shape[:2]
+            max_w = getattr(cfg, "snapshot_max_width", 1280)
+            if w > max_w:
+                scale = max_w / w
+                new_h = int(h * scale)
+                frame = cv2.resize(frame, (max_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"[{self.feed_id}] Resized snapshot from {w}x{h} to {max_w}x{new_h}")
+            
+            # 2. Use configurable JPEG quality
+            quality = getattr(cfg, "snapshot_quality", 80)
+            cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             
             # Send notification to DB queue so it can be associated with the incident
             if self.db_queue:
@@ -487,7 +500,7 @@ class CoreModule:
                     "filename": filename,
                     "timestamp": float(time.time())
                 })
-            logger.info(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename}")
+            logger.info(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename} (Quality: {quality})")
         except Exception as e:
             logger.error(f"[{self.feed_id}] Failed to save snapshot: {e}")
 

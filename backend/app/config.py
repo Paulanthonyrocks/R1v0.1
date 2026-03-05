@@ -68,6 +68,15 @@ class AppConfig(BaseSettings):
     feeds_config_path: str = "feeds_config.json"
     snapshots_dir: str = "snapshots"
     
+    # Snapshot management
+    snapshot_quality: int = 80
+    snapshot_max_width: int = 1280
+    snapshot_retention_days: int = 7
+    
+    # Data collection management
+    hard_negative_quality: int = 70
+    hard_negative_max_samples_per_feed: int = 1000
+    
     class Config:
         env_file = ".env"
         env_nested_delimiter = "__"

@@ -20,8 +20,23 @@ class RetentionService:
         self.monitored_directories = self.retention_config.get("directories", [
             "backend/data/processed_videos",
             "backend/data/pavement_images",
-            "backend/data/pavement_reports"
+            "backend/data/pavement_reports",
+            "backend/data/snapshots",
+            "backend/data/hard_negatives"
         ])
+        
+        # Per-directory age overrides (in days)
+        # We populate this from defaults and allow config to override
+        self.directory_age_limits = {}
+        for dir_path in self.monitored_directories:
+            if "snapshots" in dir_path:
+                self.directory_age_limits[dir_path] = config.get("snapshot_retention_days", 7)
+            elif "hard_negatives" in dir_path:
+                self.directory_age_limits[dir_path] = 3
+            elif "processed_videos" in dir_path:
+                self.directory_age_limits[dir_path] = self.max_age_days
+            else:
+                self.directory_age_limits[dir_path] = self.max_age_days
         
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -63,8 +78,11 @@ class RetentionService:
                 logger.debug(f"Directory does not exist, skipping: {full_path}")
                 continue
             
-            logger.info(f"Cleaning up directory: {full_path}")
-            self._cleanup_by_age(full_path)
+            # Determine age limit for this specific directory
+            age_days = self.directory_age_limits.get(dir_path, self.max_age_days)
+            
+            logger.info(f"Cleaning up directory: {full_path} (Retention: {age_days} days)")
+            self._cleanup_by_age(full_path, age_days)
             self._cleanup_by_size(full_path)
             
         # Clean up database records
@@ -109,9 +127,9 @@ class RetentionService:
         except Exception as e:
             logger.error(f"Database cleanup failed: {e}")
 
-    def _cleanup_by_age(self, directory: Path):
+    def _cleanup_by_age(self, directory: Path, age_days: int):
         now = time.time()
-        max_age_seconds = self.max_age_days * 86400
+        max_age_seconds = age_days * 86400
         
         files_deleted = 0
         for file_path in directory.glob("*"):
@@ -120,7 +138,7 @@ class RetentionService:
                 if file_age > max_age_seconds:
                     try:
                         file_path.unlink()
-                        logger.info(f"Deleted old file: {file_path} (Age: {file_age/86400:.1f} days)")
+                        logger.info(f"Deleted old file: {file_path} (Age: {file_age/86400:.1f} days, Limit: {age_days} days)")
                         files_deleted += 1
                     except Exception as e:
                         logger.error(f"Failed to delete {file_path}: {e}")
