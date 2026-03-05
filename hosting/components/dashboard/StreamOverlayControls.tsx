@@ -20,6 +20,7 @@ interface StreamOverlayControlsProps {
   showLaneOverlays: boolean;
   setShowLaneOverlays: (value: boolean) => void;
   controlId: string;
+  feedSettings?: React.ReactNode;
 }
 
 const MatrixCheckbox = ({ id, checked, onCheckedChange }: { id: string, checked: boolean, onCheckedChange: (c: boolean) => void }) => (
@@ -65,6 +66,7 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   showLaneOverlays,
   setShowLaneOverlays,
   controlId,
+  feedSettings,
 }) => {
   return (
     <div
@@ -158,6 +160,12 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
               />
             </div>
           )}
+        </div>
+      )}
+
+      {feedSettings && (
+        <div className="pt-2 border-t border-lcd-bg/30">
+           {feedSettings}
         </div>
       )}
     </div>

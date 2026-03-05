@@ -69,13 +69,19 @@ class AppConfig(BaseSettings):
     snapshots_dir: str = "snapshots"
     
     # Snapshot management
+    snapshot_format: str = "webp" # More efficient than jpg
     snapshot_quality: int = 80
     snapshot_max_width: int = 1280
     snapshot_retention_days: int = 7
     
+    # Maintenance management
+    maintenance_interval_hours: int = 24
+    db_retention_days: int = 7
+    
     # Data collection management
     hard_negative_quality: int = 70
     hard_negative_max_samples_per_feed: int = 1000
+    hard_negative_retention_days: int = 3
     
     class Config:
         env_file = ".env"

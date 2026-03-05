@@ -135,8 +135,6 @@ def serialize_tracked_vehicles(
                 "status": str(data.get("status", "unknown")),
                 "centroid": [make_serializable((scaled_bbox[0] + scaled_bbox[2]) / 2), make_serializable((scaled_bbox[1] + scaled_bbox[3]) / 2)] if scaled_bbox else None,
                 "ground_coordinates": [make_serializable(x) for x in data.get("ground_coordinates")] if "ground_coordinates" in data else None,
-                "vx": make_serializable(data.get("vx", 0)),
-                "vy": make_serializable(data.get("vy", 0)),
                 "ground_centroid": [make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
                 "car_model": data.get("car_model"),
                 "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),

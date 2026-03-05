@@ -5,6 +5,8 @@ import sqlite3
 import threading
 import logging
 import time
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -342,9 +344,6 @@ class DatabaseManager:
                 conn.commit()
             logger.info("SQLite DB schema initialization check complete.")
             
-            # Auto-prune on startup
-            self.prune_old_data()
-            
         except (sqlite3.Error, DatabaseError) as e:
             logger.error(f"DB init error in _initialize_sqlite_database: {e}", exc_info=True)
             raise DatabaseError(f"DB schema init fail: {e}") from e
@@ -511,23 +510,70 @@ class DatabaseManager:
             self.mongo_client = None
             self.mongo_db = None
 
-    def prune_old_data(self, retention_days: int = 7) -> int:
-        """Prunes vehicle tracks older than the specified number of days."""
+    def prune_old_data(self, config: Optional[Dict] = None, retention_days: int = 7) -> Dict[str, int]:
+        """
+        Prunes old records and files to reclaim space.
+        If config is provided, it also prunes snapshots and hard negatives.
+        """
+        results = {"db_pruned": 0, "snapshots_pruned": 0, "hard_negatives_pruned": 0}
         cutoff_time = time.time() - (retention_days * 24 * 3600)
+        
+        # 1. Prune Database
         sql = "DELETE FROM vehicle_tracks WHERE timestamp < ?"
         try:
             with self.lock:
                 with self._get_sqlite_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(sql, (cutoff_time,))
-                    deleted_count = cursor.rowcount
+                    results["db_pruned"] = cursor.rowcount
                     conn.commit()
-            if deleted_count > 0:
-                logger.info(f"Pruned {deleted_count} old records from vehicle_tracks (older than {retention_days} days).")
-            return deleted_count
+                    
+                    # Reclaim space (Note: VACUUM can be slow on large DBs)
+                    if results["db_pruned"] > 1000:
+                        logger.info("Reclaiming SQLite space with VACUUM...")
+                        conn.execute("VACUUM")
+            
+            if results["db_pruned"] > 0:
+                logger.info(f"Pruned {results['db_pruned']} old records from vehicle_tracks.")
         except Exception as e:
-            logger.error(f"Error pruning old data: {e}")
-            return 0
+            logger.error(f"Error pruning database records: {e}")
+
+        # 2. Prune Files (if config provided)
+        if config:
+            data_dir = Path(config.get("data_dir", "backend/data"))
+            
+            # Prune Snapshots
+            snap_dir = Path(config.get("snapshots_dir", data_dir / "snapshots"))
+            if snap_dir.exists():
+                snap_retention = config.get("snapshot_retention_days", 7)
+                results["snapshots_pruned"] = self._prune_directory(snap_dir, snap_retention)
+                
+            # Prune Hard Negatives
+            hn_dir = data_dir / "hard_negatives"
+            if hn_dir.exists():
+                hn_retention = config.get("hard_negative_retention_days", 3)
+                results["hard_negatives_pruned"] = self._prune_directory(hn_dir, hn_retention)
+                
+        return results
+
+    def _prune_directory(self, directory: Path, retention_days: int) -> int:
+        """Helper to remove old files in a directory."""
+        count = 0
+        cutoff = time.time() - (retention_days * 24 * 3600)
+        try:
+            for item in directory.glob("**/*"):
+                if item.is_file() and item.stat().st_mtime < cutoff:
+                    try:
+                        item.unlink()
+                        count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {item}: {e}")
+            
+            if count > 0:
+                logger.info(f"Pruned {count} files from {directory} (older than {retention_days} days).")
+        except Exception as e:
+            logger.error(f"Error pruning directory {directory}: {e}")
+        return count
 
     # --- Incident Management ---
     

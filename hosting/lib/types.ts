@@ -242,17 +242,21 @@ export interface VideoFrameMessage {
   timestamp?: string | number;
   metrics?: SurveillanceFeedMessage;
   vehicles?: { // Detailed vehicle data for frontend visualization
-    vehicle_id: string;
-    bbox: [number, number, number, number];
-    speed: number;
-    license_plate: string;
-    class_id: number;
-    class_name: string;
-    behavior: string;
-    confidence: number;
-    is_occluded: boolean;
-    lane: number;
-    vx?: number;
-    vy?: number;
+  vehicle_id: string;
+  bbox: [number, number, number, number];
+  speed: number;
+  license_plate: string;
+  class_id: number;
+  class_name: string;
+  behavior: string;
+  confidence: number;
+  is_occluded: boolean;
+  status: 'active' | 'tentative' | 'predicting' | 'unknown';
+  lane: number;
+  vx?: number;
+  vy?: number;
+  is_wrong_way?: boolean;
+  is_stopped?: boolean;
   }[];
+
 }

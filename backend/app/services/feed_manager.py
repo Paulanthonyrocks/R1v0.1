@@ -8,6 +8,7 @@ import atexit
 import json
 import numpy as np
 import msgpack
+from concurrent.futures import ThreadPoolExecutor
 
 from collections import deque
 from multiprocessing import (
@@ -177,9 +178,96 @@ class FeedManager:
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self._analytics_reader_task = asyncio.create_task(self._read_analytics_results())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        self._maintenance_task = asyncio.create_task(self._maintenance_loop())
+
+        # Executor for blocking ReID calls
+        self._reid_executor = ThreadPoolExecutor(max_workers=4)
+        self._last_vehicle_db_write: Dict[Tuple[str, int], float] = {}
+
         self.logger.info("FeedManager initialized. Inference, Analytics, and Watchdog tasks started.")
 
+    def _sync_match_or_register(self, feed_id: str, v: Dict) -> Optional[str]:
+        """Wrapper for synchronous match_or_register call."""
+        if not self._reid_manager or v.get("embedding") is None:
+            return None
+        try:
+            emb_np = np.array(v["embedding"], dtype=np.float32)
+            return self._reid_manager.match_or_register(
+                feed_id=feed_id,
+                local_id=v["vehicle_id"],
+                embedding=emb_np,
+                metadata={"class_name": v.get("class_name")}
+            )
+        except Exception as e:
+            logger.error(f"ReID match error for {v.get('vehicle_id')}: {e}")
+            return None
 
+    async def _read_db_queue(self):
+        """Task to process database write requests from all workers."""
+        logger.info("Database queue reader task started.")
+        
+        while not self._stop_reader_flag:
+            try:
+                items = []
+                # Drain queue up to a limit for batching
+                try:
+                    # Increase batch size for higher throughput
+                    for _ in range(5000):
+                        items.append(self._db_queue.get_nowait())
+                except queue.Empty:
+                    pass
+
+                if not items:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                if self._analytics_service and self._analytics_service._db_manager:
+                    db = self._analytics_service._db_manager
+                    
+                    # Separate items by type for appropriate processing
+                    tracking_batch = []
+                    identified_batch = []
+                    
+                    for item in items:
+                        msg_type = item.get("type", "vehicle_data")
+                        if msg_type == "vehicle_data":
+                            if not item.get("global_vehicle_id"):
+                                # Try fast lookup for already mapped tracks
+                                global_id = self._reid_manager.get_global_id(
+                                    item.get("feed_id", "unknown"), 
+                                    item.get("vehicle_id", "unknown")
+                                )
+                                if global_id:
+                                    item["global_vehicle_id"] = global_id
+                            tracking_batch.append(item)
+                        elif msg_type == "identified_vehicle":
+                            identified_batch.append(item)
+                        elif msg_type == "snapshot_created":
+                            if self._incident_manager:
+                                asyncio.create_task(self._incident_manager.attach_snapshot(
+                                    item.get("incident_id"), 
+                                    item.get("filename")
+                                ))
+
+                    # Execute tracking data as a batch
+                    if tracking_batch:
+                        await asyncio.to_thread(db.save_vehicle_data_batch, tracking_batch)
+                    
+                    if identified_batch:
+                        for iv in identified_batch:
+                            await asyncio.to_thread(db.upsert_identified_vehicle, iv)
+                else:
+                    if len(items) > 100:
+                        logger.warning(f"DB manager not available. Dropped {len(items)} items from db_queue.")
+
+                if len(items) >= 5000:
+                    await asyncio.sleep(0.001)
+                else:
+                    await asyncio.sleep(0.005)
+
+            except Exception as e:
+                logger.error(f"Error in db_queue reader: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
 
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
@@ -1131,25 +1219,20 @@ class FeedManager:
 
                     # 0. Enrich vehicles with global IDs from central manager
                     if vehicles and self._reid_manager:
+                        reid_tasks = []
                         for v in vehicles:
                             if not v.get("global_vehicle_id"):
-                                # 1. Try fast lookup
+                                # 1. Try fast lookup first
                                 gid = self._reid_manager.get_global_id(feed_id, v["vehicle_id"])
-                                
-                                # 2. If missing, perform synchronous match/register
-                                # Note: match_or_register is fast (vectorized) and includes local caching
-                                if not gid and v.get("embedding") is not None:
-                                    try:
-                                        emb_np = np.array(v["embedding"], dtype=np.float32)
-                                        gid = self._reid_manager.match_or_register(
-                                            feed_id=feed_id,
-                                            local_id=v["vehicle_id"],
-                                            embedding=emb_np,
-                                            metadata={"class_name": v.get("class_name")}
-                                        )
-                                    except Exception as e:
-                                        logger.error(f"Real-time ReID error for {v['vehicle_id']}: {e}")
-                                
+                                if gid:
+                                    v["global_vehicle_id"] = gid
+                                elif v.get("embedding") is not None:
+                                    # 2. Schedule for background registration if missing
+                                    reid_tasks.append((v, asyncio.to_thread(self._sync_match_or_register, feed_id, v)))
+                        
+                        if reid_tasks:
+                            results = await asyncio.gather(*[t[1] for t in reid_tasks])
+                            for (v, _), gid in zip(reid_tasks, results):
                                 if gid:
                                     v["global_vehicle_id"] = gid
 
@@ -1191,18 +1274,30 @@ class FeedManager:
 
                     # 4. Send to DB Queue for Persistence and ReID Registration
                     if self._db_queue:
-                         # Use list comprehension for speed if possible, but we need extra fields
+                         # Throttle database persistence to save space (Constraint Hardware Optimization)
+                         # Default to 5 seconds unless specified in config
+                         db_throttle_sec = self.config.get("db_persistence_interval_sec", 5.0)
+                         
                          for v in vehicles:
-                             # Create a lightweight copy for the queue
-                             track_data = v.copy()
-                             track_data["feed_id"] = feed_id
-                             track_data["type"] = "vehicle_data"
-                             track_data["timestamp"] = timestamp
-                             track_data["frame_index"] = frame_idx
-                             try:
-                                 self._db_queue.put_nowait(track_data)
-                             except queue.Full:
-                                 pass
+                             vid = v.get("vehicle_id")
+                             if vid is None: continue
+                             
+                             last_write = self._last_vehicle_db_write.get((feed_id, vid), 0)
+                             
+                             # Write if it's new, or interval elapsed
+                             # Significant events like license plate detection already trigger writes in some places
+                             if timestamp - last_write >= db_throttle_sec:
+                                 # Create a lightweight copy for the queue
+                                 track_data = v.copy()
+                                 track_data["feed_id"] = feed_id
+                                 track_data["type"] = "vehicle_data"
+                                 track_data["timestamp"] = timestamp
+                                 track_data["frame_index"] = frame_idx
+                                 try:
+                                     self._db_queue.put_nowait(track_data)
+                                     self._last_vehicle_db_write[(feed_id, vid)] = timestamp
+                                 except queue.Full:
+                                     pass
 
                     # 5. Broadcast to WebSocket Clients
                     if self._connection_manager:
@@ -1403,6 +1498,9 @@ class FeedManager:
         for missing_id in list(last_states.keys()):
             if missing_id not in current_ids:
                 del last_states[missing_id]
+                # Also clean up from write throttling cache
+                if (feed_id, missing_id) in self._last_vehicle_db_write:
+                    del self._last_vehicle_db_write[(feed_id, missing_id)]
                 
         return delta_vehicles
 
@@ -1454,6 +1552,32 @@ class FeedManager:
             
         except Exception as e:
             logger.error(f"Binary broadcast error for {feed_id}: {e}")
+
+    async def _maintenance_loop(self):
+        """Periodically prunes old database records and snapshot files to reclaim space."""
+        logger.info("Maintenance loop started.")
+        while not self._stop_reader_flag:
+            try:
+                interval_hours = self.config.get("maintenance_interval_hours", 24)
+                # Wait for the next interval
+                await asyncio.sleep(interval_hours * 3600)
+                
+                if self._analytics_service and self._analytics_service._db_manager:
+                    db = self._analytics_service._db_manager
+                    retention = self.config.get("db_retention_days", 7)
+                    
+                    logger.info(f"Starting scheduled maintenance (retention: {retention} days)...")
+                    # Run pruning in a separate thread to avoid blocking the event loop
+                    results = await asyncio.to_thread(db.prune_old_data, config=self.config, retention_days=retention)
+                    logger.info(f"Maintenance complete: {results}")
+                else:
+                    logger.warning("Maintenance skipped: DatabaseManager not ready.")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in maintenance loop: {e}", exc_info=True)
+                await asyncio.sleep(3600) # Wait an hour before retrying on error
 
     async def _watchdog_loop(self):
         """Periodically checks if processing workers are alive and responsive."""
@@ -1780,6 +1904,8 @@ class FeedManager:
             tasks.append(self._analytics_reader_task)
         if self._watchdog_task:
             tasks.append(self._watchdog_task)
+        if self._maintenance_task:
+            tasks.append(self._maintenance_task)
         if self._db_reader_task:
             tasks.append(self._db_reader_task)
             

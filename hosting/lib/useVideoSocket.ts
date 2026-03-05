@@ -15,7 +15,7 @@ interface VehicleFrontendData {
     confidence: number;
     is_occluded: boolean;
     lane: number;
-    status?: string;
+    status: 'active' | 'tentative' | 'predicting' | 'unknown';
     vx?: number;
     vy?: number;
     is_wrong_way?: boolean;
@@ -48,6 +48,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const frameCountRef = useRef<number>(0);
     const lastDrawnIndexRef = useRef<number>(-1);
     const lastProcessedIndexRef = useRef<number>(-1);
+    
+    // Registry to store full vehicle states for merging delta updates
+    const vehicleRegistryRef = useRef<Map<string, VehicleFrontendData>>(new Map());
+    const lastSeenVehicleTimeRef = useRef<Map<string, number>>(new Map());
 
     const subscribeToFeed = useCallback(() => {
         if (client.isConnected() && streamId) {
@@ -73,6 +77,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             if (data.frame_index < 20) {
                 // Accept as loop restart
                 console.debug(`[useVideoSocket] Loop restart detected (prev=${lastProcessedIndexRef.current}, new=${data.frame_index})`);
+                // Clear registry on loop to avoid stale ghosts from previous loop
+                vehicleRegistryRef.current.clear();
+                lastSeenVehicleTimeRef.current.clear();
             }
             // Otherwise, if the gap is small, it's likely just network jitter/out-of-order. Drop it.
             else if (lastProcessedIndexRef.current - data.frame_index < 100) {
@@ -83,12 +90,44 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
         frameCountRef.current += 1;
 
-        // Update metrics and vehicles state for side-panels (Throttled)
+        // --- Vehicle State Merging (Hydration) ---
         let now = performance.now();
+        const mergedVehicles: VehicleFrontendData[] = [];
+        const currentBatchIds = new Set<string>();
+
+        if (data.vehicles && data.vehicles.length > 0) {
+            data.vehicles.forEach((v: any) => {
+                const vid = v.vehicle_id;
+                currentBatchIds.add(vid);
+                lastSeenVehicleTimeRef.current.set(vid, now);
+
+                const existing = vehicleRegistryRef.current.get(vid);
+                if (existing) {
+                    // Merge new fields into existing state
+                    const updated = { ...existing, ...v };
+                    vehicleRegistryRef.current.set(vid, updated);
+                    mergedVehicles.push(updated);
+                } else {
+                    // New vehicle
+                    vehicleRegistryRef.current.set(vid, v as VehicleFrontendData);
+                    mergedVehicles.push(v as VehicleFrontendData);
+                }
+            });
+        }
+
+        // Cleanup stale vehicles (not seen for > 2 seconds)
+        for (const [vid, lastSeen] of lastSeenVehicleTimeRef.current.entries()) {
+            if (now - lastSeen > 2000) {
+                vehicleRegistryRef.current.delete(vid);
+                lastSeenVehicleTimeRef.current.delete(vid);
+            }
+        }
+
+        // Update metrics and vehicles state for side-panels (Throttled)
         
         // --- Annotation Persistence Logic ---
         // If we have new vehicle data, update the ref and timestamp
-        if (data.vehicles && data.vehicles.length > 0) {
+        if (mergedVehicles.length > 0) {
             lastVehiclesUpdateTimeRef.current = now;
         }
 
@@ -98,8 +137,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
             
             // If data.vehicles is missing/empty, check if we should persist the previous set
-            if (data.vehicles && data.vehicles.length > 0) {
-                setVehicles(data.vehicles);
+            if (mergedVehicles.length > 0) {
+                setVehicles(mergedVehicles);
             } else if (now - lastVehiclesUpdateTimeRef.current > ANNOTATION_PERSISTENCE_MS) {
                 // Only clear if we haven't seen updates for a while
                 setVehicles(null);
@@ -158,7 +197,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
 
             // Persistence for canvas drawing
-            let vehiclesToStore = data.vehicles || null;
+            let vehiclesToStore = mergedVehicles.length > 0 ? mergedVehicles : null;
             if (!vehiclesToStore || vehiclesToStore.length === 0) {
                 if (now - lastVehiclesUpdateTimeRef.current < ANNOTATION_PERSISTENCE_MS) {
                     vehiclesToStore = frameRef.current?.vehicles || null;
@@ -281,7 +320,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             ctx.font = 'bold 10px Arial'; // Slightly smaller font
 
             vehiclesToDraw.forEach(v => {
-                if (v.status && v.status !== 'active' && v.status !== 'predicting') return;
+                if (v.status && v.status !== 'active' && v.status !== 'predicting' && v.status !== 'tentative') return;
 
                 let [x1, y1, x2, y2] = v.bbox;
 
@@ -289,8 +328,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     return;
                 }
 
-                // Coordinates from backend are now normalized [0, 1].
-                // We scale them directly to canvas-space.
                 const sx1 = x1 * canvasWidth;
                 const sy1 = y1 * canvasHeight;
                 const sx2 = x2 * canvasWidth;
@@ -298,25 +335,27 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 const sw = sx2 - sx1;
                 const sh = sy2 - sy1;
 
-                let color = '#FF0000';
+                let color = '#888888'; // Default Gray
                 switch (v.behavior) {
-                    case 'moving': color = '#00FF00'; break; // Bright lime
-                    case 'stopped': color = '#FF0000'; break; // Red
-                    case 'speeding': color = '#0000FF'; break; // Blue
-                    case 'accelerating': color = '#FFFF00'; break; // Yellow
-                    case 'decelerating': color = '#00FFFF'; break; // Cyan
-                    case 'lane_changing': color = '#FF00FF'; break; // Magenta
-                    default: color = '#888888'; break; // Gray
+                    case 'moving': color = '#00FF00'; break;
+                    case 'stopped': color = '#FF0000'; break;
+                    case 'speeding': color = '#0000FF'; break;
+                    case 'accelerating': color = '#FFFF00'; break;
+                    case 'decelerating': color = '#00FFFF'; break;
+                    case 'lane_changing': color = '#FF00FF'; break;
                 }
                 ctx.strokeStyle = color;
 
-                // Visual distinction for predicting (ghost) tracks
+                // Visual distinction based on status
                 if (v.status === 'predicting') {
                     ctx.setLineDash([2, 2]);
-                    ctx.globalAlpha = 0.3; // Much more subtle
+                    ctx.globalAlpha = 0.3;
                     ctx.lineWidth = 1;
+                } else if (v.status === 'tentative') {
+                    ctx.setLineDash([4, 4]);
+                    ctx.globalAlpha = 0.6;
+                    ctx.lineWidth = 1.2;
                 } else if (v.is_wrong_way || v.is_stopped) {
-                    // Flashing red effect for safety alerts
                     const isEven = Math.floor(performance.now() / 200) % 2 === 0;
                     color = isEven ? '#FF0000' : '#FFFFFF';
                     ctx.setLineDash([]);
@@ -325,22 +364,18 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 } else {
                     ctx.setLineDash([]);
                     ctx.globalAlpha = 1.0;
-                    ctx.lineWidth = 1.5;
+                    ctx.lineWidth = 2.0;
                 }
 
                 if (showBoundingBoxes) {
                     ctx.strokeRect(sx1, sy1, sw, sh);
 
-                    // --- Trajectory Projection ---
+                    // Trajectory Projection
                     if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.0001 || Math.abs(v.vy ?? 0) > 0.0001)) {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
-
-                        // Project ahead by a fixed time (e.g., 0.2 seconds)
-                        // v.vx/vy are now normalized units per frame.
                         const currentFps = frameRate > 0 ? frameRate : 15;
                         const projectionFrames = currentFps * 0.2;
-
                         const projX = cx + (v.vx ?? 0) * projectionFrames * canvasWidth;
                         const projY = cy + (v.vy ?? 0) * projectionFrames * canvasHeight;
 
@@ -351,7 +386,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         ctx.setLineDash([4, 4]);
                         ctx.stroke();
 
-                        // Arrow head
                         const angle = Math.atan2(projY - cy, projX - cx);
                         const headLen = 6;
                         ctx.beginPath();
@@ -361,54 +395,44 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         ctx.lineTo(projX - headLen * Math.cos(angle + Math.PI / 6), projY - headLen * Math.sin(angle + Math.PI / 6));
                         ctx.setLineDash([]);
                         ctx.stroke();
-
-                        // Reset line dash for the box
-                        ctx.setLineDash(v.status === 'predicting' ? [2, 2] : []);
-                        ctx.lineWidth = v.status === 'predicting' ? 1 : 1.5;
                     }
 
-                    // Only add shadow/glow for active tracks to reduce clutter
                     if (v.status === 'active') {
-                        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-                        ctx.lineWidth = 1;
-                        ctx.strokeRect(sx1 + 1, sy1 + 1, sw - 2, sh - 2);
-                        ctx.lineWidth = 1.5;
-                        ctx.strokeStyle = color;
+                        ctx.shadowBlur = 4;
+                        ctx.shadowColor = color;
+                        ctx.strokeRect(sx1, sy1, sw, sh);
+                        ctx.shadowBlur = 0;
                     }
                 }
 
-                // Reset styles
                 ctx.setLineDash([]);
 
-                // Only show labels for ACTIVE detections to reduce screen occlusion
-                if (showVehicleDetails && v.status === 'active') {
+                // Show labels for ACTIVE and TENTATIVE detections
+                if (showVehicleDetails && (v.status === 'active' || v.status === 'tentative')) {
                     const speed = v.speed !== undefined && v.speed !== null ? v.speed.toFixed(0) : "0";
+                    const vid = v.vehicle_id.split('_').pop();
                     const lines = [
-                        `${v.vehicle_id.split('_').pop()}: ${v.class_name}`,
+                        `${vid}: ${v.class_name}`,
                         `${speed} km/h`
                     ];
                     if (v.license_plate && v.license_plate !== "Unknown") {
                         lines.push(v.license_plate);
                     }
 
-                    const lineHeight = 10;
-                    let textY = sy1 - (lines.length * lineHeight) - 2;
-
-                    if (textY < 0) {
-                        textY = sy2 + 2;
-                    }
+                    const lineHeight = 12;
+                    let textY = sy1 - (lines.length * lineHeight) - 4;
+                    if (textY < 0) textY = sy2 + 4;
 
                     lines.forEach((line, i) => {
                         const textWidth = ctx.measureText(line).width;
                         const textX = sx1 + (sw - textWidth) / 2;
-
-                        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // More transparent
-                        ctx.fillRect(textX - 2, textY + (i * lineHeight), textWidth + 4, lineHeight);
-
-                        ctx.fillStyle = color;
-                        ctx.fillText(line, textX, textY + (i * lineHeight) + 8);
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                        ctx.fillRect(textX - 4, textY + (i * lineHeight), textWidth + 8, lineHeight);
+                        ctx.fillStyle = (v.status === 'tentative') ? 'rgba(255,255,255,0.8)' : color;
+                        ctx.fillText(line, textX, textY + (i * lineHeight) + 10);
                     });
                 }
+                ctx.globalAlpha = 1.0;
             });
 
             // Final style reset to prevent leaks to next frame/call

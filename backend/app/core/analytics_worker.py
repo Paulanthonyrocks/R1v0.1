@@ -71,12 +71,15 @@ class AnalyticsWorker:
                     feed_id, frame_index, timestamp, vehicles, lanes, lines, worker_metrics, extra = item
                     
                     # --- Track Quality Gating ---
-                    # Only pass high-quality tracks to analytics engines
                     min_q = self.config.get("analytics", {}).get("min_track_quality", 0.4)
-                    reliable_vehicles = {
-                        v.get("vehicle_id"): v for v in vehicles 
-                        if v.get("quality_score", 1.0) >= min_q
-                    }
+                    
+                    # Mark vehicles as reliable or not, but keep all for visual continuity
+                    reliable_vehicles = []
+                    for v in vehicles:
+                        is_reliable = v.get("quality_score", 1.0) >= min_q
+                        v["is_reliable"] = is_reliable
+                        if is_reliable:
+                            reliable_vehicles.append(v)
                     
                     # 2. Lazy-init monitors
                     if feed_id not in self.traffic_monitors:
@@ -88,7 +91,7 @@ class AnalyticsWorker:
                     s_monitor = self.safety_monitors[feed_id]
 
                     # 3. Run Safety Analytics (Stopped Vehicle, Wrong Way)
-                    safety_alerts = s_monitor.update(feed_id, list(reliable_vehicles.values()), timestamp)
+                    safety_alerts = s_monitor.update(feed_id, reliable_vehicles, timestamp)
                     
                     # 3b. Handle Calibration Drift
                     calib = extra.get("calibration") if extra else None
@@ -107,7 +110,9 @@ class AnalyticsWorker:
                             })
 
                     # 4. Update Traffic Metrics
-                    t_monitor.update_vehicles(reliable_vehicles)
+                    # TrafficMonitor.update_vehicles expects a DICT of reliable vehicles for internal tracking
+                    reliable_map = {v["vehicle_id"]: v for v in reliable_vehicles}
+                    t_monitor.update_vehicles(reliable_map)
                     feed_metrics = t_monitor.get_metrics()
                     
                     # Merge worker performance metrics and extra metadata

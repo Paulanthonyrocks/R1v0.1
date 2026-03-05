@@ -472,7 +472,11 @@ class CoreModule:
             cfg = get_current_config()
             
             timestamp = int(time.time())
-            filename = f"snapshot_{self.feed_id}_{incident_id}_{timestamp}.jpg"
+            fmt = getattr(cfg, "snapshot_format", "webp").lower()
+            if fmt not in ["jpg", "jpeg", "webp", "png"]:
+                fmt = "webp"
+            
+            filename = f"snapshot_{self.feed_id}_{incident_id}_{timestamp}.{fmt}"
             # Root is backend/
             output_dir = Path(cfg.snapshots_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -487,9 +491,15 @@ class CoreModule:
                 frame = cv2.resize(frame, (max_w, new_h), interpolation=cv2.INTER_AREA)
                 logger.debug(f"[{self.feed_id}] Resized snapshot from {w}x{h} to {max_w}x{new_h}")
             
-            # 2. Use configurable JPEG quality
+            # 2. Use configurable quality and format
             quality = getattr(cfg, "snapshot_quality", 80)
-            cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            if fmt in ["jpg", "jpeg"]:
+                cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            elif fmt == "webp":
+                # WebP quality 0-100, same as JPEG but much better compression
+                cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_WEBP_QUALITY), quality])
+            else: # png or other
+                cv2.imwrite(str(filepath), frame)
             
             # Send notification to DB queue so it can be associated with the incident
             if self.db_queue:
@@ -500,7 +510,7 @@ class CoreModule:
                     "filename": filename,
                     "timestamp": float(time.time())
                 })
-            logger.info(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename} (Quality: {quality})")
+            logger.info(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename} (Format: {fmt}, Quality: {quality})")
         except Exception as e:
             logger.error(f"[{self.feed_id}] Failed to save snapshot: {e}")
 

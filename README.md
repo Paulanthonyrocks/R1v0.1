@@ -1,68 +1,42 @@
-# Traffic Management Hub
+# Traffic Management Hub (RLM-V0.1)
 
 ## Project Overview
 
-The Traffic Management Hub is a web application designed to provide a comprehensive view and control system for traffic management. It allows operators to monitor real-time traffic conditions, manage traffic signals, respond to incidents, and configure the system. The application aims to improve traffic flow, reduce congestion, and enhance road safety.
-
-## Intended Audience
-
-The primary users of the Traffic Management Hub are traffic management professionals, including:
-
-*   **Traffic Operators:** Personnel responsible for monitoring and controlling traffic flow in real-time.
-*   **Incident Responders:** Teams that need to react quickly and efficiently to traffic incidents.
-*   **System Administrators:** Individuals who configure and maintain the traffic management system.
-*   **City Planners:** Professionals who analyze traffic patterns to improve urban planning.
-
-## Project Goals
-
-*   Provide real-time traffic data visualization.
-*   Enable remote management of traffic signals.
-*   Facilitate quick responses to traffic incidents.
-*   Offer system configuration capabilities.
-*   Improve overall traffic efficiency and safety.
-*   Provide a system that is built to scale.
-*   Ensure security and reliability.
+The Traffic Management Hub is an advanced AI-powered surveillance and traffic analytics platform. It leverages real-time computer vision (YOLOv8) and distributed processing to provide operators with deep insights into traffic flow, vehicle classification, and anomaly detection.
 
 ## Core Features
 
-The Traffic Management Hub offers a range of features to address the needs of traffic management professionals:
-
-*   **3D Globe Visualization:** The core of the application, providing a dynamic 3D view of the traffic environment.
-*   **Real-time Traffic Data:** Display traffic flow, speed, and volume directly on the 3D globe.
-*   **Signal Management:** Enables operators to remotely control and adjust traffic signal timings.
-*   **Incident Management:** Allows operators to log and track incidents, manage responses, and view incidents on the map.
-*   **System Configuration:** Provides system administrators with the ability to configure various settings, including traffic signal parameters, incident response protocols, and user access.
-*   **Dashboard:** Presents an overview of system health, key metrics, and real-time alerts.
-*   **User Management:** Enables system administrators to manage user accounts, access levels, and roles.
-*   **Role-Based Access Control:** Provides control over the information that different user types can view and change.
-*   **Alerts and Notifications:** Delivers real-time alerts and notifications to operators regarding critical incidents and system events.
+*   **Surveillance Matrix:** A dynamic, multi-feed grid view with "Focus Mode" for high-priority monitoring.
+*   **AI Video Analytics:** Real-time vehicle detection (YOLOv8), tracking (Centroid/ReID), and speed estimation.
+*   **ROI-Based Detection:** Frontend-configurable Regions of Interest (ROI) for targeted lane monitoring and counting.
+*   **Adaptive Streaming:** Intelligent backend that adjusts FPS and processing intensity based on client demand and system resources.
+*   **Real-time KPI Dashboard:** Instant visualization of traffic volume, average speed, and anomaly alerts.
+*   **Unified Dashboard Shell:** Consistent, theme-aware navigation (Dark Mode) across Surveillance, Analytics, Map, and Preferences.
+*   **Cross-Camera Tracking:** Redis-backed Re-Identification (ReID) for tracking vehicles across different camera feeds.
 
 ## Technologies Used
 
 *   **Frontend:**
-    *   **Next.js:** React framework for building web applications.
-    *   **React:** JavaScript library for building user interfaces.
-    *   **TypeScript:** Typed superset of JavaScript for improved code quality.
-    *   **Tailwind CSS:** Utility-first CSS framework for styling.
-    *   **CesiumJS:** 3D mapping library for globe visualization.
+    *   **Next.js 16 & React 19:** Modern, high-performance web framework.
+    *   **TypeScript:** Full type safety across the application.
+    *   **Tailwind CSS:** Responsive, utility-first styling with a custom "Matrix" theme.
+    *   **Lucide React:** Consistent iconography.
 *   **Backend:**
-    *   **FastAPI:** High-performance Python web framework for building APIs.
-    *   **Python:** Primary language for backend logic, data processing, and machine learning.
-    *   **PyTorch, Ultralytics, OpenCV, ONNX Runtime:** For machine learning and computer vision tasks (e.g., object detection, traffic prediction).
-*   **Database & Services:**
-    *   **SQLite:** For structured data like prediction logs.
-    *   **MongoDB (Optional):** For raw and processed traffic data.
-    *   **WebSockets:** For real-time communication.
-    *   **Firebase Admin SDK:** For authentication and user management.
+    *   **FastAPI:** High-performance asynchronous API layer.
+    *   **Distributed Processing:** Decoupled architecture using `FeedManager`, `IngestionWorker`, and `InferenceWorker`.
+    *   **Computer Vision:** YOLOv8 (Ultralytics), OpenCV, and ONNX Runtime for optimized inference.
+    *   **Redis:** Fast state management for vehicle re-identification and tracking.
+*   **Infrastructure:**
+    *   **Firebase:** Authentication and hosting.
+    *   **WebSockets:** Low-latency binary broadcasting for video frames and telemetry.
 
 ## Setup Instructions
 
 1.  **Prerequisites:**
-    *   Node.js (version 16 or later)
-    *   npm or yarn
-    *   Python 3.9+
-    *   `pip` (Python package installer)
-    *   Firebase project set up (Authentication enabled, service account key for Admin SDK).
+    *   Node.js 20+ (LTS)
+    *   Python 3.10+
+    *   Redis Server (running on default port 6379)
+    *   Firebase project for Auth.
 
 2.  **Installation:**
 
@@ -71,72 +45,44 @@ The Traffic Management Hub offers a range of features to address the needs of tr
     git clone <repository_url>
     cd traffic-management-hub
 
-    # Install frontend dependencies
-    cd frontend
+    # Install Web Dashboard dependencies
+    cd hosting
     npm install
     cd ..
 
-    # Install backend dependencies
-    pip install -r backend/requirements.txt
+    # Install Backend dependencies
+    cd backend
+    pip install -r requirements.txt
     ```
 
-3.  **Firebase Configuration:**
+3.  **Environment Configuration:**
 
-    *   Download your Firebase service account key JSON file from the Firebase Console (`Project settings > Service accounts > Generate new private key`).
-    *   Place this file in `backend/configs/firebase/service-account-key.json`.
-    *   Create a `.env` file in the project root and add your Firebase project ID:
-
-        ```
-        FIREBASE_PROJECT_ID=your_project_id
-        ```
+    *   Create a `.env` file in the root directory.
+    *   Add your Firebase configuration and any necessary API keys.
+    *   Ensure Redis is accessible at `localhost:6379`.
 
 4.  **Running the Application:**
 
     *   **Start Backend:**
-
         ```bash
-        uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+        # From the backend directory
+        uvicorn app.main:app --reload --port 8000
         ```
 
     *   **Start Frontend:**
-
         ```bash
-        cd frontend
+        # From the hosting directory
         npm run dev
         ```
 
-    Open your browser and go to `http://localhost:3000` to view the application.
+    Open `http://localhost:3000` to access the Dashboard.
 
-## Development Plans
+## Architecture Highlights
 
-### Near-Term
-
-*   **Data Ingestion:** Refine Kafka integration and data processing pipelines.
-*   **ML Integration:** Fully integrate YOLOv8 for object detection and initial traffic prediction models.
-*   **Analytics Service:** Enhance data aggregation, trend analysis, and prediction outcome summaries.
-*   **Real-time Updates:** Improve WebSocket communication for various data streams.
-
-### Mid-Term
-
-*   **Advanced ML Models:** Explore and integrate more sophisticated traffic prediction and anomaly detection algorithms.
-*   **UI Enhancements:** Develop interactive dashboards, alert management, and historical data visualization.
-*   **User Management:** Implement comprehensive user roles and permissions.
-
-### Long-Term
-
-*   **Scalability:** Optimize for high-volume data and distributed deployments.
-*   **External Integrations:** Connect with external data sources (e.g., weather APIs, public transport data).
-*   **Simulation & Control:** Implement advanced traffic simulation and signal control mechanisms.
-
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1.  Fork the repository.
-2.  Create a new branch for your feature or bug fix.
-3.  Make your changes and commit them with clear messages.
-4.  Submit a pull request to the main branch.
+*   **Broadcast Backpressure:** The `FeedManager` implements a specialized `broadcast_queue` to ensure slow network clients don't block the video processing pipeline.
+*   **Parent-Monitoring Workers:** Sub-processes are hardened against "zombie" states by monitoring the parent PID, ensuring clean resource teardown on backend restarts.
+*   **Binary WebSocket Protocol:** Video frames are broadcast as raw binary data to minimize serialization overhead and latency.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License.

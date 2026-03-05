@@ -31,6 +31,7 @@ def _serialize_tracked_vehicles_with_map(
 
 def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
     """Extracts high-res PNG patches for active vehicles (better for OCR)."""
+    if frame is None or frame.size == 0: return []
     rois = []
     h, w = frame.shape[:2]
     
@@ -424,10 +425,11 @@ def inference_worker(
                                     current_count = collection_sample_counts.get(feed_id_hn, 0)
                                     if current_count < collection_max_samples:
                                         try:
-                                            fname = f"hard_neg_{feed_id_hn}_{meta['frame_index']}_{int(now)}.jpg"
+                                            # Use WebP for better compression of collection samples
+                                            fname = f"hard_neg_{feed_id_hn}_{meta['frame_index']}_{int(now)}.webp"
                                             fpath = collection_dir / fname
                                             # Use lower quality for collection samples to save space
-                                            cv2.imwrite(str(fpath), meta['frame'], [int(cv2.IMWRITE_JPEG_QUALITY), collection_quality])
+                                            cv2.imwrite(str(fpath), meta['frame'], [int(cv2.IMWRITE_WEBP_QUALITY), collection_quality])
                                             last_collection_time = now
                                             collection_sample_counts[feed_id_hn] = current_count + 1
                                             logger.info(f"[Worker {worker_id}] Saved hard negative sample for {feed_id_hn}: {fname} (Total: {current_count+1})")
@@ -473,33 +475,44 @@ def inference_worker(
                         if vis_tracks and meta['first_detect']:
                             core._first_detection_done = True
                     
-                    for vid, track in vis_tracks.items():
-                        emb = track.get("embedding")
-                        if emb is not None:
-                            global_id = local_reid_manager.match_only(np.array(emb))
-                            if global_id:
-                                track["global_vehicle_id"] = global_id
-                                if meta['feed_id'] not in local_reid_manager.local_to_global:
-                                    local_reid_manager.local_to_global[meta['feed_id']] = {}
-                                local_reid_manager.local_to_global[meta['feed_id']][vid] = global_id
-                        if not track.get("global_vehicle_id"):
-                            mapped_id = local_reid_manager.get_global_id(meta['feed_id'], vid)
-                            if mapped_id: track["global_vehicle_id"] = mapped_id
+                    # Only assign global IDs in worker if Redis is enabled for distributed sync.
+                    # Otherwise, let the central FeedManager handle it to avoid conflicts.
+                    if config.get("redis", {}).get("enabled", False):
+                        for vid, track in vis_tracks.items():
+                            emb = track.get("embedding")
+                            if emb is not None:
+                                global_id = local_reid_manager.match_only(np.array(emb))
+                                if global_id:
+                                    track["global_vehicle_id"] = global_id
+                                    if meta['feed_id'] not in local_reid_manager.local_to_global:
+                                        local_reid_manager.local_to_global[meta['feed_id']] = {}
+                                    local_reid_manager.local_to_global[meta['feed_id']][vid] = global_id
+                            if not track.get("global_vehicle_id"):
+                                mapped_id = local_reid_manager.get_global_id(meta['feed_id'], vid)
+                                if mapped_id: track["global_vehicle_id"] = mapped_id
                         
                     monitor.update_vehicles(vis_tracks)
                     metrics_result = monitor.get_metrics()
                     metrics_obj.frames_processed += 1
                     
-                    serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks)
+                    # --- NORMALIZE COORDINATES FOR FRONTEND ---
+                    # Frontend expects 0.0 to 1.0 range
+                    serialized_v = []
+                    if frame is not None and frame.size > 0:
+                        fh, fw = frame.shape[:2]
+                        if fw > 0 and fh > 0:
+                            scale_x, scale_y = 1.0 / fw, 1.0 / fh
+                            serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks, scale_x, scale_y)
                     
                     extra = {"calibration": calib_status}
-                    v_proc_cfg = config.get("video_processing", {})
-                    if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
-                         bg_scale = v_proc_cfg.get("roi_scale", 0.5)
-                         bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
-                         _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-                         extra["bg"] = bg_bytes.tobytes()
-                         extra["rois"] = _extract_rois(frame, serialized_v, device=device)
+                    if frame is not None and frame.size > 0:
+                        v_proc_cfg = config.get("video_processing", {})
+                        if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
+                             bg_scale = v_proc_cfg.get("roi_scale", 0.5)
+                             bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
+                             _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                             extra["bg"] = bg_bytes.tobytes()
+                             extra["rois"] = _extract_rois(frame, serialized_v, device=device)
                     
                     try:
                         central_output_queue.put_nowait((
