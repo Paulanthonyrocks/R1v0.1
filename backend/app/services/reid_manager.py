@@ -215,8 +215,11 @@ class GlobalReIDManager:
                 gid = self.redis.hget(mapping_key, local_id)
                 if gid:
                     gid = gid.decode('utf-8')
-                    # Update TTL in Redis
+                    # Update TTL and last_seen in Redis
                     self.redis.expire(mapping_key, self.ttl_seconds)
+                    self.redis.hset(f"reid:meta:{gid}", "last_seen", str(now))
+                    self.redis.expire(f"reid:meta:{gid}", self.ttl_seconds)
+                    self.redis.expire(f"reid:emb:{gid}", self.ttl_seconds)
                     return gid
 
                 # 2. Vectorized Search in Redis (Atomic check for late arrivals)
@@ -232,6 +235,13 @@ class GlobalReIDManager:
                 gid = self.local_to_global[feed_id][local_id]
                 if gid in self.metadata_store:
                     self.metadata_store[gid]["last_seen"] = now
+                    # If Redis is enabled, sync the "keep-alive" signal
+                    if self.redis:
+                        try:
+                            self.redis.hset(f"reid:meta:{gid}", "last_seen", str(now))
+                            self.redis.expire(f"reid:meta:{gid}", self.ttl_seconds)
+                            self.redis.expire(f"reid:emb:{gid}", self.ttl_seconds)
+                        except Exception: pass
                     return gid
 
             # 2. Vectorized Search (Local fallback)
@@ -281,6 +291,12 @@ class GlobalReIDManager:
             if best_match_id:
                 global_id = best_match_id
                 self.metadata_store[global_id]["last_seen"] = now
+                if self.redis:
+                    try:
+                        self.redis.hset(f"reid:meta:{global_id}", "last_seen", str(now))
+                        self.redis.expire(f"reid:meta:{global_id}", self.ttl_seconds)
+                        self.redis.expire(f"reid:emb:{global_id}", self.ttl_seconds)
+                    except Exception: pass
             else:
                 # Create New
                 global_id = f"GLB_{self.global_counter}"
@@ -307,6 +323,10 @@ class GlobalReIDManager:
                             "class_name": metadata.get("class_name", "unknown")
                         })
                         self.redis.set(f"reid:emb:{global_id}", embedding.tobytes())
+                        # Set TTLs
+                        self.redis.expire(f"reid:meta:{global_id}", self.ttl_seconds)
+                        self.redis.expire(f"reid:emb:{global_id}", self.ttl_seconds)
+                        
                         # Add to global list for other nodes to discover
                         self.redis.rpush("reid:gallery", global_id)
                         # Broadcast NEW identity
@@ -340,6 +360,7 @@ class GlobalReIDManager:
             if self.redis:
                 try:
                     self.redis.hset(f"reid:map:{feed_id}", local_id, global_id)
+                    self.redis.expire(f"reid:map:{feed_id}", self.ttl_seconds)
                 except Exception as e:
                     logger.error(f"Failed to sync map to Redis: {e}")
 
@@ -483,15 +504,10 @@ class GlobalReIDManager:
                 self.gallery_matrix = None
             logger.info(f"ReID Cleanup: Removed {len(expired_gids)} vehicles.")
 
-            # CLEANUP REDIS
-            if self.redis:
-                try:
-                    for gid in expired_gids:
-                        self.redis.delete(f"reid:meta:{gid}", f"reid:emb:{gid}")
-                        self.redis.lrem("reid:gallery", 0, gid)
-                except Exception as e:
-                    logger.error(f"Failed to cleanup Redis ReID: {e}")
-
+            # NOTE: We do NOT explicitly delete from Redis in cleanup anymore.
+            # We rely on Redis TTL (set via expire calls) to clean up old keys globally.
+            # This avoids race conditions where one node deletes a key that another node is still using.
+            
             # CLEANUP MAPPINGS (Fixes the memory leak)
             for feed_id in list(self.local_to_global.keys()):
                 # Filter dictionary inplace

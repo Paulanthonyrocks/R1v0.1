@@ -29,8 +29,12 @@ def _serialize_tracked_vehicles_with_map(
     v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
     return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
 
-def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
-    """Extracts high-res PNG patches for active vehicles (better for OCR)."""
+def _extract_rois(frame: np.ndarray, tracked_vehicles: Any, scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
+    """
+    Extracts high-res PNG patches for active vehicles (better for OCR).
+    tracked_vehicles can be a list of dicts or an iterable of dicts.
+    Assumes bbox coordinates in tracked_vehicles are absolute (pixels).
+    """
     if frame is None or frame.size == 0: return []
     rois = []
     h, w = frame.shape[:2]
@@ -512,7 +516,8 @@ def inference_worker(
                              bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                              _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                              extra["bg"] = bg_bytes.tobytes()
-                             extra["rois"] = _extract_rois(frame, serialized_v, device=device)
+                             # Pass absolute coordinates (vis_tracks.values()) instead of normalized serialized_v
+                             extra["rois"] = _extract_rois(frame, vis_tracks.values(), device=device)
                     
                     try:
                         central_output_queue.put_nowait((

@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+import cv2
 from typing import List, Tuple, Optional, Any
 from ultralytics import YOLO
 from collections import deque
@@ -76,7 +77,6 @@ class DetectionEngine:
 
     def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
         """Creates an ROI mask."""
-        import cv2
         self.resolution = resolution
         if not roi_points:
             # Default to all-255 (entire frame included)
@@ -121,6 +121,18 @@ class DetectionEngine:
         """Runs detection on the frame and returns bounding boxes and classes."""
         if self.model is None:
             raise RuntimeError("Model not loaded")
+
+        # Apply ROI Mask if configured and not full-screen
+        if self.roi_mask is not None:
+             # Check if mask is full screen (all 255)
+            if not np.all(self.roi_mask == 255):
+                # Ensure mask matches frame size
+                if self.roi_mask.shape != frame.shape[:2]:
+                    # Resize mask to match frame if needed (e.g. if resolution changed)
+                    mask_resized = cv2.resize(self.roi_mask, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    frame = cv2.bitwise_and(frame, frame, mask=mask_resized)
+                else:
+                    frame = cv2.bitwise_and(frame, frame, mask=self.roi_mask)
 
         # TensorRT/ONNX models have device baked in
         device_arg = self.device

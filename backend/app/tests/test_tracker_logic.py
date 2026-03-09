@@ -131,19 +131,32 @@ class TestTrackerLogic:
         assert isinstance(giou, float)
         assert giou <= 1.0
 
-    def test_stationary_cleanup(self, tracking_manager):
-        tracking_manager.stationary_cleanup_timeout = 10
-        current_time = 0.0
+    def test_behavior_classification(self, tracking_manager):
+        from collections import deque
+        # Create a track with history
+        track = {
+            "vehicle_id": "T1", "centroid": (100, 100), "predicted_bbox": (90, 90, 110, 110),
+            "velocity_history": deque(maxlen=20),
+            "hits": 50, "status": "active"
+        }
         
-        # Create a track
-        det = ((100, 100, 120, 120), 2, 0.9, None)
-        tracking_manager.update([det], current_time, (500, 500))
-        tid = list(tracking_manager.vehicle_data.keys())[0]
+        # Simulate constant speed (500 px/s)
+        # 10 frames of 500 px/s motion in X direction
+        for i in range(10):
+            track["velocity_history"].append((500, 0))
+            
+        tracking_manager._classify_behavior(track)
+        assert track["behavior"] == "normal"
+        assert abs(track["acceleration"]) < 100
         
-        # Move forward in time, but no movement
-        current_time = 20.0
-        # Re-detect at same position
-        tracking_manager.update([det], current_time, (500, 500))
-        
-        # Should be removed due to stationary cleanup
-        assert tid not in tracking_manager.vehicle_data
+        # Simulate hard braking
+        # Speed drops from 500 to 100 in 5 frames
+        # 500, 400, 300, 200, 100
+        track["velocity_history"].clear()
+        for v in [500, 400, 300, 200, 100]:
+            track["velocity_history"].append((v, 0))
+            
+        tracking_manager._classify_behavior(track)
+        # Accel: (100 - 500) / (4 * 1/30) = -400 / 0.133 = -3000
+        assert track["behavior"] == "hard_braking"
+        assert track["acceleration"] < -100

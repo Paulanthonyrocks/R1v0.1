@@ -374,38 +374,55 @@ class TrackingManager:
         if len(v_hist) < 5:
             return
 
-        # 1. Acceleration (change in speed)
-        # Using simple finite difference on last 2 velocity states
-        vx1, vy1 = v_hist[-2]
-        vx2, vy2 = v_hist[-1]
-        s1 = math.sqrt(vx1**2 + vy1**2)
-        s2 = math.sqrt(vx2**2 + vy2**2)
-        dt = 1.0 / self.fps
-        accel = (s2 - s1) / dt
+        # 1. Acceleration (change in speed) - Smoothed over window
+        # Use a 5-frame window if available
+        window = 5
+        if len(v_hist) < window:
+             window = len(v_hist)
+        
+        vx_start, vy_start = v_hist[-window]
+        vx_end, vy_end = v_hist[-1]
+        
+        s_start = math.sqrt(vx_start**2 + vy_start**2)
+        s_end = math.sqrt(vx_end**2 + vy_end**2)
+        
+        # Approximate time delta
+        dt = (window - 1) * (1.0 / self.fps)
+        if dt <= 0: dt = 0.1
+        
+        accel = (s_end - s_start) / dt
         track["acceleration"] = round(accel, 2)
 
         # 2. Behavior Classification
         behavior = "normal"
         
         # Hard Braking detection
-        # Threshold: -5.0 m/s^2 (approximate, pixel-based needs calibration but relative works)
-        # Since we are in pixels, we should use a relative threshold or smoothed value
-        if accel < -100: # Heuristic for pixel-based speed drop
+        # Threshold: Significant negative acceleration
+        # e.g., dropping 100 px/s in 1 second -> -100
+        # Check if speed is significant to avoid noise at near-zero speeds
+        if s_start > 50 and accel < -150: 
             behavior = "hard_braking"
         
         # Turning detection
         if len(v_hist) >= 10:
             # Check angle change between start and end of window
-            vx_start, vy_start = v_hist[-10]
-            vx_end, vy_end = v_hist[-1]
-            angle_start = math.atan2(vy_start, vx_start)
-            angle_end = math.atan2(vy_end, vx_end)
-            angle_diff = abs(angle_end - angle_start)
-            if angle_diff > math.pi / 6: # > 30 degrees
-                behavior = "turning"
+            vx_initial, vy_initial = v_hist[-10]
+            vx_final, vy_final = v_hist[-1]
+            
+            # Only check angle if moving
+            if (vx_initial**2 + vy_initial**2) > 100 and (vx_final**2 + vy_final**2) > 100:
+                angle_start = math.atan2(vy_initial, vx_initial)
+                angle_end = math.atan2(vy_final, vx_final)
+                angle_diff = abs(angle_end - angle_start)
+                # Normalize angle diff
+                if angle_diff > math.pi:
+                    angle_diff = 2*math.pi - angle_diff
+                
+                if angle_diff > math.pi / 6: # > 30 degrees
+                    behavior = "turning"
         
         # Stationary detection (if smoothed speed is very low but hits are high)
-        if s2 < 5 and track["hits"] > 10:
+        if s_end < 10 and track["hits"] > 30:
             behavior = "stationary"
 
         track["behavior"] = behavior
