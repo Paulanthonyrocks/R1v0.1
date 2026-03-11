@@ -24,6 +24,9 @@ export interface FeedStatusData {
     exclusion_zones?: { x: number; y: number }[][];
     static_object_filter_enabled?: boolean;
     static_object_timeout?: number;
+    show_bounding_boxes?: boolean;
+    show_vehicle_details?: boolean;
+    show_trajectories?: boolean;
   };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;

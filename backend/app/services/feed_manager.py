@@ -114,6 +114,10 @@ class FeedManager:
         # Persistence
         self.persistence_path = Path(self.config.get("feeds_config_path", "backend/data/feeds_config.json"))
 
+        # Broadcast Optimization
+        self.broadcast_queue = asyncio.Queue(maxsize=100)
+        self._broadcast_worker_task: Optional[asyncio.Task] = None
+
         # Database processing
         self._db_queue: Optional[MPQueue] = MPQueue(maxsize=100000)
         self._db_reader_task: Optional[asyncio.Task] = None
@@ -175,6 +179,7 @@ class FeedManager:
         atexit.register(self._atexit_cleanup)
 
         # Start background readers and watchdog
+        self._broadcast_worker_task = asyncio.create_task(self._broadcast_worker())
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self._analytics_reader_task = asyncio.create_task(self._read_analytics_results())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
@@ -1195,6 +1200,38 @@ class FeedManager:
 
     # --- Background Reader ---
 
+    async def _broadcast_worker(self):
+        """Dedicated worker for high-frequency WebSocket broadcasting with backpressure."""
+        logger.info("Broadcast worker task started.")
+        while not self._stop_reader_flag:
+            try:
+                # 1. Wait for message from queue
+                msg = await self.broadcast_queue.get()
+                
+                m_type = msg.get("type")
+                feed_id = msg.get("feed_id")
+                
+                # 2. Optimized Routing
+                if m_type == "video_frame":
+                    if self._connection_manager:
+                        await self._connection_manager.broadcast_bytes_to_feed(
+                            feed_id, 
+                            msg["data"]
+                        )
+                elif m_type == "kpi_update":
+                    if self._connection_manager:
+                        await self._connection_manager.broadcast_to_feed(
+                            msg["data"],
+                            feed_id
+                        )
+                
+                self.broadcast_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in broadcast worker: {e}")
+                await asyncio.sleep(0.1)
+
     async def _read_result_queues(self):
         """Drains Inference output and forwards frames/raw data to Analytics process."""
         logger.info("Inference Result reader task started.")
@@ -1303,14 +1340,67 @@ class FeedManager:
                     if self._connection_manager:
                         # Only broadcast if there are subscribers to save resources
                         if hasattr(self._connection_manager, 'has_subscribers') and self._connection_manager.has_subscribers(feed_id):
-                            asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                            # Offload expensive serialization to thread pool
+                            # This replaces the per-frame asyncio task creation
+                            asyncio.create_task(self._enqueue_broadcast(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
 
                 # Yield control
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.001)
 
             except Exception as e:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
+
+    async def _enqueue_broadcast(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
+        """Prepares and enqueues a broadcast message using a thread pool for serialization."""
+        try:
+            # 1. Prepare Payload (Lightweight dict manipulation)
+            payload = {
+                "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
+                "f": feed_id,
+                "i": frame_idx,
+                "ts": time.time(),
+                "v": vehicles, # Could use _compute_vehicle_deltas here if needed
+                "m": metrics
+            }
+            if extra and "bg" in extra:
+                payload["bg"] = extra["bg"]
+                payload["rois"] = extra.get("rois", [])
+            else:
+                payload["frame"] = frame_bytes
+
+            # 2. Serialize in ThreadPool to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            msg_bytes = await loop.run_in_executor(self._cpu_executor, self._serialize_msgpack, payload)
+            
+            # 3. Enqueue for the dedicated broadcast worker
+            # Use put_nowait with overflow protection (Real-time priority)
+            try:
+                self.broadcast_queue.put_nowait({
+                    "type": "video_frame",
+                    "feed_id": feed_id,
+                    "data": msg_bytes
+                })
+            except asyncio.QueueFull:
+                try:
+                    self.broadcast_queue.get_nowait()
+                    self.broadcast_queue.put_nowait({
+                        "type": "video_frame",
+                        "feed_id": feed_id,
+                        "data": msg_bytes
+                    })
+                except: pass
+        except Exception as e:
+            logger.error(f"Error enqueuing broadcast for {feed_id}: {e}")
+
+    def _serialize_msgpack(self, payload):
+        """Synchronous msgpack serialization helper for thread pool."""
+        def msgpack_default(obj):
+            if isinstance(obj, (np.integer, np.int64, np.int32)): return int(obj)
+            if isinstance(obj, (np.floating, np.float64, np.float32)): return float(obj)
+            if isinstance(obj, np.ndarray): return obj.tolist()
+            return str(obj)
+        return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
 
     async def _read_analytics_results(self):
         """Drains Analytics output and triggers UI broadcasts."""

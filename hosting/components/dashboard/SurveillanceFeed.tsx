@@ -31,9 +31,9 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
-    const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
-    const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(true);
-    const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
+    const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(feed.config?.show_bounding_boxes ?? true);
+    const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(feed.config?.show_vehicle_details ?? true);
+    const [showTrajectories, setShowTrajectories] = useState<boolean>(feed.config?.show_trajectories ?? true);
     const [showROI, setShowROI] = useState<boolean>(false);
     const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
     const [showLaneOverlays, setShowLaneOverlays] = useState<boolean>(false);
@@ -71,6 +71,15 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             if (feed.config.static_object_filter_enabled !== undefined) {
                 setStaticFilterEnabled(feed.config.static_object_filter_enabled);
             }
+            if (feed.config.show_bounding_boxes !== undefined) {
+                setShowBoundingBoxes(feed.config.show_bounding_boxes);
+            }
+            if (feed.config.show_vehicle_details !== undefined) {
+                setShowVehicleDetails(feed.config.show_vehicle_details);
+            }
+            if (feed.config.show_trajectories !== undefined) {
+                setShowTrajectories(feed.config.show_trajectories);
+            }
         }
     }, [feed, roiMode]);
 
@@ -95,6 +104,21 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const handleToggleStaticFilter = (enabled: boolean) => {
         setStaticFilterEnabled(enabled);
         updateFeedConfig({ static_object_filter_enabled: enabled });
+    };
+
+    const handleToggleBoundingBoxes = (enabled: boolean) => {
+        setShowBoundingBoxes(enabled);
+        updateFeedConfig({ show_bounding_boxes: enabled });
+    };
+
+    const handleToggleVehicleDetails = (enabled: boolean) => {
+        setShowVehicleDetails(enabled);
+        updateFeedConfig({ show_vehicle_details: enabled });
+    };
+
+    const handleToggleTrajectories = (enabled: boolean) => {
+        setShowTrajectories(enabled);
+        updateFeedConfig({ show_trajectories: enabled });
     };
 
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -396,13 +420,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 showOverlays={showOverlays}
                 setShowOverlays={setShowOverlays}
                 showBoundingBoxes={showBoundingBoxes}
-                setShowBoundingBoxes={setShowBoundingBoxes}
+                setShowBoundingBoxes={isAdmin ? handleToggleBoundingBoxes : setShowBoundingBoxes}
                 showVehicleDetails={showVehicleDetails}
-                setShowVehicleDetails={setShowVehicleDetails}
+                setShowVehicleDetails={isAdmin ? handleToggleVehicleDetails : setShowVehicleDetails}
                 showROI={showROI}
                 setShowROI={setShowROI}
                 showTrajectories={showTrajectories}
-                setShowTrajectories={setShowTrajectories}
+                setShowTrajectories={isAdmin ? handleToggleTrajectories : setShowTrajectories}
                 showLaneOverlays={showLaneOverlays}
                 setShowLaneOverlays={setShowLaneOverlays}
                 showExclusionZones={showExclusionZones}

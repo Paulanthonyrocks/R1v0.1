@@ -271,11 +271,22 @@ class CoreModule:
             except Exception as e:
                 logger.warning(f"Lane detection failed: {e}")
 
-        # 2. Detection (Skip if external provided)
+        # 2. Detection (Use ROI Cropping for performance)
         if external_detections is not None:
             detections = external_detections
         else:
-            detections = self.detector.detect(frame, self.confidence_threshold)
+            # ROI Cropping Optimization: Detect only in relevant area
+            processed_frame, is_cropped, x_off, y_off = self._preprocess_frame(frame)
+            raw_detections = self.detector.detect(processed_frame, self.confidence_threshold)
+            
+            # Map back to original frame coordinates if cropped
+            if is_cropped:
+                detections = []
+                for bbox, cls, conf in raw_detections:
+                    mapped_bbox = (bbox[0] + x_off, bbox[1] + y_off, bbox[2] + x_off, bbox[3] + y_off)
+                    detections.append((mapped_bbox, cls, conf))
+            else:
+                detections = raw_detections
         
         # 2b. ROI & BBox Quality Filtering
         if detections:
@@ -306,7 +317,7 @@ class CoreModule:
                     cx2, cy2 = min(fw, x2), min(fh, y2)
                     
                     if cx2 > cx1 and cy2 > cy1:
-                        box_area = (x2 - x1) * (y2 - y1)
+                        box_area = max(1, (x2 - x1) * (y2 - y1))
                         # Slice the GPU tensor
                         roi_crop_gpu = self.roi_mask_gpu[cy1:cy2, cx1:cx2]
                         # Sum values on GPU, then bring to CPU for comparison
@@ -323,7 +334,7 @@ class CoreModule:
                     cx2, cy2 = min(fw, x2), min(fh, y2)
                     
                     if cx2 > cx1 and cy2 > cy1:
-                        box_area = (x2 - x1) * (y2 - y1)
+                        box_area = max(1, (x2 - x1) * (y2 - y1))
                         roi_crop = self.roi_mask[cy1:cy2, cx1:cx2]
                         overlap_area = np.sum(roi_crop > 0)
                         if (overlap_area / box_area) < 0.3:
@@ -335,7 +346,7 @@ class CoreModule:
             
             detections = filtered_detections
 
-        # 3. Enrichment (ReID Embeddings)
+        # 3. Enrichment (ReID Embeddings) - BATCHED
         enriched_detections = []
         
         # Stagger ReID to avoid CPU/GPU spikes across all feeds
@@ -362,11 +373,6 @@ class CoreModule:
                     roi = frame[y1:y2, x1:x2]
                     if roi.size > 0:
                         # Quality Gating (Heuristic: skip ReID if too blurry, small or occluded)
-                        # We need to find if this detection is likely part of an occluded track
-                        # For simplicity, we can check if it overlaps heavily with another track here
-                        # or rely on the previous frame's occlusion status if we had it.
-                        # Since detections are raw, we don't have the tid yet. 
-                        # But we can approximate by checking if this detection's IoU with ANY existing occluded track is high.
                         is_likely_occluded = False
                         for t in self.tracker.vehicle_data.values():
                             if t.get("is_occluded") and self.tracker._bbox_iou(bbox, t["bbox"]) > 0.5:
@@ -380,7 +386,7 @@ class CoreModule:
                         else:
                             logger.debug(f"[{self.feed_id}] Skipping ReID for low-quality ROI (Q: {quality:.1f})")
             
-            # Batch Inference
+            # Batch Inference (Performance win: Single GPU/CPU call)
             if rois_for_batch:
                 try:
                     if hasattr(self.reid_embedder, 'get_batch_embeddings'):
@@ -468,23 +474,25 @@ class CoreModule:
     def _save_snapshot(self, frame: np.ndarray, incident_id: str):
         """Saves a high-res snapshot of an incident."""
         try:
-            from app.config import get_current_config
-            cfg = get_current_config()
-            
             timestamp = int(time.time())
-            fmt = getattr(cfg, "snapshot_format", "webp").lower()
+            
+            # Use self.config (dict) instead of get_current_config()
+            # The worker process has its own copy of config passed at init
+            fmt = self.config.get("snapshot_format", "webp").lower()
             if fmt not in ["jpg", "jpeg", "webp", "png"]:
                 fmt = "webp"
             
             filename = f"snapshot_{self.feed_id}_{incident_id}_{timestamp}.{fmt}"
-            # Root is backend/
-            output_dir = Path(cfg.snapshots_dir)
+            
+            # snapshots_dir might be in a top-level 'storage' or directly in config
+            snapshots_dir = self.config.get("snapshots_dir", "data/snapshots")
+            output_dir = Path(snapshots_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             filepath = output_dir / filename
             
             # 1. Resize if frame is too large (to save space)
             h, w = frame.shape[:2]
-            max_w = getattr(cfg, "snapshot_max_width", 1280)
+            max_w = self.config.get("snapshot_max_width", 1280)
             if w > max_w:
                 scale = max_w / w
                 new_h = int(h * scale)
@@ -492,11 +500,11 @@ class CoreModule:
                 logger.debug(f"[{self.feed_id}] Resized snapshot from {w}x{h} to {max_w}x{new_h}")
             
             # 2. Use configurable quality and format
-            quality = getattr(cfg, "snapshot_quality", 80)
+            quality = self.config.get("snapshot_quality", 80)
             if fmt in ["jpg", "jpeg"]:
                 cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             elif fmt == "webp":
-                # WebP quality 0-100, same as JPEG but much better compression
+                # WebP quality 0-100
                 cv2.imwrite(str(filepath), frame, [int(cv2.IMWRITE_WEBP_QUALITY), quality])
             else: # png or other
                 cv2.imwrite(str(filepath), frame)
@@ -775,6 +783,21 @@ class CoreModule:
 
     def update_config(self, updates: Dict[str, Any]):
         """Dynamically updates configuration."""
+        # Top-level field updates for self.config
+        allowed_keys = [
+            "name", "latitude", "longitude", 
+            "static_object_filter_enabled", "static_object_timeout",
+            "show_bounding_boxes", "show_vehicle_details", "show_trajectories"
+        ]
+        for key in allowed_keys:
+            if key in updates:
+                self.config[key] = updates[key]
+                # Update specific attributes if they correspond to these keys
+                if key == "static_object_filter_enabled":
+                    self.static_object_filter_enabled = updates[key]
+                elif key == "static_object_timeout":
+                    self.static_object_timeout = updates[key]
+
         if "vehicle_detection" in updates:
             v_cfg = updates["vehicle_detection"]
             # Update internal config copy to keep filters in sync
@@ -788,8 +811,9 @@ class CoreModule:
                 self._update_homography(v_cfg["calibration"])
                 self.transformer.update_calibration(v_cfg["calibration"])
         
+        # Handle ROI and Exclusion Zones updates
+        roi_updated = False
         if "roi" in updates:
-            # Handle ROI updates from frontend (usually normalized list of dicts)
             roi_data = updates["roi"]
             if isinstance(roi_data, list):
                 new_points = []
@@ -798,7 +822,6 @@ class CoreModule:
                     if isinstance(pt, dict) and 'x' in pt and 'y' in pt:
                         new_points.append([pt['x'] * res[0], pt['y'] * res[1]])
                     elif isinstance(pt, (list, tuple)) and len(pt) == 2:
-                        # Assume normalized if values <= 1.0
                         if pt[0] <= 1.0 and pt[1] <= 1.0:
                             new_points.append([pt[0] * res[0], pt[1] * res[1]])
                         else:
@@ -806,14 +829,24 @@ class CoreModule:
                 
                 if new_points:
                     self.roi_polygon_points = new_points
-                    # Update internal config copy
                     if "roi_processing" not in self.config:
                         self.config["roi_processing"] = {}
                     self.config["roi_processing"]["polygon_points"] = new_points
-                    self.config["roi_processing"]["enabled"] = True # Automatically enable if points provided
-                    
-                    # Re-initialize ROI masks with actual current resolution
-                    current_res = self.detector.resolution or res
-                    self._initialize_roi_mask(current_res)
-                    self.detector.initialize_roi(current_res, new_points)
-                    logger.info(f"[{self.feed_id}] ROI updated with {len(new_points)} points. ROI Enabled.")
+                    self.config["roi_processing"]["enabled"] = True
+                    roi_updated = True
+
+        if "exclusion_zones" in updates:
+            exclusion_data = updates["exclusion_zones"]
+            if isinstance(exclusion_data, list):
+                if "roi_processing" not in self.config:
+                    self.config["roi_processing"] = {}
+                self.config["roi_processing"]["exclusion_zones"] = exclusion_data
+                roi_updated = True
+        
+        if roi_updated:
+            res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
+            current_res = getattr(self.detector, 'resolution', res) or res
+            self._initialize_roi_mask(current_res)
+            if self.roi_polygon_points:
+                self.detector.initialize_roi(current_res, self.roi_polygon_points)
+            logger.info(f"[{self.feed_id}] ROI/Exclusion zones updated. Masks re-initialized.")

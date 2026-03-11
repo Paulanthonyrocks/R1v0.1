@@ -264,6 +264,30 @@ def inference_worker(
                 
                 # If queue is more than 50% full, start increasing skip
                 if q_size > q_max * 0.5:
+                    # 1. HOL Blocking Prevention: If queue is dangerously full (>70%),
+                    # drain it and only keep the LATEST frame for each feed.
+                    if q_size > q_max * 0.7:
+                        drain_map = {}
+                        try:
+                            # Drain up to 200 stale items at once
+                            for _ in range(200):
+                                item = central_input_queue.get_nowait()
+                                # Key by feed_id to keep only the latest frame
+                                if item and len(item) >= 2:
+                                    feed_id = item[0]
+                                    drain_map[feed_id] = item
+                        except queue.Empty:
+                            pass
+                        
+                        # Re-inject only the latest frame for each active feed
+                        for feed_id, latest_item in drain_map.items():
+                            try:
+                                central_input_queue.put_nowait(latest_item)
+                            except queue.Full: pass
+                        
+                        # Re-calculate size after drain
+                        q_size = central_input_queue.qsize()
+
                     # Scale skip_frames up to 2x base value or 10 max
                     # load_factor is 0.0 at 50% full, 1.0 at 100% full
                     load_factor = (q_size - (q_max * 0.5)) / (q_max * 0.5)

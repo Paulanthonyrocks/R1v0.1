@@ -207,170 +207,129 @@ class GlobalReIDManager:
         embedding = self._normalize(embedding)
         now = time.time()
 
-        # --- Redis Distributed Mode ---
+        # 1. Check Redis Mapping (local_id -> global_id) - OUTSIDE LOCK
         if self.redis:
             try:
-                # 1. Check Redis Mapping (local_id -> global_id)
                 mapping_key = f"reid:map:{feed_id}"
                 gid = self.redis.hget(mapping_key, local_id)
                 if gid:
                     gid = gid.decode('utf-8')
-                    # Update TTL and last_seen in Redis
+                    # Update TTL and last_seen in Redis (Fire and forget-ish)
                     self.redis.expire(mapping_key, self.ttl_seconds)
                     self.redis.hset(f"reid:meta:{gid}", "last_seen", str(now))
                     self.redis.expire(f"reid:meta:{gid}", self.ttl_seconds)
                     self.redis.expire(f"reid:emb:{gid}", self.ttl_seconds)
                     return gid
-
-                # 2. Vectorized Search in Redis (Atomic check for late arrivals)
-                # We do a quick check of the global gallery in Redis if a local match fails later.
-                # This part is handled after local failure.
-                pass
             except Exception as e:
-                logger.error(f"Redis ReID error: {e}")
+                logger.error(f"Redis ReID early check error: {e}")
 
+        best_match_id = None
+        is_new = False
+        global_id = None
+
+        # 2. Local Matching - INSIDE LOCK
         with self._lock:
-            # 1. Check local cache first (Fastest)
+            # 2a. Check local cache again (for race conditions between threads)
             if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
                 gid = self.local_to_global[feed_id][local_id]
                 if gid in self.metadata_store:
                     self.metadata_store[gid]["last_seen"] = now
-                    # If Redis is enabled, sync the "keep-alive" signal
-                    if self.redis:
+                    global_id = gid
+
+            if not global_id:
+                # 2b. Vectorized Search (Local fallback)
+                if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
+                    # GPU/CPU Matching
+                    self._sync_gpu_matrix()
+                    if self.gallery_matrix_gpu is not None:
                         try:
-                            self.redis.hset(f"reid:meta:{gid}", "last_seen", str(now))
-                            self.redis.expire(f"reid:meta:{gid}", self.ttl_seconds)
-                            self.redis.expire(f"reid:emb:{gid}", self.ttl_seconds)
-                        except Exception: pass
-                    return gid
-
-            # 2. Vectorized Search (Local fallback)
-            best_match_id = None
-            best_score = -1.0
-
-            if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
-                # GPU Matching
-                self._sync_gpu_matrix()
-                if self.gallery_matrix_gpu is not None:
-                    try:
-                        emb_tensor = torch.from_numpy(embedding).to(self.device).unsqueeze(1)
-                        scores_tensor = torch.mm(self.gallery_matrix_gpu, emb_tensor).squeeze(1)
-                        best_idx = torch.argmax(scores_tensor).item()
-                        best_score = scores_tensor[best_idx].item()
-                    except Exception as e:
-                        logger.error(f"GPU match in register failed: {e}")
-                        # CPU Fallback
+                            emb_tensor = torch.from_numpy(embedding).to(self.device).unsqueeze(1)
+                            scores_tensor = torch.mm(self.gallery_matrix_gpu, emb_tensor).squeeze(1)
+                            best_idx = torch.argmax(scores_tensor).item()
+                            best_score = scores_tensor[best_idx].item()
+                        except Exception:
+                            scores = np.dot(self.gallery_matrix, embedding)
+                            best_idx = np.argmax(scores)
+                            best_score = scores[best_idx]
+                    else:
                         scores = np.dot(self.gallery_matrix, embedding)
                         best_idx = np.argmax(scores)
                         best_score = scores[best_idx]
-                else:
-                    # Pure CPU Matching
-                    scores = np.dot(self.gallery_matrix, embedding)
-                    best_idx = np.argmax(scores)
-                    best_score = scores[best_idx]
 
-                if best_score > self.similarity_threshold:
-                    best_match_id = self.gallery_ids[best_idx]
-                    logger.debug(f"ReID Match: {local_id} -> {best_match_id} (Score: {best_score:.3f})")
-                elif self.redis:
-                    # Last-ditch effort: sync from Redis
-                    if time.time() - self.last_cleanup_time > 1.0: 
-                         self._sync_from_redis()
-                         # Re-sync GPU matrix after Redis sync
-                         self._sync_gpu_matrix()
-                         # Re-score after sync (CPU for simplicity in retry)
-                         if self.gallery_matrix is not None and len(self.gallery_ids) > 0:
-                             scores = np.dot(self.gallery_matrix, embedding)
-                             best_idx = np.argmax(scores)
-                             best_score = scores[best_idx]
-                             if best_score > self.similarity_threshold:
-                                 best_match_id = self.gallery_ids[best_idx]
-                                 logger.info(f"ReID Match (Remote-Sync): {local_id} -> {best_match_id}")
+                    if best_score > self.similarity_threshold:
+                        best_match_id = self.gallery_ids[best_idx]
+                        global_id = best_match_id
+                        self.metadata_store[global_id]["last_seen"] = now
 
-            # 3. Register or Return
-            if best_match_id:
-                global_id = best_match_id
-                self.metadata_store[global_id]["last_seen"] = now
-                if self.redis:
-                    try:
-                        self.redis.hset(f"reid:meta:{global_id}", "last_seen", str(now))
-                        self.redis.expire(f"reid:meta:{global_id}", self.ttl_seconds)
-                        self.redis.expire(f"reid:emb:{global_id}", self.ttl_seconds)
-                    except Exception: pass
-            else:
-                # Create New
-                global_id = f"GLB_{self.global_counter}"
-                self.global_counter += 1
-                
-                # Add to Matrix
-                if self.gallery_matrix is None:
-                    self.gallery_matrix = embedding.reshape(1, -1)
-                else:
-                    self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
-                
-                self.gallery_ids.append(global_id)
-                self.metadata_store[global_id] = {
-                    "last_seen": now,
-                    "metadata": metadata
-                }
-                
-                # --- Sync to Redis ---
-                if self.redis:
-                    try:
-                        # Save embedding and metadata to Redis
-                        self.redis.hset(f"reid:meta:{global_id}", mapping={
-                            "last_seen": str(now),
-                            "class_name": metadata.get("class_name", "unknown")
-                        })
-                        self.redis.set(f"reid:emb:{global_id}", embedding.tobytes())
-                        # Set TTLs
-                        self.redis.expire(f"reid:meta:{global_id}", self.ttl_seconds)
-                        self.redis.expire(f"reid:emb:{global_id}", self.ttl_seconds)
-                        
-                        # Add to global list for other nodes to discover
-                        self.redis.rpush("reid:gallery", global_id)
-                        # Broadcast NEW identity
-                        self.redis.publish("reid:new_identity", global_id)
-                        
-                        # --- Bound Redis Gallery ---
-                        # If Redis gallery grows too large, trim the oldest from the list
-                        # Note: This only trims the list, meta/emb keys will expire via TTL
-                        if self.redis.llen("reid:gallery") > self.max_gallery_size * 2:
-                            self.redis.lpop("reid:gallery")
-                    except Exception as e:
-                        logger.error(f"Failed to sync new ReID to Redis: {e}")
-                
-                # --- Sync to Database ---
-                if self.db_manager:
+                # 2c. Register New Locally
+                if not global_id:
+                    global_id = f"GLB_{self.global_counter}"
+                    self.global_counter += 1
+                    is_new = True
+                    
+                    if self.gallery_matrix is None:
+                        self.gallery_matrix = embedding.reshape(1, -1)
+                    else:
+                        self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
+                    
+                    self.gallery_ids.append(global_id)
+                    self.metadata_store[global_id] = {
+                        "last_seen": now,
+                        "metadata": metadata
+                    }
+
+                # 2d. Update local mapping
+                if feed_id not in self.local_to_global:
+                    self.local_to_global[feed_id] = {}
+                self.local_to_global[feed_id][local_id] = global_id
+
+        # 3. Persistent Sync - OUTSIDE LOCK
+        if is_new:
+            # New Identity Sync
+            if self.redis:
+                try:
+                    self.redis.hset(f"reid:meta:{global_id}", mapping={
+                        "last_seen": str(now),
+                        "class_name": metadata.get("class_name", "unknown")
+                    })
+                    self.redis.set(f"reid:emb:{global_id}", embedding.tobytes())
+                    self.redis.expire(f"reid:meta:{global_id}", self.ttl_seconds)
+                    self.redis.expire(f"reid:emb:{global_id}", self.ttl_seconds)
+                    self.redis.rpush("reid:gallery", global_id)
+                    self.redis.publish("reid:new_identity", global_id)
+                except Exception as e:
+                    logger.error(f"Failed to sync new ReID to Redis: {e}")
+            
+            if self.db_manager:
+                try:
                     self.db_manager.save_reid_identity(
                         global_id=global_id,
                         embeddings=embedding,
                         metadata=metadata,
                         last_seen=now
                     )
-                
-                logger.info(f"ReID New: {local_id} -> {global_id}")
-
-            # 4. Update Mappings
-            if feed_id not in self.local_to_global:
-                self.local_to_global[feed_id] = {}
-            self.local_to_global[feed_id][local_id] = global_id
-            
-            # --- Sync Mapping to Redis ---
-            if self.redis:
-                try:
-                    self.redis.hset(f"reid:map:{feed_id}", local_id, global_id)
-                    self.redis.expire(f"reid:map:{feed_id}", self.ttl_seconds)
                 except Exception as e:
-                    logger.error(f"Failed to sync map to Redis: {e}")
+                    logger.error(f"Failed to save ReID to DB: {e}")
+        
+        # Mapping Sync
+        if self.redis:
+            try:
+                self.redis.hset(f"reid:map:{feed_id}", local_id, global_id)
+                self.redis.expire(f"reid:map:{feed_id}", self.ttl_seconds)
+            except Exception: pass
 
-            # 5. Periodic Cleanup and Redis Sync
-            if now - self.last_cleanup_time > 60:
-                self._cleanup(now)
-                if self.redis:
-                    self._sync_from_redis()
-            
-            return global_id
+        # 4. Periodic Cleanup (Throttled)
+        if now - self.last_cleanup_time > 60:
+            # Cleanup still needs lock but it is infrequent
+            with self._lock:
+                if now - self.last_cleanup_time > 60:
+                    self._cleanup(now)
+                    if self.redis:
+                        # Sync from redis could be slow, but it is infrequent
+                        # TODO: Consider making this async or a separate task
+                        self._sync_from_redis()
+        
+        return global_id
 
     def _listen_for_updates(self):
         """Background thread listening for new ReID identities via Pub/Sub."""

@@ -48,6 +48,10 @@ class FeedConfigInfo(BaseModel):
     exclusion_zones: Optional[List[List[Dict[str, float]]]] = None
     static_object_filter_enabled: Optional[bool] = False
     static_object_timeout: Optional[float] = 300.0
+    # UI Preferences
+    show_bounding_boxes: Optional[bool] = True
+    show_vehicle_details: Optional[bool] = True
+    show_trajectories: Optional[bool] = True
 
 
 class FeedOperationalStatusEnum(str, Enum):
@@ -72,7 +76,13 @@ class FeedStatusUpdate(BaseModel):
 
 
 class FeedConfigRequest(BaseModel):
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     roi: Optional[List[Dict[str, float]]] = None
     exclusion_zones: Optional[List[List[Dict[str, float]]]] = None
     static_object_filter_enabled: Optional[bool] = None
     static_object_timeout: Optional[float] = None
+    show_bounding_boxes: Optional[bool] = None
+    show_vehicle_details: Optional[bool] = None
+    show_trajectories: Optional[bool] = None

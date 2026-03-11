@@ -65,12 +65,16 @@ class TrackingManager:
         new_or_updated_tracks = {}
         h, w = frame_shape[:2]
         
-        # Configuration parameters
+        # Dynamic Configuration parameters (allow updates from CoreModule)
         tracking_cfg = self.config.get("tracking", {})
         vd_cfg = self.config.get("vehicle_detection", {})
         self.proximity_threshold = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
         self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
         self.probation_threshold = tracking_cfg.get("probation_threshold") or vd_cfg.get("probation_threshold") or 3
+        
+        # Use FeedConfig specific static object filter settings if present
+        static_filter_enabled = self.config.get("static_object_filter_enabled", True)
+        static_timeout = self.config.get("static_object_timeout", self.stationary_cleanup_timeout)
         
         # 1. Separate detections
         high_conf_dets = []
@@ -170,7 +174,14 @@ class TrackingManager:
                                      (track["centroid"][1] - track["start_centroid"][1])**2)
             
             age = current_time - track["first_seen"]
-            if age > self.stationary_cleanup_timeout and displacement < 50:
+            
+            # Use FeedConfig specific static object filter settings
+            if static_filter_enabled:
+                if age > static_timeout and displacement < 50:
+                     continue
+            elif age > self.stationary_cleanup_timeout and displacement < 50:
+                 # Fallback to default if not explicitly enabled but matches general stationary rule
+                 # This preserves previous behavior for general tracks
                  continue
             
             final_active_tracks[tid] = track
@@ -290,7 +301,7 @@ class TrackingManager:
             
             # Update history for behavior analytics
             track["position_history"].append((cx, cy))
-            track["velocity_history"].append((kf.x[4][0], kf.x[5][0]))
+            track["velocity_history"].append(((kf.x[4][0], kf.x[5][0]), current_time))
 
         self._update_quality_score(track, conf, innovation_mag)
 
@@ -380,15 +391,17 @@ class TrackingManager:
         if len(v_hist) < window:
              window = len(v_hist)
         
-        vx_start, vy_start = v_hist[-window]
-        vx_end, vy_end = v_hist[-1]
+        (vx_start, vy_start), t_start = v_hist[-window]
+        (vx_end, vy_end), t_end = v_hist[-1]
         
         s_start = math.sqrt(vx_start**2 + vy_start**2)
         s_end = math.sqrt(vx_end**2 + vy_end**2)
         
-        # Approximate time delta
-        dt = (window - 1) * (1.0 / self.fps)
-        if dt <= 0: dt = 0.1
+        # Exact time delta from timestamps
+        dt = t_end - t_start
+        if dt <= 0.001: 
+            # Fallback if timestamps are identical (should not happen with actual frames)
+            dt = (window - 1) * (1.0 / self.fps)
         
         accel = (s_end - s_start) / dt
         track["acceleration"] = round(accel, 2)
@@ -406,8 +419,8 @@ class TrackingManager:
         # Turning detection
         if len(v_hist) >= 10:
             # Check angle change between start and end of window
-            vx_initial, vy_initial = v_hist[-10]
-            vx_final, vy_final = v_hist[-1]
+            (vx_initial, vy_initial), _ = v_hist[-10]
+            (vx_final, vy_final), _ = v_hist[-1]
             
             # Only check angle if moving
             if (vx_initial**2 + vy_initial**2) > 100 and (vx_final**2 + vy_final**2) > 100:
