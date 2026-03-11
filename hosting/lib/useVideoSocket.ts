@@ -133,14 +133,18 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
         if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
             if (data.metrics) {
-                setMetrics(data.metrics);
+                // Only update metrics if they actually changed to avoid unnecessary re-renders
+                setMetrics(prev => {
+                    if (JSON.stringify(prev) === JSON.stringify(data.metrics)) return prev;
+                    return data.metrics || null;
+                });
             }
             
-            // If data.vehicles is missing/empty, check if we should persist the previous set
+            // For vehicles, we use the merged batch. 
+            // Only update the React state every 200ms.
             if (mergedVehicles.length > 0) {
                 setVehicles(mergedVehicles);
             } else if (now - lastVehiclesUpdateTimeRef.current > ANNOTATION_PERSISTENCE_MS) {
-                // Only clear if we haven't seen updates for a while
                 setVehicles(null);
             }
             

@@ -657,7 +657,10 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     // (since we use useVideoSocket for live metrics)
     return prevProps.feed.feed_id === nextProps.feed.feed_id && 
            prevProps.feed.status === nextProps.feed.status &&
-           prevProps.minimalControls === nextProps.minimalControls;
+           prevProps.feed.name === nextProps.feed.name &&
+           prevProps.feed.source === nextProps.feed.source &&
+           prevProps.minimalControls === nextProps.minimalControls &&
+           JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
 });
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';

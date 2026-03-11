@@ -33,12 +33,20 @@ const auth = getAuth(app);
 export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   const { user, token, userRole, loading } = useAuth();
 
-  const logout = async () => {
+  const logout = React.useCallback(async () => {
     await signOut(auth);
-  };
+  }, []);
+
+  const value = React.useMemo(() => ({
+    userRole,
+    user,
+    token,
+    loading,
+    logout
+  }), [userRole, user, token, loading, logout]);
 
   return (
-    <UserContext.Provider value={{ userRole, user, token, loading, logout }}>
+    <UserContext.Provider value={value}>
       {children}
     </UserContext.Provider>
   );

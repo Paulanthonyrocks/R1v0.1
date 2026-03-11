@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import { 
     Dialog, 
-    DialogTrigger,
     DialogContent, 
     DialogHeader, 
     DialogTitle, 
@@ -135,33 +134,54 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
     );
 };
 
-function AddFeedDialog() {
+const AddFeedDialog = React.memo(function AddFeedDialog() {
     const { token } = useAuth();
     const [open, setOpen] = useState(false);
 
-    return (
-        <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-                <Button 
-                    type="button"
-                    variant="outline"
-                    className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold transition-all h-12 px-6"
-                >
-                    <Plus className="mr-2 h-4 w-4" /> Add Feed
-                </Button>
-            </DialogTrigger>
+    // Use a manual click handler to toggle open state
+    // This avoids flickering issues sometimes caused by DialogTrigger 
+    // when combined with manual 'open' state management.
+    const handleToggle = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(prev => !prev);
+    };
 
-            <DialogContent className="sm:max-w-[425px]">
-                <DialogHeader>
-                    <DialogTitle>Add New Feed</DialogTitle>
-                    <DialogDescription>
-                        Enter the source details for the new traffic monitoring node.
-                    </DialogDescription>
-                </DialogHeader>
-                {open && <AddFeedForm token={token} setOpen={setOpen} />}
-            </DialogContent>
-        </Dialog>
+    return (
+        <>
+            <Button 
+                type="button"
+                variant="outline"
+                data-add-feed-trigger="true"
+                className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold transition-all h-12 px-6"
+                onClick={handleToggle}
+            >
+                <Plus className="mr-2 h-4 w-4" /> Add Feed
+            </Button>
+
+            <Dialog open={open} onOpenChange={setOpen}>
+                <DialogContent 
+                    className="sm:max-w-[425px]"
+                    onPointerDownOutside={(e) => {
+                        // Prevent the dialog from closing and immediately reopening 
+                        // when the trigger button is clicked.
+                        const target = e.target as HTMLElement;
+                        if (target?.closest('[data-add-feed-trigger="true"]')) {
+                            e.preventDefault();
+                        }
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Add New Feed</DialogTitle>
+                        <DialogDescription>
+                            Enter the source details for the new traffic monitoring node.
+                        </DialogDescription>
+                    </DialogHeader>
+                    {open && <AddFeedForm token={token} setOpen={setOpen} />}
+                </DialogContent>
+            </Dialog>
+        </>
     );
-}
+}, () => true);
 
 export default AddFeedDialog;
