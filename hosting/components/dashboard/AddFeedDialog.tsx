@@ -138,39 +138,19 @@ const AddFeedDialog = React.memo(function AddFeedDialog() {
     const { token } = useAuth();
     const [open, setOpen] = useState(false);
 
-    // Use a manual click handler to toggle open state
-    // This avoids flickering issues sometimes caused by DialogTrigger 
-    // when combined with manual 'open' state management.
-    const handleToggle = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setOpen(prev => !prev);
-    };
-
     return (
         <>
             <Button 
                 type="button"
                 variant="outline"
-                data-add-feed-trigger="true"
                 className="bg-lcd-text/10 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg rounded-none uppercase font-bold transition-all h-12 px-6"
-                onClick={handleToggle}
+                onClick={() => setOpen(true)}
             >
                 <Plus className="mr-2 h-4 w-4" /> Add Feed
             </Button>
 
             <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent 
-                    className="sm:max-w-[425px]"
-                    onPointerDownOutside={(e) => {
-                        // Prevent the dialog from closing and immediately reopening 
-                        // when the trigger button is clicked.
-                        const target = e.target as HTMLElement;
-                        if (target?.closest('[data-add-feed-trigger="true"]')) {
-                            e.preventDefault();
-                        }
-                    }}
-                >
+                <DialogContent className="sm:max-w-[425px]">
                     <DialogHeader>
                         <DialogTitle>Add New Feed</DialogTitle>
                         <DialogDescription>
