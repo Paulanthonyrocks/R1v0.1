@@ -85,6 +85,7 @@ class DatabaseManager:
         # Initialize database connections
         self._init_from_config(config)
         self.lock = threading.Lock()
+        self._needs_vacuum = False  # S4: Background VACUUM scheduling flag
 
         # Initialize databases
         if self.sqlite_db_path:
@@ -387,6 +388,10 @@ class DatabaseManager:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
             )
+            # S3: Compound index for cross-feed vehicle lookups
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vt_global_timestamp ON vehicle_tracks(global_vehicle_id, timestamp DESC);"
+            )
             cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
                     license_plate TEXT PRIMARY KEY,
                     appearance_id TEXT,
@@ -528,10 +533,9 @@ class DatabaseManager:
                     results["db_pruned"] = cursor.rowcount
                     conn.commit()
                     
-                    # Reclaim space (Note: VACUUM can be slow on large DBs)
+                    # S4 Fix: Don't VACUUM inline — set flag for background scheduling
                     if results["db_pruned"] > 1000:
-                        logger.info("Reclaiming SQLite space with VACUUM...")
-                        conn.execute("VACUUM")
+                        self._needs_vacuum = True
             
             if results["db_pruned"] > 0:
                 logger.info(f"Pruned {results['db_pruned']} old records from vehicle_tracks.")
@@ -663,13 +667,15 @@ class DatabaseManager:
             return None
 
     def _validate_query(self, query: str, params: tuple):
-        """Validates query for potential SQL injection risks."""
-        unsafe_keywords = ['DROP ', 'TRUNCATE ', 'DELETE FROM', 'ALTER TABLE']
+        """S2 Fix: Validates that destructive queries use parameterized values.
+        Parameterized queries with placeholders (?) are safe — SQL injection
+        only happens when user input is concatenated into query strings."""
+        destructive_keywords = ['DROP ', 'TRUNCATE ', 'ALTER TABLE']
         upper_query = query.upper()
-        if any(keyword in upper_query for keyword in unsafe_keywords):
-            if not params:
-                logger.error(f"Potentially unsafe query without parameters: {query}")
-                raise ValueError("Unsafe query detected: potentially destructive command without parameters")
+        for keyword in destructive_keywords:
+            if keyword in upper_query:
+                logger.error(f"Blocked potentially destructive query: {keyword.strip()}")
+                raise ValueError(f"Destructive SQL command detected: {keyword.strip()}")
 
     def _execute_write(self, sql: str, params: tuple):
         """Helper for synchronous write operations."""
@@ -691,12 +697,30 @@ class DatabaseManager:
         if not vehicle_data_list:
             return 0
         
-        sql = """INSERT OR REPLACE INTO vehicle_tracks (
+        # S1 Fix: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
+        # to preserve existing rows and update them rather than delete+reinsert
+        sql = """INSERT INTO vehicle_tracks (
             feed_id, track_id, timestamp, global_vehicle_id, class_id, confidence,
             bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
             speed, acceleration, lane, direction, license_plate, ocr_confidence, 
             car_model, car_model_confidence, car_color, flags
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(feed_id, track_id, timestamp) DO UPDATE SET
+            global_vehicle_id = COALESCE(excluded.global_vehicle_id, global_vehicle_id),
+            class_id = excluded.class_id,
+            confidence = excluded.confidence,
+            bbox_x1 = excluded.bbox_x1, bbox_y1 = excluded.bbox_y1,
+            bbox_x2 = excluded.bbox_x2, bbox_y2 = excluded.bbox_y2,
+            center_x = excluded.center_x, center_y = excluded.center_y,
+            speed = excluded.speed, acceleration = excluded.acceleration,
+            lane = excluded.lane, direction = excluded.direction,
+            license_plate = COALESCE(excluded.license_plate, license_plate),
+            ocr_confidence = COALESCE(excluded.ocr_confidence, ocr_confidence),
+            car_model = COALESCE(excluded.car_model, car_model),
+            car_model_confidence = COALESCE(excluded.car_model_confidence, car_model_confidence),
+            car_color = COALESCE(excluded.car_color, car_color),
+            flags = excluded.flags
+        """
         
         batch_params = []
         for vd in vehicle_data_list:
@@ -748,7 +772,7 @@ class DatabaseManager:
             return 0
 
     async def _save_to_timescale_batch(self, vehicle_data_list: List[Dict]):
-        """Asynchronously saves a batch of data to TimescaleDB."""
+        """Asynchronously saves a batch of data to TimescaleDB (S5: with retry)."""
         if not self.timescale_engine:
             return
 
@@ -762,31 +786,38 @@ class DatabaseManager:
             )
         """)
         
-        try:
-            async with self.timescale_engine.begin() as conn:
-                params = []
-                for vd in vehicle_data_list:
-                    center = vd.get("centroid") or vd.get("center") or [None, None]
-                    ts = datetime.fromtimestamp(vd.get("timestamp", time.time()), tz=timezone.utc)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self.timescale_engine.begin() as conn:
+                    params = []
+                    for vd in vehicle_data_list:
+                        center = vd.get("centroid") or vd.get("center") or [None, None]
+                        ts = datetime.fromtimestamp(vd.get("timestamp", time.time()), tz=timezone.utc)
+                        
+                        params.append({
+                            "feed_id": vd.get("feed_id", "unknown"),
+                            "track_id": str(vd.get("track_id") or vd.get("vehicle_id")),
+                            "timestamp": ts,
+                            "global_vehicle_id": vd.get("global_vehicle_id"),
+                            "class_id": vd.get("class_id"),
+                            "confidence": vd.get("confidence"),
+                            "center_x": center[0],
+                            "center_y": center[1],
+                            "speed": vd.get("speed"),
+                            "lane": vd.get("lane"),
+                            "direction": vd.get("direction"),
+                            "license_plate": vd.get("license_plate")
+                        })
                     
-                    params.append({
-                        "feed_id": vd.get("feed_id", "unknown"),
-                        "track_id": str(vd.get("track_id") or vd.get("vehicle_id")),
-                        "timestamp": ts,
-                        "global_vehicle_id": vd.get("global_vehicle_id"),
-                        "class_id": vd.get("class_id"),
-                        "confidence": vd.get("confidence"),
-                        "center_x": center[0],
-                        "center_y": center[1],
-                        "speed": vd.get("speed"),
-                        "lane": vd.get("lane"),
-                        "direction": vd.get("direction"),
-                        "license_plate": vd.get("license_plate")
-                    })
-                
-                await conn.execute(sql, params)
-        except Exception as e:
-            logger.error(f"TimescaleDB batch save failed: {e}")
+                    await conn.execute(sql, params)
+                return  # Success, exit retry loop
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"TimescaleDB batch save attempt {attempt + 1} failed: {e}. Retrying...")
+                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                else:
+                    logger.error(f"TimescaleDB batch save failed after {max_retries} attempts: {e}")
 
     def _get_location_key(self, latitude: float, longitude: float) -> str:
         """Create a unique key for a location, rounding to 4 decimal places for nearby grouping"""

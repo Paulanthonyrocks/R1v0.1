@@ -111,11 +111,34 @@ class DetectionEngine:
                     match_count += 1
             
             if match_count >= self.fusion_min_frames:
-                # A simple fusion: just take the latest detection if it's stable
-                # A more advanced fusion could average box coordinates or confidence
                 fused_detections.append(current_det)
+        
+        # D1 Fix: NMS dedup to eliminate overlapping fused detections
+        if len(fused_detections) > 1:
+            fused_detections = self._nms_dedup(fused_detections, iou_threshold=0.5)
                 
         return fused_detections
+
+    def _nms_dedup(self, detections: List[Tuple], iou_threshold: float = 0.5) -> List[Tuple]:
+        """Greedy NMS to remove duplicate overlapping detections after fusion."""
+        if not detections:
+            return detections
+        
+        # Sort by confidence descending
+        sorted_dets = sorted(detections, key=lambda d: d[2], reverse=True)
+        keep = []
+        
+        while sorted_dets:
+            best = sorted_dets.pop(0)
+            keep.append(best)
+            
+            remaining = []
+            for det in sorted_dets:
+                if iou(best[0], det[0]) < iou_threshold:
+                    remaining.append(det)
+            sorted_dets = remaining
+        
+        return keep
 
     def detect(self, frame: np.ndarray, confidence_threshold: float) -> List[Tuple]:
         """Runs detection on the frame and returns bounding boxes and classes."""

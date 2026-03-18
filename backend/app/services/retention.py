@@ -89,15 +89,22 @@ class RetentionService:
         self._cleanup_database_records()
 
     def _cleanup_database_records(self):
-        """Clean up old database records."""
-        # This requires access to database manager.
-        # Since RetentionService is initialized in ServiceRegistry which has db_manager access,
-        # we should ideally inject db_manager or get it globally.
-        # For simplicity in this structure, we'll try to get the global one.
-        
+        """Clean up old database records and handle deferred VACUUM."""
         try:
             from app.database import get_database_manager
             db = get_database_manager()
+            
+            # S4 Fix: Execute deferred VACUUM if flagged
+            if getattr(db, '_needs_vacuum', False):
+                try:
+                    logger.info("Running deferred SQLite VACUUM (scheduled by retention service)...")
+                    with db.lock:
+                        with db._get_sqlite_connection() as conn:
+                            conn.execute("VACUUM")
+                    db._needs_vacuum = False
+                    logger.info("SQLite VACUUM completed successfully.")
+                except Exception as e:
+                    logger.error(f"Deferred VACUUM failed: {e}")
             
             # Retention days
             audit_days = self.retention_config.get("audit_days", 90)

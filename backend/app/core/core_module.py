@@ -85,7 +85,9 @@ class CoreModule:
         self.detector.initialize_roi(res, self.roi_polygon_points)
         
         self.tracker = TrackingManager(self.config, self.fps)
-        self.vehicle_data = self.tracker.vehicle_data
+        # T2 Fix: Don't hold a reference to tracker's internal dict;
+        # always access via self.tracker.vehicle_data after update()
+        self.vehicle_data = {}
         
         self.motion_estimator = CameraMotionEstimator()
         self.calib_monitor = CalibrationMonitor(self.feed_id, self.config) if CalibrationMonitor else None
@@ -112,10 +114,11 @@ class CoreModule:
         self.accel_threshold_mps2 = b_cfg.get("acceleration_threshold_mps2", 2.0)
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
         
-        self.preprocessor = None # Gemini
+        self.preprocessor = None
         self.local_ocr = None
         self._reid_updates_this_frame = 0 # Budget control
         self._pending_snapshot_incident_id = None
+        self._ocr_pending_count = 0  # R7: OCR backpressure counter
         
         self._last_save_time: Dict[str, float] = {} # For cooldown in _save_vehicle_data
         
@@ -351,9 +354,11 @@ class CoreModule:
         
         # Stagger ReID to avoid CPU/GPU spikes across all feeds
         feed_offset = hash(self.feed_id) % self.reid_interval
+        # R4 Fix: Adaptive ReID interval — in high-skip scenarios, run more frequently
+        effective_reid_interval = max(1, self.reid_interval // 2) if frame_index > 100 else self.reid_interval
         should_run_reid = (
             self.reid_embedder is not None 
-            and ((frame_index + feed_offset) % self.reid_interval == 0)
+            and ((frame_index + feed_offset) % effective_reid_interval == 0)
         )
 
         if should_run_reid and detections:
@@ -380,7 +385,8 @@ class CoreModule:
                                 break
 
                         quality = self._calculate_image_quality(roi, is_likely_occluded)
-                        if quality > 10.0: # Minimum bar
+                        # R5 Fix: Raised threshold from 10.0 to 30.0 to reduce gallery pollution
+                        if quality > 30.0:
                             rois_for_batch.append(roi)
                             valid_indices.append(idx)
                         else:
@@ -409,7 +415,7 @@ class CoreModule:
             for bbox, cls, dconf in detections:
                 enriched_detections.append((bbox, cls, dconf, None))
 
-        # 4. Tracking
+        # 4. Tracking (T2 Fix: immediately capture returned vehicle_data)
         self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
         
         # 5. Metadata Processing
@@ -432,9 +438,9 @@ class CoreModule:
             # Estimate Lane
             track["lane"] = self._estimate_lane((cx, cy))
 
-            # OCR Submission
+            # OCR Submission (R7: with backpressure check)
             if self.local_ocr and track["status"] == "active" and "license_plate" not in track:
-                if frame_index % 10 == 0: # Check periodically
+                if frame_index % 10 == 0 and self._ocr_pending_count < 4:  # R7: limit concurrent OCR tasks
                      x1, y1, x2, y2 = map(int, track["bbox"])
                      h, w = frame.shape[:2]
                      x1, y1 = max(0, x1), max(0, y1)
@@ -443,10 +449,9 @@ class CoreModule:
                          roi = frame[y1:y2, x1:x2].copy()
                          quality = self._calculate_image_quality(roi)
                          if quality > 150.0: # Higher threshold for OCR
-                            self.ocr_executor.submit(self._run_ocr_task, tid, roi)
-                         else:
-                            # Try again later if quality improves (e.g. closer)
-                            pass
+                            self._ocr_pending_count += 1
+                            future = self.ocr_executor.submit(self._run_ocr_task, tid, roi)
+                            future.add_done_callback(lambda f: setattr(self, '_ocr_pending_count', max(0, self._ocr_pending_count - 1)))
 
             # Simple Filtering for Visualization
             if track["status"] == "active":
@@ -523,15 +528,10 @@ class CoreModule:
             logger.error(f"[{self.feed_id}] Failed to save snapshot: {e}")
 
     def _run_ocr_task(self, tid, roi):
-        """Worker task for OCR executor."""
+        """Worker task for OCR executor. R6: Removed dead Gemini code path."""
         try:
             plate_result = None
-            if self.preprocessor:
-                # Gemini path (if enabled)
-                # plate_result = self.preprocessor.process(roi)
-                pass
-            
-            if not plate_result and self.local_ocr:
+            if self.local_ocr:
                 plate_result = self.local_ocr.read_plate(roi) # Returns (text, conf)
                 
             if plate_result:
@@ -645,6 +645,12 @@ class CoreModule:
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
         now = time.time()
+        
+        # S6 Fix: Prune _last_save_time for tracks that no longer exist
+        stale_ids = [vid for vid in self._last_save_time if vid not in self.vehicle_data]
+        for vid in stale_ids:
+            del self._last_save_time[vid]
+        
         for vehicle_id, data in tracked_vehicles.items():
             # Cooldown: Don't save same vehicle more than once every 0.5s unless it's moving fast
             last_save = self._last_save_time.get(vehicle_id, 0)

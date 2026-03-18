@@ -28,6 +28,10 @@ class TrackingManager:
         self.stationary_cleanup_timeout = tracking_cfg.get("stationary_cleanup_timeout", 300)
         self.probation_threshold = tracking_cfg.get("probation_threshold", 3)
         self.occlusion_threshold = tracking_cfg.get("occlusion_threshold", 0.7)
+        # T1: Max track limit to prevent O(n^2) cost matrix blowup
+        self.max_active_tracks = vd_cfg.get("max_active_tracks", tracking_cfg.get("max_active_tracks", 50))
+        # R3: Configurable ReID EMA alpha for embedding update
+        self.embedding_ema_alpha = tracking_cfg.get("embedding_ema_alpha", 0.1)
         
         self.global_id_counter = 0
 
@@ -158,10 +162,15 @@ class TrackingManager:
                         if px2 < 0 or px1 > w or py2 < 0 or py1 > h: continue
                         new_or_updated_tracks[tid] = track
 
-        # 6. Initialize New Tracks
+        # 6. Initialize New Tracks (T1: enforce max_active_tracks ceiling)
+        active_count = len(new_or_updated_tracks)
         for det in unmatched_dets_1:
+            if active_count >= self.max_active_tracks:
+                logger.debug(f"Max active tracks ({self.max_active_tracks}) reached, skipping new track creation")
+                break
             new_track = self._create_new_track(det, current_time)
             new_or_updated_tracks[new_track["vehicle_id"]] = new_track
+            active_count += 1
             
         # 7. Stationary Cleanup
         final_active_tracks = {}
@@ -175,14 +184,9 @@ class TrackingManager:
             
             age = current_time - track["first_seen"]
             
-            # Use FeedConfig specific static object filter settings
-            if static_filter_enabled:
-                if age > static_timeout and displacement < 50:
-                     continue
-            elif age > self.stationary_cleanup_timeout and displacement < 50:
-                 # Fallback to default if not explicitly enabled but matches general stationary rule
-                 # This preserves previous behavior for general tracks
-                 continue
+            # T5 Fix: Only apply static object filter when explicitly enabled
+            if static_filter_enabled and age > static_timeout and displacement < 50:
+                continue
             
             final_active_tracks[tid] = track
 
@@ -228,13 +232,13 @@ class TrackingManager:
         track["bbox"] = bbox
         track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
         
-        # Update embedding with EMA if available
+        # Update embedding with EMA if available (R3: configurable alpha)
         if emb is not None:
             if track.get("embedding") is None:
                 track["embedding"] = emb
             else:
-                # EMA update
-                alpha = 0.1
+                # EMA update with configurable alpha
+                alpha = self.embedding_ema_alpha
                 track["embedding"] = alpha * emb + (1 - alpha) * track["embedding"]
                 # Re-normalize
                 norm = np.linalg.norm(track["embedding"])
@@ -258,6 +262,10 @@ class TrackingManager:
                     # State: [x, y, w, h, vx, vy, vw, vh]
                     kf.x[4][0] = vx
                     kf.x[5][0] = vy
+                    # T3 Fix: Inflate velocity covariance so KF doesn't over-trust
+                    # the raw displacement-based estimate in early frames
+                    kf.P[4, 4] = max(kf.P[4, 4], 50.0)
+                    kf.P[5, 5] = max(kf.P[5, 5], 50.0)
                     
         track["last_seen"] = current_time
         
@@ -275,13 +283,14 @@ class TrackingManager:
             track["class_history"] = deque([track["class_id"]], maxlen=10)
         track["class_history"].append(cls)
         
-        # Simple majority vote
+        # T4 Fix: Majority vote with supermajority rule (60% threshold, min 3 votes)
         counts = Counter(track["class_history"])
         most_common = counts.most_common(1)
         if most_common:
-            # Only switch if we have a strong lead or enough samples
             winner, count = most_common[0]
-            if count >= 5: # minimal stability (majority)
+            total = len(track["class_history"])
+            # Switch if we have at least 3 votes AND a 60% supermajority
+            if count >= 3 and (count / total) >= 0.6:
                 track["class_id"] = winner
 
         # Update Kalman
