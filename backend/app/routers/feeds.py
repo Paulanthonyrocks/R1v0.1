@@ -149,13 +149,13 @@ async def add_and_start_feed(
             source=request.source,
             latitude=request.latitude,
             longitude=request.longitude,
-            name_hint=request.name,
+            name_hint=request.name_hint,
             is_looped=True,  # Assuming new feeds are looped by default, adjust if needed
         )
 
         response_data = FeedCreateResponse(
             feed_id=result["feed_id"],
-            message=f"Feed '{request.name or request.source}' added. Status: {result['status']}.",
+            message=f"Feed '{request.name_hint or request.source}' added. Status: {result['status']}.",
             initial_status=result["status"],
         )
         return APIResponse.success(

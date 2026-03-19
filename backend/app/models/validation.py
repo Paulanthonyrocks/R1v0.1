@@ -1,5 +1,15 @@
-from pydantic import BaseModel, Field, validator
-from typing import Optional
+from pydantic import BaseModel, Field, validator, model_validator
+from typing import Optional, Any
+from app.utils.sanitization import sanitize_input
+
+class SanitizedBaseModel(BaseModel):
+    """Base model that automatically sanitizes string inputs to prevent XSS."""
+    @model_validator(mode='before')
+    @classmethod
+    def sanitize_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return sanitize_input(data)
+        return data
 
 class CoordinateModel(BaseModel):
     """Base model for GPS coordinates validation."""
@@ -23,7 +33,7 @@ class PaginationParams(BaseModel):
     limit: int = Field(100, ge=1, le=1000)
     offset: int = Field(0, ge=0)
 
-class SearchQuery(BaseModel):
+class SearchQuery(SanitizedBaseModel):
     """Base model for text search queries."""
     q: str = Field(..., min_length=1, max_length=100)
     limit: int = Field(10, ge=1, le=50)

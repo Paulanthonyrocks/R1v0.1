@@ -36,48 +36,50 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+from app.models.validation import SanitizedBaseModel, SearchQuery
+
 # --- Pydantic Models for new endpoints ---
 
-class GetAverageTrafficRequest(BaseModel):
+class GetAverageTrafficRequest(SanitizedBaseModel):
  sensor_ids: List[str]
  start_time: datetime
  end_time: datetime
 
-class AverageTrafficResponse(BaseModel):
+class AverageTrafficResponse(SanitizedBaseModel):
  average_vehicle_count: float
  average_speed: float
 
-class IdentifyTrafficPatternRequest(BaseModel):
+class IdentifyTrafficPatternRequest(SanitizedBaseModel):
  sensor_id: str
  time_range: str # e.g., 'rush_hour', 'midnight'
 
-class TrafficPatternResponse(BaseModel):
+class TrafficPatternResponse(SanitizedBaseModel):
  average_vehicle_count: float
  average_speed: float
 
-class SimpleAnomalyDetectionRequest(BaseModel):
+class SimpleAnomalyDetectionRequest(SanitizedBaseModel):
  current_data: Dict[str, float] = Field(..., description="Current traffic data with keys like 'vehicle_count' and 'average_speed'")
  sensor_id: str = Field(..., description="ID of the sensor for which to detect anomalies")
  threshold: float = Field(..., description="Threshold for anomaly detection")
 
-class SimpleAnomalyDetectionResponse(BaseModel):
+class SimpleAnomalyDetectionResponse(SanitizedBaseModel):
  is_anomaly: bool
 
-class GetTimeSeriesRequest(BaseModel):
+class GetTimeSeriesRequest(SanitizedBaseModel):
     sensor_ids: List[str]
     start_time: datetime
     end_time: datetime
 
 # Using a generic Dict for time series data as DataFrame structure can vary
-class TimeSeriesDataResponse(BaseModel):
+class TimeSeriesDataResponse(SanitizedBaseModel):
     data: List[Dict[str, Any]]
     message: str = "Time series data retrieved successfully."
 
-class CalculateRollingAveragesRequest(BaseModel):
+class CalculateRollingAveragesRequest(SanitizedBaseModel):
     time_series_data: List[Dict[str, Any]]
     window_size: str
 
-class RollingAveragesResponse(BaseModel):
+class RollingAveragesResponse(SanitizedBaseModel):
     data: List[Dict[str, Any]]
     message: str = "Rolling averages calculated successfully."
 

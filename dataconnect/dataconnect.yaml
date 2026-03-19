@@ -8,5 +8,5 @@ schema:
       database: "fdcdb"
       cloudSql:
         instanceId: "r1v01-fdc"
-      # schemaValidation: "COMPATIBLE"
+      schemaValidation: "COMPATIBLE"
 connectorDirs: ["./connector"]

@@ -2,9 +2,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
+from app.models.validation import SanitizedBaseModel
 
 
-class FeedStatus(BaseModel):
+class FeedStatus(SanitizedBaseModel):
     id: str
     source: str
     status: str = Field(..., examples=["stopped", "running", "starting", "error"])
@@ -19,26 +20,26 @@ class FeedDetails(FeedStatus):
     error_message: Optional[str] = None
 
 
-class FeedCreateRequest(BaseModel):
+class FeedCreateRequest(SanitizedBaseModel):
     source: str = Field(..., examples=["/path/to/video.mp4", "webcam:0"])
     name_hint: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
 
-class FeedCreateResponse(BaseModel):
+class FeedCreateResponse(SanitizedBaseModel):
     feed_id: str
     status: str = "starting"
     message: str
     initial_status: Optional[str] = None
 
 
-class StandardResponse(BaseModel):
+class StandardResponse(SanitizedBaseModel):
     success: bool = True
     message: str
 
 
-class FeedConfigInfo(BaseModel):
+class FeedConfigInfo(SanitizedBaseModel):
     name: str
     source_type: str
     source_identifier: str
@@ -61,7 +62,7 @@ class FeedOperationalStatusEnum(str, Enum):
     ERROR = "error"
 
 
-class FeedStatusData(BaseModel):
+class FeedStatusData(SanitizedBaseModel):
     feed_id: str
     config: FeedConfigInfo
     source: str
@@ -71,11 +72,11 @@ class FeedStatusData(BaseModel):
     latest_metrics: Optional[Dict[str, Any]] = None
 
 
-class FeedStatusUpdate(BaseModel):
+class FeedStatusUpdate(SanitizedBaseModel):
     feed_status_data: FeedStatusData
 
 
-class FeedConfigRequest(BaseModel):
+class FeedConfigRequest(SanitizedBaseModel):
     name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None

@@ -3,9 +3,10 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from app.models import traffic
+from app.models.validation import SanitizedBaseModel
 
 
-class TrendDataPoint(BaseModel):
+class TrendDataPoint(SanitizedBaseModel):
     timestamp: datetime
     total_vehicles: Optional[int] = None
     avg_speed: Optional[float] = None
@@ -14,14 +15,14 @@ class TrendDataPoint(BaseModel):
     high_density_lanes: Optional[int] = None
 
 
-class LocationPredictionRequest(BaseModel):
+class LocationPredictionRequest(SanitizedBaseModel):
     location: traffic.LocationModel
     prediction_time: Optional[datetime] = None
     prediction_window_hours: Optional[int] = Field(default=24, ge=1, le=168)
     include_historical_context: Optional[bool] = Field(default=True)
 
 
-class PredictionResponse(BaseModel):
+class PredictionResponse(SanitizedBaseModel):
     location: traffic.LocationModel
     prediction_time: datetime
     incident_likelihood: float = Field(..., ge=0, le=1)
@@ -31,7 +32,7 @@ class PredictionResponse(BaseModel):
     historical_context: Optional[Dict[str, Any]]
 
 
-class TrendQuery(BaseModel):
+class TrendQuery(SanitizedBaseModel):
     start_time: datetime
     end_time: datetime
     region_id: Optional[str] = None
@@ -39,16 +40,16 @@ class TrendQuery(BaseModel):
     aggregation_interval_minutes: Optional[int] = Field(60, ge=5)
 
 
-class AnomalyDetectionRequest(BaseModel):
+class AnomalyDetectionRequest(SanitizedBaseModel):
     traffic_data_points: List[traffic.TrafficData]
 
 
-class IncidentPredictionRequest(BaseModel):
+class IncidentPredictionRequest(SanitizedBaseModel):
     location: traffic.LocationModel
     prediction_time: Optional[datetime] = None
 
 
-class NodeCongestionData(BaseModel):
+class NodeCongestionData(SanitizedBaseModel):
     id: str = Field(
         ...,
         description="Unique identifier for the node (e.g., 'lat,lon' string or a specific ID).",
@@ -86,7 +87,7 @@ class NodeCongestionData(BaseModel):
         }
 
 
-class AllNodesCongestionResponse(BaseModel):
+class AllNodesCongestionResponse(SanitizedBaseModel):
     nodes: List[NodeCongestionData]
     schema_extra: ClassVar[dict] = {
         "example": {

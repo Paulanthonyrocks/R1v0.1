@@ -55,6 +55,10 @@
   ],
   "hosting": {
     "source": "hosting",
+    "predeploy": [
+      "npm --prefix hosting run lint",
+      "npm --prefix hosting test"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",

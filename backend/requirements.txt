@@ -19,6 +19,7 @@ pyyaml>=6.0
 psutil>=5.9.0
 tenacity>=8.2.0
 watchdog>=2.1.0
+bleach>=6.1.0
 
 # ML/CV
 ultralytics>=8.0.0

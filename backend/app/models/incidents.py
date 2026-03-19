@@ -3,13 +3,14 @@ from typing import Optional, List, Dict
 from datetime import datetime
 from enum import Enum
 from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum, IncidentStatusEnum
+from app.models.validation import SanitizedBaseModel
 
 # Use existing Enums from traffic.py to maintain consistency
 IncidentType = IncidentTypeEnum
 IncidentSeverity = IncidentSeverityEnum
 IncidentStatus = IncidentStatusEnum
 
-class IncidentBase(BaseModel):
+class IncidentBase(SanitizedBaseModel):
     feed_id: Optional[str] = None
     type: IncidentType
     severity: IncidentSeverity
@@ -21,7 +22,7 @@ class IncidentBase(BaseModel):
 class IncidentCreate(IncidentBase):
     pass
 
-class IncidentUpdate(BaseModel):
+class IncidentUpdate(SanitizedBaseModel):
     status: Optional[IncidentStatus] = None
     description: Optional[str] = None
     assigned_to: Optional[str] = None
