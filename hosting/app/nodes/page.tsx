@@ -5,12 +5,14 @@ import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import NodeCard from '@/components/nodes/NodeCard';
-import { AlertTriangle, BatteryFull, Search, MapPin, ArrowLeft } from 'lucide-react';
+import CorridorTopologyView from '@/components/nodes/CorridorTopologyView';
+import { AlertTriangle, BatteryFull, Search, MapPin, ArrowLeft, LayoutGrid, Network } from 'lucide-react';
 import Link from 'next/link';
 import { BackendCongestionNodeData } from '@/lib/types';
 
 const NodesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'topology'>('topology');
   const { feeds, isConnected, isReady, error: wsError } = useRealtimeUpdates();
 
   const nodes: BackendCongestionNodeData[] = useMemo(() => {
@@ -68,6 +70,10 @@ const NodesPage: React.FC = () => {
       );
     }
 
+    if (viewMode === 'topology') {
+      return <CorridorTopologyView nodes={filteredNodes} />;
+    }
+
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
         {filteredNodes.map((node) => (
@@ -111,12 +117,30 @@ const NodesPage: React.FC = () => {
                       with edge-processed traffic metrics.
                   </p>
               </div>
-              <div className="w-full md:w-96">
-                  <div className="relative">
+              <div className="w-full md:w-auto flex flex-col sm:flex-row gap-4">
+                  {/* View Mode Toggle */}
+                  <div className="flex bg-lcd-text/5 border-2 border-lcd-text/20 p-1">
+                      <button 
+                        onClick={() => setViewMode('grid')}
+                        className={`flex items-center gap-2 px-4 py-2 text-[10px] font-bold tracking-widest uppercase transition-all ${viewMode === 'grid' ? 'bg-lcd-text text-black' : 'hover:bg-lcd-text/10'}`}
+                      >
+                        <LayoutGrid size={14} />
+                        Grid
+                      </button>
+                      <button 
+                        onClick={() => setViewMode('topology')}
+                        className={`flex items-center gap-2 px-4 py-2 text-[10px] font-bold tracking-widest uppercase transition-all ${viewMode === 'topology' ? 'bg-lcd-text text-black' : 'hover:bg-lcd-text/10'}`}
+                      >
+                        <Network size={14} />
+                        Topology
+                      </button>
+                  </div>
+
+                  <div className="relative w-full md:w-72">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40" size={18} />
                       <input
                         type="text"
-                        placeholder="FILTER NODES..."
+                        placeholder="FILTER..."
                         className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text rounded-none p-3 pl-10 w-full focus:outline-none focus:border-primary tracking-[0.1em] placeholder:text-lcd-text/30"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}

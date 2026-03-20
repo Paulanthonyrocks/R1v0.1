@@ -29,12 +29,12 @@ class RedisConfig(BaseModel):
     port: int = 6379
     db: int = 0
     password: Optional[str] = None
-    enabled: bool = True
+    enabled: bool = False
 
 class MongoDBConfig(BaseModel):
     uri: str = "mongodb://localhost:27017/"
     database_name: str = "traffic_hub"
-    enabled: bool = True
+    enabled: bool = False
 
 class PerformanceConfig(BaseModel):
     gpu_acceleration: bool = False

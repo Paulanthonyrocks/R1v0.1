@@ -22,17 +22,7 @@ export class APIClient {
     private tokenManager: TokenManager;
 
     private constructor(options: APIOptions) {
-        // Ensure baseURL is an absolute URL
-        let base = options.baseURL;
-        if (!base || base === '/' || base.startsWith('/')) {
-            if (typeof window !== 'undefined') {
-                base = window.location.origin + (base === '/' ? '' : base);
-            } else {
-                base = 'http://localhost:8000'; // Fallback for SSR if needed
-            }
-        }
-        this.baseURL = base.replace(/\/$/, ''); // Remove trailing slash
-        
+        this.baseURL = 'http://localhost:8000'; // Always connect to the backend directly
         this.timeout = options.timeout || 30000;
         this.headers = {
             'Content-Type': 'application/json',
@@ -53,19 +43,9 @@ export class APIClient {
             if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
                 console.log(`APIClient.getInstance called with different options. Updating instance...`);
                 
-                // Update baseURL if it changed
-                if (options.baseURL !== APIClient._options.baseURL) {
-                    let base = options.baseURL;
-                    if (!base || base === '/' || base.startsWith('/')) {
-                        if (typeof window !== 'undefined') {
-                            base = window.location.origin + (base === '/' ? '' : base);
-                        } else {
-                            base = 'http://localhost:8000';
-                        }
-                    }
-                    APIClient.instance.baseURL = base.replace(/\/$/, '');
-                    console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
-                }
+                // Always use localhost:8000
+                APIClient.instance.baseURL = 'http://localhost:8000';
+                console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
                 
                 // Update timeout if it changed
                 if (options.timeout !== undefined && options.timeout !== APIClient._options.timeout) {
