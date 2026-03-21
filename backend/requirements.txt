@@ -28,6 +28,7 @@ scipy>=1.8.0
 filterpy>=1.4.5
 numpy<2.0
 scikit-learn>=1.0.0
+onnxscript>=0.6.0
 
 # TensorFlow (with GPU support)
 tensorflow>=2.16.1

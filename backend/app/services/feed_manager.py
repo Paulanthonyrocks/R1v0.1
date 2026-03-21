@@ -874,6 +874,15 @@ class FeedManager:
                 logger.warning(f"Feed '{feed_id}' is in state '{entry['status']}'. Cleaning up before start.")
                 resources_to_cleanup = self._detach_resources(feed_id)
 
+        # Perform CLEANUP BEFORE ALLOCATING NEW RESOURCES (Fix for [Errno 28] /dev/shm exhaustion)
+        if resources_to_cleanup:
+            await self._terminate_resources(resources_to_cleanup)
+
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry: # Safety check
+                raise FeedNotFoundError(feed_id)
+
             # Check resources
             is_sample = entry.get("is_sample_feed", False)
             if not is_sample or self._any_real_feeds_active_unsafe():
@@ -927,10 +936,7 @@ class FeedManager:
                     self.video_writers[feed_id] = video_writer
                     video_writer.start()
 
-        # Perform cleanups outside the lock
-        if resources_to_cleanup:
-            await self._terminate_resources(resources_to_cleanup)
-        
+        # Perform failed cleanups outside the lock
         if failed_resources_to_cleanup:
             await self._terminate_resources(failed_resources_to_cleanup)
             await self._broadcast_feed_update(feed_id)
