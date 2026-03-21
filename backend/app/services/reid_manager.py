@@ -62,7 +62,20 @@ class GlobalReIDManager:
         # Initialize internal state (Local fallback/cache)
         self.metadata_store: Dict[str, Dict] = {}
         self.local_to_global: Dict[str, Dict[str, str]] = {}
+        
+        # Redis-Atomic Global Counter
         self.global_counter = 1
+        if self.redis:
+            try:
+                # Synchronize counter with Redis to prevent collisions across workers
+                current_remote = self.redis.get("reid:global_counter")
+                if current_remote:
+                    self.global_counter = int(current_remote)
+                else:
+                    self.redis.set("reid:global_counter", self.global_counter)
+            except Exception as e:
+                logger.warning(f"Could not sync ReID counter with Redis: {e}")
+
         self.last_cleanup_time = time.time()
         self.gallery_ids: List[str] = []
         # R2 Fix: Pre-allocate gallery matrix buffer instead of using np.vstack
@@ -320,10 +333,22 @@ class GlobalReIDManager:
                         global_id = best_match_id
                         self.metadata_store[global_id]["last_seen"] = now
 
-                # 2c. Register New Locally (R2: use pre-allocated buffer)
+                # 2c. Register New Locally (With Redis-Atomic Counter if possible)
                 if not global_id:
-                    global_id = f"GLB_{self.global_counter}"
-                    self.global_counter += 1
+                    if self.redis:
+                        try:
+                            # Use Redis INCR for an atomic global ID across all servers
+                            new_val = self.redis.incr("reid:global_counter")
+                            global_id = f"GLB_{new_val}"
+                            self.global_counter = new_val
+                        except Exception as e:
+                            logger.error(f"Redis INCR failed, falling back to local counter: {e}")
+                            global_id = f"GLB_{self.global_counter}"
+                            self.global_counter += 1
+                    else:
+                        global_id = f"GLB_{self.global_counter}"
+                        self.global_counter += 1
+                    
                     is_new = True
                     
                     emb_dim = len(embedding)
@@ -468,9 +493,17 @@ class GlobalReIDManager:
                 if gid not in self.gallery_ids:
                     self.gallery_ids.append(gid)
                     if self.gallery_matrix is None:
-                        self.gallery_matrix = embedding.reshape(1, -1)
+                        # R2: Pre-allocate full buffer on first sync
+                        self.gallery_matrix = np.zeros((self.max_gallery_size, embedding.shape[0]), dtype=np.float32)
+                        self.gallery_matrix[0] = embedding
+                        self._gallery_write_idx = 1
+                        self._embedding_dim = embedding.shape[0]
+                    elif self._gallery_write_idx < self.max_gallery_size:
+                        self.gallery_matrix[self._gallery_write_idx] = embedding
+                        self._gallery_write_idx += 1
                     else:
-                        self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
+                        # Matrix is full, cleanup will handle it eventually
+                        pass
                     
                     self.metadata_store[gid] = {
                         "last_seen": float(meta.get(b"last_seen", time.time())),

@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import * as THREE from 'three';
 import LeafletMap from '@/components/map/LeafletMap';
-import { WebSocketClient, WebSocketMessageType, WebSocketMessage } from '../lib/websocket/WebSocketClient';
+import { WebSocketClient, WebSocketMessageType } from '../lib/websocket/WebSocketClient';
 import { useVehicleTracking } from '../lib/hooks/useVehicleTracking';
 import { WebSocketVideoFrame } from '../lib/types/api';
 
@@ -32,52 +33,92 @@ const TrafficMap: React.FC = () => {
     };
   }, [mergeVehicleUpdates]);
 
-  // Animation Loop for Dead Reckoning
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const instancedMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  // WebGL Initialization
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const width = containerRef.current.clientWidth || 800;
+    const height = containerRef.current.clientHeight || 600;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(0, width, 0, height, 1, 1000);
+    camera.position.z = 10;
+    
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    containerRef.current.appendChild(renderer.domElement);
+
+    // Create a simple plane geometry for the markers
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.8 });
+    
+    // Support up to 5000 vehicles in one draw call
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, 5000);
+    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(instancedMesh);
+
+    sceneRef.current = scene;
+    cameraRef.current = camera;
+    rendererRef.current = renderer;
+    instancedMeshRef.current = instancedMesh;
+
+    const handleResize = () => {
+      if (!containerRef.current) return;
+      const w = containerRef.current.clientWidth;
+      const h = containerRef.current.clientHeight;
+      renderer.setSize(w, h);
+      camera.right = w;
+      camera.bottom = h;
+      camera.updateProjectionMatrix();
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      renderer.dispose();
+      if (containerRef.current) containerRef.current.removeChild(renderer.domElement);
+    };
+  }, []);
+
+  // Animation Loop (High-Performance WebGL)
   useEffect(() => {
     const animate = () => {
       const now = Date.now();
-      const dt = (now - lastTimeRef.current) / 1000; // seconds
+      const dt = (now - lastTimeRef.current) / 1000;
       lastTimeRef.current = now;
 
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext('2d');
-
-      if (canvas && ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Visualize Vehicles
-        vehicles.forEach(v => {
-          // Dead Reckoning: Extrapolate position locally based on velocity
-          // timestamp of data vs now could be used for more precise sync
-          // For simple smoothing:
-          let x = v.bbox[0];
-          let y = v.bbox[1];
-
-          // Simple simulation of movement (in pixels)
-          // In real app, you'd update local state or use a rigid body
-          // Here we just draw what we have, but if we wanted to extrapolate:
-          // x += (v.vx || 0) * dt; 
-          // y += (v.vy || 0) * dt;
-
+      if (rendererRef.current && sceneRef.current && cameraRef.current && instancedMeshRef.current) {
+        const mesh = instancedMeshRef.current;
+        
+        // Update all instances
+        vehicles.forEach((v, i) => {
+          if (i >= 5000) return;
+          
+          // Dead Reckoning: Smooth extrapolation
+          const x = v.bbox[0] + (v.vx || 0) * dt;
+          const y = v.bbox[1] + (v.vy || 0) * dt;
           const w = v.bbox[2] - v.bbox[0];
           const h = v.bbox[3] - v.bbox[1];
 
-          // Draw BBox
-          ctx.strokeStyle = '#00ff00';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x, y, w, h);
-
-          // Draw Info
-          ctx.fillStyle = '#00ff00';
-          ctx.font = '12px Arial';
-          ctx.fillText(`${v.class_name} ${v.vehicle_id.substring(0, 4)}`, x, y - 5);
-
-          // Visualize ReID Confidence (Gallery Size)
-          if (v.gallery_size !== undefined) {
-            ctx.fillStyle = '#ffff00';
-            ctx.fillText(`Views: ${v.gallery_size} Vel: ${v.vx?.toFixed(1)},${v.vy?.toFixed(1)}`, x, y + h + 15);
-          }
+          dummy.position.set(x + w/2, y + h/2, 0);
+          dummy.scale.set(w, h, 1);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
         });
+
+        mesh.count = Math.min(vehicles.length, 5000);
+        mesh.instanceMatrix.needsUpdate = true;
+        
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
 
       requestRef.current = requestAnimationFrame(animate);
@@ -87,20 +128,18 @@ const TrafficMap: React.FC = () => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [vehicles]); // Re-bind when vehicle list changes (or use Ref for vehicles to avoid re-binding)
+  }, [vehicles, dummy]);
 
   return (
-    <section className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden">
+    <section 
+      ref={containerRef}
+      className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden"
+    >
       {/* Background Map */}
       <LeafletMap />
 
-      {/* Overlay for Vehicle Visualization */}
-      <canvas
-        ref={canvasRef}
-        className="absolute top-0 left-0 w-full h-full pointer-events-none z-[1001]"
-        width={800} // Should be dynamic based on container
-        height={600}
-      />
+      {/* THREE.js overlay will be appended here */}
+      
       <div className="absolute top-2 right-2 bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono z-[1002]">
         Active Vehicles: {vehicles.length}
       </div>

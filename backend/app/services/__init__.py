@@ -19,6 +19,7 @@ from .services import (
     analytics_service_instance,
     connection_manager_instance,
     get_incident_manager,
+    get_v2x_service,
 )
 # Optional: Import specific classes if they are needed elsewhere directly
 # from .feed_manager import FeedManager # If FeedManager class is in its own file

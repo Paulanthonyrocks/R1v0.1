@@ -685,28 +685,32 @@ class DatabaseManager:
                 conn.execute(sql, params)
                 conn.commit()
 
+    from sqlalchemy.exc import OperationalError as SAOperationalError
     db_write_retry_decorator = retry(
         wait=wait_exponential(multiplier=0.2, min=0.2, max=3),
         stop=stop_after_attempt(4),
-        retry=retry_if_exception_type(sqlite3.OperationalError),
+        retry=retry_if_exception_type((sqlite3.OperationalError, SAOperationalError)),
     )
 
     @db_write_retry_decorator
-    def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> int:
-        """Saves a batch of vehicle tracking data in a single transaction."""
+    async def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> int:
+        """Saves a batch of vehicle tracking data in a single transaction via aiosqlite."""
         if not vehicle_data_list:
             return 0
         
-        # S1 Fix: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
-        # to preserve existing rows and update them rather than delete+reinsert
-        sql = """INSERT INTO vehicle_tracks (
+        sql = text("""INSERT INTO vehicle_tracks (
             feed_id, track_id, timestamp, global_vehicle_id, class_id, confidence,
             bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
             speed, acceleration, lane, direction, license_plate, ocr_confidence, 
             car_model, car_model_confidence, car_color, flags
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (
+            :feed_id, :track_id, :timestamp, :global_vehicle_id, :class_id, :confidence,
+            :bbox_x1, :bbox_y1, :bbox_x2, :bbox_y2, :center_x, :center_y,
+            :speed, :acceleration, :lane, :direction, :license_plate, :ocr_confidence, 
+            :car_model, :car_model_confidence, :car_color, :flags
+        )
         ON CONFLICT(feed_id, track_id, timestamp) DO UPDATE SET
-            global_vehicle_id = COALESCE(excluded.global_vehicle_id, global_vehicle_id),
+            global_vehicle_id = COALESCE(excluded.global_vehicle_id, vehicle_tracks.global_vehicle_id),
             class_id = excluded.class_id,
             confidence = excluded.confidence,
             bbox_x1 = excluded.bbox_x1, bbox_y1 = excluded.bbox_y1,
@@ -714,13 +718,13 @@ class DatabaseManager:
             center_x = excluded.center_x, center_y = excluded.center_y,
             speed = excluded.speed, acceleration = excluded.acceleration,
             lane = excluded.lane, direction = excluded.direction,
-            license_plate = COALESCE(excluded.license_plate, license_plate),
-            ocr_confidence = COALESCE(excluded.ocr_confidence, ocr_confidence),
-            car_model = COALESCE(excluded.car_model, car_model),
-            car_model_confidence = COALESCE(excluded.car_model_confidence, car_model_confidence),
-            car_color = COALESCE(excluded.car_color, car_color),
+            license_plate = COALESCE(excluded.license_plate, vehicle_tracks.license_plate),
+            ocr_confidence = COALESCE(excluded.ocr_confidence, vehicle_tracks.ocr_confidence),
+            car_model = COALESCE(excluded.car_model, vehicle_tracks.car_model),
+            car_model_confidence = COALESCE(excluded.car_model_confidence, vehicle_tracks.car_model_confidence),
+            car_color = COALESCE(excluded.car_color, vehicle_tracks.car_color),
             flags = excluded.flags
-        """
+        """)
         
         batch_params = []
         for vd in vehicle_data_list:
@@ -732,33 +736,31 @@ class DatabaseManager:
             else:
                 flags_str = str(flags_val)
 
-            params = (
-                vd.get("feed_id", "unknown"),
-                vd.get("track_id") or vd.get("vehicle_id"),
-                vd.get("timestamp", time.time()),
-                vd.get("global_vehicle_id"),
-                vd.get("class_id"),
-                vd.get("confidence"),
-                bbox[0], bbox[1], bbox[2], bbox[3],
-                center[0], center[1],
-                vd.get("speed"),
-                vd.get("acceleration"),
-                vd.get("lane"),
-                vd.get("direction"),
-                vd.get("license_plate"),
-                vd.get("ocr_confidence"),
-                vd.get("car_model"),
-                vd.get("car_model_confidence"),
-                vd.get("car_color"),
-                flags_str,
-            )
+            params = {
+                "feed_id": vd.get("feed_id", "unknown"),
+                "track_id": vd.get("track_id") or vd.get("vehicle_id"),
+                "timestamp": vd.get("timestamp", time.time()),
+                "global_vehicle_id": vd.get("global_vehicle_id"),
+                "class_id": vd.get("class_id"),
+                "confidence": vd.get("confidence"),
+                "bbox_x1": bbox[0], "bbox_y1": bbox[1], "bbox_x2": bbox[2], "bbox_y2": bbox[3],
+                "center_x": center[0], "center_y": center[1],
+                "speed": vd.get("speed"),
+                "acceleration": vd.get("acceleration"),
+                "lane": vd.get("lane"),
+                "direction": vd.get("direction"),
+                "license_plate": vd.get("license_plate"),
+                "ocr_confidence": vd.get("ocr_confidence"),
+                "car_model": vd.get("car_model"),
+                "car_model_confidence": vd.get("car_model_confidence"),
+                "car_color": vd.get("car_color"),
+                "flags": flags_str,
+            }
             batch_params.append(params)
 
         try:
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    conn.executemany(sql, batch_params)
-                    conn.commit()
+            async with self.async_engine.begin() as conn:
+                await conn.execute(sql, batch_params)
             
             # --- DUAL WRITE TO TIMESCALEDB ---
             if self.timescale_engine:
@@ -767,9 +769,7 @@ class DatabaseManager:
             return len(batch_params)
         except Exception as e:
             logger.error(f"DB batch save failed: {e}")
-            if isinstance(e, sqlite3.OperationalError):
-                raise
-            return 0
+            raise
 
     async def _save_to_timescale_batch(self, vehicle_data_list: List[Dict]):
         """Asynchronously saves a batch of data to TimescaleDB (S5: with retry)."""
@@ -1104,13 +1104,16 @@ class DatabaseManager:
                 raise DatabaseError(f"Failed save vehicle: {e}") from e
 
     @db_write_retry_decorator
-    def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
+    async def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
         """Upserts a vehicle identification record based on license plate."""
-        sql = """
+        sql = text("""
         INSERT INTO identified_vehicles (
             license_plate, appearance_id, vehicle_type, make, model, color, 
             first_seen, last_seen, reid_gallery, flags, total_detections
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ) VALUES (
+            :license_plate, :appearance_id, :vehicle_type, :make, :model, :color, 
+            :first_seen, :last_seen, :reid_gallery, :flags, 1
+        )
         ON CONFLICT(license_plate) DO UPDATE SET
             appearance_id = COALESCE(excluded.appearance_id, identified_vehicles.appearance_id),
             vehicle_type = COALESCE(excluded.vehicle_type, identified_vehicles.vehicle_type),
@@ -1121,7 +1124,7 @@ class DatabaseManager:
             last_seen = excluded.last_seen,
             total_detections = identified_vehicles.total_detections + 1,
             flags = COALESCE(excluded.flags, identified_vehicles.flags)
-        """
+        """)
         try:
             lp = vehicle_data.get("license_plate")
             if not lp or lp == "Unknown":
@@ -1137,22 +1140,21 @@ class DatabaseManager:
                     logger.warning(f"Failed to serialize ReID gallery for {lp}: {e}")
 
             now = vehicle_data.get("timestamp", time.time())
-            params = (
-                lp,
-                vehicle_data.get("appearance_id") or vehicle_data.get("global_vehicle_id"),
-                vehicle_data.get("vehicle_type"),
-                vehicle_data.get("make"),
-                vehicle_data.get("model"),
-                vehicle_data.get("color"),
-                now, # first_seen
-                now, # last_seen
-                gallery_blob,
-                vehicle_data.get("flags")
-            )
+            params = {
+                "license_plate": lp,
+                "appearance_id": vehicle_data.get("appearance_id") or vehicle_data.get("global_vehicle_id"),
+                "vehicle_type": vehicle_data.get("vehicle_type"),
+                "make": vehicle_data.get("make"),
+                "model": vehicle_data.get("model"),
+                "color": vehicle_data.get("color"),
+                "first_seen": now,
+                "last_seen": now,
+                "reid_gallery": gallery_blob,
+                "flags": vehicle_data.get("flags")
+            }
             
-            with self.lock:
-                with self._get_sqlite_connection() as conn:
-                    conn.execute(sql, params)
+            async with self.async_engine.begin() as conn:
+                await conn.execute(sql, params)
             return True
         except Exception as e:
             logger.error(f"Error upserting identified vehicle {vehicle_data.get('license_plate')}: {e}")

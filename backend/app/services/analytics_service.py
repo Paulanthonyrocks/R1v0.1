@@ -40,6 +40,8 @@ from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum
 
 from app.services.safety_monitor import SafetyMonitor
 from app.services.incident_manager import IncidentManager
+from app.services.v2x_service import V2XService
+from app.services.lane_calibrator import LaneCalibrator
 
 class AnalyticsService:
     def __init__(
@@ -51,6 +53,7 @@ class AnalyticsService:
         traffic_signal_service: Optional[TrafficSignalService] = None,
         notification_service: Optional[NotificationService] = None,
         incident_manager: Optional[IncidentManager] = None,
+        v2x_service: Optional[V2XService] = None,
     ):
         self.config = config
         self._connection_manager = connection_manager
@@ -58,9 +61,11 @@ class AnalyticsService:
         self._traffic_signal_service = traffic_signal_service
         self._notification_service = notification_service
         self._incident_manager = incident_manager
+        self._v2x_service = v2x_service
         self._data_cache = TrafficDataCache()
         self._traffic_predictor_instance = traffic_predictor
         self._anomaly_detector_instance = None
+        self._lane_calibrators: Dict[str, LaneCalibrator] = {} # feed_id -> LaneCalibrator
         self._prediction_log_table_initialized = False
         
         # [NEW] Safety Monitor
@@ -337,6 +342,27 @@ class AnalyticsService:
             recent_data = self._data_cache.get_recent_data(latitude, longitude, hours=1)
             if len(recent_data) > 5:
                 await self.detect_traffic_anomalies(recent_data)
+
+            # [NEW] D. V2X Feedback Loop
+            if self._v2x_service:
+                await self._v2x_service.process_analytics_trigger(feed_id, metrics)
+            
+            # [NEW] E. Autonomous Lane Nudge
+            if feed_id not in self._lane_calibrators:
+                self._lane_calibrators[feed_id] = LaneCalibrator(feed_id, self.config)
+            
+            calibrator = self._lane_calibrators[feed_id]
+            calibrator.accumulate(metrics.get("vehicles", []))
+            
+            # Periodically analyze for drift (every 500 frames processed by analytics)
+            if metrics.get("frame_index", 0) % 500 == 0:
+                nudge_result = await calibrator.analyze_and_nudge()
+                if nudge_result.get("status") == "nudge_required":
+                    logger.info(f"[{feed_id}] Autonomous Nudge Triggered: {nudge_result['data']}")
+                    # We can emit this as a special system alert/event
+                    await self._connection_manager.broadcast_to_feed(feed_id, {
+                        "type": "lane_nudge", "data": nudge_result["data"]
+                    })
 
         except Exception as e:
             logger.error(f"Error in async analytics pipeline: {e}", exc_info=True)

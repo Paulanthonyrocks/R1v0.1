@@ -86,32 +86,61 @@ class DetectionEngine:
             pts = np.array(roi_points, np.int32)
             cv2.fillPoly(self.roi_mask, [pts], 255)
 
+    def _bbox_iou_matrix(self, boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
+        if len(boxes1) == 0 or len(boxes2) == 0:
+            return np.zeros((len(boxes1), len(boxes2)))
+        
+        x11, y11, x12, y12 = np.split(boxes1, 4, axis=1)
+        x21, y21, x22, y22 = np.split(boxes2, 4, axis=1)
+
+        xA = np.maximum(x11, np.transpose(x21))
+        yA = np.maximum(y11, np.transpose(y21))
+        xB = np.minimum(x12, np.transpose(x22))
+        yB = np.minimum(y12, np.transpose(y22))
+
+        interArea = np.maximum(0, xB - xA) * np.maximum(0, yB - yA)
+        boxAArea = (x12 - x11) * (y12 - y11)
+        boxBArea = (x22 - x21) * (y22 - y21)
+
+        iou = interArea / (boxAArea + np.transpose(boxBArea) - interArea + 1e-6)
+        return iou
+
     def _fuse_detections(self) -> List[Tuple]:
         if len(self.detection_history) < self.fusion_min_frames:
             return self.detection_history[-1] # Not enough history, return latest
 
         current_detections = self.detection_history[-1]
-        fused_detections = []
-
-        for current_det in current_detections:
-            current_box, current_cls, current_conf = current_det
-            match_count = 1 # The detection matches itself in the current frame
+        if not current_detections:
+            return []
             
-            # Look for matches in previous frames
-            for i in range(len(self.detection_history) - 1):
-                past_frame_detections = self.detection_history[i]
-                found_match_in_frame = False
-                for past_det in past_frame_detections:
-                    past_box, past_cls, _ = past_det
-                    # Check for class match and sufficient IoU
-                    if current_cls == past_cls and iou(current_box, past_box) > self.fusion_min_iou:
-                        found_match_in_frame = True
-                        break # Move to the next past frame
-                if found_match_in_frame:
-                    match_count += 1
+        # Extract features for vectorized comparison
+        curr_boxes = np.array([d[0] for d in current_detections])
+        curr_classes = np.array([d[1] for d in current_detections])
+        
+        match_counts = np.ones(len(current_detections), dtype=int)
+        
+        for i in range(len(self.detection_history) - 1):
+            past_frame_detections = self.detection_history[i]
+            if not past_frame_detections:
+                continue
+                
+            past_boxes = np.array([d[0] for d in past_frame_detections])
+            past_classes = np.array([d[1] for d in past_frame_detections])
             
-            if match_count >= self.fusion_min_frames:
-                fused_detections.append(current_det)
+            # Vectorized IoU Matrix (N x M)
+            iou_matrix = self._bbox_iou_matrix(curr_boxes, past_boxes)
+            
+            # Vectorized Class Match Matrix (N x M)
+            cls_matrix = curr_classes[:, None] == past_classes[None, :]
+            
+            # Valid matches boolean matrix
+            valid_matches = (iou_matrix > self.fusion_min_iou) & cls_matrix
+            
+            # True if current detection matched ANY past detection in this frame
+            matched_in_frame = valid_matches.any(axis=1)
+            match_counts += matched_in_frame
+            
+        fused_detections = [current_detections[i] for i, count in enumerate(match_counts) if count >= self.fusion_min_frames]
         
         # D1 Fix: NMS dedup to eliminate overlapping fused detections
         if len(fused_detections) > 1:
@@ -162,8 +191,11 @@ class DetectionEngine:
         if self.model_path.endswith((".engine", ".onnx")):
             device_arg = None
 
+        # FP16 inference on CUDA for ~2x speedup
+        use_half = device_arg is not None and device_arg != "cpu"
         results = self.model(frame, conf=confidence_threshold, imgsz=self.imgsz, 
-                           classes=self.target_classes, verbose=False, device=device_arg)
+                           classes=self.target_classes, verbose=False, device=device_arg,
+                           half=use_half)
         
         detections = []
         for r in results:

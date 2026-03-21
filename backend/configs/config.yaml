@@ -10,7 +10,7 @@ performance:
   image_gpu_acceleration: false # Enable GPU-based image ops
   auto_optimize: true # Auto-export to TensorRT
   batch_size: 8
-  inference_timeout: 0.005 # 5ms wait
+  inference_timeout: 0.02 # Increased from 0.005 to gather cross-camera batches
   inference_pool_size: 4
   memory_limit_percent: 95
   cpu_limit_percent: 90
@@ -601,3 +601,9 @@ websocket:
   max_connections: 1000
   token_refresh_interval: 300
   ping_interval: 60
+
+v2x:
+  enabled: true
+  broadcast_ip: "255.255.255.255"
+  broadcast_port: 5005
+  directive_interval_sec: 2.0

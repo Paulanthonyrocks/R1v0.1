@@ -4,8 +4,11 @@ import torchvision.models as models
 import torchvision.transforms as T
 import numpy as np
 import sys
+import os
+from pathlib import Path
 from typing import List, Optional
 import logging
+import onnxruntime as ort
 
 logger = logging.getLogger("app.ml.reid")
 
@@ -19,6 +22,8 @@ class ReIDEmbedder:
         self.backbone_name = self.reid_cfg.get("backbone", "mobilenet_v3_small")
         self.input_size = self.reid_cfg.get("input_size", (256, 256)) # Default to 256x256 as suggested
         self.embedding_dim = self.reid_cfg.get("embedding_dim", 128)
+        self.use_onnx = self.reid_cfg.get("use_onnx", True)
+        self.onnx_session = None
         
         logger.info(f"Initializing ReID Embedder ({self.backbone_name}) on {self.device}...")
         for h in logger.handlers: h.flush()
@@ -139,6 +144,9 @@ class ReIDEmbedder:
         for h in logger.handlers: h.flush()
         self.backbone.eval()
         
+        if self.use_onnx:
+            self._initialize_onnx()
+        
         # Standard ImageNet normalization for pre-trained models
         logger.info("Creating transforms")
         for h in logger.handlers: h.flush()
@@ -151,25 +159,102 @@ class ReIDEmbedder:
         logger.info("ReID Embedder initialization complete.")
         for h in logger.handlers: h.flush()
 
+    def _initialize_onnx(self):
+        project_root = Path(self.config.get("project_root_dir", ""))
+        models_dir = project_root / "backend/models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        onnx_path = models_dir / f"reid_{self.backbone_name}.onnx"
+
+        if not onnx_path.exists():
+            logger.info(f"ONNX model not found at {onnx_path}. Exporting PyTorch model...")
+            try:
+                dummy_input = torch.randn(1, 3, self.input_size[0], self.input_size[1]).to(self.device)
+                torch.onnx.export(
+                    self.backbone, 
+                    dummy_input, 
+                    str(onnx_path), 
+                    export_params=True,
+                    opset_version=12,
+                    do_constant_folding=True,
+                    input_names=['input'],
+                    output_names=['output'],
+                    dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+                )
+                logger.info("ONNX export successful.")
+            except Exception as e:
+                logger.error(f"Failed to export ONNX model: {e}")
+                self.onnx_session = None
+                return
+
+        try:
+            from onnxruntime.quantization import quantize_dynamic, QuantType
+            int8_onnx_path = models_dir / f"reid_{self.backbone_name}_int8.onnx"
+            
+            if not int8_onnx_path.exists():
+                logger.info("Dynamic Quantization (INT8) running on exported ONNX model...")
+                quantize_dynamic(
+                    model_input=str(onnx_path),
+                    model_output=str(int8_onnx_path),
+                    weight_type=QuantType.QUInt8
+                )
+                logger.info(f"INT8 ONNX model generated at {int8_onnx_path}")
+                
+            # Use the compressed INT8 model for inference
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if self.device == "cuda" else ['CPUExecutionProvider']
+            self.onnx_session = ort.InferenceSession(str(int8_onnx_path), providers=providers)
+            logger.info(f"ONNX (INT8) InferenceSession loaded successfully with providers: {self.onnx_session.get_providers()}")
+        except ImportError:
+            logger.warning("onnxruntime.quantization not found. Falling back to FP32 ONNX model.")
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if self.device == "cuda" else ['CPUExecutionProvider']
+            self.onnx_session = ort.InferenceSession(str(onnx_path), providers=providers)
+            logger.info(f"ONNX (FP32) InferenceSession loaded successfully with providers: {self.onnx_session.get_providers()}")
+        except Exception as e:
+            logger.error(f"Failed to load ONNX session: {e}")
+            self.onnx_session = None
+
+    def _center_crop_numpy(self, img: np.ndarray, crop_ratio: float = 0.7) -> np.ndarray:
+        h, w = img.shape[:2]
+        ch, cw = int(h * crop_ratio), int(w * crop_ratio)
+        y1, x1 = (h - ch) // 2, (w - cw) // 2
+        return img[y1:y1+ch, x1:x1+cw]
+
     @torch.no_grad()
     def get_embedding(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Generates a normalized embedding vector for a cropped vehicle image.
+        Generates a normalized multi-scale embedding vector (full + center crop).
         """
         if image.size == 0:
             return None
             
         try:
-            # Prepare image (CoreModule provides RGB)
-            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            # Scale 1: Full image
+            input_tensor_full = self.transform(image).unsqueeze(0).to(self.device)
             
-            # Forward pass
-            embedding = self.backbone(input_tensor)
+            # Scale 2: Center crop
+            crop_img = self._center_crop_numpy(image)
+            input_tensor_crop = self.transform(crop_img).unsqueeze(0).to(self.device)
             
-            # L2 Normalize
-            embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
-            
-            return embedding.cpu().numpy()[0]
+            if self.onnx_session is not None:
+                inp_full = input_tensor_full.cpu().numpy()
+                inp_crop = input_tensor_crop.cpu().numpy()
+                
+                ort_inputs_full = {self.onnx_session.get_inputs()[0].name: inp_full}
+                ort_inputs_crop = {self.onnx_session.get_inputs()[0].name: inp_crop}
+                
+                emb_full = self.onnx_session.run(None, ort_inputs_full)[0]
+                emb_crop = self.onnx_session.run(None, ort_inputs_crop)[0]
+                
+                embedding = np.concatenate([emb_full, emb_crop], axis=1)
+                norm = np.linalg.norm(embedding, axis=1, keepdims=True)
+                embedding = embedding / (norm + 1e-6)
+                return embedding[0]
+            else:
+                emb_full = self.backbone(input_tensor_full)
+                emb_crop = self.backbone(input_tensor_crop)
+                
+                embedding = torch.cat([emb_full, emb_crop], dim=1)
+                embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
+                return embedding.cpu().numpy()[0]
         except Exception as e:
             logger.error(f"ReID embedding failed: {e}")
             return None
@@ -198,19 +283,36 @@ class ReIDEmbedder:
             return [None] * len(images)
 
         try:
-            # Batch transform
-            batch_tensors = []
+            # Batch transform for multi-scale
+            batch_tensors_full = []
+            batch_tensors_crop = []
             for img in valid_images:
-                batch_tensors.append(self.transform(img))
+                batch_tensors_full.append(self.transform(img))
+                batch_tensors_crop.append(self.transform(self._center_crop_numpy(img)))
             
-            input_tensor = torch.stack(batch_tensors).to(self.device)
+            input_tensor_full = torch.stack(batch_tensors_full).to(self.device)
+            input_tensor_crop = torch.stack(batch_tensors_crop).to(self.device)
 
-            # Forward pass
-            embeddings = self.backbone(input_tensor)
+            if self.onnx_session is not None:
+                inp_full = input_tensor_full.cpu().numpy()
+                inp_crop = input_tensor_crop.cpu().numpy()
+                
+                ort_inputs_full = {self.onnx_session.get_inputs()[0].name: inp_full}
+                ort_inputs_crop = {self.onnx_session.get_inputs()[0].name: inp_crop}
+                
+                emb_full = self.onnx_session.run(None, ort_inputs_full)[0]
+                emb_crop = self.onnx_session.run(None, ort_inputs_crop)[0]
+                
+                embeddings_np = np.concatenate([emb_full, emb_crop], axis=1)
+                norm = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
+                embeddings_np = embeddings_np / (norm + 1e-6)
+            else:
+                emb_full = self.backbone(input_tensor_full)
+                emb_crop = self.backbone(input_tensor_crop)
 
-            # L2 Normalize
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            embeddings_np = embeddings.cpu().numpy()
+                embeddings = torch.cat([emb_full, emb_crop], dim=1)
+                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+                embeddings_np = embeddings.cpu().numpy()
 
             # Map back to original indices
             for i, idx in enumerate(indices):

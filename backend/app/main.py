@@ -48,6 +48,7 @@ from app.routers import (
     incidents, routing, weather,
     events, ws, vehicles, signals, ws_monitoring
 )
+from app.routers.webrtc import router as webrtc_router
 
 # --- Constants & Setup ---
 logger = logging.getLogger("main")
@@ -458,7 +459,7 @@ app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["Vehicles"]
 app.include_router(signals.router, prefix="/api/v1/signals", tags=["Signals"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(ws_monitoring.router, prefix="/api/v1/websocket", tags=["WebSocket Monitoring"])
-
+app.include_router(webrtc_router, prefix="/api/v1/webrtc", tags=["WebRTC"])
 # --- Secure File Serving ---
 @app.get("/api/v1/snapshots/{file_path:path}", tags=["Snapshots"])
 async def serve_snapshot(file_path: str):

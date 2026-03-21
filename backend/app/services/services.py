@@ -21,6 +21,7 @@ from app.services.notification_service import NotificationService
 from app.services.incident_manager import IncidentManager
 from app.services.node_manager import NodeManager
 from app.services.simulation_service import SimulationService
+from app.services.v2x_service import V2XService
 from app.ml.traffic_predictor import TrafficPredictor
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class ServiceRegistry:
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
         self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
+        self._v2x_service: Optional[V2XService] = None
         self._health_check_lock = asyncio.Lock()
         self._initialized = False
         
@@ -135,6 +137,12 @@ class ServiceRegistry:
             raise RuntimeError("NodeManager not initialized.")
         return self._node_manager
 
+    @property
+    def v2x_service(self) -> V2XService:
+        if self._v2x_service is None:
+            raise RuntimeError("V2XService not initialized.")
+        return self._v2x_service
+
     async def initialize(
         self, 
         config: Dict[str, Any], 
@@ -224,6 +232,7 @@ class ServiceRegistry:
                 traffic_signal_service=self._traffic_signal_service,
                 notification_service=self._notification_service,
                 incident_manager=self._incident_manager,
+                v2x_service=self._v2x_service,
             )
             logger.info("AnalyticsService initialized.")
 
@@ -338,6 +347,14 @@ class ServiceRegistry:
         except Exception as e:
             logger.warning(f"EventService initialization failed (non-critical): {e}")
             self._event_service = None
+
+        # V2X Service
+        try:
+            self._v2x_service = V2XService(config=config)
+            logger.info("V2XService initialized.")
+        except Exception as e:
+            logger.warning(f"V2XService initialization failed (non-critical): {e}")
+            self._v2x_service = None
 
         # Retention Service
         try:
@@ -616,3 +633,6 @@ def get_retention_service() -> RetentionService:
 
 def get_incident_manager() -> IncidentManager:
     return get_service_registry().incident_manager
+
+def get_v2x_service() -> V2XService:
+    return get_service_registry().v2x_service

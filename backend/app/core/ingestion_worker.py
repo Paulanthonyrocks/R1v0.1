@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from ..utils.video import FrameReader
 from ..utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics
+from .worker_utils import WorkerMetrics, SharedFrameManager
 
 logger = logging.getLogger("Ingestion")
 
@@ -72,6 +72,10 @@ def ingestion_worker(
     # Device setup for GPU preprocessing
     device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
     logger.info(f"[{feed_id}] Ingestion Preprocessing device: {device}")
+
+    # Shared Memory Config
+    use_shm = perf_cfg.get("use_shared_memory", True)
+    logger.info(f"[{feed_id}] Shared Memory IPC: {use_shm}")
 
     # Stream resolution for the raw frame transmission
     video_out_cfg = config.get("video_output", {})
@@ -151,7 +155,7 @@ def ingestion_worker(
     try:
         while not stop_event.is_set():
             try:
-                result = reader.read()
+                result = reader.read_raw()
                 if result is None:
                     if reader.end_of_video:
                         logger.info(f"[{feed_id}] End of stream.")
@@ -228,27 +232,36 @@ def ingestion_worker(
                         # Fallback to CPU-based cv2.resize
                         resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
 
-                    success, buffer = cv2.imencode(".jpg", resized, encode_params)
-                    
-                    if success:
+                    if use_shm:
+                        # ZERO-COPY PATH: Put raw frame into Shared Memory
                         try:
-                            # Put data in the central queue
-                            # Format: (feed_id, frame_index, frame_bytes, metadata)
-                            # Reduced timeout to 0.1s to avoid blocking ingestion pulse
-                            central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=0.1)
+                            shm_name, shape, dtype_str = SharedFrameManager.create_shm(resized)
+                            # Format: (feed_id, frame_index, shm_metadata, time.time())
+                            shm_payload = {"shm_name": shm_name, "shape": shape, "dtype": dtype_str}
+                            central_input_queue.put((feed_id, frame_index, shm_payload, time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         except queue.Full:
+                            # Cleanup SHM if we can't queue it
+                            SharedFrameManager.cleanup_shm(shm_name)
                             metrics.frames_dropped += 1
-                            if metrics.frames_dropped % 50 == 0:
-                                total = metrics.frames_processed + metrics.frames_dropped
-                                drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
-                                logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
                         except Exception as e:
+                            logger.error(f"[{feed_id}] SHM Error for frame {frame_index}: {e}")
                             metrics.errors += 1
-                            logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
                     else:
-                        logger.warning(f"[{feed_id}] Failed to encode frame {frame_index}")
-                        metrics.errors += 1
+                        # FALLBACK PATH: JPEG Encoding
+                        success, buffer = cv2.imencode(".jpg", resized, encode_params)
+                        if success:
+                            try:
+                                central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=0.1)
+                                metrics.frames_processed += 1
+                            except queue.Full:
+                                metrics.frames_dropped += 1
+                            except Exception as e:
+                                metrics.errors += 1
+                                logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
+                        else:
+                            logger.warning(f"[{feed_id}] Failed to encode frame {frame_index}")
+                            metrics.errors += 1
 
                     # 4. Periodic Performance Logging
                     current_time = time.time()

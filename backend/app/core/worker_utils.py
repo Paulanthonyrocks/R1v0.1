@@ -8,7 +8,9 @@ to ensure consistency and reduce code duplication.
 import time
 import logging
 import numpy as np
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+import os
+from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
+from multiprocessing import shared_memory
 
 if TYPE_CHECKING:
     pass
@@ -58,6 +60,47 @@ class WorkerMetrics:
         self.frames_dropped = 0
         self.errors = 0
         self.start_time = time.time()
+
+
+class SharedFrameManager:
+    """
+    Manages Zero-Copy frame exchange via Shared Memory.
+    Eliminates pickle overhead for high-resolution video IPC.
+    """
+    
+    @staticmethod
+    def create_shm(frame: np.ndarray) -> Tuple[str, Tuple[int, ...], str]:
+        """
+        Allocates shared memory and copies frame data.
+        Returns (shm_name, shape, dtype_str).
+        """
+        shm = shared_memory.SharedMemory(create=True, size=frame.nbytes)
+        # Create a numpy array view backed by the shared memory buffer
+        shm_array = np.ndarray(frame.shape, dtype=frame.dtype, buffer=shm.buf)
+        shm_array[:] = frame[:]
+        shm.close() # Close access in producer, but it stays alive until unlinked
+        return shm.name, frame.shape, str(frame.dtype)
+
+    @staticmethod
+    def access_shm(name: str, shape: Tuple[int, ...], dtype_str: str) -> np.ndarray:
+        """
+        Attaches to existing shared memory and returns a numpy view.
+        """
+        shm = shared_memory.SharedMemory(name=name)
+        # Note: The caller must keep a reference to shm to keep the buffer alive while using the array
+        # or we return a copy if we want to unlink immediately.
+        # For inference, we attach, run model, then detach.
+        return np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=shm.buf), shm
+
+    @staticmethod
+    def cleanup_shm(name: str):
+        """Closes and unlinks shared memory block."""
+        try:
+            shm = shared_memory.SharedMemory(name=name)
+            shm.close()
+            shm.unlink()
+        except (FileNotFoundError, Exception):
+            pass
 
 
 def make_serializable(obj: Any) -> Any:
@@ -139,7 +182,7 @@ def serialize_tracked_vehicles(
                 "car_model": data.get("car_model"),
                 "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),
                 "gallery_size": make_serializable(data.get("gallery_size", 0)),
-                "embedding": make_serializable(data.get("embedding")),
+                # Embedding excluded from serialization - only used internally for ReID
             })
         except Exception as e:
             logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")

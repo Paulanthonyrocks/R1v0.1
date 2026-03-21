@@ -189,6 +189,12 @@ class FeedManager:
         self._reid_executor = ThreadPoolExecutor(max_workers=4)
         self._last_vehicle_db_write: Dict[Tuple[str, int], float] = {}
 
+        # WebRTC Registry: feed_id -> {pc_id -> asyncio.Queue}
+        self._webrtc_queues: Dict[str, Dict[int, asyncio.Queue]] = {}
+
+        # Spatial Debouncing: feed_id -> {vehicle_id -> (last_x, last_y, last_vx, last_vy, timestamp)}
+        self._last_sent_telemetry: Dict[str, Dict[int, Tuple[float, float, float, float, float]]] = {}
+
         self.logger.info("FeedManager initialized. Inference, Analytics, and Watchdog tasks started.")
 
     def _sync_match_or_register(self, feed_id: str, v: Dict) -> Optional[str]:
@@ -207,72 +213,19 @@ class FeedManager:
             logger.error(f"ReID match error for {v.get('vehicle_id')}: {e}")
             return None
 
-    async def _read_db_queue(self):
-        """Task to process database write requests from all workers."""
-        logger.info("Database queue reader task started.")
-        
-        while not self._stop_reader_flag:
-            try:
-                items = []
-                # Drain queue up to a limit for batching
-                try:
-                    # Increase batch size for higher throughput
-                    for _ in range(5000):
-                        items.append(self._db_queue.get_nowait())
-                except queue.Empty:
-                    pass
+    # NOTE: _read_db_queue is defined below (after set_incident_manager).
+    # A previous duplicate definition was removed here during pipeline optimization.
 
-                if not items:
-                    await asyncio.sleep(0.05)
-                    continue
+    def register_webrtc_queue(self, feed_id: str, pc_id: int, q: asyncio.Queue):
+        if feed_id not in self._webrtc_queues:
+            self._webrtc_queues[feed_id] = {}
+        self._webrtc_queues[feed_id][pc_id] = q
+        logger.info(f"Registered WebRTC queue for feed '{feed_id}', peer {pc_id}")
 
-                if self._analytics_service and self._analytics_service._db_manager:
-                    db = self._analytics_service._db_manager
-                    
-                    # Separate items by type for appropriate processing
-                    tracking_batch = []
-                    identified_batch = []
-                    
-                    for item in items:
-                        msg_type = item.get("type", "vehicle_data")
-                        if msg_type == "vehicle_data":
-                            if not item.get("global_vehicle_id"):
-                                # Try fast lookup for already mapped tracks
-                                global_id = self._reid_manager.get_global_id(
-                                    item.get("feed_id", "unknown"), 
-                                    item.get("vehicle_id", "unknown")
-                                )
-                                if global_id:
-                                    item["global_vehicle_id"] = global_id
-                            tracking_batch.append(item)
-                        elif msg_type == "identified_vehicle":
-                            identified_batch.append(item)
-                        elif msg_type == "snapshot_created":
-                            if self._incident_manager:
-                                asyncio.create_task(self._incident_manager.attach_snapshot(
-                                    item.get("incident_id"), 
-                                    item.get("filename")
-                                ))
-
-                    # Execute tracking data as a batch
-                    if tracking_batch:
-                        await asyncio.to_thread(db.save_vehicle_data_batch, tracking_batch)
-                    
-                    if identified_batch:
-                        for iv in identified_batch:
-                            await asyncio.to_thread(db.upsert_identified_vehicle, iv)
-                else:
-                    if len(items) > 100:
-                        logger.warning(f"DB manager not available. Dropped {len(items)} items from db_queue.")
-
-                if len(items) >= 5000:
-                    await asyncio.sleep(0.001)
-                else:
-                    await asyncio.sleep(0.005)
-
-            except Exception as e:
-                logger.error(f"Error in db_queue reader: {e}", exc_info=True)
-                await asyncio.sleep(1.0)
+    def unregister_webrtc_queue(self, feed_id: str, pc_id: int):
+        if feed_id in self._webrtc_queues and pc_id in self._webrtc_queues[feed_id]:
+            del self._webrtc_queues[feed_id][pc_id]
+            logger.info(f"Unregistered WebRTC queue for feed '{feed_id}', peer {pc_id}")
 
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
@@ -370,7 +323,12 @@ class FeedManager:
         logger.info("WebSocket ConnectionManager set in FeedManager.")
 
     async def _read_db_queue(self):
-        """Task to process database write requests from all workers."""
+        """Task to process database write requests from all workers.
+        
+        NOTE: Vehicles arriving here from _read_result_queues are already
+        enriched with global_vehicle_id by the ReID manager. We only need
+        a fast fallback lookup for items that still lack one.
+        """
         logger.info("Database queue reader task started.")
         
         while not self._stop_reader_flag:
@@ -378,7 +336,6 @@ class FeedManager:
                 items = []
                 # Drain queue up to a limit for batching
                 try:
-                    # Increase batch size for higher throughput
                     for _ in range(5000):
                         items.append(self._db_queue.get_nowait())
                 except queue.Empty:
@@ -391,21 +348,14 @@ class FeedManager:
                 if self._analytics_service and self._analytics_service._db_manager:
                     db = self._analytics_service._db_manager
                     
-                    # Separate items by type for appropriate processing
                     tracking_batch = []
                     identified_batch = []
-                    
-                    # Group items needing Re-ID to process in a single executor call
-                    items_needing_reid = []
-                    loop = asyncio.get_running_loop()
                     
                     for item in items:
                         msg_type = item.get("type", "vehicle_data")
                         if msg_type == "vehicle_data":
-                            if item.get("embedding"):
-                                items_needing_reid.append(item)
-                            else:
-                                # Try fast lookup for already mapped tracks
+                            # Fast fallback: only lookup if result reader didn't set it
+                            if not item.get("global_vehicle_id") and self._reid_manager:
                                 global_id = self._reid_manager.get_global_id(
                                     item.get("feed_id", "unknown"), 
                                     item.get("vehicle_id", "unknown")
@@ -416,28 +366,22 @@ class FeedManager:
                         elif msg_type == "identified_vehicle":
                             identified_batch.append(item)
                         elif msg_type == "snapshot_created":
-                            if self._incident_manager:
+                            if hasattr(self, '_incident_manager') and self._incident_manager:
                                 asyncio.create_task(self._incident_manager.attach_snapshot(
                                     item.get("incident_id"), 
                                     item.get("filename")
                                 ))
 
-                    # Execute tracking data as a batch
                     if tracking_batch:
-                        await asyncio.to_thread(db.save_vehicle_data_batch, tracking_batch)
+                        await db.save_vehicle_data_batch(tracking_batch)
                     
-                    # Identified vehicles (usually rarer, process one by one or add batch support later)
                     if identified_batch:
                         for iv in identified_batch:
-                            await asyncio.to_thread(db.upsert_identified_vehicle, iv)
+                            await db.upsert_identified_vehicle(iv)
                 else:
-                    # If DB manager is not ready, we must drop the items to prevent queue overflow
-                    # or re-queue them if critical. For vehicle tracking, dropping is often acceptable 
-                    # during startup/shutdown race conditions.
                     if len(items) > 100:
                         logger.warning(f"DB manager not available. Dropped {len(items)} items from db_queue.")
 
-                # If we processed a full batch, yield briefly but don't sleep long
                 if len(items) >= 5000:
                     await asyncio.sleep(0.001)
                 else:
@@ -1336,13 +1280,45 @@ class FeedManager:
                                  except queue.Full:
                                      pass
 
-                    # 5. Broadcast to WebSocket Clients
+                    # 5. Broadcast to WebRTC Peers
+                    if feed_id in self._webrtc_queues:
+                        for pc_id, route_q in list(self._webrtc_queues[feed_id].items()):
+                            try:
+                                route_q.put_nowait(frame_bytes)
+                            except asyncio.QueueFull:
+                                pass # Drop frame gracefully if WebRTC socket is lagging
+                    
+                    # 6. Broadcast Telemetry to WebSocket Clients
                     if self._connection_manager:
                         # Only broadcast if there are subscribers to save resources
                         if hasattr(self._connection_manager, 'has_subscribers') and self._connection_manager.has_subscribers(feed_id):
-                            # Offload expensive serialization to thread pool
-                            # This replaces the per-frame asyncio task creation
-                            asyncio.create_task(self._enqueue_broadcast(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                            # Direct inline enqueue — avoids per-frame asyncio.Task overhead
+                            try:
+                                loop = asyncio.get_running_loop()
+                                msg_bytes = await loop.run_in_executor(
+                                    self._cpu_executor, self._serialize_broadcast_payload,
+                                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
+                                )
+                                if msg_bytes:
+                                    try:
+                                        self.broadcast_queue.put_nowait({
+                                            "type": "video_frame",
+                                            "feed_id": feed_id,
+                                            "data": msg_bytes
+                                        })
+                                    except asyncio.QueueFull:
+                                        # Drop oldest to make room (real-time priority)
+                                        try:
+                                            self.broadcast_queue.get_nowait()
+                                            self.broadcast_queue.put_nowait({
+                                                "type": "video_frame",
+                                                "feed_id": feed_id,
+                                                "data": msg_bytes
+                                            })
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                logger.error(f"Error enqueuing broadcast for {feed_id}: {e}")
 
                 # Yield control
                 await asyncio.sleep(0.001)
@@ -1351,47 +1327,82 @@ class FeedManager:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
 
-    async def _enqueue_broadcast(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
-        """Prepares and enqueues a broadcast message using a thread pool for serialization."""
+    def _serialize_broadcast_payload(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
+        """Synchronous: builds payload + JSON/msgpack serializes. Applies spatial debouncing."""
         try:
-            # 1. Prepare Payload (Lightweight dict manipulation)
+            now = time.time()
+            debounced_vehicles = []
+            feed_telemetry = self._last_sent_telemetry.get(feed_id, {})
+            
+            # Spatial Debouncing Threshold (in pixels)
+            SPATIAL_THRESHOLD = 3.0 
+
+            for v in vehicles:
+                vid = v.get("vehicle_id")
+                if vid is None:
+                    # Fallback for old tracked objects without IDs
+                    debounced_vehicles.append(v)
+                    continue
+
+                curr_x = (v.get("x1", 0) + v.get("x2", 0)) / 2
+                curr_y = (v.get("y1", 0) + v.get("y2", 0)) / 2
+                curr_vx = v.get("vx", 0)
+                curr_vy = v.get("vy", 0)
+
+                # Check if we have a previous state to dead-reckon against
+                last_state = feed_telemetry.get(vid)
+                is_debounced = False
+
+                if last_state:
+                    lx, ly, lvx, lvy, lts = last_state
+                    dt = now - lts
+                    
+                    # Predict position based on last known velocity
+                    # Note: We assume constant velocity for the dead-reckoning interval
+                    pred_x = lx + (lvx * dt)
+                    pred_y = ly + (lvy * dt)
+
+                    # Calculate spatial error
+                    err_sq = (curr_x - pred_x)**2 + (curr_y - pred_y)**2
+                    
+                    # If error is within threshold, only send the ID (debounced)
+                    # This saves bandwidth while letting the frontend know the vehicle is still "alive"
+                    if err_sq < (SPATIAL_THRESHOLD**2):
+                        is_debounced = True
+
+                if is_debounced:
+                    # Lightweight update for debounced vehicles
+                    debounced_vehicles.append({"id": vid, "d": 1})
+                else:
+                    # Full update + refresh dead-reckoning state
+                    debounced_vehicles.append(v)
+                    if feed_id not in self._last_sent_telemetry:
+                        self._last_sent_telemetry[feed_id] = {}
+                    self._last_sent_telemetry[feed_id][vid] = (curr_x, curr_y, curr_vx, curr_vy, now)
+
+            # Cleanup dead-reckoning state for vehicles no longer in frame
+            active_ids = {v.get("vehicle_id") for v in vehicles if "vehicle_id" in v}
+            for vid in list(feed_telemetry.keys()):
+                if vid not in active_ids:
+                    del feed_telemetry[vid]
+
             payload = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
                 "f": feed_id,
                 "i": frame_idx,
-                "ts": time.time(),
-                "v": vehicles, # Could use _compute_vehicle_deltas here if needed
+                "ts": now,
+                "v": debounced_vehicles,
                 "m": metrics
             }
-            if extra and "bg" in extra:
-                payload["bg"] = extra["bg"]
+            # Phase 14: Video transmission is moved entirely to WebRTC Native.
+            # We explicitly drop frame_bytes and bg images from the WebSocket packet.
+            if extra and "rois" in extra:
                 payload["rois"] = extra.get("rois", [])
-            else:
-                payload["frame"] = frame_bytes
 
-            # 2. Serialize in ThreadPool to avoid blocking event loop
-            loop = asyncio.get_running_loop()
-            msg_bytes = await loop.run_in_executor(self._cpu_executor, self._serialize_msgpack, payload)
-            
-            # 3. Enqueue for the dedicated broadcast worker
-            # Use put_nowait with overflow protection (Real-time priority)
-            try:
-                self.broadcast_queue.put_nowait({
-                    "type": "video_frame",
-                    "feed_id": feed_id,
-                    "data": msg_bytes
-                })
-            except asyncio.QueueFull:
-                try:
-                    self.broadcast_queue.get_nowait()
-                    self.broadcast_queue.put_nowait({
-                        "type": "video_frame",
-                        "feed_id": feed_id,
-                        "data": msg_bytes
-                    })
-                except: pass
+            return self._serialize_msgpack(payload)
         except Exception as e:
-            logger.error(f"Error enqueuing broadcast for {feed_id}: {e}")
+            logger.error(f"Error serializing broadcast payload for {feed_id}: {e}")
+            return None
 
     def _serialize_msgpack(self, payload):
         """Synchronous msgpack serialization helper for thread pool."""
@@ -1594,54 +1605,9 @@ class FeedManager:
                 
         return delta_vehicles
 
-    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
-        if not self._connection_manager or not frame_bytes:
-            return
-        
-        try:
-            # 1. Compute Deltas (Bandwidth Optimization)
-            optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
-
-            # 2. Prepare Payload
-            payload = {
-                "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
-                "f": feed_id,
-                "i": frame_idx,
-                "ts": time.time(),
-                "v": optimized_vehicles,
-                "m": metrics
-            }
-
-            # 3. Check for Adaptive Streaming (ROIs)
-            if extra_payload and "bg" in extra_payload:
-                payload["bg"] = extra_payload["bg"]
-                payload["rois"] = extra_payload.get("rois", [])
-                # Use smaller original frame if available (future: could drop frame_bytes here)
-            else:
-                payload["frame"] = frame_bytes
-
-            # 4. Binary Serialization with msgpack
-            # Use raw bytes for performance
-            def msgpack_default(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, (np.integer, np.int64, np.int32)):
-                    return int(obj)
-                if isinstance(obj, (np.floating, np.float64, np.float32)):
-                    return float(obj)
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                if isinstance(obj, timedelta):
-                    return obj.total_seconds() 
-                return str(obj)
-
-            msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-            
-            # 5. Targeted Binary Delivery (Only to subscribers of this feed)
-            await self._connection_manager.broadcast_bytes_to_feed(feed_id, msg_bytes)
-            
-        except Exception as e:
-            logger.error(f"Binary broadcast error for {feed_id}: {e}")
+    # _broadcast_video_frame removed during pipeline optimization.
+    # Its logic is consolidated into _serialize_broadcast_payload + broadcast_worker.
+    # See _serialize_broadcast_payload and _broadcast_worker for the unified path.
 
     async def _maintenance_loop(self):
         """Periodically prunes old database records and snapshot files to reclaim space."""

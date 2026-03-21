@@ -55,103 +55,112 @@ class AnalyticsWorker:
                     self.heartbeat.value = time.time()
 
                 try:
-                    # 1. Get results from InferenceWorkers (non-blocking)
-                    start_wait = time.time()
+                    # 1. Batch-drain input queue for higher throughput
+                    raw_items = []
                     try:
-                        # item format: (feed_id, frame_index, timestamp, vis_tracks, lane_boundaries, lane_lines, metrics, extra)
-                        item = self.input_queue.get_nowait()
+                        for _ in range(50):
+                            raw_items.append(self.input_queue.get_nowait())
                     except queue.Empty:
-                        time.sleep(0.01) # Avoid CPU pinning
+                        pass
+                    
+                    if not raw_items:
+                        time.sleep(0.005)  # Reduced from 10ms
                         continue
-                    
-                    unpickle_time = time.time() - start_wait
-                    total_unpickle_time += unpickle_time
-                    
-                    loop_start = time.time()
-                    feed_id, frame_index, timestamp, vehicles, lanes, lines, worker_metrics, extra = item
-                    
-                    # --- Track Quality Gating ---
-                    min_q = self.config.get("analytics", {}).get("min_track_quality", 0.4)
-                    
-                    # Mark vehicles as reliable or not, but keep all for visual continuity
-                    reliable_vehicles = []
-                    for v in vehicles:
-                        is_reliable = v.get("quality_score", 1.0) >= min_q
-                        v["is_reliable"] = is_reliable
-                        if is_reliable:
-                            reliable_vehicles.append(v)
-                    
-                    # 2. Lazy-init monitors
-                    if feed_id not in self.traffic_monitors:
-                        self.traffic_monitors[feed_id] = TrafficMonitor(self.config)
-                        self.safety_monitors[feed_id] = SafetyMonitor(self.config)
-                        logger.info(f"[AnalyticsWorker] Initialized monitors for feed {feed_id}")
 
-                    t_monitor = self.traffic_monitors[feed_id]
-                    s_monitor = self.safety_monitors[feed_id]
-
-                    # 3. Run Safety Analytics (Stopped Vehicle, Wrong Way)
-                    safety_alerts = s_monitor.update(feed_id, reliable_vehicles, timestamp)
+                    start_wait = time.time()
                     
-                    # 3b. Handle Calibration Drift
-                    calib = extra.get("calibration") if extra else None
-                    if calib:
-                        is_drifted = calib.get("is_drifted", False)
-                        if is_drifted:
-                            drift_score = calib.get("drift_score", 0.0)
-                            safety_alerts.append({
-                                "type": "safety_alert",
-                                "subtype": "calibration_drift",
-                                "severity": "high",
-                                "feed_id": feed_id,
-                                "description": f"Camera calibration drift detected (Score: {drift_score:.4f}). Speeds may be inaccurate.",
-                                "timestamp": timestamp,
-                                "meta": {"drift_score": drift_score}
-                            })
-
-                    # 4. Update Traffic Metrics
-                    # TrafficMonitor.update_vehicles expects a DICT of reliable vehicles for internal tracking
-                    reliable_map = {v["vehicle_id"]: v for v in reliable_vehicles}
-                    t_monitor.update_vehicles(reliable_map)
-                    feed_metrics = t_monitor.get_metrics()
+                    for item in raw_items:
+                        unpickle_time = time.time() - start_wait
+                        total_unpickle_time += unpickle_time
                     
-                    # Merge worker performance metrics and extra metadata
-                    feed_metrics.update(worker_metrics)
-                    if calib:
-                        feed_metrics["calibration"] = calib
+                        loop_start = time.time()
+                        feed_id, frame_index, timestamp, vehicles, lanes, lines, worker_metrics, extra = item
+                    
+                        # --- Track Quality Gating ---
+                        min_q = self.config.get("analytics", {}).get("min_track_quality", 0.4)
+                    
+                        # Mark vehicles as reliable or not, but keep all for visual continuity
+                        reliable_vehicles = []
+                        for v in vehicles:
+                            is_reliable = v.get("quality_score", 1.0) >= min_q
+                            v["is_reliable"] = is_reliable
+                            if is_reliable:
+                                reliable_vehicles.append(v)
+                    
+                        # 2. Lazy-init monitors
+                        if feed_id not in self.traffic_monitors:
+                            self.traffic_monitors[feed_id] = TrafficMonitor(self.config)
+                            self.safety_monitors[feed_id] = SafetyMonitor(self.config)
+                            logger.info(f"[AnalyticsWorker] Initialized monitors for feed {feed_id}")
+
+                        t_monitor = self.traffic_monitors[feed_id]
+                        s_monitor = self.safety_monitors[feed_id]
+
+                        # 3. Run Safety Analytics (Stopped Vehicle, Wrong Way)
+                        safety_alerts = s_monitor.update(feed_id, reliable_vehicles, timestamp)
+                    
+                        # 3b. Handle Calibration Drift
+                        calib = extra.get("calibration") if extra else None
+                        if calib:
+                            is_drifted = calib.get("is_drifted", False)
+                            if is_drifted:
+                                drift_score = calib.get("drift_score", 0.0)
+                                safety_alerts.append({
+                                    "type": "safety_alert",
+                                    "subtype": "calibration_drift",
+                                    "severity": "high",
+                                    "feed_id": feed_id,
+                                    "description": f"Camera calibration drift detected (Score: {drift_score:.4f}). Speeds may be inaccurate.",
+                                    "timestamp": timestamp,
+                                    "meta": {"drift_score": drift_score}
+                                })
+
+                        # 4. Update Traffic Metrics
+                        # TrafficMonitor.update_vehicles expects a DICT of reliable vehicles for internal tracking
+                        reliable_map = {v["vehicle_id"]: v for v in reliable_vehicles}
+                        t_monitor.update_vehicles(reliable_map)
+                        feed_metrics = t_monitor.get_metrics()
+                    
+                        # Merge worker performance metrics and extra metadata
+                        feed_metrics.update(worker_metrics)
+                        if calib:
+                            feed_metrics["calibration"] = calib
                         
-                    feed_metrics["frame_index"] = frame_index
-                    feed_metrics["timestamp"] = timestamp
-                    feed_metrics["reliable_track_count"] = len(reliable_vehicles)
-                    feed_metrics["noise_track_count"] = len(vehicles) - len(reliable_vehicles)
+                        feed_metrics["frame_index"] = frame_index
+                        feed_metrics["timestamp"] = timestamp
+                        feed_metrics["reliable_track_count"] = len(reliable_vehicles)
+                        feed_metrics["noise_track_count"] = len(vehicles) - len(reliable_vehicles)
                     
-                    # 5. Handle Alerts (Send to DB Queue)
-                    for alert in safety_alerts:
-                        try:
-                            self.db_queue.put(
-                                {"type": "safety_alert", "feed_id": feed_id, "data": alert},
-                                block=False
-                            )
-                        except queue.Full:
-                            logger.warning("[AnalyticsWorker] DB queue full. Alert dropped.")
+                        # 5. Handle Alerts (Send to DB Queue)
+                        for alert in safety_alerts:
+                            try:
+                                self.db_queue.put(
+                                    {"type": "safety_alert", "feed_id": feed_id, "data": alert},
+                                    block=False
+                                )
+                            except queue.Full:
+                                logger.warning("[AnalyticsWorker] DB queue full. Alert dropped.")
 
-                    # 6. Push final processed payload to output queue for UI broadcast
-                    if frame_index % self.config.get("analytics", {}).get("broadcast_interval", 5) == 0:
-                        try:
-                            # Backpressure check
-                            if self.output_queue.qsize() > 500:
-                                logger.warning(f"[AnalyticsWorker] Output queue backing up ({self.output_queue.qsize()} items).")
+                        # 6. Push final processed payload to output queue for UI broadcast
+                        if frame_index % self.config.get("analytics", {}).get("broadcast_interval", 5) == 0:
+                            try:
+                                # Backpressure check
+                                if self.output_queue.qsize() > 500:
+                                    logger.warning(f"[AnalyticsWorker] Output queue backing up ({self.output_queue.qsize()} items).")
                             
-                            self.output_queue.put((feed_id, feed_metrics, vehicles, lanes, lines), block=False)
-                        except queue.Full:
-                            logger.error("[AnalyticsWorker] Output queue saturated. Dropping analytics update.")
+                                self.output_queue.put((feed_id, feed_metrics, vehicles, lanes, lines), block=False)
+                            except queue.Full:
+                                logger.error("[AnalyticsWorker] Output queue saturated. Dropping analytics update.")
 
-                    proc_time = time.time() - loop_start
-                    total_process_time += proc_time
-                    processed_since_log += 1
+                        proc_time = time.time() - loop_start
+                        total_process_time += proc_time
+                        processed_since_log += 1
                     
-                    if proc_time > 1.0:
-                        logger.warning(f"[AnalyticsWorker] Slow iteration for {feed_id}: {proc_time:.3f}s (Vehicles: {len(vehicles)})")
+                        if proc_time > 1.0:
+                            logger.warning(f"[AnalyticsWorker] Slow iteration for {feed_id}: {proc_time:.3f}s (Vehicles: {len(vehicles)})")
+                    
+                        # Reset wait timer for next item in batch
+                        start_wait = time.time()
                     
                     # Periodic Diagnostic Summary
                     now = time.time()

@@ -7,15 +7,14 @@ import queue
 import signal
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
 import torch
-import torch.nn.functional as F
 
 from ..core.core_module import CoreModule
 from ..utils.monitoring import TrafficMonitor
 from ..utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, make_serializable, serialize_tracked_vehicles
+from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, SharedFrameManager
 
 logger = logging.getLogger("Inference")
 
@@ -94,7 +93,7 @@ def inference_worker(
     import logging.config
     try:
         logging.config.dictConfig(config["logging"])
-    except Exception as e:
+    except Exception:
         # Cannot use logger here as it may not be configured
         pass  # Logging config failed, will use default
 
@@ -396,18 +395,41 @@ def inference_worker(
                     needs_frame = should_detect or is_lane_frame
                     
                     frame = None
+                    shm_to_cleanup = None
                     if needs_frame:
-                        nparr = np.frombuffer(frame_bytes, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is None:
-                            metrics_obj.errors += 1
-                            continue
+                        if isinstance(frame_bytes, dict) and "shm_name" in frame_bytes:
+                            # ZERO-COPY PATH
+                            try:
+                                name = frame_bytes["shm_name"]
+                                shape = frame_bytes["shape"]
+                                dtype = frame_bytes["dtype"]
+                                frame, shm_obj = SharedFrameManager.access_shm(name, shape, dtype)
+                                shm_to_cleanup = name
+                                # We MUST keep shm_obj alive until we are done processing the frame
+                                # or copy it. Since we use it in batch_meta, we'll cleanup after inference.
+                            except Exception as e:
+                                logger.error(f"[Worker {worker_id}] SHM Access error: {e}")
+                                metrics_obj.errors += 1
+                                continue
+                        else:
+                            # FALLBACK PATH: Decode JPEG
+                            try:
+                                nparr = np.frombuffer(frame_bytes, np.uint8)
+                                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                                if frame is None:
+                                    metrics_obj.errors += 1
+                                    continue
+                            except Exception as e:
+                                logger.error(f"[Worker {worker_id}] JPEG decode error: {e}")
+                                metrics_obj.errors += 1
+                                continue
                     
                     batch_meta.append({
                         "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
                         "frame_bytes": frame_bytes, "timestamp": timestamp,
                         "core": core, "monitor": monitor, "metrics": metrics_obj,
-                        "should_detect": should_detect, "first_detect": first_detect
+                        "should_detect": should_detect, "first_detect": first_detect,
+                        "shm_name": shm_to_cleanup
                     })
 
                     if should_detect:
@@ -421,23 +443,48 @@ def inference_worker(
                 if frames_to_infer:
                     try:
                         now = time.time()
-                        # Optimization: Check if all feeds in this batch use the same model
-                        models_in_batch = [get_model_for_feed(batch_meta[idx]['feed_id']) for idx in inference_indices]
+                        # Optimization (Phase 12): Group frames by model instance so we can run multi-camera 
+                        # batch inference natively on the GPU, even if feeds have overridden models.
+                        model_groups = {} 
+                        # Map: id(model_obj) -> {'model': obj, 'frames': [], 'meta_indices': []}
                         
-                        if all(m == models_in_batch[0] for m in models_in_batch) and models_in_batch[0] is not None:
-                            # Standard fast path: all same model
-                            conf_min = vehicle_det_cfg.get("low_confidence_threshold", 0.15)
-                            results = models_in_batch[0](frames_to_infer, verbose=False, stream=False, conf=conf_min)
+                        for i, meta_idx in enumerate(inference_indices):
+                            meta = batch_meta[meta_idx]
+                            model_to_use = get_model_for_feed(meta['feed_id'])
+                            if model_to_use is None:
+                                continue
+                            
+                            m_id = id(model_to_use)
+                            if m_id not in model_groups:
+                                model_groups[m_id] = {
+                                    'model': model_to_use, 
+                                    'frames': [], 
+                                    'meta_indices': []
+                                }
+                            
+                            model_groups[m_id]['frames'].append(frames_to_infer[i])
+                            model_groups[m_id]['meta_indices'].append(meta_idx)
+                            
+                        conf_min = vehicle_det_cfg.get("low_confidence_threshold", 0.15)
+                        conf_max = vehicle_det_cfg.get("confidence_threshold", 0.30)
+                        use_half = device.type == "cuda"
+                        
+                        # Process each grouped model explicitly as a massive batch tensor
+                        for m_id, group in model_groups.items():
+                            m = group['model']
+                            g_frames = group['frames']
+                            g_meta_indices = group['meta_indices']
+                            
+                            results = m(g_frames, verbose=False, stream=False, conf=conf_min, half=use_half)
+                            
                             for i, res in enumerate(results):
-                                meta_idx = inference_indices[i]
+                                meta_idx = g_meta_indices[i]
                                 meta = batch_meta[meta_idx]
                                 boxes_data = res.boxes.data.cpu().numpy()
                                 formatted_dets = []
                                 x_off, y_off = meta.get("crop_offsets", (0, 0))
                                 
                                 has_uncertain = False
-                                conf_max = vehicle_det_cfg.get("confidence_threshold", 0.30)
-
                                 for row in boxes_data:
                                     rx1, ry1, rx2, ry2, conf, cls_id = row
                                     fx1, fy1 = rx1 + x_off, ry1 + y_off
@@ -446,7 +493,7 @@ def inference_worker(
                                     
                                     if conf_min < conf < conf_max:
                                         has_uncertain = True
-                                
+                                        
                                 # Hard Negative Mining logic
                                 if collect_hard_negatives and has_uncertain and (now - last_collection_time > collection_cooldown):
                                     feed_id_hn = meta['feed_id']
@@ -456,7 +503,6 @@ def inference_worker(
                                             # Use WebP for better compression of collection samples
                                             fname = f"hard_neg_{feed_id_hn}_{meta['frame_index']}_{int(now)}.webp"
                                             fpath = collection_dir / fname
-                                            # Use lower quality for collection samples to save space
                                             cv2.imwrite(str(fpath), meta['frame'], [int(cv2.IMWRITE_WEBP_QUALITY), collection_quality])
                                             last_collection_time = now
                                             collection_sample_counts[feed_id_hn] = current_count + 1
@@ -467,25 +513,11 @@ def inference_worker(
                                         if current_count == collection_max_samples:
                                              logger.info(f"[Worker {worker_id}] Hard negative limit reached for {feed_id_hn} ({collection_max_samples})")
                                              collection_sample_counts[feed_id_hn] += 1 # Avoid repeated logging
-
+                                             
                                 batch_detections_map[meta_idx] = formatted_dets
-                        else:
-                            # Mixed models or overrides present: process individually
-                            conf_min = vehicle_det_cfg.get("low_confidence_threshold", 0.15)
-                            for i, meta_idx in enumerate(inference_indices):
-                                meta = batch_meta[meta_idx]
-                                model_to_use = get_model_for_feed(meta['feed_id'])
-                                if model_to_use:
-                                    res = model_to_use(frames_to_infer[i], verbose=False, stream=False, conf=conf_min)[0]
-                                    boxes_data = res.boxes.data.cpu().numpy()
-                                    formatted_dets = []
-                                    x_off, y_off = meta.get("crop_offsets", (0, 0))
-                                    for row in boxes_data:
-                                        rx1, ry1, rx2, ry2, conf, cls_id = row
-                                        formatted_dets.append(((rx1+x_off, ry1+y_off, rx2+x_off, ry2+y_off), conf, cls_id))
-                                    batch_detections_map[meta_idx] = formatted_dets
+
                     except Exception as e:
-                        logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
+                        logger.error(f"[Worker {worker_id}] Batch inference failed: {e}", exc_info=True)
 
                 # Tracking & Output
                 for i, meta in enumerate(batch_meta):
@@ -540,8 +572,13 @@ def inference_worker(
                              bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                              _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                              extra["bg"] = bg_bytes.tobytes()
-                             # Pass absolute coordinates (vis_tracks.values()) instead of normalized serialized_v
-                             extra["rois"] = _extract_rois(frame, vis_tracks.values(), device=device)
+                             
+                             # Throttle heavy ROI/embedding extraction 
+                             # Only extract PNG patches on new detections or every 15th frame for EMA tracking stability
+                             if meta['first_detect'] or f_idx % 15 == 0:
+                                 extra["rois"] = _extract_rois(frame, vis_tracks.values(), device=device)
+                             else:
+                                 extra["rois"] = []
                     
                     try:
                         central_output_queue.put_nowait((
@@ -550,6 +587,11 @@ def inference_worker(
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
                 
+                # Post-Processing Cleanup (including SHM)
+                for meta in batch_meta:
+                    if meta.get("shm_name"):
+                        SharedFrameManager.cleanup_shm(meta["shm_name"])
+
                 now = time.time()
                 if now - last_metrics_log > 30.0:
                       for fid, m in metrics_map.items():

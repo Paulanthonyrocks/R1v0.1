@@ -62,6 +62,9 @@ class TrackingManager:
         kf.R *= 1.0
         kf.Q *= 0.1
         
+        # Store base Q for adaptive scaling
+        self._base_Q = kf.Q.copy()
+        
         return kf
 
     def update(self, detections: List[Tuple], current_time: float, frame_shape: Tuple[int, int]) -> Dict[str, Dict]:
@@ -95,7 +98,7 @@ class TrackingManager:
             elif conf >= LOW_CONF_THRESH:
                 low_conf_dets.append(det)
 
-        # 2. Kalman Prediction
+        # 2. Kalman Prediction (with adaptive process noise)
         for tid, track in self.vehicle_data.items():
             kf = track.get("kalman_filter")
             if kf:
@@ -104,6 +107,13 @@ class TrackingManager:
                 
                 kf.F[0, 4] = dt
                 kf.F[1, 5] = dt
+                
+                # Adaptive Q: scale process noise by estimated speed
+                # Fast vehicles need looser predictions; slow ones need tighter
+                speed = math.sqrt(float(kf.x[4][0])**2 + float(kf.x[5][0])**2)
+                speed_factor = max(0.1, min(2.0, speed / 100.0))
+                kf.Q = self._base_Q * speed_factor
+                
                 kf.predict()
                 
                 tx, ty, tw, th = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
@@ -203,7 +213,39 @@ class TrackingManager:
     def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
         num_dets = len(detections)
         num_tracks = len(tracks)
+        if num_dets == 0 or num_tracks == 0:
+            return np.empty((num_dets, num_tracks))
+            
         costs = np.full((num_dets, num_tracks), 10000.0)
+        
+        reid_sim_matrix = None
+        if use_reid:
+            # Find an embedding dimension if possible
+            emb_dim = 128
+            for d in detections:
+                if d[3] is not None:
+                    emb_dim = len(d[3])
+                    break
+            
+            det_embs = np.zeros((num_dets, emb_dim), dtype=np.float32)
+            track_embs = np.zeros((num_tracks, emb_dim), dtype=np.float32)
+            
+            has_valid_det = False
+            for d, det in enumerate(detections):
+                if det[3] is not None:
+                    det_embs[d] = det[3]
+                    has_valid_det = True
+                    
+            has_valid_trk = False
+            for t, track in enumerate(tracks):
+                emb = track.get("embedding")
+                if emb is not None:
+                    track_embs[t] = emb
+                    has_valid_trk = True
+                    
+            if has_valid_det and has_valid_trk:
+                # O(1) vectorized operation instead of O(M*N) dot products
+                reid_sim_matrix = np.dot(det_embs, track_embs.T)
         
         for d, (det_bbox, det_cls, det_conf, det_emb) in enumerate(detections):
             det_cx = (det_bbox[0] + det_bbox[2]) / 2
@@ -211,17 +253,17 @@ class TrackingManager:
             
             for t, track in enumerate(tracks):
                 if "predicted_bbox" in track:
-                    giou = self._bbox_giou(det_bbox, track["predicted_bbox"])
+                    diou = self._bbox_diou(det_bbox, track["predicted_bbox"])
                     tr_cx = (track["predicted_bbox"][0] + track["predicted_bbox"][2]) / 2
                     tr_cy = (track["predicted_bbox"][1] + track["predicted_bbox"][3]) / 2
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
                     
-                    if giou > -0.5 or dist < 150: # Gate
-                        motion_cost = 1.0 - giou
+                    if diou > -0.5 or dist < 150: # Gate
+                        motion_cost = 1.0 - diou
                         reid_cost = 0.0
-                        if use_reid and det_emb is not None and track.get("embedding") is not None:
-                            # Re-scale ReID to match motion cost magnitude
-                            reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight * 2.0
+                        if reid_sim_matrix is not None and det_emb is not None and track.get("embedding") is not None:
+                            # Re-scale ReID to match motion cost magnitude using precomputed sim
+                            reid_cost = (1.0 - reid_sim_matrix[d, t]) * self.appearance_weight * 2.0
                         
                         costs[d, t] = motion_cost + reid_cost
         return costs
@@ -237,8 +279,8 @@ class TrackingManager:
             if track.get("embedding") is None:
                 track["embedding"] = emb
             else:
-                # EMA update with configurable alpha
-                alpha = self.embedding_ema_alpha
+                # Confidence-weighted EMA: high-conf detections update more aggressively
+                alpha = self.embedding_ema_alpha * min(1.0, conf / 0.7)
                 track["embedding"] = alpha * emb + (1 - alpha) * track["embedding"]
                 # Re-normalize
                 norm = np.linalg.norm(track["embedding"])
@@ -357,6 +399,33 @@ class TrackingManager:
         if e_area <= 0:
             return iou
         return iou - (e_area - union) / (e_area + 1e-6)
+
+    def _bbox_diou(self, boxA, boxB):
+        """Distance-IoU: adds centroid distance penalty for better lane-parallel discrimination."""
+        xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        areaA = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
+        areaB = max(0, boxB[2] - boxB[0]) * max(0, boxB[3] - boxB[1])
+        union = areaA + areaB - inter
+        if union <= 0:
+            return 0.0
+        iou = inter / (union + 1e-6)
+        
+        # Centroid distance
+        cxA = (boxA[0] + boxA[2]) / 2
+        cyA = (boxA[1] + boxA[3]) / 2
+        cxB = (boxB[0] + boxB[2]) / 2
+        cyB = (boxB[1] + boxB[3]) / 2
+        d2 = (cxA - cxB)**2 + (cyA - cyB)**2
+        
+        # Enclosing box diagonal
+        ex, ey = min(boxA[0], boxB[0]), min(boxA[1], boxB[1])
+        ex2, ey2 = max(boxA[2], boxB[2]), max(boxA[3], boxB[3])
+        c2 = (ex2 - ex)**2 + (ey2 - ey)**2
+        if c2 <= 0:
+            return iou
+        
+        return iou - d2 / (c2 + 1e-6)
 
     def _bbox_iou(self, boxA, boxB):
         xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])

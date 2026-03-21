@@ -48,18 +48,15 @@ async def test_feed_broadcast_logic():
             "video_writer_queue": None
         }
         
-        # Test 1: Direct broadcast call
-        # Mock msgpack to avoid dependency issues in test if possible, or just let it run
-        # We'll just run it.
+        # Test 1: Serialize broadcast payload (replaces old _broadcast_video_frame test)
+        msg_bytes = fm._serialize_broadcast_payload(
+            "test_feed", 1, b"frame_bytes", {}, [], None
+        )
+        assert msg_bytes is not None
+        assert isinstance(msg_bytes, bytes)
+        assert len(msg_bytes) > 0
         
-        await fm._broadcast_video_frame("test_feed", 1, b"frame_bytes", {}, [], extra_payload=None)
-        
-        # Assert broadcast_bytes_to_feed was called
-        assert mock_cm.broadcast_bytes_to_feed.called
-        args, _ = mock_cm.broadcast_bytes_to_feed.call_args
-        assert args[0] == "test_feed"
-        
-        # Test 2: Logic inside _read_result_queues (optimization)
+        # Test 2: Logic inside _read_result_queues (optimization = no subscribers)
         mock_cm.broadcast_bytes_to_feed.reset_mock()
         mock_cm.has_subscribers.return_value = False
         
@@ -69,11 +66,8 @@ async def test_feed_broadcast_logic():
         fm._central_output_queue.put(test_item)
         
         # Run reader loop briefly
-        # We start the task, let it process one item, then cancel/stop it.
         fm._stop_reader_flag = False
         
-        # We need to make sure the loop runs at least once.
-        # We can run it in a separate task.
         task = asyncio.create_task(fm._read_result_queues())
         
         # Give it time to process
@@ -81,7 +75,6 @@ async def test_feed_broadcast_logic():
         
         # Stop
         fm._stop_reader_flag = True
-        # We might need to wait for it to finish or cancel
         task.cancel()
         try:
             await task
@@ -91,7 +84,7 @@ async def test_feed_broadcast_logic():
         # Check: has_subscribers was False, so NO broadcast should happen
         mock_cm.broadcast_bytes_to_feed.assert_not_called()
         
-        # Test 3: Logic inside _read_result_queues (optimization = True)
+        # Test 3: Logic inside _read_result_queues (subscribers = True)
         mock_cm.broadcast_bytes_to_feed.reset_mock()
         mock_cm.has_subscribers.return_value = True
         
@@ -109,10 +102,10 @@ async def test_feed_broadcast_logic():
         except asyncio.CancelledError:
             pass
             
-        # Check: has_subscribers was True, so broadcast SHOULD happen
-        assert mock_cm.broadcast_bytes_to_feed.called
-        args, _ = mock_cm.broadcast_bytes_to_feed.call_args
-        assert args[0] == "test_feed"
+        # Check: has_subscribers was True, broadcast queue should have items
+        # (broadcast_bytes_to_feed is called by _broadcast_worker, not directly here)
+        # The enqueue path puts items into broadcast_queue now
+        assert fm.broadcast_queue.qsize() > 0 or mock_cm.broadcast_bytes_to_feed.called
 
 if __name__ == "__main__":
     pass

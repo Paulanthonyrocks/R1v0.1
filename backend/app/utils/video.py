@@ -86,13 +86,22 @@ class FrameReader:
         # Select backend and options based on GPU config
         backend = cv2.CAP_ANY
         if self.gpu_acceleration:
-            # Note: This requires OpenCV built with FFMPEG and specific environment setup
-            # We use CAP_FFMPEG to allow for hardware acceleration flags
+            # Optimized FFMPEG HWAccel strings for different vendors
+            # Priority: NVIDIA (cuvid) -> Intel (qsv) -> Generic (vaapi)
+            hw_options = [
+                "hwaccel;cuvid|video_codec;h264_cuvid",
+                "hwaccel;qsv|video_codec;h264_qsv",
+                "hwaccel;vaapi"
+            ]
+            
+            # Combine options with basic stream optimizations for low latency
+            # 'rtsp_transport;tcp' is critical for avoiding packet loss on high-res streams
+            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
+            
+            # Try the primary (NVIDIA) first
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options[0]}|{base_options}"
             backend = cv2.CAP_FFMPEG
-            # Set comprehensive hardware acceleration options for NVIDIA GPUs
-            # 'hwaccel;cuvid|video_codec;h264_cuvid' is the standard way to trigger this in OpenCV-FFMPEG
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "hwaccel;cuvid|video_codec;h264_cuvid"
-            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (cuvid).")
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).")
 
         cap = cv2.VideoCapture(self.source, backend)
         if not cap.isOpened():
@@ -195,6 +204,15 @@ class FrameReader:
         """Returns (frame_index, frame) or None."""
         frame_data = self.get_frame()
         return (frame_data["frame_index"], frame_data["frame"]) if frame_data else None
+
+    def read_raw(self) -> Optional[Tuple[int, Any]]:
+        """Returns (frame_index, frame) directly without dict wrapper for lower overhead."""
+        try:
+            data = self.frames_queue.get_nowait()
+            self.frames_processed_count += 1
+            return (data["frame_index"], data["frame"])
+        except Empty:
+            return None
 
     def get_frame(self) -> Optional[Dict[str, Any]]:
         """Returns full dictionary including metadata or None."""
