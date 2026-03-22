@@ -18,7 +18,7 @@ node_modules/
 secrets.txt
 .env
 .env.local
-backend/configs/firebase/service-account-key.json
+service-account-key.json
 backend/data
 backend/__pycache__/__init__.cpython-311.pyc
 backend/logs
@@ -47,3 +47,5 @@ memory.md
 
 .gemini/
 gha-creds-*.json
+
+backend/configs/firrebase/service-account-key.json

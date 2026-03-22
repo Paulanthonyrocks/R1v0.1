@@ -26,7 +26,7 @@ def load_ml_model(model_path: str = None) -> YOLO:
     global model
     try:
         if model_path is None:
-            model_path = str(MODEL_PATH)
+            model_path = '/content/drive/MyDrive/R1v0.1/backend/models/OpenVino/yolov8n.xml' if os.path.exists('/content/drive/MyDrive/R1v0.1/backend/models/OpenVino/yolov8n.xml') else str(MODEL_PATH)
 
         logger.info(f"Loading YOLOv8 model from {model_path}")
         model = YOLO(model_path)

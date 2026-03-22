@@ -67,8 +67,8 @@ class FeedManager:
         # --- CRITICAL: Set multiprocessing start method for CUDA safety ---
         import multiprocessing
         try:
-            multiprocessing.set_start_method('spawn', force=True)
-            logger.info("Multiprocessing start method set to 'spawn' for CUDA safety.")
+            multiprocessing.set_start_method('fork', force=True)
+            logger.info("Multiprocessing start method set to 'fork' for CUDA safety.")
         except RuntimeError:
             # Already set, ignore
             pass
