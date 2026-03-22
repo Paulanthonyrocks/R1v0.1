@@ -14,15 +14,17 @@ export const useWebSocket = () => {
 };
 
 const getWsUrl = (path: string) => {
-    let baseUrl = process.env.NEXT_PUBLIC_WS_URL;
-    
-    if (!baseUrl && typeof window !== 'undefined') {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        baseUrl = `${protocol}//${window.location.host}`;
+    let httpBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+    if (!httpBaseUrl && typeof window !== 'undefined') {
+        httpBaseUrl = window.location.origin;
     }
+
+    httpBaseUrl = httpBaseUrl || 'http://localhost:8000';
+
+    const wsBaseUrl = httpBaseUrl.replace(/^(http)/, 'ws');
     
-    baseUrl = (baseUrl || 'ws://localhost:8000').replace(/\/$/, '');
-    return `${baseUrl}${path}`;
+    return `${wsBaseUrl.replace(/\/$/, '')}${path}`;
 }
 
 const WS_BASE_URL = getWsUrl('/api/v1/ws');

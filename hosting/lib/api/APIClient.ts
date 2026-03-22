@@ -22,7 +22,7 @@ export class APIClient {
     private tokenManager: TokenManager;
 
     private constructor(options: APIOptions) {
-        this.baseURL = 'http://localhost:8000'; // Always connect to the backend directly
+        this.baseURL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'; // Always connect to the backend directly
         this.timeout = options.timeout || 30000;
         this.headers = {
             'Content-Type': 'application/json',
@@ -44,7 +44,7 @@ export class APIClient {
                 console.log(`APIClient.getInstance called with different options. Updating instance...`);
                 
                 // Always use localhost:8000
-                APIClient.instance.baseURL = 'http://localhost:8000';
+                APIClient.instance.baseURL = process.env.NEXT_PUBLIC_API_BASE_URL ||'http://localhost:8000';
                 console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
                 
                 // Update timeout if it changed
