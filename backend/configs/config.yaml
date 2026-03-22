@@ -6,9 +6,9 @@ video_processing:
   roi_scale: 0.5
 performance:
   gpu_acceleration: false
-  video_gpu_acceleration: false # Enable HW accelerated decoding
-  image_gpu_acceleration: false # Enable GPU-based image ops
-  auto_optimize: true # Auto-export to TensorRT
+  gpu_acceleration: false
+  gpu_acceleration: false
+  auto_optimize: false # Disabled TensorRT for OpenVINO CPU
   batch_size: 8
   inference_timeout: 0.02 # Increased from 0.005 to gather cross-camera batches
   inference_pool_size: 4
@@ -607,3 +607,7 @@ v2x:
   broadcast_ip: "255.255.255.255"
   broadcast_port: 5005
   directive_interval_sec: 2.0
+# OpenVINO Optimized Models
+openvino:
+  yolo_model_path: models/OpenVino/yolov8n.xml
+  reid_model_path: models/OpenVino/reid_model.xml
