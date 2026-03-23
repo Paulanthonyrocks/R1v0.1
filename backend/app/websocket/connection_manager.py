@@ -84,6 +84,23 @@ class ConnectionManager:
         
         logger.info(f"Client {client_id} cleanup complete.")
         
+    async def send_bytes(self, data: bytes, client_id: str):
+        if client_id in self.active_connections:
+            websocket = self.active_connections[client_id]
+            try:
+                await websocket.send_bytes(data)
+                logger.debug(f"[WS] Sent {len(data)} bytes to client {client_id}")
+            except Exception as e:
+                logger.error(f"Error sending bytes to {client_id}: {e}")
+
+    async def broadcast_bytes_to_feed(self, data: bytes, feed_id: str):
+        if feed_id in self.feed_subscriptions:
+            client_ids = list(self.feed_subscriptions[feed_id])
+            for client_id in client_ids:
+                await self.send_bytes(data, client_id)
+            if client_ids:
+                logger.info(f"[WS] {len(data)} bytes sent to {len(client_ids)} clients for feed {feed_id}")
+
     def get_user_role(self, client_id: str) -> str:
         return self.client_roles.get(client_id, "user")
 
@@ -92,8 +109,9 @@ class ConnectionManager:
         return bool(self.feed_subscriptions.get(feed_id))
 
     async def subscribe_to_topic(self, client_id: str, topic: str):
-        self.topic_subscriptions[topic].add(client_id)
-        logger.info(f"Client {client_id} subscribed to topic: {topic}")
+        if client_id not in self.topic_subscriptions[topic]:
+            self.topic_subscriptions[topic].add(client_id)
+            logger.info(f"Client {client_id} subscribed to topic: {topic}")
 
     async def unsubscribe_from_topic(self, client_id: str, topic: str):
         if topic in self.topic_subscriptions:
@@ -101,8 +119,9 @@ class ConnectionManager:
             logger.info(f"Client {client_id} unsubscribed from topic: {topic}")
 
     async def subscribe_to_feed(self, client_id: str, feed_id: str):
-        self.feed_subscriptions[feed_id].add(client_id)
-        logger.info(f"Client {client_id} subscribed to feed: {feed_id}")
+        if client_id not in self.feed_subscriptions[feed_id]:
+            self.feed_subscriptions[feed_id].add(client_id)
+            logger.info(f"Client {client_id} subscribed to feed: {feed_id}")
 
     async def unsubscribe_from_feed(self, client_id: str, feed_id: str):
         if feed_id in self.feed_subscriptions:
@@ -114,6 +133,7 @@ class ConnectionManager:
             try:
                 # Add a small timeout to avoid blocking the entire broadcast for one slow client
                 await asyncio.wait_for(self.active_connections[client_id].send_text(message), timeout=1.0)
+                logger.info(f"[WS] Text message sent to {client_id}")
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout sending message to {client_id}")
             except Exception as e:
@@ -128,6 +148,7 @@ class ConnectionManager:
                 try:
                     # Add a small timeout to avoid blocking the entire broadcast for one slow client
                     await asyncio.wait_for(websocket.send_bytes(message), timeout=1.0)
+                    logger.info(f"[WS] {len(message)} bytes sent to {client_id}")
                 except asyncio.TimeoutError:
                     logger.warning(f"Timeout sending bytes to client {client_id}")
                 except Exception as e:
