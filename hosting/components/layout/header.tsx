@@ -6,7 +6,7 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { signOut, Auth } from 'firebase/auth'; // Import Auth type
 // Using Panel icons for clearer collapse/expand indication
-import { PanelLeftClose, PanelRightOpen, Power } from 'lucide-react'; // Remove unused icons
+import { PanelLeftClose, PanelRightOpen, Power, User } from 'lucide-react'; // Remove unused icons
 import { cn } from '@/lib/utils';
 import { useUser } from '@/lib/auth/UserContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -49,54 +49,32 @@ export default function Header({ onToggleSidebar, isSidebarCollapsed }: HeaderPr
       {/* Placeholder action icons */}
       <div className="flex items-center space-x-2">
 
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    {/* Using Button variant outline for better visibility on header */}
-                    <Button variant="outline" size="icon" className="text-muted-foreground hover:text-primary hover:bg-secondary" aria-label="More Actions">
-                         {/* Consider using a more suitable icon for a menu, e.g., Menu or ThreeDotsVertical */}
-                        <PanelRightOpen className="h-4 w-4 md:h-5 md:w-5" />
-                    </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                   {/* Navigation Links */}
-                  {/* Replaced a tag with Link component for client-side navigation */}
-                  <DropdownMenuItem className="tracking-normal" asChild>
-                    <Link href="/">Home</Link>
-                  </DropdownMenuItem>
-                   <DropdownMenuItem className="tracking-normal" asChild>
-                    <a href="/anomalies">Anomalies</a>
-                  </DropdownMenuItem>
-                   <DropdownMenuItem className="tracking-normal" asChild>
-                    <a href="/export">Export</a>
-                  </DropdownMenuItem>
-                   <DropdownMenuItem className="tracking-normal" asChild>
-                    <a href="/grid">Grid</a>
-                  </DropdownMenuItem>
-                   <DropdownMenuItem className="tracking-normal" asChild>
-                    <a href="/logs">Logs</a>
-                  </DropdownMenuItem>
-                   <DropdownMenuItem className="tracking-normal" asChild>
-                    <a href="/nodes">Nodes</a>
-                  </DropdownMenuItem>
-                  {/* Conditionally render Login link */}
-                  {!user ? (
-                    <DropdownMenuItem className="tracking-normal" asChild>
-                      <Link href="/login">Login</Link>
-                    </DropdownMenuItem>
-                  ) : (
-                    // Conditionally render Logout link if user is logged in
-                    <DropdownMenuItem className="tracking-normal" onClick={async () => {
-                      if (auth) { // Check if auth is not null
- await signOut(auth as Auth); // Cast auth to Auth
-                      }
-                      router.push('/login');
-                    }}>
-                      Logout
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Power className="h-4 w-4 md:h-5 md:w-5 text-primary" /> {/* Added text-primary */}
+        {user ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="text-primary hover:text-primary/90 hover:bg-secondary">
+                <User className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={async () => {
+                if (auth) {
+                  await signOut(auth as Auth);
+                }
+                router.push('/login');
+              }}>
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Link href="/login">
+            <Button variant="ghost" className="text-primary hover:text-primary/90 hover:bg-secondary">
+              Login
+            </Button>
+          </Link>
+        )}
+        <Power className="h-4 w-4 md:h-5 md:w-5 text-primary" /> {/* Added text-primary */}
       </div>
     </header>
   );

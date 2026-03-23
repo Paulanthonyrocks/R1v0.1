@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: require('path').join(__dirname, '..'),
   // @ts-ignore
   allowedDevOrigins: [
-    '3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
+    '3000-firebase-r1v01-1774108349517.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
   ],
   async rewrites() {
     return [
