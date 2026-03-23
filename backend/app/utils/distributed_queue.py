@@ -1,3 +1,21 @@
+
+import json
+import numpy as np
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return obj.decode('utf-8', errors='ignore')
+        if isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        if isinstance(obj, (np.integer, int)):
+            return int(obj)
+        if isinstance(obj, (np.floating, float)):
+            return float(obj)
+        if isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
 import json
 import logging
 import time
@@ -12,6 +30,7 @@ class RedisQueue:
     Matches the basic interface of multiprocessing.Queue for easy swap-in.
     """
     def __init__(self, name: str, maxsize: int = 0):
+        self.use_shm = False
         self.redis = get_redis_client()
         self.key = f"q:{name}"
         self.maxsize = maxsize
@@ -21,7 +40,7 @@ class RedisQueue:
         """Pushes an item to the back of the queue."""
         # Serialize to JSON (or pickle for complex objects, but JSON is safer across langs)
         # Note: Bbox and frames might be large, we might need a different strategy for frames
-        data = json.dumps(item)
+        data = json.dumps(item, cls=NumpyEncoder)
         
         if self.maxsize > 0:
             if self.qsize() >= self.maxsize:

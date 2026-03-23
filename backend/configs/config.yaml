@@ -1,38 +1,108 @@
-fps: 15
-speed_limit: 60
-video_processing:
-  target_fps: 5
-  adaptive_streaming: false
-  roi_scale: 0.5
-performance:
-  gpu_acceleration: false
-  gpu_acceleration: false
-  gpu_acceleration: false
-  auto_optimize: false # Disabled TensorRT for OpenVINO CPU
-  batch_size: 8
-  inference_timeout: 0.02 # Increased from 0.005 to gather cross-camera batches
-  inference_pool_size: 4
-  memory_limit_percent: 95
-  cpu_limit_percent: 90
-  min_global_skip_factor: 1.0
-  max_global_skip_factor: 3.0
-  skip_factor_increase_step: 0.1
-  skip_factor_decrease_step: 0.05
-  cpu_threshold_for_skip_increase: 80
-  queue_fullness_threshold_for_skip_increase: 0.7
-  skip_factor_adjustment_interval: 360.0
-  long_sleep_after_increase: 10
-firebase_admin:
-  service_account_key_path: configs/firebase/service-account-key.json
-  project_id: gen-lang-client-0230118708
-  auth_enabled: true
-  storage_bucket: r1v0-1.appspot.com
-traffic_predictor_model_path: models/traffic_predictor_model.h5
+accel_threshold_mps2: 0.5
+analytics_service:
+  node_congestion_broadcast:
+    enabled: true
+    interval: 300
+  traffic_prediction:
+    enabled: false
 anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
+behavior_analysis:
+  accel_threshold_mps2: 0.5
+  ewma_alpha: 0.2
+  lane_change_buffer: 20
+  speed_limit: 60
+  stopped_speed_threshold_kmh: 5
+database:
+  cache_size: 128
+  chunk_size: 100
+  db_path: backend/data/vehicle.db
+  schema:
+    car_color: TEXT
+    car_model: TEXT
+    confidence: REAL
+    first_seen: REAL
+    frame_index: INTEGER
+    lane: INTEGER
+    last_seen: REAL
+    license_plate: TEXT
+    speed: REAL
+    timestamp: REAL
+    vehicle_id: TEXT PRIMARY KEY
+    vehicle_type: TEXT
+    x1: REAL
+    x2: REAL
+    y1: REAL
+    y2: REAL
+  timescaledb:
+    enabled: false
+    url: postgresql+asyncpg://postgres:password@localhost:5432/traffic_hub
+feed_manager:
+  db_write_interval: 0.5
+  error_check_interval: 5.0
+  max_concurrent_feeds: 5
+file_watcher:
+  enabled: true
+  watch_directory: data/new_sample_videos
+firebase_admin:
+  auth_enabled: true
+  project_id: gen-lang-client-0230118708
+  service_account_key_path: configs/firebase/service-account-key.json
+  storage_bucket: r1v0-1.appspot.com
+fps: 15
+incident_detection:
+  congestion_speed_threshold: 20
+  density_threshold: 10
+ingestion:
+  shared_memory_ipc: false
+interface:
+  camera_warmup_time: 0.5
+kalman_filter_params:
+  base_gate_multiplier: 5.0
+  init_covariance_dim: 100
+  init_covariance_pos: 25
+  init_covariance_vel: 2000
+  kf_sigma_md: 10.0
+  kf_sigma_mx: 10.0
+  kf_sigma_my: 10.0
+  kf_sigma_pd: 0.5
+  kf_sigma_pvw: 1.0
+  kf_sigma_pvx: 15.0
+  kf_sigma_pvy: 15.0
+  kf_sigma_px: 5.0
+  kf_sigma_py: 5.0
+  velocity_gate_boost: 1.5
+lane_detection:
+  canny_high_threshold: 150
+  canny_low_threshold: 50
+  dynamic_lane_detection_enabled: false
+  gaussian_blur_kernel_size: 5
+  hough_max_line_gap: 20
+  hough_min_line_length: 40
+  hough_rho: 2
+  hough_theta_divisor: 180
+  hough_threshold: 15
+  lane_change_buffer: 10
+  lane_width: 120
+  model_type: mobilenet_v3_small
+  num_lanes: 6
+  roi_vertices_percent:
+  - - 0.1
+    - 1.0
+  - - 0.45
+    - 0.6
+  - - 0.55
+    - 0.6
+  - - 0.9
+    - 1.0
+log_files:
+  allowed_log_files:
+  - backend_main.log
+  - uvicorn_access.log
+  - uvicorn_error.log
+  - app.log
 logging:
-  version: 1
   disable_existing_loggers: false
   formatters:
     standardFormatter:
@@ -40,73 +110,73 @@ logging:
   handlers:
     consoleHandler:
       class: logging.StreamHandler
-      level: INFO
       formatter: standardFormatter
+      level: INFO
       stream: ext://sys.stdout
-    mainFileHandler:
-      class: logging.handlers.RotatingFileHandler
-      level: INFO
-      formatter: standardFormatter
-      filename: logs/backend_main.log
-      maxBytes: 10485760
-      backupCount: 5
-    workerFileHandler:
-      class: logging.handlers.RotatingFileHandler
-      level: INFO
-      formatter: standardFormatter
-      filename: logs/backend_worker.log
-      maxBytes: 10485760
-      backupCount: 5
     databaseFileHandler:
+      backupCount: 5
       class: logging.handlers.RotatingFileHandler
-      level: INFO
-      formatter: standardFormatter
       filename: logs/backend_database.log
-      maxBytes: 10485760
-      backupCount: 5
-    servicesFileHandler:
-      class: logging.handlers.RotatingFileHandler
-      level: INFO
       formatter: standardFormatter
-      filename: logs/backend_services.log
+      level: INFO
       maxBytes: 10485760
+    mainFileHandler:
       backupCount: 5
+      class: logging.handlers.RotatingFileHandler
+      filename: logs/backend_main.log
+      formatter: standardFormatter
+      level: INFO
+      maxBytes: 10485760
     mlFileHandler:
+      backupCount: 5
       class: logging.handlers.RotatingFileHandler
-      level: INFO
-      formatter: standardFormatter
       filename: logs/backend_ml.log
-      maxBytes: 10485760
-      backupCount: 5
-    videoWsFileHandler:
-      class: logging.handlers.RotatingFileHandler
-      level: INFO
       formatter: standardFormatter
-      filename: logs/backend_video_ws.log
+      level: INFO
       maxBytes: 10485760
+    servicesFileHandler:
       backupCount: 5
+      class: logging.handlers.RotatingFileHandler
+      filename: logs/backend_services.log
+      formatter: standardFormatter
+      level: INFO
+      maxBytes: 10485760
+    videoWsFileHandler:
+      backupCount: 5
+      class: logging.handlers.RotatingFileHandler
+      filename: logs/backend_video_ws.log
+      formatter: standardFormatter
+      level: INFO
+      maxBytes: 10485760
+    workerFileHandler:
+      backupCount: 5
+      class: logging.handlers.RotatingFileHandler
+      filename: logs/backend_worker.log
+      formatter: standardFormatter
+      level: INFO
+      maxBytes: 10485760
   loggers:
-    root:
-      handlers:
-      - consoleHandler
-      - mainFileHandler
-      level: INFO
-      propagate: true
-    app.main:
-      handlers:
-      - consoleHandler
-      - mainFileHandler
-      level: INFO
-      propagate: false
-    app.routers.video_ws:
-      handlers:
-      - consoleHandler
-      - videoWsFileHandler
-      level: INFO
-      propagate: false
     Process:
       handlers:
       - workerFileHandler
+      level: INFO
+      propagate: false
+    analyze_pavement:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
+      level: INFO
+      propagate: false
+    app.core.agent_core:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
+      level: INFO
+      propagate: false
+    app.core.core_module:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       level: INFO
       propagate: false
     app.database:
@@ -115,10 +185,10 @@ logging:
       - databaseFileHandler
       level: INFO
       propagate: false
-    app.services:
+    app.main:
       handlers:
       - consoleHandler
-      - servicesFileHandler
+      - mainFileHandler
       level: INFO
       propagate: false
     app.ml:
@@ -127,37 +197,31 @@ logging:
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.traffic_predictor:
+    app.ml.data_cache:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.route_optimizer:
+    app.ml.pavement_analysis.analysis_modules.crack_measurement:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.preference_learner:
+    app.ml.pavement_analysis.analysis_modules.pci_calculator:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.utils.image_preprocessing:
+    app.ml.pavement_analysis.analysis_modules.pothole_measurement:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.utils.camera_calibration:
-      handlers:
-      - consoleHandler
-      - mlFileHandler
-      level: INFO
-      propagate: false
-    app.ml.pavement_analysis.reporting.report_generator:
+    app.ml.pavement_analysis.analysis_modules.rutting_analysis:
       handlers:
       - consoleHandler
       - mlFileHandler
@@ -175,41 +239,53 @@ logging:
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.analysis_modules.rutting_analysis:
+    app.ml.pavement_analysis.reporting.report_generator:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.analysis_modules.pothole_measurement:
+    app.ml.pavement_analysis.utils.camera_calibration:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.analysis_modules.pci_calculator:
+    app.ml.pavement_analysis.utils.image_preprocessing:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.pavement_analysis.analysis_modules.crack_measurement:
+    app.ml.preference_learner:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.ml.data_cache:
+    app.ml.route_optimizer:
       handlers:
       - consoleHandler
       - mlFileHandler
       level: INFO
       propagate: false
-    app.services.feed_manager:
+    app.ml.traffic_predictor:
       handlers:
       - consoleHandler
-      - mainFileHandler
-      level: DEBUG
+      - mlFileHandler
+      level: INFO
+      propagate: false
+    app.routers.video_ws:
+      handlers:
+      - consoleHandler
+      - videoWsFileHandler
+      level: INFO
+      propagate: false
+    app.services:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
+      level: INFO
       propagate: false
     app.services.analytics_service:
       handlers:
@@ -217,23 +293,17 @@ logging:
       - servicesFileHandler
       level: INFO
       propagate: false
-    app.services.weather_service:
+    app.services.event_service:
       handlers:
       - consoleHandler
       - servicesFileHandler
       level: INFO
       propagate: false
-    app.services.video_processor:
+    app.services.feed_manager:
       handlers:
       - consoleHandler
-      - servicesFileHandler
-      level: INFO
-      propagate: false
-    app.services.traffic_signal_service:
-      handlers:
-      - consoleHandler
-      - servicesFileHandler
-      level: INFO
+      - mainFileHandler
+      level: DEBUG
       propagate: false
     app.services.personalized_routing_service:
       handlers:
@@ -247,37 +317,25 @@ logging:
       - servicesFileHandler
       level: INFO
       propagate: false
-    app.services.event_service:
+    app.services.traffic_signal_service:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
+      level: INFO
+      propagate: false
+    app.services.video_processor:
+      handlers:
+      - consoleHandler
+      - servicesFileHandler
+      level: INFO
+      propagate: false
+    app.services.weather_service:
       handlers:
       - consoleHandler
       - servicesFileHandler
       level: INFO
       propagate: false
     app.websocket.connection_manager:
-      handlers:
-      - consoleHandler
-      - mainFileHandler
-      level: INFO
-      propagate: false
-    main:
-      handlers:
-      - consoleHandler
-      - mainFileHandler
-      level: INFO
-      propagate: false
-    ml_detector:
-      handlers:
-      - consoleHandler
-      - mlFileHandler
-      level: INFO
-      propagate: false
-    analyze_pavement:
-      handlers:
-      - consoleHandler
-      - mlFileHandler
-      level: INFO
-      propagate: false
-    uvicorn.access:
       handlers:
       - consoleHandler
       - mainFileHandler
@@ -295,226 +353,46 @@ logging:
       - mainFileHandler
       level: INFO
       propagate: false
-    app.core.agent_core:
+    main:
       handlers:
       - consoleHandler
       - mainFileHandler
       level: INFO
       propagate: false
-    app.core.core_module:
+    ml_detector:
+      handlers:
+      - consoleHandler
+      - mlFileHandler
+      level: INFO
+      propagate: false
+    root:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
+      level: INFO
+      propagate: true
+    uvicorn.access:
       handlers:
       - consoleHandler
       - mainFileHandler
       level: INFO
       propagate: false
-database:
-  db_path: backend/data/vehicle.db
-  timescaledb:
-    enabled: false
-    url: "postgresql+asyncpg://postgres:password@localhost:5432/traffic_hub"
-  chunk_size: 100
-  cache_size: 128
-  schema:
-    vehicle_id: TEXT PRIMARY KEY
-    timestamp: REAL
-    frame_index: INTEGER
-    license_plate: TEXT
-    vehicle_type: TEXT
-    first_seen: REAL
-    last_seen: REAL
-    x1: REAL
-    y1: REAL
-    x2: REAL
-    y2: REAL
-    speed: REAL
-    lane: INTEGER
-    confidence: REAL
-    car_model: TEXT
-    car_color: TEXT
+  version: 1
+ml_model:
+  model_path: models/pavement/pavement_model.pt
 mongodb:
-  # Use 'mongodb://mongodb:27017/' when running in Docker with the mongodb service
-  uri: "mongodb://localhost:27017/"
-  database_name: "traffic_hub"
+  database_name: traffic_hub
   enabled: false
-redis:
-  host: "localhost"
-  port: 6379
-  db: 0
-  enabled: true
-feed_manager:
-  max_concurrent_feeds: 5
-  db_write_interval: 0.5
-  error_check_interval: 5.0
-queue_log_interval: 120.0
-video_input:
-  webcam_index: 0
-  webcam_buffer_size: 20
-  max_queue_size: 500
-  queue_put_timeout_ms: 1000
-
-post_startup_processing:
-  enabled: true
-  sample_feeds:
-    - path: "data/new_sample_videos/sample_traffic.mp4"
-      is_looped: true
-      latitude: 34.0522
-      longitude: -118.2437
-    - path: "data/new_sample_videos/sample_traffic_2.mp4"
-      is_looped: true
-      latitude: 34.0521
-      longitude: -118.2358
-    - path: "data/new_sample_videos/sample_traffic_3.mp4"
-      is_looped: true
-      latitude: 34.0471
-      longitude: -118.2369
-
-video_output:
-  enabled: false
-  processing_enabled: true
-  output_directory: data/processed_videos
-  codec: mp4v
-  fps: 5
-  frame_resolution:
-  - 640
-  - 480
-  stream_resolution:
-  - 640
-  - 480
-vehicle_detection:
-  enabled: true
-  model_type: yolo
-  model_path: models/yolov8n.pt
-  frame_resolution:
-  - 640
-  - 480
-  vehicle_class_ids:
-  - 2 # car
-  - 3 # motorcycle
-  - 5 # bus
-  - 7 # truck
-  # Detection Quality Parameters
-  confidence_threshold: 0.20  # Reduced to capture more daytime vehicles
-  low_confidence_threshold: 0.10 # Candidates for tracking maintenance
-  nms_threshold: 0.45  # Increased from 0.35 to avoid suppressing overlapping cars in distance
-  
-  # Bounding Box Quality Filters
-  bbox_expansion_factor: 0.05
-  min_bbox_area: 256  # Minimum 16x16 pixels (capture smaller cars in distance)
-  max_aspect_ratio: 4.0
-  min_bbox_dimension: 16
-  
-  # Tracking Parameters
-  proximity_threshold: 250 # Increased from 150 for better high-speed tracking at low FPS
-  track_timeout: 30 # Increased to allow more coasting for fast vehicles
-  probation_threshold: 2 # Number of hits before track becomes active
-  reid_timeout: 3600
-  max_active_tracks: 100
-  max_reid_per_frame: 2
-  reid_interval_frames: 30 # More frequent ReID for better identity stability
-  
-  # Model Configuration
-  yolo_imgsz: 640 # Keep 640 for speed, but consider 960 if hardware allows
-  skip_frames: 1 # Process every 2nd frame (7.5 FPS @ 15 FPS) for much better continuity
-  predict_timeout: 0.5
-  
-  # ReID Configuration
-  reid_enabled: true
-  reid:
-    backbone: mobilenet_v3_small
-    input_size: [256, 256]
-    embedding_dim: 128
-    similarity_threshold: 0.75
-    # Appearance-Based Tracking (Phase 3)
-    use_appearance_in_tracking: true  # Integrate ReID into cost matrix
-    appearance_weight: 0.3  # 30% weight for appearance, 70% for motion
-    min_track_age_for_appearance: 5  # Only use appearance for tracks >5 frames
-  
-  # Static Object Filtering
-  static_object_filter_enabled: true
-  static_movement_threshold: 25
-  static_object_timeout: 20
-  occlusion_confidence_threshold: 0.2
-  
-  # Car Classification
-  car_classification_enabled: false
-  car_classification_interval_frames: 60
-  car_classifier_model_path: models/Car_Make_Model.tflite
-  car_classifier_labels_path: models/car_labels.txt
-  traffic_predictor:
-    model_path: models/traffic_predictor_model.h5
-  traffic_prediction:
-    enabled: true
-analytics_service:
-  traffic_prediction:
-    enabled: false
-  node_congestion_broadcast:
-    enabled: true
-    interval: 300
-behavior_analysis:
-  stopped_speed_threshold_kmh: 5
-  speed_limit: 60
-  accel_threshold_mps2: 0.5
-  lane_change_buffer: 20
-  ewma_alpha: 0.2
-kalman_filter_params:
-  # Process Noise (Q matrix) - How much we expect the state to change
-  kf_sigma_px: 5.0  # Position process noise
-  kf_sigma_py: 5.0
-  kf_sigma_pd: 0.5  # Dimension process noise (boxes change size slowly)
-  kf_sigma_pvx: 15.0  # Velocity process noise (acceleration)
-  kf_sigma_pvy: 15.0
-  kf_sigma_pvw: 1.0  # Dimension velocity process noise
-  
-  # Measurement Noise (R matrix) - How much we trust detections
-  kf_sigma_mx: 10.0  # Position measurement noise
-  kf_sigma_my: 10.0
-  kf_sigma_md: 10.0  # Dimension measurement noise
-  
-  # Initial Covariance (P matrix) - Uncertainty in initial state
-  init_covariance_pos: 25  # Reduced from 50 (more confident in initial detection)
-  init_covariance_dim: 100  # Dimension uncertainty
-  init_covariance_vel: 2000  # Increased from 1000 (less confident in zero-init velocity)
-  
-  # Adaptive Gating for Track Association
-  base_gate_multiplier: 5.0  # Increased from 3.5 for better tracking at low FPS
-  velocity_gate_boost: 1.5  # Extra multiplier for fast-moving tracks
-lane_detection:
-  dynamic_lane_detection_enabled: false
-  num_lanes: 6 # Fallback if dynamic detection fails or is disabled
-  lane_width: 120 # Fallback if dynamic detection fails or is disabled
-  lane_change_buffer: 10
-  gaussian_blur_kernel_size: 5
-  canny_low_threshold: 50
-  canny_high_threshold: 150
-  hough_rho: 2
-  hough_theta_divisor: 180
-  hough_threshold: 15
-  hough_min_line_length: 40
-  hough_max_line_gap: 20
-  roi_vertices_percent: # [x_percent, y_percent] for top-left, top-right, bottom-right, bottom-left
-    - [0.1, 1.0] # Bottom-left
-    - [0.45, 0.6] # Top-left
-    - [0.55, 0.6] # Top-right
-    - [0.9, 1.0] # Bottom-right
-pixels_per_meter: 30
-stopped_speed_threshold_kmh: 5
-accel_threshold_mps2: 0.5
+  uri: mongodb://localhost:27017/
 ocr_engine:
   enabled: false
-  use_gemini_ocr: false
-  use_tesseract: true
-  use_gpu_ocr: false
+  gemini_max_retries: 3
+  gemini_retry_delay: 1.0
+  max_aspect_ratio: 5.5
+  min_aspect_ratio: 2.0
+  min_ocr_bbox_height: 50
+  min_ocr_bbox_width: 100
   min_roi_size: 600
-  sharpen_kernel:
-  - - -1
-    - -1
-    - -1
-  - - -1
-    - 9
-    - -1
-  - - -1
-    - -1
-    - -1
   morph_kernel:
   - - 1
     - 1
@@ -525,59 +403,75 @@ ocr_engine:
   - - 1
     - 1
     - 1
-  min_aspect_ratio: 2.0
-  max_aspect_ratio: 5.5
   ocr_interval: 10
-  gemini_max_retries: 3
-  gemini_retry_delay: 1.0
-  min_ocr_bbox_height: 50
-  min_ocr_bbox_width: 100
   ocr_sweet_spot_y_start: 0.5
-  roi_top_margin_factor: 0.5
   roi_bottom_margin_factor: 0.1
   roi_left_margin_factor: 0.15
   roi_right_margin_factor: 0.15
-incident_detection:
-  density_threshold: 10
-  congestion_speed_threshold: 20
-perspective_calibration:
-  matrix_path: configs/perspective_matrix.npy
-vis_options_default:
-- Grid Overlay
-- Lane Lines
-interface:
-  camera_warmup_time: 0.5
-roi_processing:
-  enabled: false
-  crop_rect:
-  - 0
-  - 233
-  - 640
-  - 480
-  polygon_points: null
+  roi_top_margin_factor: 0.5
+  sharpen_kernel:
+  - - -1
+    - -1
+    - -1
+  - - -1
+    - 9
+    - -1
+  - - -1
+    - -1
+    - -1
+  use_gemini_ocr: false
+  use_gpu_ocr: false
+  use_tesseract: true
+openvino:
+  reid_model_path: models/OpenVino/reid_model.xml
+  yolo_model_path: models/OpenVino/yolov8n.xml
 pavement_analysis:
   camera_calibration:
     calibration_file: calibration_params.npz
-ml_model:
-  model_path: models/pavement/pavement_model.pt
-storage:
-  image_output_dir: data/pavement_images
-  report_output_dir: data/pavement_reports
-log_files:
-  allowed_log_files:
-    - backend_main.log
-    - uvicorn_access.log
-    - uvicorn_error.log
-    - app.log
+performance:
+  auto_optimize: false
+  batch_size: 8
+  cpu_limit_percent: 90
+  cpu_threshold_for_skip_increase: 80
+  gpu_acceleration: false
+  inference_pool_size: 4
+  inference_timeout: 0.02
+  long_sleep_after_increase: 10
+  max_global_skip_factor: 3.0
+  memory_limit_percent: 95
+  min_global_skip_factor: 1.0
+  queue_fullness_threshold_for_skip_increase: 0.7
+  skip_factor_adjustment_interval: 360.0
+  skip_factor_decrease_step: 0.05
+  skip_factor_increase_step: 0.1
+  use_shared_memory: false
+  use_shm: false
+perspective_calibration:
+  matrix_path: configs/perspective_matrix.npy
+pixels_per_meter: 30
+post_startup_processing:
+  enabled: true
+  sample_feeds:
+  - is_looped: true
+    latitude: 34.0522
+    longitude: -118.2437
+    path: data/new_sample_videos/sample_traffic.mp4
+  - is_looped: true
+    latitude: 34.0521
+    longitude: -118.2358
+    path: data/new_sample_videos/sample_traffic_2.mp4
+  - is_looped: true
+    latitude: 34.0471
+    longitude: -118.2369
+    path: data/new_sample_videos/sample_traffic_3.mp4
 prediction_scheduler:
-  enabled: false
-  prediction_interval_minutes: 15
-  likelihood_threshold: 70
   accuracy_cache_ttl_minutes: 60
-  min_verified_predictions_for_accuracy: 5
   default_low_data_weight: 0.75
   default_no_accuracy_weight: 0.8
+  enabled: false
+  likelihood_threshold: 70
   max_locations_to_select_factor: 0.5
+  min_verified_predictions_for_accuracy: 5
   monitored_locations:
   - latitude: 34.0522
     longitude: -118.2437
@@ -594,20 +488,115 @@ prediction_scheduler:
   - latitude: 33.749
     longitude: -84.388
     name: Atlanta Centennial Park
-file_watcher:
+  prediction_interval_minutes: 15
+queue_log_interval: 120.0
+redis:
+  db: 0
   enabled: true
-  watch_directory: data/new_sample_videos
-websocket:
-  max_connections: 1000
-  token_refresh_interval: 300
-  ping_interval: 60
-
+  host: localhost
+  port: 6379
+roi_processing:
+  crop_rect:
+  - 0
+  - 233
+  - 640
+  - 480
+  enabled: false
+  polygon_points: null
+speed_limit: 60
+stopped_speed_threshold_kmh: 5
+storage:
+  image_output_dir: data/pavement_images
+  report_output_dir: data/pavement_reports
+tracking:
+  use_appearance_in_tracking: false
+traffic_predictor_model_path: models/traffic_predictor_model.h5
 v2x:
-  enabled: true
-  broadcast_ip: "255.255.255.255"
+  broadcast_ip: 255.255.255.255
   broadcast_port: 5005
   directive_interval_sec: 2.0
-# OpenVINO Optimized Models
-openvino:
-  yolo_model_path: models/OpenVino/yolov8n.xml
-  reid_model_path: models/OpenVino/reid_model.xml
+  enabled: true
+vehicle_detection:
+  bbox_expansion_factor: 0.05
+  car_classification_enabled: false
+  car_classification_interval_frames: 60
+  car_classifier_labels_path: models/car_labels.txt
+  car_classifier_model_path: models/Car_Make_Model.tflite
+  confidence_threshold: 0.2
+  enabled: true
+  frame_resolution:
+  - 640
+  - 480
+  low_confidence_threshold: 0.1
+  max_active_tracks: 100
+  max_aspect_ratio: 4.0
+  max_reid_per_frame: 2
+  min_bbox_area: 256
+  min_bbox_dimension: 16
+  model_path: yolov8n.pt
+  model_type: yolo
+  nms_threshold: 0.45
+  occlusion_confidence_threshold: 0.2
+  openvino_model_path: /content/drive/MyDrive/R1v0.1/backend/models/OpenVino/yolov8n.xml
+  predict_timeout: 0.5
+  probation_threshold: 2
+  proximity_threshold: 250
+  reid:
+    appearance_weight: 0.3
+    backbone: mobilenet_v3_small
+    embedding_dim: 128
+    input_size:
+    - 256
+    - 256
+    min_track_age_for_appearance: 5
+    model_path: ''
+    similarity_threshold: 0.75
+    use_appearance_in_tracking: true
+    use_openvino: true
+  reid_enabled: true
+  reid_interval_frames: 30
+  reid_timeout: 3600
+  skip_frames: 5
+  static_movement_threshold: 25
+  static_object_filter_enabled: true
+  static_object_timeout: 20
+  track_timeout: 30
+  traffic_prediction:
+    enabled: true
+  traffic_predictor:
+    model_path: models/traffic_predictor_model.h5
+  use_openvino: true
+  vehicle_class_ids:
+  - 2
+  - 3
+  - 5
+  - 7
+  yolo_imgsz: 640
+video_input:
+  max_queue_size: 500
+  queue_put_timeout_ms: 1000
+  webcam_buffer_size: 20
+  webcam_index: 0
+video_output:
+  codec: mp4v
+  enabled: false
+  fps: 5
+  frame_resolution:
+  - 640
+  - 480
+  output_directory: data/processed_videos
+  processing_enabled: true
+  stream_resolution:
+  - 640
+  - 480
+video_processing:
+  adaptive_streaming: false
+  roi_scale: 0.5
+  target_fps: 5
+vis_options_default:
+- Grid Overlay
+- Lane Lines
+websocket:
+  max_connections: 1000
+  ping_interval: 60
+  token_refresh_interval: 300

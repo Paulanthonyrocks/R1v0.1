@@ -1,3 +1,4 @@
+import openvino.runtime as ov
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -112,13 +113,18 @@ class ReIDEmbedder:
         weights_path = self.reid_cfg.get("model_path")
         if weights_path:
             try:
-                project_root = Path(config.get("project_root_dir", ""))
+                project_root = Path(self.config.get("project_root_dir", ""))
                 full_weights_path = project_root / weights_path
-                if full_weights_path.exists():
+                
+                # --- NEW: Force ignore XML files before PyTorch crashes ---
+                if str(full_weights_path).endswith(".xml"):
+                    logger.warning(f"Bypassing OpenVINO .xml file for PyTorch backbone: {full_weights_path}")
+                elif full_weights_path.exists():
                     logger.info(f"Loading custom weights from {full_weights_path}...")
-                    state_dict = torch.load(full_weights_path, map_location=self.device)
-                    # Filter out 'classifier.' or 'embedding_head.' prefixes if they come from train_reid.py
-                    # and map them to our backbone structure
+                    # Use weights_only=False for custom legacy weights
+                    state_dict = torch.load(full_weights_path, map_location=self.device, weights_only=False)
+                    
+                    # Filter out 'backbone.' or 'embedding_head.' prefixes
                     new_state_dict = {}
                     for k, v in state_dict.items():
                         if k.startswith("backbone."):
@@ -128,6 +134,8 @@ class ReIDEmbedder:
                                 new_state_dict["fc." + k[15:]] = v
                             else:
                                 new_state_dict["classifier." + k[15:]] = v
+                        else:
+                            new_state_dict[k] = v
                     
                     self.backbone.load_state_dict(new_state_dict, strict=False)
                     logger.info(f"Loaded ReID weights from {full_weights_path}")
@@ -165,6 +173,7 @@ class ReIDEmbedder:
         models_dir.mkdir(parents=True, exist_ok=True)
         onnx_path = models_dir / f"reid_{self.backbone_name}.onnx"
 
+        # 1. Export the model if it doesn't exist
         if not onnx_path.exists():
             logger.info(f"ONNX model not found at {onnx_path}. Exporting PyTorch model...")
             try:
@@ -186,32 +195,15 @@ class ReIDEmbedder:
                 self.onnx_session = None
                 return
 
+        # 2. Load the FP32 ONNX model into InferenceSession
         try:
-            from onnxruntime.quantization import quantize_dynamic, QuantType
-            int8_onnx_path = models_dir / f"reid_{self.backbone_name}_int8.onnx"
-            
-            if not int8_onnx_path.exists():
-                logger.info("Dynamic Quantization (INT8) running on exported ONNX model...")
-                quantize_dynamic(
-                    model_input=str(onnx_path),
-                    model_output=str(int8_onnx_path),
-                    weight_type=QuantType.QUInt8
-                )
-                logger.info(f"INT8 ONNX model generated at {int8_onnx_path}")
-                
-            # Use the compressed INT8 model for inference
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if self.device == "cuda" else ['CPUExecutionProvider']
-            self.onnx_session = ort.InferenceSession(str(int8_onnx_path), providers=providers)
-            logger.info(f"ONNX (INT8) InferenceSession loaded successfully with providers: {self.onnx_session.get_providers()}")
-        except ImportError:
-            logger.warning("onnxruntime.quantization not found. Falling back to FP32 ONNX model.")
+            logger.info("Loading FP32 ONNX model...")
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if self.device == "cuda" else ['CPUExecutionProvider']
             self.onnx_session = ort.InferenceSession(str(onnx_path), providers=providers)
             logger.info(f"ONNX (FP32) InferenceSession loaded successfully with providers: {self.onnx_session.get_providers()}")
         except Exception as e:
             logger.error(f"Failed to load ONNX session: {e}")
             self.onnx_session = None
-
     def _center_crop_numpy(self, img: np.ndarray, crop_ratio: float = 0.7) -> np.ndarray:
         h, w = img.shape[:2]
         ch, cw = int(h * crop_ratio), int(w * crop_ratio)
@@ -316,7 +308,7 @@ class ReIDEmbedder:
 
             # Map back to original indices
             for i, idx in enumerate(indices):
-                embeddings_map[idx] = embeddings_np[i]
+                embeddings_map[idx] = embeddings_np[i][:128]
 
             # Construct result list in order
             return [embeddings_map.get(i) for i in range(len(images))]

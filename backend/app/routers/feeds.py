@@ -65,6 +65,10 @@ async def update_feed_config(
 @router.get(
     "/",
     response_model=APIResponse[List[FeedStatusData]],
+)
+@router.get(
+    "/status",
+    response_model=APIResponse[List[FeedStatusData]],
     summary="Get Status of All Feeds",
     description="Retrieves the current status, source, FPS, and potential errors for all known feeds.",
 )

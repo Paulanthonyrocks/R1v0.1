@@ -52,6 +52,7 @@ class CoreModule:
         preloaded_model: Optional[Any] = None,
         preloaded_reid: Optional[Any] = None,
     ):
+        self.use_shm = False
         self.feed_id = feed_id
         import copy
         self.config = copy.deepcopy(config)
@@ -98,7 +99,7 @@ class CoreModule:
         self._update_homography(calib_cfg)
 
         # 4. State & Helpers
-        self.reid_embedder = preloaded_reid or (ReIDEmbedder(self.config) if v_cfg.get("reid_enabled", True) else None)
+        self.reid_embedder = preloaded_reid or (ReIDEmbedder(self.config) if (v_cfg.get("reid_enabled", True) and "ReIDEmbedder" in globals() and ReIDEmbedder is not None) else None)
         self.ocr_executor = ThreadPoolExecutor(max_workers=2)
         self.ocr_results_queue = queue.Queue()
         

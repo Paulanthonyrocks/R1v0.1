@@ -6,6 +6,7 @@ import numpy as np
 import queue
 import signal
 import json
+import base64
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
@@ -414,6 +415,11 @@ def inference_worker(
                         else:
                             # FALLBACK PATH: Decode JPEG
                             try:
+                                if isinstance(frame_bytes, str):
+                                    try:
+                                        frame_bytes = base64.b64decode(frame_bytes)
+                                    except Exception as e:
+                                        logger.error(f'Base64 decode error: {e}')
                                 nparr = np.frombuffer(frame_bytes, np.uint8)
                                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                                 if frame is None:
@@ -581,7 +587,7 @@ def inference_worker(
                                  extra["rois"] = []
                     
                     try:
-                        central_output_queue.put_nowait((
+                        central_output_queue.put((
                             meta['feed_id'], f_idx, meta['frame_bytes'], metrics_result, serialized_v, extra
                         ))
                     except queue.Full:

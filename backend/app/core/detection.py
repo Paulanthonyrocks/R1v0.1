@@ -192,20 +192,23 @@ class DetectionEngine:
             device_arg = None
 
         # FP16 inference on CUDA for ~2x speedup
-        use_half = device_arg is not None and device_arg != "cpu"
-        results = self.model(frame, conf=confidence_threshold, imgsz=self.imgsz, 
-                           classes=self.target_classes, verbose=False, device=device_arg,
-                           half=use_half)
-        
+        use_half = False # Explicitly disabled for CPU stability
         detections = []
-        for r in results:
-            boxes = r.boxes
-            for box in boxes:
-                b = box.xyxy[0].cpu().numpy()
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
-                
-                detections.append((b, cls, conf))
+        try:
+            results = self.model(frame, conf=confidence_threshold, imgsz=self.imgsz, 
+                               classes=self.target_classes, verbose=False, device=device_arg,
+                               half=use_half)
+            
+            for r in results:
+                boxes = r.boxes
+                for box in boxes:
+                    b = box.xyxy[0].cpu().numpy()
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    
+                    detections.append((b, cls, conf))
+        except Exception as e:
+            logger.error(f"Inference failed on frame: {e}")
         
         self.detection_history.append(detections)
         fused_detections = self._fuse_detections()

@@ -29,6 +29,7 @@ class VideoProcessor:
 
     def __init__(self, stream_id: str, feed_manager: "FeedManager", output_directory: str):
         self.stream_id = stream_id
+        self.use_shm = False # Final Force Disable for Colab
         self.feed_manager = feed_manager
         self.output_directory = output_directory
         
