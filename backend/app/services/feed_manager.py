@@ -1229,8 +1229,16 @@ class FeedManager:
             }
             # Phase 14: Video transmission is moved entirely to WebRTC Native.
             # We explicitly drop frame_bytes and bg images from the WebSocket packet.
-            if extra and "rois" in extra:
-                payload["rois"] = extra.get("rois", [])
+            # UPDATE: Re-enabled WebSocket fallback for environments where WebRTC fails (e.g. Colab/Localtunnel)
+            if frame_bytes:
+                payload["frame"] = frame_bytes
+            
+            if extra:
+                if "rois" in extra:
+                    payload["rois"] = extra.get("rois")
+                if "background" in extra:
+                    payload["background"] = extra.get("background")
+
             return self._serialize_msgpack(payload)
         except Exception as e:
             logger.error(f"Error serializing broadcast payload for {feed_id}: {e}")
