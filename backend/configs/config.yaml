@@ -54,6 +54,8 @@ fps: 15
 incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
+inference:
+  device: cpu
 ingestion:
   shared_memory_ipc: false
 interface:
