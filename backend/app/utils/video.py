@@ -87,23 +87,27 @@ class FrameReader:
         backend = cv2.CAP_ANY
         if self.gpu_acceleration:
             # Optimized FFMPEG HWAccel strings for different vendors
-            # Priority: NVIDIA (cuvid) -> Intel (qsv) -> Generic (vaapi)
             hw_options = [
                 "hwaccel;cuvid|video_codec;h264_cuvid",
                 "hwaccel;qsv|video_codec;h264_qsv",
                 "hwaccel;vaapi"
             ]
             
-            # Combine options with basic stream optimizations for low latency
-            # 'rtsp_transport;tcp' is critical for avoiding packet loss on high-res streams
             base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
-            
-            # Try the primary (NVIDIA) first
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options[0]}|{base_options}"
             backend = cv2.CAP_FFMPEG
             logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).")
+        else:
+            # For CPU, ensure we don't have any GPU-related options lingering
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+            logger.debug(f"FrameReader '{self.source_name}' using CPU-only capture.")
 
         cap = cv2.VideoCapture(self.source, backend)
+        
+        # Clear the global env var immediately after opening to minimize side effects on other threads
+        if self.gpu_acceleration:
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+
         if not cap.isOpened():
             logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
             self.started_event.set() # Unblock init
@@ -131,7 +135,15 @@ class FrameReader:
                         # Robust looping: Reopen the file to ensure a clean state
                         cap.release()
                         time.sleep(0.05) # Brief pause to release handles
-                        cap = cv2.VideoCapture(self.source)
+                        
+                        if self.gpu_acceleration:
+                             hw_options = "hwaccel;cuvid|video_codec;h264_cuvid"
+                             base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
+                             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options}|{base_options}"
+                             cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+                             os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+                        else:
+                             cap = cv2.VideoCapture(self.source)
                         
                         if not cap.isOpened():
                              logger.error(f"Failed to reopen video '{self.source_name}' for looping.")

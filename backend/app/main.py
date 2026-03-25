@@ -1,7 +1,10 @@
 import os
 # --- Hardware Optimization Flags ---
-# Globally disable GPU usage for all ML frameworks (TensorFlow, PyTorch, etc.)
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# Force CPU usage if USE_GPU is false or not set (since user is on CPU)
+if os.getenv("USE_GPU", "false").lower() == "false":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "" # Clear any potential GPU capture options
+    
 # Suppress excessive TensorFlow logging
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
