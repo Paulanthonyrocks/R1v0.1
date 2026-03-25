@@ -1058,45 +1058,6 @@ class FeedManager:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
                                 sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
-                                                                                                # Trigger actual WebSocket broadcast for video stream
-                                if frame_bytes:
-                                    try:
-                                        self.broadcast_queue.put_nowait({
-                                            'type': 'binary',
-                                            'feed_id': feed_id,
-                                            'data': frame_bytes
-                                        })
-                                    except asyncio.QueueFull:
-                                        try:
-                                            self.broadcast_queue.get_nowait()
-                                            self.broadcast_queue.put_nowait({
-                                                'type': 'binary',
-                                                'feed_id': feed_id,
-                                                'data': frame_bytes
-                                            })
-                                        except:
-                                            pass
-                            except asyncio.QueueFull:
-                                pass
-                            except asyncio.QueueFull:
-                                pass
-                                # Trigger actual WebSocket broadcast for video stream
-                                if frame_bytes:
-                                    try:
-                                        self.broadcast_queue.put_nowait({
-                                            'type': 'binary',
-                                            'feed_id': feed_id,
-                                            'data': frame_bytes
-                                        })
-                                    except asyncio.QueueFull:
-                                        try:
-                                            self.broadcast_queue.get_nowait()
-                                            self.broadcast_queue.put_nowait({
-                                                'type': 'binary',
-                                                'feed_id': feed_id,
-                                                'data': frame_bytes
-                                            })
-                                        except: pass
                             except asyncio.QueueFull:
                                 pass
                     # 3. Route to Video Writer
@@ -1237,7 +1198,7 @@ class FeedManager:
                 if "rois" in extra:
                     payload["rois"] = extra.get("rois")
                 if "background" in extra:
-                    payload["background"] = extra.get("background")
+                    payload["bg"] = extra.get("background")
 
             return self._serialize_msgpack(payload)
         except Exception as e:
