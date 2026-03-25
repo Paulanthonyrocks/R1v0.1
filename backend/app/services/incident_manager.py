@@ -155,8 +155,8 @@ class IncidentManager:
                 }
             )
             await self._connection_manager.broadcast_to_topic(
-                message.model_dump_json(),
-                topic="incidents"
+                "incidents",
+                message.model_dump()
             )
 
             # 6. External Notifications
