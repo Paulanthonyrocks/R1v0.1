@@ -1008,7 +1008,7 @@ class FeedManager:
                         items_buffer.append(self._central_output_queue.get(block=False))
                 except Exception as e:
                     if 'Queue empty' in str(e) or isinstance(e, queue.Empty):
-                        break
+                        pass
                 except queue.Empty:
                     pass
                 if not items_buffer:
@@ -1018,6 +1018,10 @@ class FeedManager:
                     feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
                     entry = self.process_registry.get(feed_id)
                     if not entry: continue
+                    
+                    # Update FPS timer for this feed
+                    if entry.get("timer"):
+                        entry["timer"].tick("loop_total")
                     # 0. Enrich vehicles with global IDs from central manager
                     if vehicles and self._reid_manager:
                         reid_tasks = []
@@ -1197,8 +1201,8 @@ class FeedManager:
             if extra:
                 if "rois" in extra:
                     payload["rois"] = extra.get("rois")
-                if "background" in extra:
-                    payload["bg"] = extra.get("background")
+                if "bg" in extra:
+                    payload["bg"] = extra.get("bg")
 
             return self._serialize_msgpack(payload)
         except Exception as e:
@@ -1292,7 +1296,7 @@ class FeedManager:
                 "vehicles": self._compute_vehicle_deltas(feed_id, vehicles, metrics.get("frame_index", 0))
             }
         )
-        await self._connection_manager.broadcast_to_topic(update.model_dump_json(), f"feed:{feed_id}")
+        await self._connection_manager.broadcast_to_topic(f"feed:{feed_id}", update.model_dump())
     async def _handle_periodic_tasks(self):
         now = time.time()
         # Periodic KPI Broadcast

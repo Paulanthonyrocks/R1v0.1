@@ -1,22 +1,4 @@
-
-import json
-import numpy as np
-
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, bytes):
-            return obj.decode('utf-8', errors='ignore')
-        if isinstance(obj, (np.bool_, bool)):
-            return bool(obj)
-        if isinstance(obj, (np.integer, int)):
-            return int(obj)
-        if isinstance(obj, (np.floating, float)):
-            return float(obj)
-        if isinstance(obj, (np.ndarray,)):
-            return obj.tolist()
-        return super(NumpyEncoder, self).default(obj)
-
-import json
+import pickle
 import logging
 import time
 from typing import Any, Optional
@@ -28,19 +10,20 @@ class RedisQueue:
     """
     A simple queue implementation using Redis Lists.
     Matches the basic interface of multiprocessing.Queue for easy swap-in.
+    Uses pickle for serialization to support binary data (like images and numpy arrays).
     """
     def __init__(self, name: str, maxsize: int = 0):
         self.use_shm = False
-        self.redis = get_redis_client()
+        # Use raw client (decode_responses=False) for binary pickle data
+        self.redis = get_redis_client(decode_responses=False)
         self.key = f"q:{name}"
         self.maxsize = maxsize
-        logger.info(f"Initialized RedisQueue '{name}'")
+        logger.info(f"Initialized RedisQueue '{name}' (Binary/Pickle mode)")
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the back of the queue."""
-        # Serialize to JSON (or pickle for complex objects, but JSON is safer across langs)
-        # Note: Bbox and frames might be large, we might need a different strategy for frames
-        data = json.dumps(item, cls=NumpyEncoder)
+        # Serialize to pickle
+        data = pickle.dumps(item)
         
         if self.maxsize > 0:
             if self.qsize() >= self.maxsize:
@@ -63,15 +46,18 @@ class RedisQueue:
             # Redis blpop returns (key, value)
             res = self.redis.blpop(self.key, timeout=int(timeout) if timeout else 0)
             if res:
-                return json.loads(res[1])
+                return pickle.loads(res[1])
             else:
-                raise Exception("Queue empty")
+                # multiprocessing.Queue.get(block=True) raises queue.Empty on timeout
+                import queue
+                raise queue.Empty
         else:
             res = self.redis.lpop(self.key)
             if res:
-                return json.loads(res)
+                return pickle.loads(res)
             else:
-                raise Exception("Queue empty")
+                import queue
+                raise queue.Empty
 
     def qsize(self) -> int:
         """Returns the approximate size of the queue."""
