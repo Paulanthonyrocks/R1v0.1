@@ -323,11 +323,26 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             ctx.lineWidth = 1.5;
             ctx.font = 'bold 10px Arial'; // Slightly smaller font
 
+            const now = performance.now();
+            const timeSinceLastFrame = lastFrameTimeRef.current > 0 ? (now - lastFrameTimeRef.current) / 1000 : 0;
+            // Cap interpolation to avoid wild jumps during massive lag
+            const interpolationTime = Math.min(timeSinceLastFrame, 0.5); 
+
             vehiclesToDraw.forEach(v => {
                 if (v.status && v.status !== 'active' && v.status !== 'predicting' && v.status !== 'tentative') return;
 
                 if (!v.bbox || !Array.isArray(v.bbox)) return; // Skip if no bbox (debounced or malformed)
                 let [x1, y1, x2, y2] = v.bbox;
+
+                // Interpolate position based on velocity if available
+                if ((v.vx || v.vy) && interpolationTime > 0) {
+                    const dx = (v.vx || 0) * interpolationTime;
+                    const dy = (v.vy || 0) * interpolationTime;
+                    x1 += dx;
+                    x2 += dx;
+                    y1 += dy;
+                    y2 += dy;
+                }
 
                 if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) {
                     return;

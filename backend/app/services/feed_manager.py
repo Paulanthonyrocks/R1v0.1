@@ -1026,8 +1026,10 @@ class FeedManager:
                     if not entry: continue
                     
                     # Update FPS timer for this feed
-                    if entry.get("timer"):
+                    # [FIX] Only tick if the frame index has changed to avoid over-counting in batches
+                    if entry.get("timer") and frame_idx != entry.get("last_processed_idx"):
                         entry["timer"].tick("loop_total")
+                        entry["last_processed_idx"] = frame_idx
                     # 0. Enrich vehicles with global IDs from central manager
                     if vehicles and self._reid_manager:
                         reid_tasks = []
