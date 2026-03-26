@@ -592,7 +592,7 @@ video_output:
   - 640
   - 480
 video_processing:
-  adaptive_streaming: false
+  adaptive_streaming: true
   roi_scale: 0.5
   target_fps: 5
 vis_options_default:
