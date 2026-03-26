@@ -100,7 +100,6 @@ def inference_worker(
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
-        logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
         stop_event.set()
     
     signal.signal(signal.SIGTERM, signal_handler)

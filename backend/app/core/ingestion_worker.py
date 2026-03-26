@@ -38,7 +38,6 @@ def ingestion_worker(
     except Exception as e: logging.basicConfig(level=logging.INFO)
 
     def signal_handler(signum, frame):
-        logger.info(f"[{feed_id}] Received signal {signum}")
         stop_event.set()
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
