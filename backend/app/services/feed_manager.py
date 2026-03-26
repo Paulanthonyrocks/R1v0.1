@@ -120,7 +120,13 @@ class FeedManager:
                     for i in range(self._inference_pool_size)
                 ]
                 self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
-                logger.info("Using Redis for inference queues.")
+                
+                # Flush queues to avoid stale/corrupt data from previous versions or crashes
+                for q in self._inference_input_queues:
+                    q.clear()
+                self._central_output_queue.clear()
+                
+                logger.info("Using Redis for inference queues (cleared stale data).")
             except Exception as e:
                 logger.warning(f"Redis enabled but connection failed: {e}. Falling back to multiprocessing queues.")
                 use_redis = False

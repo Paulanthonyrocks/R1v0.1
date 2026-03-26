@@ -1,6 +1,9 @@
 import asyncio
 import logging
 import time
+import json
+from datetime import datetime
+from uuid import UUID
 from collections import defaultdict
 from typing import Dict, List, Set, Any, Optional
 
@@ -12,6 +15,14 @@ from app.models.websocket import (FeedStatusUpdate, WebSocketMessage,
                                   WebSocketMessageTypeEnum)
 
 logger = logging.getLogger(__name__)
+
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, UUID):
+            return str(obj)
+        return super(DateTimeEncoder, self).default(obj)
 
 class ConnectionManager:
     def __init__(self):
@@ -76,8 +87,7 @@ class ConnectionManager:
             return
 
         # Handle dict/string messages
-        import json
-        msg_str = json.dumps(message) if isinstance(message, dict) else str(message)
+        msg_str = json.dumps(message, cls=DateTimeEncoder) if isinstance(message, dict) else str(message)
         
         targets = self.feed_subscriptions[feed_id] if feed_id else self.active_connections.keys()
         for cid in list(targets):
@@ -91,8 +101,7 @@ class ConnectionManager:
 
     async def broadcast_to_topic(self, topic: str, message: Any):
         """Broadcast a message to all clients subscribed to a specific topic (e.g., incidents)."""
-        import json
-        msg_str = json.dumps(message) if isinstance(message, (dict, list)) else str(message)
+        msg_str = json.dumps(message, cls=DateTimeEncoder) if isinstance(message, (dict, list)) else str(message)
         
         # In this implementation, topics are mapped to feed_subscriptions keys
         if topic in self.feed_subscriptions:
@@ -103,7 +112,6 @@ class ConnectionManager:
                 if ws:
                     tasks.append(ws.send_text(msg_str))
             if tasks:
-                import asyncio
                 await asyncio.gather(*tasks, return_exceptions=True)
 
 

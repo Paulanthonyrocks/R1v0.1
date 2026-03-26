@@ -66,6 +66,10 @@ class RedisQueue:
     def empty(self) -> bool:
         return self.qsize() == 0
 
+    def clear(self):
+        """Removes all items from the queue."""
+        self.redis.delete(self.key)
+
     def close(self):
         pass
 
