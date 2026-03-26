@@ -180,6 +180,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         // Vehicle Selection Logic (only if not in ROI mode)
         // Find vehicle under cursor using normalized coordinates
         const clickedVehicle = vehicles?.find(v => {
+            if (!v.bbox || !Array.isArray(v.bbox)) return false;
             const [x1, y1, x2, y2] = v.bbox;
             return xClamped >= x1 && xClamped <= x2 && yClamped >= y1 && yClamped <= y2;
         });

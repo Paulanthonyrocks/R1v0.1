@@ -100,7 +100,7 @@ class TrafficSignalService:
         )
         topic = f"signal:{signal_id}"
         await self._connection_manager.broadcast_to_topic(
-            message.model_dump_json(), topic="signal_updates"
+            "signal_updates", message.model_dump()
         )
         logger.debug(
             f"Broadcasted signal state update for {signal_id} to topic {topic}"

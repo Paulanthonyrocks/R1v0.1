@@ -326,6 +326,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             vehiclesToDraw.forEach(v => {
                 if (v.status && v.status !== 'active' && v.status !== 'predicting' && v.status !== 'tentative') return;
 
+                if (!v.bbox || !Array.isArray(v.bbox)) return; // Skip if no bbox (debounced or malformed)
                 let [x1, y1, x2, y2] = v.bbox;
 
                 if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) {

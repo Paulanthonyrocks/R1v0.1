@@ -198,8 +198,8 @@ class IncidentManager:
                     }
                 )
                 await self._connection_manager.broadcast_to_topic(
-                    message.model_dump_json(),
-                    topic="incidents"
+                    "incidents",
+                    message.model_dump()
                 )
         except Exception as e:
             logger.error(f"Failed to attach snapshot to incident {incident_id}: {e}")
@@ -261,8 +261,8 @@ class IncidentManager:
                     }
                 )
                 await self._connection_manager.broadcast_to_topic(
-                    message.model_dump_json(),
-                    topic="incidents"
+                    "incidents",
+                    message.model_dump()
                 )
                 return True
             return False

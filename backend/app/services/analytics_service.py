@@ -411,9 +411,8 @@ class AnalyticsService:
                         "snapshot_path": snapshot_path
                     }
                 )
-                from app.websocket.connection_manager import MessagePriority
                 await self._connection_manager.broadcast_to_topic(
-                    message.model_dump_json(), topic="incidents", priority=MessagePriority.HIGH
+                    "incidents", message.model_dump()
                 )
         except Exception as e:
             logger.error(f"Error updating incident snapshot: {e}")
@@ -793,9 +792,8 @@ class AnalyticsService:
         message = WebSocketMessage(
             type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification.model_dump()
         )
-        from app.websocket.connection_manager import MessagePriority
         await self._connection_manager.broadcast_to_topic(
-            message.model_dump_json(), topic="operational_alerts", priority=MessagePriority.HIGH
+            "operational_alerts", message.model_dump()
         )
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):
@@ -1052,9 +1050,8 @@ class AnalyticsService:
             message = WebSocketMessage(
                 type=WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE, data=payload
             )
-            from app.websocket.connection_manager import MessagePriority
             await self._connection_manager.broadcast_to_topic(
-                message.model_dump_json(), topic="node_congestion", priority=MessagePriority.NORMAL
+                "node_congestion", message.model_dump()
             )
             logger.debug(
                 f"Broadcasted {len(nodes_for_broadcast)} node congestion updates."

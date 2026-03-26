@@ -487,7 +487,7 @@ class FeedManager:
     async def _broadcast(self, message_type: WebSocketMessageTypeEnum, data: Dict):
         if self._connection_manager:
             message = WebSocketMessage(type=message_type, data=data)
-            await self._connection_manager.broadcast(message.model_dump_json())
+            await self._connection_manager.broadcast(message.model_dump())
     # --- Persistence ---
     def _save_persisted_feeds(self):
         """Saves current feeds configuration to disk."""
@@ -1178,7 +1178,7 @@ class FeedManager:
                         is_debounced = True
                 if is_debounced:
                     # Lightweight update for debounced vehicles
-                    debounced_vehicles.append({"id": vid, "d": 1})
+                    debounced_vehicles.append({"vehicle_id": vid, "d": 1})
                 else:
                     # Full update + refresh dead-reckoning state
                     debounced_vehicles.append(v)
@@ -1570,7 +1570,7 @@ class FeedManager:
         )
         # Broadcast to ALL connected clients so the dashboard gets the update
         # regardless of specific topic subscriptions.
-        await self._connection_manager.broadcast(msg.model_dump_json())
+        await self._connection_manager.broadcast(msg.model_dump())
     async def _broadcast_kpi_update(self):
         if not self._connection_manager:
             return
@@ -1636,7 +1636,7 @@ class FeedManager:
             type=WebSocketMessageTypeEnum.KPI_UPDATE,
             data=kpi_data.model_dump()
         )
-        await self._connection_manager.broadcast_to_topic(message.model_dump_json(), "kpi")
+        await self._connection_manager.broadcast_to_topic("kpi", message.model_dump())
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:
             await self._broadcast_feed_update(fid)
