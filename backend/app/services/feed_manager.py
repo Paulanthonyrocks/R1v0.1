@@ -55,11 +55,12 @@ QUEUE_DRAIN_LIMIT = 100
 MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
-        # --- CRITICAL: Set multiprocessing start method for CUDA safety ---
+        # --- CRITICAL: Set multiprocessing start method for stability ---
         import multiprocessing
         try:
-            multiprocessing.set_start_method('fork', force=True)
-            logger.info("Multiprocessing start method set to 'fork' for CUDA safety.")
+            # Use 'spawn' for better safety with CUDA/AI libraries and to avoid reentrant logging errors
+            multiprocessing.set_start_method('spawn', force=True)
+            logger.info("Multiprocessing start method set to 'spawn' for stability.")
         except RuntimeError:
             # Already set, ignore
             pass
