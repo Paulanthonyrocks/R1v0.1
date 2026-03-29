@@ -50,7 +50,7 @@ class DetectionEngine:
         # Temporal Fusion
         self.detection_history = deque(maxlen=3)
         self.fusion_min_iou = vd_cfg.get("fusion_min_iou", 0.6)
-        self.fusion_min_frames = vd_cfg.get("fusion_min_frames", 2)
+        self.fusion_min_frames = vd_cfg.get("fusion_min_frames", 1)
 
     def load_model(self, preloaded_model: Optional[Any] = None):
         """Loads the model into the specified device or uses a preloaded one."""

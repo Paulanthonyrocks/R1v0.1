@@ -431,23 +431,23 @@ pavement_analysis:
   camera_calibration:
     calibration_file: calibration_params.npz
 performance:
-  auto_optimize: false
-  batch_size: 8
-  cpu_limit_percent: 90
-  cpu_threshold_for_skip_increase: 80
+  auto_optimize: true
+  batch_size: 16
+  cpu_limit_percent: 95
+  cpu_threshold_for_skip_increase: 85
   gpu_acceleration: false
-  inference_pool_size: 4
-  inference_timeout: 0.02
+  inference_pool_size: 6
+  inference_timeout: 0.05
   long_sleep_after_increase: 10
-  max_global_skip_factor: 3.0
+  max_global_skip_factor: 2.0
   memory_limit_percent: 95
   min_global_skip_factor: 1.0
-  queue_fullness_threshold_for_skip_increase: 0.7
+  queue_fullness_threshold_for_skip_increase: 0.8
   skip_factor_adjustment_interval: 360.0
   skip_factor_decrease_step: 0.05
   skip_factor_increase_step: 0.1
-  use_shared_memory: false
-  use_shm: false
+  use_shared_memory: true
+  use_shm: true
 perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
@@ -533,8 +533,8 @@ vehicle_detection:
   max_active_tracks: 100
   max_aspect_ratio: 4.0
   max_reid_per_frame: 2
-  min_bbox_area: 256
-  min_bbox_dimension: 16
+  min_bbox_area: 150
+  min_bbox_dimension: 12
   model_path: yolov8n.pt
   model_type: yolo
   nms_threshold: 0.45
@@ -558,7 +558,7 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 5
+  skip_frames: 2
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -602,3 +602,4 @@ websocket:
   max_connections: 1000
   ping_interval: 60
   token_refresh_interval: 300
+
