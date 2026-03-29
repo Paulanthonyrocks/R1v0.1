@@ -11,14 +11,24 @@ class RedisQueue:
     A simple queue implementation using Redis Lists.
     Matches the basic interface of multiprocessing.Queue for easy swap-in.
     Uses pickle for serialization to support binary data (like images and numpy arrays).
+    
+    NOTE: Redis connections are lazily initialized to allow pickling across processes (spawn method).
     """
     def __init__(self, name: str, maxsize: int = 0):
         self.use_shm = False
-        # Use raw client (decode_responses=False) for binary pickle data
-        self.redis = get_redis_client(decode_responses=False)
+        self._redis = None  # Lazily initialized
+        self.name = name
         self.key = f"q:{name}"
         self.maxsize = maxsize
         logger.info(f"Initialized RedisQueue '{name}' (Binary/Pickle mode)")
+
+    @property
+    def redis(self):
+        """Lazily initialize Redis connection to support pickling."""
+        if self._redis is None:
+            # Use raw client (decode_responses=False) for binary pickle data
+            self._redis = get_redis_client(decode_responses=False)
+        return self._redis
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the back of the queue."""
