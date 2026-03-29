@@ -141,12 +141,12 @@ class FeedManager:
         # Initialize shared values before starting pool
         self.initialize_shared_values()
         self._start_inference_pool()
-        # Decoupled Analytics Process
-        self._analytics_input_queue = MPQueue(maxsize=1000)
-        self._analytics_output_queue = MPQueue(maxsize=1000)
+        # Decoupled Analytics Process - use ctx
+        self._analytics_input_queue = ctx.Queue(maxsize=1000)
+        self._analytics_output_queue = ctx.Queue(maxsize=1000)
         self._analytics_process: Optional[Process] = None
-        self._analytics_stop_event = Event()
-        self._analytics_heartbeat = Value("d", time.time())
+        self._analytics_stop_event = ctx.Event()
+        self._analytics_heartbeat = ctx.Value("d", time.time())
         self._analytics_start_time = time.time()
         self._dropped_analytics_count = 0
         self._start_analytics_worker()
@@ -329,13 +329,13 @@ class FeedManager:
                 logger.error(f"Error in db_queue reader: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
     def initialize_shared_values(self):
-        import multiprocessing
+        """Initializes shared memory primitives for inter-process sync."""
         if self._global_fps is None:
-            manager = multiprocessing.Manager()
-            self._global_fps = manager.Value("i", self.config.get("fps", 30))
             # Shared array for adaptive skip: one entry per inference worker
             # Size = self._inference_pool_size
-            self._shared_skip_array = multiprocessing.Array("i", self._inference_pool_size)
+            self._shared_skip_array = self._mp_ctx.Array("i", self._inference_pool_size)
+            # Use raw ctx.Value for FPS instead of Manager().Value
+            self._global_fps = self._mp_ctx.Value("i", self.config.get("fps", 30))
             logger.info(f"FeedManager shared values initialized. Skip array size: {self._inference_pool_size}")
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
@@ -363,27 +363,25 @@ class FeedManager:
     def _start_inference_pool(self):
         pool_size = self._inference_pool_size
         logger.info(f"Starting Inference Pool with {pool_size} partitioned workers.")
-        self._inference_command_queues = [MPQueue(maxsize=100) for _ in range(pool_size)]
+        self._inference_command_queues = [self._mp_ctx.Queue(maxsize=100) for _ in range(pool_size)]
         for i in range(pool_size):
-            print(f"DEBUG: Starting InferenceWorker-{i}")
-            p = Process(
+            p = self._mp_ctx.Process(
                 target=inference_worker,
                 args=(
                     i,
-                    self._inference_input_queues[i], # Pass the partitioned queue
+                    self._inference_input_queues[i],
                     self._central_output_queue,
                     self._inference_command_queues[i],
                     self._inference_stop_event,
                     self.config,
                     self._db_queue,
-                    self._shared_skip_array # New shared skip array
+                    self._shared_skip_array
                 ),
                 daemon=True,
                 name=f"InferenceWorker-{i}"
             )
             p.start()
             self._inference_pool.append(p)
-            # Add small delay to avoid excessive RAM spike during spawn imports
             time.sleep(0.1)
     async def _stop_inference_pool(self):
         logger.info("Stopping Inference Pool...")
@@ -402,7 +400,7 @@ class FeedManager:
         from app.core.analytics_worker import analytics_worker_process
         logger.info("Starting Analytics Worker process.")
         self._analytics_start_time = time.time()
-        self._analytics_process = Process(
+        self._analytics_process = self._mp_ctx.Process(
             target=analytics_worker_process,
             args=(
                 0,
@@ -1688,3 +1686,4 @@ class FeedManager:
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
     # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
+ture)
