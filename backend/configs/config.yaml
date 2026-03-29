@@ -582,7 +582,7 @@ video_input:
 video_output:
   codec: mp4v
   enabled: false
-  fps: 5
+  fps: 10
   frame_resolution:
   - 640
   - 480
@@ -594,7 +594,7 @@ video_output:
 video_processing:
   adaptive_streaming: true
   roi_scale: 0.5
-  target_fps: 5
+  target_fps: 10
 vis_options_default:
 - Grid Overlay
 - Lane Lines
