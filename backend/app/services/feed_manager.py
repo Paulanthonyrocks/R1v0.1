@@ -1688,9 +1688,10 @@ class FeedManager:
             tasks.append(self._db_reader_task)
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
-    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
-
-andlers match your original structure)
-
-rs match your original structure)
-
+    async def get_feed_status(self, feed_id: str) -> Optional[FeedStatusData]:
+        """Retrieves summarized status for a specific feed."""
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                return None
+            return self._entry_to_status_data(feed_id, entry)
