@@ -57,6 +57,9 @@ class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         # --- CRITICAL: Set multiprocessing start method for stability ---
         import multiprocessing
+        ctx = multiprocessing.get_context('spawn')
+        self._mp_ctx = ctx # Store context for future primitive creation
+        
         try:
             # Use 'spawn' for better safety with CUDA/AI libraries and to avoid reentrant logging errors
             multiprocessing.set_start_method('spawn', force=True)
@@ -101,7 +104,7 @@ class FeedManager:
         self.broadcast_queue = asyncio.Queue(maxsize=100)
         self._broadcast_worker_task: Optional[asyncio.Task] = None
         # Database processing
-        self._db_queue: Optional[MPQueue] = MPQueue(maxsize=100000)
+        self._db_queue: Optional[MPQueue] = ctx.Queue(maxsize=100000)
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
@@ -132,12 +135,12 @@ class FeedManager:
                 logger.warning(f"Redis enabled but connection failed: {e}. Falling back to multiprocessing queues.")
                 use_redis = False
         if not use_redis:
-            self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
-            self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+            self._inference_input_queues = [ctx.Queue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
+            self._central_output_queue = ctx.Queue(maxsize=QUEUE_MAX_SIZE)
             logger.info("Using Multiprocessing Queues for inference.")
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
-        self._inference_stop_event = Event()
+        self._inference_stop_event = ctx.Event()
         # Initialize shared values before starting pool
         self.initialize_shared_values()
         self._start_inference_pool()
@@ -751,15 +754,15 @@ class FeedManager:
                 self._check_resources()
             logger.info(f"Starting feed: '{feed_id}'")
             # Initialize Queues and Events
-            entry["command_queue"] = MPQueue(maxsize=50) # Small queue for control commands
+            entry["command_queue"] = self._mp_ctx.Queue(maxsize=50) # Small queue for control commands
             # Only create video writer queue if enabled
             video_output_config = self.config.get("video_output", {})
             if video_output_config.get("enabled", False):
-                entry["video_writer_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
+                entry["video_writer_queue"] = self._mp_ctx.Queue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
             else:
                 entry["video_writer_queue"] = None
-            entry["stop_event"] = Event()
-            entry["reduce_fps_event"] = Event()
+            entry["stop_event"] = self._mp_ctx.Event()
+            entry["reduce_fps_event"] = self._mp_ctx.Event()
             entry["status"] = FeedOperationalStatusEnum.STARTING
             entry["start_time"] = time.time()
             entry["last_frame_time"] = time.time()
@@ -892,7 +895,7 @@ class FeedManager:
             worker_idx # Index of the inference worker this feed is routed to
         )
         logger.debug(f"Creating Ingestion process for {feed_id} with source {source}")
-        process = Process(
+        process = self._mp_ctx.Process(
             target=ingestion_worker,
             args=worker_args,
             daemon=True,
@@ -1686,4 +1689,8 @@ class FeedManager:
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
     # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
+
+andlers match your original structure)
+
+rs match your original structure)
 
