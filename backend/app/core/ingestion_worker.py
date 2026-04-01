@@ -71,6 +71,9 @@ def ingestion_worker(
         reader = FrameReader(source, max_queue_size=15, is_looped=is_looped, target_fps=target_fps, gpu_acceleration=gpu_acceleration)
         if not reader.start(): return
 
+        # Track internal frame count for skipping logic
+        processed_frames_count = 0
+        
         while not stop_event.is_set():
             result = reader.read_raw()
             if result is None:
@@ -78,6 +81,22 @@ def ingestion_worker(
                 time.sleep(0.01); continue
 
             frame_index, frame = result
+            
+            # --- Early Skip Logic ---
+            # Check the shared skip array updated by the Inference Worker
+            current_skip = 0
+            if shared_skip_array is not None:
+                try:
+                    current_skip = shared_skip_array[worker_idx]
+                except Exception:
+                    pass
+            
+            # If skip > 0, we only process 1 out of every (skip + 1) frames
+            # Use the frame_index if provided by the reader for consistency
+            effective_index = frame_index if frame_index >= 0 else processed_frames_count
+            if current_skip > 0 and (effective_index % (current_skip + 1) != 0):
+                continue
+
             try:
                 if device.type == "cuda":
                     frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1).float().unsqueeze(0)
@@ -91,11 +110,12 @@ def ingestion_worker(
                     fh, fw = resized.shape[:2]
                     central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time(), fw, fh), timeout=0.1)
                     metrics.frames_processed += 1
+                    processed_frames_count += 1
             except queue.Full: metrics.frames_dropped += 1
             except Exception: metrics.errors += 1
 
             if metrics.frames_processed % 100 == 0:
-                logger.info(f"[{feed_id}] Processed {metrics.frames_processed} frames")
+                logger.info(f"[{feed_id}] Processed {metrics.frames_processed} frames (Current skip: {current_skip})")
 
     finally:
         if reader: reader.stop()

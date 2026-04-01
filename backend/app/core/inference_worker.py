@@ -144,8 +144,9 @@ def inference_worker(
     logger.info(f"[Worker {worker_id}] Inference device: {device}")
 
     if device.type == "cpu":
-        torch.set_num_threads(2)
-        logger.info(f"[Worker {worker_id}] Clamped torch.set_num_threads to 2 for CPU stability.")
+        # Increase threads to 4 for better CPU utilization in Colab
+        torch.set_num_threads(4)
+        logger.info(f"[Worker {worker_id}] set torch.set_num_threads to 4 for CPU processing.")
 
     model_path = vehicle_det_cfg.get("model_path")
 
@@ -260,7 +261,8 @@ def inference_worker(
                 # --- Adaptive Frame Skipping ---
                 # Dynamically adjust skip_frames based on queue fullness
                 q_size = central_input_queue.qsize()
-                q_max = config.get("performance", {}).get("queue_max_size", 500)
+                # Use the actual per-worker queue limit from FeedManager logic (50)
+                q_max = config.get("performance", {}).get("queue_max_size", 50)
                 
                 # If queue is more than 50% full, start increasing skip
                 if q_size > q_max * 0.5:
