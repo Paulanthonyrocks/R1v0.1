@@ -600,6 +600,7 @@ vis_options_default:
 - Lane Lines
 websocket:
   max_connections: 1000
-  ping_interval: 60
+  ping_interval: 20
+  pong_timeout: 90
   token_refresh_interval: 300
 

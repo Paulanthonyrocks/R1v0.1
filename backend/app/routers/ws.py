@@ -57,6 +57,8 @@ async def message_receiver(
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
                     logger.debug(f"Received PING from {client_id}")
+                    # Record activity on PING (proof of life)
+                    connection_manager.record_pong(client_id)
                     # Echo back the correlation_id for RTT calculation
                     await connection_manager.send_personal_message(
                         WebSocketMessage(

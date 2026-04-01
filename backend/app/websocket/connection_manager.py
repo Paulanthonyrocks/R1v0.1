@@ -64,13 +64,17 @@ class ConnectionManager:
         if feed_id in self.feed_subscriptions:
             client_ids = list(self.feed_subscriptions[feed_id])
             if client_ids:
-                tasks = []
+                to_disconnect = []
                 for cid in client_ids:
                     ws = self.active_connections.get(cid)
                     if ws:
-                        tasks.append(ws.send_bytes(data))
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                        try:
+                            await ws.send_bytes(data)
+                        except Exception:
+                            to_disconnect.append(cid)
+                
+                for cid in to_disconnect:
+                    await self.disconnect(cid)
 
     def has_subscribers(self, feed_id: str) -> bool:
         return bool(self.feed_subscriptions.get(feed_id))
@@ -89,14 +93,23 @@ class ConnectionManager:
         # Handle dict/string messages
         msg_str = json.dumps(message, cls=DateTimeEncoder) if isinstance(message, dict) else str(message)
         
-        targets = self.feed_subscriptions[feed_id] if feed_id else self.active_connections.keys()
-        for cid in list(targets):
+        targets = list(self.feed_subscriptions[feed_id]) if feed_id else list(self.active_connections.keys())
+        to_disconnect = []
+        for cid in targets:
             ws = self.active_connections.get(cid)
             if ws:
                 try:
                     await ws.send_text(msg_str)
                 except Exception:
-                    pass
+                    to_disconnect.append(cid)
+        
+        for cid in to_disconnect:
+            await self.disconnect(cid)
+
+
+    async def broadcast_to_feed(self, message: Any, feed_id: str):
+        """Broadcast a message to all clients subscribed to a specific feed."""
+        await self.broadcast(message, feed_id=feed_id)
 
 
     async def broadcast_to_topic(self, topic: str, message: Any):
@@ -106,13 +119,17 @@ class ConnectionManager:
         # In this implementation, topics are mapped to feed_subscriptions keys
         if topic in self.feed_subscriptions:
             targets = list(self.feed_subscriptions[topic])
-            tasks = []
+            to_disconnect = []
             for cid in targets:
                 ws = self.active_connections.get(cid)
                 if ws:
-                    tasks.append(ws.send_text(msg_str))
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                    try:
+                        await ws.send_text(msg_str)
+                    except Exception:
+                        to_disconnect.append(cid)
+            
+            for cid in to_disconnect:
+                await self.disconnect(cid)
 
 
 
@@ -122,6 +139,12 @@ class ConnectionManager:
         """Subscribe a client to a specific topic (like incidents)."""
         self.feed_subscriptions[topic].add(client_id)
         logger.info(f"Client {client_id} subscribed to topic: {topic}")
+
+    async def unsubscribe_from_topic(self, client_id: str, topic: str):
+        """Unsubscribe a client from a specific topic."""
+        if topic in self.feed_subscriptions and client_id in self.feed_subscriptions[topic]:
+            self.feed_subscriptions[topic].remove(client_id)
+            logger.info(f"Client {client_id} unsubscribed from topic: {topic}")
 
     async def subscribe_to_feed(self, client_id: str, feed_id: str):
         """Subscribe a client to a specific video feed."""
@@ -162,7 +185,7 @@ class ConnectionManager:
                     
                     for client_id in to_disconnect:
                         logger.warning(f"Keepalive timeout for {client_id}. Disconnecting.")
-                        self.disconnect(client_id)
+                        await self.disconnect(client_id)
             except asyncio.CancelledError:
                 logger.info("Keepalive check task stopped.")
         

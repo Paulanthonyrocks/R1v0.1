@@ -109,8 +109,8 @@ export class WebSocketClient implements IWebSocketClient {
     private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown> | ScopedListener>> = new Map();
     private ws: WebSocket | null = null;
     private reconnectAttempts = 0;
-    private maxReconnectAttempts = 5;
-    private reconnectDelay = 1000;
+    private maxReconnectAttempts = 10;
+    private reconnectDelay = 500;
     private instanceId = Math.random().toString(36).substring(7);
 
     private tokenManager: TokenManager;
