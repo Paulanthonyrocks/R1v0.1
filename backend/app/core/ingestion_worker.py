@@ -88,7 +88,8 @@ def ingestion_worker(
 
                 success, buffer = cv2.imencode(".jpg", resized, encode_params)
                 if success:
-                    central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=0.1)
+                    fh, fw = resized.shape[:2]
+                    central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time(), fw, fh), timeout=0.1)
                     metrics.frames_processed += 1
             except queue.Full: metrics.frames_dropped += 1
             except Exception: metrics.errors += 1

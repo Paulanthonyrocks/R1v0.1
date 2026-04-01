@@ -198,6 +198,26 @@ class CoreModule:
             except Exception as e:
                 logger.error(f"Failed to initialize Local OCR: {e}")
 
+    def predict_only(self, width: int, height: int, current_time: float) -> Dict[str, Dict]:
+        """Runs only the Kalman prediction step for smooth tracking during skipped detections."""
+        # Use an empty list of detections to trigger only predictions in the tracker
+        # We pass a dummy frame shape to satisfy track clipping
+        self.vehicle_data = self.tracker.update([], current_time, (height, width))
+        
+        vis_tracks = {}
+        for tid, track in self.vehicle_data.items():
+            # Minimal updates for 'predicting' tracks
+            if track.get("status") == "predicting":
+                cx, cy = (track["bbox"][0] + track["bbox"][2])/2, (track["bbox"][1] + track["bbox"][3])/2
+                ground_pos = self.transformer.pixel_to_ground(cx, cy)
+                if ground_pos:
+                    track["ground_coordinates"] = ground_pos
+                vis_tracks[tid] = track
+            elif track.get("status") == "active":
+                vis_tracks[tid] = track
+                
+        return vis_tracks
+        
     def detect_and_track(
         self,
         frame: Optional[np.ndarray],

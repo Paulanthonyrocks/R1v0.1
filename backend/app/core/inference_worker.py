@@ -335,8 +335,12 @@ def inference_worker(
                 batch_meta = []
 
                 for task in batch_tasks:
-                    feed_id, frame_index, frame_bytes, extra_payload = task
-                    timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
+                    if len(task) == 6:
+                        feed_id, frame_index, frame_bytes, timestamp, fw, fh = task
+                    else:
+                        feed_id, frame_index, frame_bytes, extra_payload = task
+                        timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
+                        fw, fh = 640, 480 # Default
                     
                     if feed_id not in metrics_map:
                         metrics_map[feed_id] = WorkerMetrics(feed_id)
@@ -433,6 +437,7 @@ def inference_worker(
                     batch_meta.append({
                         "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
                         "frame_bytes": frame_bytes, "timestamp": timestamp,
+                        "fw": fw, "fh": fh,
                         "core": core, "monitor": monitor, "metrics": metrics_obj,
                         "should_detect": should_detect, "first_detect": first_detect,
                         "shm_name": shm_to_cleanup
@@ -530,16 +535,21 @@ def inference_worker(
                     core, monitor, metrics_obj = meta['core'], meta['monitor'], meta['metrics']
                     frame, f_idx = meta['frame'], meta['frame_index']
                     
-                    detections = batch_detections_map.get(i, []) if meta['should_detect'] else []
-                    vis_tracks, lane_bounds, lane_lines, calib_status = core.detect_and_track(
-                        frame, f_idx, external_detections=detections,
-                        timestamp=meta.get("timestamp")
-                    )
-                    
                     if meta['should_detect']:
+                        detections = batch_detections_map.get(i, [])
+                        vis_tracks, lane_bounds, lane_lines, calib_status = core.detect_and_track(
+                            frame, f_idx, external_detections=detections,
+                            timestamp=meta.get("timestamp")
+                        )
                         core._last_detection_time = time.time()
                         if vis_tracks and meta['first_detect']:
                             core._first_detection_done = True
+                            
+                        calib_data = calib_status
+                    else:
+                        # FAST PATH: No AI, just prediction for UI smoothness
+                        vis_tracks = core.predict_only(meta['fw'], meta['fh'], meta['timestamp'])
+                        calib_data = {"is_calibrated": True} # Assume stable if not checking
                     
                     # Only assign global IDs in worker if Redis is enabled for distributed sync.
                     # Otherwise, let the central FeedManager handle it to avoid conflicts.
@@ -570,7 +580,7 @@ def inference_worker(
                             scale_x, scale_y = 1.0 / fw, 1.0 / fh
                             serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks, scale_x, scale_y)
                     
-                    extra = {"calibration": calib_status}
+                    extra = {"calibration": calib_data}
                     if frame is not None and frame.size > 0:
                         v_proc_cfg = config.get("video_processing", {})
                         if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:

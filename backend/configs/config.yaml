@@ -562,7 +562,7 @@ vehicle_detection:
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
-  track_timeout: 30
+  track_timeout: 3
   traffic_prediction:
     enabled: true
   traffic_predictor:
