@@ -143,6 +143,10 @@ def inference_worker(
     device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
     logger.info(f"[Worker {worker_id}] Inference device: {device}")
 
+    if device.type == "cpu":
+        torch.set_num_threads(2)
+        logger.info(f"[Worker {worker_id}] Clamped torch.set_num_threads to 2 for CPU stability.")
+
     model_path = vehicle_det_cfg.get("model_path")
 
     # Shared Model Loading Logic
@@ -577,7 +581,7 @@ def inference_worker(
                              
                              # Throttle heavy ROI/embedding extraction 
                              # Only extract PNG patches on new detections or every 15th frame for EMA tracking stability
-                             if meta['first_detect'] or f_idx % 15 == 0:
+                             if meta['first_detect'] or f_idx % 60 == 0:
                                  extra["rois"] = _extract_rois(frame, vis_tracks.values(), device=device)
                              else:
                                  extra["rois"] = []

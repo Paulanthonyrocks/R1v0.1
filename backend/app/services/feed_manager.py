@@ -49,9 +49,7 @@ from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.video_writer import VideoWriter
 from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger("app.services.feed_manager")
-# Constants
-PROCESS_JOIN_TIMEOUT = 3.0
-QUEUE_MAX_SIZE = 500
+QUEUE_MAX_SIZE = 50
 QUEUE_DRAIN_LIMIT = 100
 MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
 class FeedManager:
@@ -110,6 +108,11 @@ class FeedManager:
         self._watchdog_task: Optional[asyncio.Task] = None
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
         self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        import torch
+        if not (self.config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available()):
+            self._inference_pool_size = min(1, self._inference_pool_size)
+            logger.info("GPU acceleration unavailable or disabled. Clamping inference_pool_size to 1 to prevent OOM.")
+
         redis_cfg = self.config.get("redis", {})
         # We divide the QUEUE_MAX_SIZE among workers
         per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)

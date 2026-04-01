@@ -68,7 +68,7 @@ def ingestion_worker(
         if isinstance(video_path, str) and video_path.startswith("webcam:"):
             try: source = int(video_path.split(":")[1])
             except: source = 0
-        reader = FrameReader(source, max_queue_size=50, is_looped=is_looped, target_fps=target_fps, gpu_acceleration=gpu_acceleration)
+        reader = FrameReader(source, max_queue_size=15, is_looped=is_looped, target_fps=target_fps, gpu_acceleration=gpu_acceleration)
         if not reader.start(): return
 
         while not stop_event.is_set():
