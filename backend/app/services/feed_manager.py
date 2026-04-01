@@ -1450,9 +1450,10 @@ class FeedManager:
                 uptime = now - self._analytics_start_time
                 # Startup Grace Period: If started < 15s ago, only check if it's dead, not heartbeat
                 grace_period = 15.0
-                timeout_threshold = 60.0 # Increased from 30.0
+                timeout_threshold = 120.0 # Increased from 60.0 to allow for heavy processing
                 should_restart = False
                 if is_dead:
+
                     logger.warning(f"Watchdog: Analytics worker died. Restarting...")
                     should_restart = True
                 elif uptime > grace_period and (now - last_hb > timeout_threshold):

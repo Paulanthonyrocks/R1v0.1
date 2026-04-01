@@ -50,26 +50,30 @@ class AnalyticsWorker:
         
         try:
             while not self.stop_event.is_set():
-                # Update heartbeat every loop iteration
-                if self.heartbeat:
-                    self.heartbeat.value = time.time()
-
                 try:
                     # 1. Batch-drain input queue for higher throughput
                     raw_items = []
                     try:
-                        for _ in range(50):
+                        # Reduced batch size from 50 to 10 for better heartbeat granularity
+                        for _ in range(10):
                             raw_items.append(self.input_queue.get_nowait())
                     except queue.Empty:
                         pass
                     
                     if not raw_items:
-                        time.sleep(0.005)  # Reduced from 10ms
+                        # Update heartbeat even when idle
+                        if self.heartbeat:
+                            self.heartbeat.value = time.time()
+                        time.sleep(0.01)
                         continue
 
                     start_wait = time.time()
                     
                     for item in raw_items:
+                        # Update heartbeat for every item processed
+                        if self.heartbeat:
+                            self.heartbeat.value = time.time()
+
                         unpickle_time = time.time() - start_wait
                         total_unpickle_time += unpickle_time
                     
