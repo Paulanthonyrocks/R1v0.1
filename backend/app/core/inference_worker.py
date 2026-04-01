@@ -20,59 +20,7 @@ import torch
 logger = logging.getLogger("Inference")
 
 
-def _serialize_tracked_vehicles_with_map(
-    tracked_vehicles: Dict[str, Dict], 
-    scale_x: float = 1.0, 
-    scale_y: float = 1.0
-) -> List[Dict[str, Any]]:
-    """Wrapper that uses CoreModule's vehicle_type_map."""
-    v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
-    return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
-
-def _extract_rois(frame: np.ndarray, tracked_vehicles: Any, scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
-    """
-    Extracts high-res PNG patches for active vehicles (better for OCR).
-    tracked_vehicles can be a list of dicts or an iterable of dicts.
-    Assumes bbox coordinates in tracked_vehicles are absolute (pixels).
-    """
-    if frame is None or frame.size == 0: return []
-    rois = []
-    h, w = frame.shape[:2]
-    
-    # Optimization: Use GPU for cropping if available
-    frame_tensor = None
-    if device and device.type == "cuda":
-        try:
-            frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1) # (C, H, W)
-        except Exception as e:
-            logger.warning(f"Failed to move frame to GPU for ROI extraction: {e}")
-
-    for v in tracked_vehicles:
-        bbox = v.get("bbox")
-        if not bbox or len(bbox) != 4: continue
-        
-        # Clamp coordinates
-        x1, y1, x2, y2 = map(int, bbox)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-        
-        if x2 <= x1 or y2 <= y1: continue
-        
-        if frame_tensor is not None:
-            # GPU Crop
-            crop_tensor = frame_tensor[:, y1:y2, x1:x2]
-            crop = crop_tensor.permute(1, 2, 0).byte().cpu().numpy()
-        else:
-            # CPU Crop
-            crop = frame[y1:y2, x1:x2]
-            
-        _, crop_bytes = cv2.imencode(".png", crop) # Switched to PNG
-        
-        rois.append({
-            "b": crop_bytes.tobytes(),
-            "x": x1, "y": y1, "w": x2-x1, "h": y2-y1
-        })
-    return rois
+# Helpers moved inside inference_worker to access deferred imports
 
 def inference_worker(
     worker_id: int,
@@ -92,6 +40,46 @@ def inference_worker(
     from ..core.core_module import CoreModule
     from ..utils.monitoring import TrafficMonitor
     from ..utils.process import start_parent_monitor
+    
+    def _serialize_tracked_vehicles_with_map(
+        tracked_vehicles: Dict[str, Dict], 
+        scale_x: float = 1.0, 
+        scale_y: float = 1.0
+    ) -> List[Dict[str, Any]]:
+        """Wrapper that uses CoreModule's vehicle_type_map."""
+        v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
+        return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
+
+    def _extract_rois(frame: np.ndarray, tracked_vehicles: Any, scale: float = 1.0, device: Optional[torch.device] = None) -> List[Dict[str, Any]]:
+        """
+        Extracts high-res PNG patches for active vehicles (better for OCR).
+        """
+        if frame is None or frame.size == 0: return []
+        rois = []
+        h, w = frame.shape[:2]
+        
+        frame_tensor = None
+        if device and device.type == "cuda":
+            try:
+                frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1)
+            except Exception:
+                pass
+
+        for v in tracked_vehicles:
+            bbox = v.get("bbox")
+            if not bbox or len(bbox) != 4: continue
+            x1, y1, x2, y2 = map(int, bbox)
+            x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+            if x2 <= x1 or y2 <= y1: continue
+            
+            if frame_tensor is not None:
+                crop = frame_tensor[:, y1:y2, x1:x2].permute(1, 2, 0).byte().cpu().numpy()
+            else:
+                crop = frame[y1:y2, x1:x2]
+                
+            _, crop_bytes = cv2.imencode(".png", crop)
+            rois.append({"b": crop_bytes.tobytes(), "x": x1, "y": y1, "w": x2-x1, "h": y2-y1})
+        return rois
     
     # Initialize global config for this process
     from ..config import set_config
