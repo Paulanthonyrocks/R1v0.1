@@ -22,6 +22,12 @@ class RedisQueue:
         self.maxsize = maxsize
         logger.info(f"Initialized RedisQueue '{name}' (Binary/Pickle mode)")
 
+    def __getstate__(self):
+        """Exclude non-picklable Redis client from state."""
+        state = self.__dict__.copy()
+        state['_redis'] = None
+        return state
+
     @property
     def redis(self):
         """Lazily initialize Redis connection to support pickling."""
