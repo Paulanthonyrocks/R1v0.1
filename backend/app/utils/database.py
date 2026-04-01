@@ -829,10 +829,13 @@ class DatabaseManager:
             return
 
         # --- 1. SAVE TO SQLITE ---
-        sql = """INSERT OR REPLACE INTO location_metrics (
+        sql = text("""INSERT OR REPLACE INTO location_metrics (
             location_id, timestamp, vehicle_count, average_speed, 
             congestion_score, latitude, longitude
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)"""
+        ) VALUES (
+            :location_id, :timestamp, :vehicle_count, :average_speed, 
+            :congestion_score, :latitude, :longitude
+        )""")
 
         sqlite_params = []
         for m in metrics_list:
@@ -845,20 +848,20 @@ class DatabaseManager:
                 except ValueError:
                     ts = time.time()
 
-            sqlite_params.append((
-                m.get("id"),
-                ts,
-                m.get("vehicle_count"),
-                m.get("average_speed"),
-                m.get("congestion_score"),
-                m.get("latitude"),
-                m.get("longitude")
-            ))
+            sqlite_params.append({
+                "location_id": m.get("id"),
+                "timestamp": ts,
+                "vehicle_count": m.get("vehicle_count"),
+                "average_speed": m.get("average_speed"),
+                "congestion_score": m.get("congestion_score"),
+                "latitude": m.get("latitude"),
+                "longitude": m.get("longitude")
+            })
 
         try:
-            # FIX: Use asyncio.to_thread to avoid blocking the event loop with self.lock
-            await asyncio.to_thread(self._sync_save_location_metrics, sql, sqlite_params)
-            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite.")
+            async with self.async_engine.begin() as conn:
+                await conn.execute(sql, sqlite_params)
+            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite via async_engine.")
         except Exception as e:
             logger.error(f"Failed to save location metrics to SQLite: {e}")
 
@@ -903,13 +906,6 @@ class DatabaseManager:
                 logger.info(f"Saved {len(ts_params)} location metrics to TimescaleDB.")
         except Exception as e:
             logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
-
-    def _sync_save_location_metrics(self, sql: str, params: List[tuple]):
-        """Synchronous helper for save_location_metrics_batch to hold the lock."""
-        with self.lock:
-            with self._get_sqlite_connection() as conn:
-                conn.executemany(sql, params)
-                conn.commit()
 
     async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
         """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""

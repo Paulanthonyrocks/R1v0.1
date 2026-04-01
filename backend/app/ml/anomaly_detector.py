@@ -16,7 +16,8 @@ class TrafficAnomalyDetector:
         self.model: Any = None
         
         model_path = config.get("anomaly_detection", {}).get("model_path")
-        if model_path:
+        is_enabled = config.get("anomaly_detection", {}).get("enabled", False)
+        if model_path and is_enabled:
             self.load_model(model_path)
 
     def _initialize_model(self, feature_count: int):
