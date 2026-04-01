@@ -12,10 +12,10 @@ from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
 import torch
 
-from ..core.core_module import CoreModule
-from ..utils.monitoring import TrafficMonitor
-from ..utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, SharedFrameManager
+# from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, SharedFrameManager
+# from ..core.core_module import CoreModule
+# from ..utils.monitoring import TrafficMonitor
+# from ..utils.process import start_parent_monitor
 
 logger = logging.getLogger("Inference")
 
@@ -88,6 +88,11 @@ def inference_worker(
     Heavyweight AI process that processes frames from the central queue.
     Can handle frames from multiple feeds interleaved.
     """
+    from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, SharedFrameManager
+    from ..core.core_module import CoreModule
+    from ..utils.monitoring import TrafficMonitor
+    from ..utils.process import start_parent_monitor
+    
     # Initialize global config for this process
     from ..config import set_config
     set_config(config)

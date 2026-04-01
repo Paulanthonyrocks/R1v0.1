@@ -35,8 +35,9 @@ from app.models.websocket import (
     GlobalRealtimeMetrics,
 )
 # Import core worker and utilities
-from app.core.ingestion_worker import ingestion_worker
-from app.core.inference_worker import inference_worker
+# Defer worker imports to avoid circular dependency during startup
+# from app.core.ingestion_worker import ingestion_worker
+# from app.core.inference_worker import inference_worker
 # from app.core.analytics_worker import analytics_worker_process
 # from app.core.processing_worker import result_reader_worker
 from app.utils.monitoring import FrameTimer, check_system_resources
@@ -367,6 +368,7 @@ class FeedManager:
         pool_size = self._inference_pool_size
         logger.info(f"Starting Inference Pool with {pool_size} partitioned workers.")
         self._inference_command_queues = [self._mp_ctx.Queue(maxsize=100) for _ in range(pool_size)]
+        from app.core.inference_worker import inference_worker
         for i in range(pool_size):
             p = self._mp_ctx.Process(
                 target=inference_worker,
@@ -894,7 +896,7 @@ class FeedManager:
             self._shared_skip_array, # New shared skip array
             worker_idx # Index of the inference worker this feed is routed to
         )
-        logger.debug(f"Creating Ingestion process for {feed_id} with source {source}")
+        from app.core.ingestion_worker import ingestion_worker
         process = self._mp_ctx.Process(
             target=ingestion_worker,
             args=worker_args,

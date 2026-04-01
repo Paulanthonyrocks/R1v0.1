@@ -12,9 +12,9 @@ from multiprocessing import Queue as MPQueue, Event
 import torch
 import torch.nn.functional as F
 
-from ..utils.video import FrameReader
-from ..utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, SharedFrameManager
+# from ..utils.video import FrameReader
+# from ..utils.process import start_parent_monitor
+# from .worker_utils import WorkerMetrics, SharedFrameManager
 
 logger = logging.getLogger("Ingestion")
 
@@ -29,6 +29,10 @@ def ingestion_worker(
     worker_idx: int = 0
 ):
     """Lightweight process for frame capture."""
+    from ..utils.video import FrameReader
+    from ..utils.process import start_parent_monitor
+    from .worker_utils import WorkerMetrics, SharedFrameManager
+    
     # Initialize global config for this process
     from ..config import set_config
     set_config(config)
