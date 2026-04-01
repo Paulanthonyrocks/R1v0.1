@@ -22,9 +22,9 @@ try:
     from ..utils.local_ocr import LocalOCR
     from ..ml.reid_model import ReIDEmbedder
     from ..services.calibration_monitor import CalibrationMonitor
-except ImportError:
+except ImportError as e:
     logger = logging.getLogger("app.ml")
-    logger.error("Error importing utils for CoreModule. System functionality may be limited.")
+    logger.error(f"Error importing utils for CoreModule: {e}. System functionality may be limited.")
     LicensePlatePreprocessor = None
     process_frame_for_lanes = None
     get_lane_boundaries_from_lines = None
