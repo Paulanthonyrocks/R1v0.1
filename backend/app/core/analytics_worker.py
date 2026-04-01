@@ -189,6 +189,10 @@ class AnalyticsWorker:
 
 def analytics_worker_process(worker_id, config, input_q, output_q, db_q, stop_event, heartbeat=None):
     """Entry point for multiprocessing."""
+    # Initialize global config for this process
+    from ..config import set_config
+    set_config(config)
+
     # Initialize logging for the child process
     import logging.config
     try:

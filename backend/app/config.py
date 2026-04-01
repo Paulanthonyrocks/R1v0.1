@@ -173,6 +173,14 @@ def get_current_config() -> AppConfig:
         raise RuntimeError("Config not initialized")
     return _config_instance
 
+def set_config(config_data: Dict[str, Any]) -> AppConfig:
+    """
+    Manually sets the global configuration instance from a dictionary.
+    Used for initializing child processes.
+    """
+    global _config_instance
+    _config_instance = AppConfig(**config_data)
+    return _config_instance
 
 # Optional: Function to reload config (similar logic to router, but maybe called differently)
 def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:

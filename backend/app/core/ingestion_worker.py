@@ -29,6 +29,10 @@ def ingestion_worker(
     worker_idx: int = 0
 ):
     """Lightweight process for frame capture."""
+    # Initialize global config for this process
+    from ..config import set_config
+    set_config(config)
+
     start_parent_monitor(stop_event)
     print(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}", flush=True)
     import logging.config

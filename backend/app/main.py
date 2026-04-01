@@ -103,7 +103,7 @@ def setup_cors(app: FastAPI, config: dict):
         "http://localhost",
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://3000-firebase-r1v01-1757542787380.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
+        "https://3000-firebase-r1v01-1774108349517.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
     ]
     
     if env != "development":

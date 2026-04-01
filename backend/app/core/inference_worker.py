@@ -88,6 +88,10 @@ def inference_worker(
     Heavyweight AI process that processes frames from the central queue.
     Can handle frames from multiple feeds interleaved.
     """
+    # Initialize global config for this process
+    from ..config import set_config
+    set_config(config)
+
     # Start parent monitor to avoid zombie processes
     start_parent_monitor(stop_event)
     # Initialize logging for the child process
