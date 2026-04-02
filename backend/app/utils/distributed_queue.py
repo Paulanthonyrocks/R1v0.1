@@ -1,6 +1,7 @@
 import pickle
 import logging
 import time
+import queue
 from typing import Any, Optional
 from .redis_client import get_redis_client
 
@@ -44,16 +45,20 @@ class RedisQueue:
         if self.maxsize > 0:
             if self.qsize() >= self.maxsize:
                 if not block:
-                    raise Exception("Queue full")
+                    raise queue.Full
                 
                 # Simple backoff wait if full
                 start_time = time.time()
                 while self.qsize() >= self.maxsize:
                     if timeout and (time.time() - start_time) > timeout:
-                        raise Exception("Queue full timeout")
+                        raise queue.Full
                     time.sleep(0.01)
         
         self.redis.rpush(self.key, data)
+
+    def put_nowait(self, item: Any):
+        """Pushes an item without blocking."""
+        return self.put(item, block=False)
 
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
         """Pops an item from the front of the queue."""
@@ -65,15 +70,17 @@ class RedisQueue:
                 return pickle.loads(res[1])
             else:
                 # multiprocessing.Queue.get(block=True) raises queue.Empty on timeout
-                import queue
                 raise queue.Empty
         else:
             res = self.redis.lpop(self.key)
             if res:
                 return pickle.loads(res)
             else:
-                import queue
                 raise queue.Empty
+
+    def get_nowait(self) -> Any:
+        """Pops an item without blocking."""
+        return self.get(block=False)
 
     def qsize(self) -> int:
         """Returns the approximate size of the queue."""
@@ -82,11 +89,20 @@ class RedisQueue:
     def empty(self) -> bool:
         return self.qsize() == 0
 
+    def full(self) -> bool:
+        """Returns True if the queue is full."""
+        if self.maxsize <= 0:
+            return False
+        return self.qsize() >= self.maxsize
+
     def clear(self):
         """Removes all items from the queue."""
         self.redis.delete(self.key)
 
     def close(self):
+        pass
+
+    def join_thread(self):
         pass
 
     def cancel_join_thread(self):
