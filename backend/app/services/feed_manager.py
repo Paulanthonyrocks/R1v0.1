@@ -1728,4 +1728,3 @@ class FeedManager:
             if not entry:
                 return None
             return self._entry_to_status_data(feed_id, entry)
-_to_status_data(feed_id, entry)
