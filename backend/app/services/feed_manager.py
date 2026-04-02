@@ -7,6 +7,7 @@ import re
 import atexit
 import json
 import numpy as np
+import cv2
 import msgpack
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
@@ -1215,7 +1216,28 @@ class FeedManager:
             # We explicitly drop frame_bytes and bg images from the WebSocket packet.
             # UPDATE: Re-enabled WebSocket fallback for environments where WebRTC fails (e.g. Colab/Localtunnel)
             if frame_bytes:
-                payload["frame"] = frame_bytes
+                # OPTIMIZATION: If we received raw bytes, we must JPEG encode for the frontend
+                if isinstance(frame_bytes, dict) and "raw_bytes" in frame_bytes:
+                    try:
+                        # Reconstruct numpy array
+                        np_frame = np.frombuffer(
+                            frame_bytes["raw_bytes"], 
+                            dtype=frame_bytes.get("dtype", "uint8")
+                        ).reshape(frame_bytes["shape"])
+                        
+                        # Encode to JPEG for WebSocket (Quality 60 for bandwidth/CPU balance)
+                        # This runs in our ThreadPoolExecutor, so it doesn't block inference
+                        success, enc_buffer = cv2.imencode(".jpg", np_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                        if success:
+                            payload["frame"] = enc_buffer.tobytes()
+                        else:
+                            payload["frame"] = None
+                    except Exception as e:
+                        logger.error(f"Error encoding raw frame for broadcast: {e}")
+                        payload["frame"] = None
+                else:
+                    # Legacy fallback
+                    payload["frame"] = frame_bytes
             
             if extra:
                 if "rois" in extra:
