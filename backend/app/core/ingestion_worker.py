@@ -105,12 +105,21 @@ def ingestion_worker(
                 else:
                     resized = cv2.resize(frame, stream_res)
 
-                success, buffer = cv2.imencode(".jpg", resized, encode_params)
-                if success:
-                    fh, fw = resized.shape[:2]
-                    central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time(), fw, fh), timeout=0.1)
-                    metrics.frames_processed += 1
-                    processed_frames_count += 1
+                # success, buffer = cv2.imencode(".jpg", resized, encode_params)
+                # if success:
+                #     fh, fw = resized.shape[:2]
+                #     central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time(), fw, fh), timeout=0.1)
+                
+                # OPTIMIZATION: Send raw bytes to avoid CPU-heavy JPEG encoding
+                fh, fw = resized.shape[:2]
+                frame_data = {
+                    "raw_bytes": resized.tobytes(),
+                    "shape": resized.shape,
+                    "dtype": str(resized.dtype)
+                }
+                central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
+                metrics.frames_processed += 1
+                processed_frames_count += 1
             except queue.Full: metrics.frames_dropped += 1
             except Exception: metrics.errors += 1
 

@@ -404,7 +404,18 @@ def inference_worker(
                     frame = None
                     shm_to_cleanup = None
                     if needs_frame:
-                        if isinstance(frame_bytes, dict) and "shm_name" in frame_bytes:
+                        if isinstance(frame_bytes, dict) and "raw_bytes" in frame_bytes:
+                            # OPTIMIZATION: Handle raw bytes from Ingestion Worker
+                            try:
+                                frame = np.frombuffer(
+                                    frame_bytes["raw_bytes"], 
+                                    dtype=frame_bytes.get("dtype", "uint8")
+                                ).reshape(frame_bytes["shape"])
+                            except Exception as e:
+                                logger.error(f"[Worker {worker_id}] Raw buffer reconstruction error: {e}")
+                                metrics_obj.errors += 1
+                                continue
+                        elif isinstance(frame_bytes, dict) and "shm_name" in frame_bytes:
                             # ZERO-COPY PATH
                             try:
                                 name = frame_bytes["shm_name"]
@@ -412,8 +423,6 @@ def inference_worker(
                                 dtype = frame_bytes["dtype"]
                                 frame, shm_obj = SharedFrameManager.access_shm(name, shape, dtype)
                                 shm_to_cleanup = name
-                                # We MUST keep shm_obj alive until we are done processing the frame
-                                # or copy it. Since we use it in batch_meta, we'll cleanup after inference.
                             except Exception as e:
                                 logger.error(f"[Worker {worker_id}] SHM Access error: {e}")
                                 metrics_obj.errors += 1
@@ -585,18 +594,23 @@ def inference_worker(
                     extra = {"calibration": calib_data}
                     if frame is not None and frame.size > 0:
                         v_proc_cfg = config.get("video_processing", {})
-                        if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
+                        # R9: Skip heavy encoding on CPU systems to save cycles
+                        if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect'] and device.type == "cuda":
                              bg_scale = v_proc_cfg.get("roi_scale", 0.5)
                              bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                              _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                              extra["bg"] = bg_bytes.tobytes()
                              
                              # Throttle heavy ROI/embedding extraction 
-                             # Only extract PNG patches on new detections or every 15th frame for EMA tracking stability
+                             # Only extract PNG patches on new detections or every 60th frame
                              if meta['first_detect'] or f_idx % 60 == 0:
                                  extra["rois"] = _extract_rois(frame, vis_tracks.values(), device=device)
                              else:
                                  extra["rois"] = []
+                        else:
+                            # Fast path for CPU: No BG/ROI encoding
+                            extra["bg"] = None
+                            extra["rois"] = []
                     
                     try:
                         central_output_queue.put((

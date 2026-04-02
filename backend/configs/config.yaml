@@ -458,14 +458,6 @@ post_startup_processing:
     latitude: 34.0522
     longitude: -118.2437
     path: data/new_sample_videos/sample_traffic.mp4
-  - is_looped: true
-    latitude: 34.0521
-    longitude: -118.2358
-    path: data/new_sample_videos/sample_traffic_2.mp4
-  - is_looped: true
-    latitude: 34.0471
-    longitude: -118.2369
-    path: data/new_sample_videos/sample_traffic_3.mp4
 prediction_scheduler:
   accuracy_cache_ttl_minutes: 60
   default_low_data_weight: 0.75
@@ -540,7 +532,7 @@ vehicle_detection:
   nms_threshold: 0.45
   occlusion_confidence_threshold: 0.2
   openvino_model_path: /content/drive/MyDrive/R1v0.1/backend/models/OpenVino/yolov8n.xml
-  predict_timeout: 0.5
+  predict_timeout: 0.8
   probation_threshold: 2
   proximity_threshold: 250
   reid:
@@ -558,7 +550,7 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 2
+  skip_frames: 4
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -592,9 +584,8 @@ video_output:
   - 640
   - 480
 video_processing:
-  adaptive_streaming: true
-  roi_scale: 0.5
   target_fps: 10
+  adaptive_streaming: false
 vis_options_default:
 - Grid Overlay
 - Lane Lines
