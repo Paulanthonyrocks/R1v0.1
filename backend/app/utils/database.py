@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager, contextmanager
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from pymongo import MongoClient
 from pymongo.database import Database as MongoDatabase
 from pymongo.errors import (
@@ -101,8 +102,10 @@ class DatabaseManager:
         if self.sqlite_db_path:
             # --- THIS IS THE FIX ---
             # The "sqlite+aiosqlite" prefix tells SQLAlchemy to use the async aiosqlite driver.
+            # Increased timeout to 30s to handle "database is locked" errors in concurrent environments.
             self.async_engine = create_async_engine(
-                f"sqlite+aiosqlite:///{self.sqlite_db_path}"
+                f"sqlite+aiosqlite:///{self.sqlite_db_path}",
+                connect_args={"timeout": 30.0}
             )
             # ---------------------
 
@@ -823,6 +826,12 @@ class DatabaseManager:
         """Create a unique key for a location, rounding to 4 decimal places for nearby grouping"""
         return f"{round(latitude, 4)},{round(longitude, 4)}"
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(5),
+        retry=retry_if_exception_type((sqlite3.OperationalError, SQLAlchemyOperationalError)),
+        reraise=True
+    )
     async def save_location_metrics_batch(self, metrics_list: List[Dict]):
         """Saves a batch of aggregated location metrics to SQLite and TimescaleDB."""
         if not metrics_list:
@@ -862,8 +871,12 @@ class DatabaseManager:
             async with self.async_engine.begin() as conn:
                 await conn.execute(sql, sqlite_params)
             logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite via async_engine.")
+        except (sqlite3.OperationalError, SQLAlchemyOperationalError) as e:
+            logger.warning(f"Retrying: Failed to save location metrics to SQLite: {e}")
+            raise # RE-RAISE so @retry can catch it
         except Exception as e:
-            logger.error(f"Failed to save location metrics to SQLite: {e}")
+            logger.error(f"Unexpected error saving location metrics to SQLite: {e}")
+            # Don't re-raise generic exceptions unless you want them to trigger retries too
 
         # --- 2. SAVE TO TIMESCALEDB ---
         if not self.timescale_engine:
