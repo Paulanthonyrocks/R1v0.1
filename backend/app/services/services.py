@@ -237,16 +237,17 @@ class ServiceRegistry:
             logger.info("AnalyticsService initialized.")
 
             # Simulation Service
-            self._simulation_service = SimulationService(
-                analytics_service=self._analytics_service,
-                traffic_signal_service=self._traffic_signal_service,
-                interval=config.get("simulation", {}).get("interval", 2.0)
-            )
-            if config.get("simulation", {}).get("enabled", True):
+            sim_cfg = config.get("simulation", {})
+            if sim_cfg.get("enabled", True):
+                self._simulation_service = SimulationService(
+                    analytics_service=self._analytics_service,
+                    traffic_signal_service=self._traffic_signal_service,
+                    interval=sim_cfg.get("interval", 2.0)
+                )
                 await self._simulation_service.start()
                 logger.info("SimulationService initialized and started.")
             else:
-                logger.info("SimulationService initialized (disabled by config).")
+                logger.info("SimulationService disabled by config.")
 
             # Node Manager
             self._node_manager = NodeManager(config=config)
@@ -632,6 +633,11 @@ def get_retention_service() -> RetentionService:
 
 
 def get_incident_manager() -> IncidentManager:
+    return get_service_registry().incident_manager
+
+def get_v2x_service() -> V2XService:
+    return get_service_registry().v2x_service
+
     return get_service_registry().incident_manager
 
 def get_v2x_service() -> V2XService:

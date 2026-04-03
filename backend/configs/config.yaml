@@ -163,12 +163,6 @@ logging:
       - workerFileHandler
       level: INFO
       propagate: false
-    analyze_pavement:
-      handlers:
-      - consoleHandler
-      - mlFileHandler
-      level: INFO
-      propagate: false
     app.core.agent_core:
       handlers:
       - consoleHandler
@@ -594,4 +588,16 @@ websocket:
   ping_interval: 20
   pong_timeout: 90
   token_refresh_interval: 300
+
+erlay
+- Lane Lines
+websocket:
+  max_connections: 1000
+  ping_interval: 20
+  pong_timeout: 90
+  token_refresh_interval: 300
+simulation:
+  enabled: false
+weather_service:
+  enabled: false
 
