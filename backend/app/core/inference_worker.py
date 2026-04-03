@@ -267,6 +267,9 @@ def inference_worker(
                 q_max = config.get("performance", {}).get("queue_max_size", 50)
                 
                 # If queue is more than 50% full, start increasing skip
+                # Ensure q_max is at least 1 to prevent division by zero
+                q_max = max(1, q_max)
+                
                 if q_size > q_max * 0.5:
                     # 1. HOL Blocking Prevention: If queue is dangerously full (>70%),
                     # drain it and only keep the LATEST frame for each feed.
@@ -277,9 +280,20 @@ def inference_worker(
                             for _ in range(200):
                                 item = central_input_queue.get_nowait()
                                 # Key by feed_id to keep only the latest frame
-                                if item and len(item) >= 2:
+                                if item and len(item) >= 3:
                                     feed_id = item[0]
+                                    # CRITICAL: If we are discarding an old frame from the drain_map
+                                    # because a newer one arrived, we MUST cleanup its SHM.
+                                    if feed_id in drain_map:
+                                        old_item = drain_map[feed_id]
+                                        if isinstance(old_item[2], dict) and "shm_name" in old_item[2]:
+                                            try: SharedFrameManager.cleanup_shm(old_item[2]["shm_name"])
+                                            except: pass
+                                    
                                     drain_map[feed_id] = item
+                                else:
+                                    # If it's a sentinel or invalid, we don't drain it or we just drop it
+                                    pass
                         except queue.Empty:
                             pass
                         
@@ -287,7 +301,11 @@ def inference_worker(
                         for feed_id, latest_item in drain_map.items():
                             try:
                                 central_input_queue.put_nowait(latest_item)
-                            except queue.Full: pass
+                            except queue.Full:
+                                # If we can't even put back the latest ones, cleanup their SHM
+                                if isinstance(latest_item[2], dict) and "shm_name" in latest_item[2]:
+                                    try: SharedFrameManager.cleanup_shm(latest_item[2]["shm_name"])
+                                    except: pass
                         
                         # Re-calculate size after drain
                         q_size = central_input_queue.qsize()

@@ -1106,20 +1106,25 @@ class FeedManager:
                         # Drop analytics for this frame if backed up
                     
                     # 2. Immediate Frame Distribution (For video subscribers)
-                    # Use np_frame if available (zero-copy), otherwise fallback to frame_bytes
-                    delivery_frame = np_frame if np_frame is not None else frame_bytes
+                    # CRITICAL: If delivery_frame is a view into Shared Memory (np_frame), 
+                    # we MUST copy it before passing it to asynchronous queues because
+                    # the SHM handle will be unlinked at the end of this loop.
+                    async_delivery_frame = delivery_frame
+                    if np_frame is not None:
+                        # Copy is required for async consumers since SHM will be unlinked shortly
+                        async_delivery_frame = np_frame.copy()
                     
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
-                                sub_q.put_nowait({"frame": delivery_frame, "metrics": metrics, "vehicles": vehicles})
+                                sub_q.put_nowait({"frame": async_delivery_frame, "metrics": metrics, "vehicles": vehicles})
                             except asyncio.QueueFull:
                                 pass
                     # 3. Route to Video Writer
                     if entry.get("video_writer_queue"):
                         try:
-                            # Video writer needs bytes or numpy
-                            entry["video_writer_queue"].put_nowait((delivery_frame, metrics))
+                            # Video writer needs bytes or numpy (use copy for SHM)
+                            entry["video_writer_queue"].put_nowait((async_delivery_frame, metrics))
                         except queue.Full:
                             pass
                     # 4. Send to DB Queue for Persistence and ReID Registration
@@ -1149,7 +1154,7 @@ class FeedManager:
                     if feed_id in self._webrtc_queues:
                         for pc_id, route_q in list(self._webrtc_queues[feed_id].items()):
                             try:
-                                route_q.put_nowait(delivery_frame)
+                                route_q.put_nowait(async_delivery_frame)
                             except asyncio.QueueFull:
                                 pass # Drop frame gracefully if WebRTC socket is lagging
                     # 6. Broadcast Telemetry to WebSocket Clients
@@ -1200,6 +1205,23 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
+
+        # FINAL DRAIN: Before exiting, drain the queue and cleanup all SHM
+        logger.info("Draining remaining inference results for cleanup...")
+        try:
+            while not self._central_output_queue.empty():
+                try:
+                    item = self._central_output_queue.get_nowait()
+                    # Check for SHM dict in the item (index 2)
+                    if len(item) >= 3 and isinstance(item[2], dict) and "shm_name" in item[2]:
+                        try:
+                            from app.core.worker_utils import SharedFrameManager
+                            SharedFrameManager.cleanup_shm(item[2]["shm_name"])
+                        except: pass
+                except queue.Empty:
+                    break
+        except Exception as e:
+            logger.warning(f"Error during final result queue drain: {e}")
     def _serialize_broadcast_payload(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
         """Synchronous: builds payload + JSON/msgpack serializes. Applies spatial debouncing."""
         try:
