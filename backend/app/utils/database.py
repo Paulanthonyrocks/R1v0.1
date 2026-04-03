@@ -176,7 +176,6 @@ class DatabaseManager:
                 self.mongo_uri = mongo_config["uri"]
                 
                 # Auto-adjust if in Docker and uri points to localhost
-                import os
                 is_colab = "COLAB_RELEASE_TAG" in os.environ
                 if Path("/.dockerenv").exists() and "localhost" in self.mongo_uri and not is_colab:
                     logger.info("Docker environment detected (non-Colab). Adjusting MongoDB URI from localhost to mongodb service name.")

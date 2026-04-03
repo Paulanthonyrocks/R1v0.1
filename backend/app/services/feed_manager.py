@@ -111,7 +111,6 @@ class FeedManager:
         self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         import torch
         if not (self.config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available()):
-            import os
             # Allow at least 2 workers on multi-core CPU systems to handle partitioned feeds
             cpu_count = os.cpu_count() or 1
             # We cap at 2 for CPU to avoid starving the event loop and ingestion workers
@@ -1729,3 +1728,4 @@ class FeedManager:
             if not entry:
                 return None
             return self._entry_to_status_data(feed_id, entry)
+_to_status_data(feed_id, entry)
