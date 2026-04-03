@@ -8,6 +8,8 @@ import { WebSocketVideoFrame } from '../lib/types/api';
 const TrafficMap: React.FC = () => {
   const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
   const [wsClient, setWsClient] = useState<WebSocketClient | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
@@ -142,6 +144,58 @@ const TrafficMap: React.FC = () => {
       
       <div className="absolute top-2 right-2 bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono z-[1002]">
         Active Vehicles: {vehicles.length}
+      </div>
+    </section>
+  );
+};
+
+export default TrafficMap; next = new Set(prev);
+          const id = clickedVehicle.global_vehicle_id || clickedVehicle.vehicle_id;
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+      }
+    };
+
+    const el = rendererRef.current.domElement;
+    el.addEventListener('click', handleClick);
+    return () => el.removeEventListener('click', handleClick);
+  }, [vehicles]);
+
+  return (
+    <section 
+      ref={containerRef}
+      className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden"
+    >
+      {/* Background Map */}
+      <LeafletMap />
+
+      {/* THREE.js overlay will be appended here */}
+      
+      <div className="absolute top-2 right-2 flex flex-col gap-2 z-[1002]">
+        <div className="bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono">
+          Active Vehicles: {vehicles.length}
+        </div>
+        <div className="bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono flex items-center gap-2">
+          <label className="cursor-pointer flex items-center gap-2">
+            <input 
+              type="checkbox" 
+              checked={showAll} 
+              onChange={e => setShowAll(e.target.checked)}
+              className="accent-[#00ff41]"
+            />
+            SHOW ALL
+          </label>
+        </div>
+        {selectedIds.size > 0 && (
+          <button 
+            onClick={() => setSelectedIds(new Set())}
+            className="bg-black/80 border border-red-500/50 text-red-500 p-1 text-[10px] font-mono hover:bg-red-500/20"
+          >
+            CLEAR SELECTION ({selectedIds.size})
+          </button>
+        )}
       </div>
     </section>
   );

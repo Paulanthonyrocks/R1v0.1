@@ -338,7 +338,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isConnected, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showTrajectories, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef]);
+    }, [isConnected, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showTrajectories, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef, showAllDetections, selectedVehicleIds]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
@@ -430,6 +430,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 setShowTrajectories={isAdmin ? handleToggleTrajectories : setShowTrajectories}
                 showLaneOverlays={showLaneOverlays}
                 setShowLaneOverlays={setShowLaneOverlays}
+                showAllDetections={showAllDetections}
+                setShowAllDetections={setShowAllDetections}
                 showExclusionZones={showExclusionZones}
                 setShowExclusionZones={setShowExclusionZones}
                 onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
@@ -660,6 +662,15 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
            prevProps.feed.status === nextProps.feed.status &&
            prevProps.feed.name === nextProps.feed.name &&
            prevProps.feed.source === nextProps.feed.source &&
+           prevProps.minimalControls === nextProps.minimalControls &&
+           JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
+});
+
+SurveillanceFeed.displayName = 'SurveillanceFeed';
+export default SurveillanceFeed;);
+
+SurveillanceFeed.displayName = 'SurveillanceFeed';
+export default SurveillanceFeed;nextProps.feed.source &&
            prevProps.minimalControls === nextProps.minimalControls &&
            JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
 });

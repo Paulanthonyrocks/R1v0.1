@@ -326,6 +326,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             vehiclesToDraw.forEach(v => {
                 if (v.status && v.status !== 'active' && v.status !== 'predicting' && v.status !== 'tentative') return;
 
+                // Selective rendering logic:
+                // If showAllDetections is false, only draw if vehicle is selected.
+                const isSelected = selectedVehicleIds.has(v.vehicle_id) || (v.global_vehicle_id && selectedVehicleIds.has(v.global_vehicle_id));
+                if (!showAllDetections && !isSelected) return;
+
                 if (!v.bbox || !Array.isArray(v.bbox)) return; // Skip if no bbox (debounced or malformed)
                 let [x1, y1, x2, y2] = v.bbox;
 
