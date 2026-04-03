@@ -489,7 +489,7 @@ redis:
 roi_processing:
   crop_rect:
   - 0
-  - 233
+  - 0
   - 640
   - 480
   enabled: false
@@ -513,17 +513,17 @@ vehicle_detection:
   car_classification_interval_frames: 60
   car_classifier_labels_path: models/car_labels.txt
   car_classifier_model_path: models/Car_Make_Model.tflite
-  confidence_threshold: 0.1
+  confidence_threshold: 0.05
   enabled: true
   frame_resolution:
   - 640
   - 480
-  low_confidence_threshold: 0.05
+  low_confidence_threshold: 0.01
   max_active_tracks: 100
-  max_aspect_ratio: 4.0
+  max_aspect_ratio: 100.0
   max_reid_per_frame: 2
-  min_bbox_area: 150
-  min_bbox_dimension: 12
+  min_bbox_area: 10
+  min_bbox_dimension: 2
   model_path: yolov8n.pt
   model_type: yolo
   nms_threshold: 0.45

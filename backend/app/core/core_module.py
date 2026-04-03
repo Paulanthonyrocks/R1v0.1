@@ -308,6 +308,7 @@ class CoreModule:
             # ROI Cropping Optimization: Detect only in relevant area
             processed_frame, is_cropped, x_off, y_off = self._preprocess_frame(frame)
             raw_detections = self.detector.detect(processed_frame, self.confidence_threshold)
+            logger.debug(f"[{self.feed_id}] Raw detections: {len(raw_detections)}")
             
             # Map back to original frame coordinates if cropped
             if is_cropped:
