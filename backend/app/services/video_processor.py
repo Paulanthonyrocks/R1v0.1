@@ -35,7 +35,7 @@ class VideoProcessor:
         
         # State
         self._is_recording: bool = False
-        self._draw_overlays_enabled: bool = True # Configuration default
+        self._draw_overlays_enabled: bool = False # Disabled by default for CPU performance
         
         # Recording internals
         self._video_writer: Optional[cv2.VideoWriter] = None

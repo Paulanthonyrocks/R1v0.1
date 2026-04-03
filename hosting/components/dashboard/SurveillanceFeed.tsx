@@ -42,7 +42,14 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
     const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
 
-    // ROI & Exclusion Zone State
+    // Sync selections to Backend
+    useEffect(() => {
+        if (feed_id && wsClient) {
+            console.debug(`[SurveillanceFeed] Syncing selections for ${feed_id}:`, Array.from(selectedVehicleIds));
+            wsClient.sendCommand("SET_SELECTED_IDS", feed_id, Array.from(selectedVehicleIds));
+        }
+    }, [selectedVehicleIds, feed_id, wsClient]);
+
     const [roiMode, setRoiMode] = useState<'roi' | 'exclusion' | null>(null);
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
     const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);

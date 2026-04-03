@@ -720,6 +720,17 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
+    public sendCommand(type: string, feed_id: string, data: any): void {
+        this.send({
+            type: WebSocketMessageType.GENERAL_NOTIFICATION, // Or add a new type if needed
+            data: {
+                type: type,
+                feed_id: feed_id,
+                data: data
+            }
+        });
+    }
+
     public send(message: WebSocketMessage): void {
         const messageToSend: WebSocketMessage = { ...message, timestamp: message.timestamp ?? Date.now() };
         if (this.isConnected()) {

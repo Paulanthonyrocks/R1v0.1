@@ -232,6 +232,7 @@ class CoreModule:
         track_timeout: Optional[int] = None,
         external_detections: Optional[List[Tuple]] = None,
         timestamp: Optional[float] = None,
+        selected_ids: Optional[Set[str]] = None,
     ) -> Tuple[Dict[str, Dict], List[int], Any, Dict]:
         """Orchestrates detection and tracking using modular engines."""
         if frame is None or frame.size == 0:
@@ -382,12 +383,15 @@ class CoreModule:
         feed_offset = hash(self.feed_id) % self.reid_interval
         # R4 Fix: Adaptive ReID interval — in high-skip scenarios, run more frequently
         effective_reid_interval = max(1, self.reid_interval // 2) if frame_index > 100 else self.reid_interval
+        
+        # New Selective ReID logic: Only run if it's interval OR vehicle is in user's selection
+        # Note: We pass selected_ids from the websocket message or UI state
         should_run_reid = (
             self.reid_embedder is not None 
             and ((frame_index + feed_offset) % effective_reid_interval == 0)
         )
 
-        if should_run_reid and detections:
+        if (should_run_reid or (self.reid_embedder is not None and selected_ids)) and detections:
             rois_for_batch = []
             valid_indices = []
             embeddings_map = {}
@@ -401,9 +405,22 @@ class CoreModule:
                 x2, y2 = min(w, x2), min(h, y2)
                 
                 if x2 > x1 and y2 > y1:
+                    # Logic to decide if we run ReID for this detection
+                    is_selected_or_scheduled = should_run_reid
+                    
+                    # If we aren't in a global ReID frame, only check if this detection overlaps a selected track
+                    if not should_run_reid and selected_ids:
+                        for tid, track in self.tracker.vehicle_data.items():
+                            if tid in selected_ids and self.tracker._bbox_iou(bbox, track["bbox"]) > 0.5:
+                                is_selected_or_scheduled = True
+                                break
+                    
+                    if not is_selected_or_scheduled:
+                        continue
+
                     roi = frame[y1:y2, x1:x2]
                     if roi.size > 0:
-                        # Quality Gating (Heuristic: skip ReID if too blurry, small or occluded)
+                        # Quality Gating
                         is_likely_occluded = False
                         for t in self.tracker.vehicle_data.values():
                             if t.get("is_occluded") and self.tracker._bbox_iou(bbox, t["bbox"]) > 0.5:
@@ -411,7 +428,6 @@ class CoreModule:
                                 break
 
                         quality = self._calculate_image_quality(roi, is_likely_occluded)
-                        # R5 Fix: Raised threshold from 10.0 to 30.0 to reduce gallery pollution
                         if quality > 30.0:
                             rois_for_batch.append(roi)
                             valid_indices.append(idx)

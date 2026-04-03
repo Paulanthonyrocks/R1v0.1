@@ -428,11 +428,11 @@ pavement_analysis:
     calibration_file: calibration_params.npz
 performance:
   auto_optimize: true
-  batch_size: 16
+  batch_size: 1
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: false
-  inference_pool_size: 6
+  inference_pool_size: 2
   inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0

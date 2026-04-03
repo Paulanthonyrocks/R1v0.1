@@ -210,21 +210,23 @@ def inference_worker(
     def get_model_for_feed(f_id: str) -> YOLO:
         return model_overrides.get(f_id, shared_model)
 
+    # Map: FeedID -> Set of Selected Global IDs
+    selected_ids_map: Dict[str, Set[str]] = {}
+    
     def handle_command(cmd):
         if not cmd: return
         try:
             cmd_type = cmd.get("type")
             if cmd_type == "config_update":
+                # ... (existing config update logic) ...
                 data = cmd.get("data", {})
                 feed_id_cmd = data.get("feed_id") or cmd.get("feed_id")
-                
                 # Check for model path override
                 if "model_path" in data and feed_id_cmd:
                     try:
                         logger.info(f"[Worker {worker_id}] Overriding model for feed {feed_id_cmd}: {data['model_path']}")
                         override_path = str(Path(config.get("project_root_dir", "")) / data["model_path"])
                         model_overrides[feed_id_cmd] = YOLO(override_path)
-                        # Move to same device as shared
                         if shared_model:
                             model_overrides[feed_id_cmd].to(next(shared_model.parameters()).device)
                     except Exception as e:
@@ -237,12 +239,18 @@ def inference_worker(
                         pending_configs[feed_id_cmd].update(data)
                     else:
                         core_modules[feed_id_cmd].update_config(data)
+            
+            elif cmd_type == "SET_SELECTED_IDS":
+                feed_id_cmd = cmd.get("feed_id")
+                ids = set(cmd.get("data", []))
+                if feed_id_cmd:
+                    selected_ids_map[feed_id_cmd] = ids
+                    logger.debug(f"[Worker {worker_id}] Updated selections for {feed_id_cmd}: {ids}")
+
             elif cmd_type == "save_snapshot":
                 data = cmd.get("data", {})
                 feed_id_cmd = cmd.get("feed_id")
                 if feed_id_cmd and feed_id_cmd in core_modules:
-                    # We can't save it here immediately because we don't have the current frame
-                    # Set a flag on the CoreModule to save the next processed frame
                     core_modules[feed_id_cmd]._pending_snapshot_incident_id = data.get("incident_id")
         except Exception as e:
             logger.error(f"[Worker {worker_id}] Command error: {e}")
@@ -580,7 +588,8 @@ def inference_worker(
                         detections = batch_detections_map.get(i, [])
                         vis_tracks, lane_bounds, lane_lines, calib_status = core.detect_and_track(
                             frame, f_idx, external_detections=detections,
-                            timestamp=meta.get("timestamp")
+                            timestamp=meta.get("timestamp"),
+                            selected_ids=selected_ids_map.get(feed_id, set())
                         )
                         core._last_detection_time = time.time()
                         if vis_tracks and meta['first_detect']:

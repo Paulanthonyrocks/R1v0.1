@@ -133,6 +133,12 @@ def ingestion_worker(
                     }
 
                 fh, fw = resized.shape[:2]
+                # Enforce source-side drop if queue is at capacity
+                q_max = config.get("performance", {}).get("queue_max_size", 50)
+                if central_input_queue.qsize() >= q_max:
+                    metrics.frames_dropped += 1
+                    continue
+
                 central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
                 metrics.frames_processed += 1
                 processed_frames_count += 1
