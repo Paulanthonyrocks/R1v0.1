@@ -379,9 +379,21 @@ app = FastAPI(
 
 def to_dict(obj):
     if hasattr(obj, "model_dump"):
-        return obj.model_dump()
+        # Use mode='json' in Pydantic v2 to automatically convert Path to str
+        try:
+            return obj.model_dump(mode='json')
+        except:
+            return obj.model_dump()
     if hasattr(obj, "dict"):
         return obj.dict()
+    
+    # Recursive conversion for nested structures
+    if isinstance(obj, dict):
+        return {k: to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_dict(v) for v in obj]
+    if isinstance(obj, Path):
+        return str(obj)
     return obj
 
 cfg_dict = to_dict(loaded_config)

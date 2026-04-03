@@ -99,7 +99,7 @@ class FeedManager:
         # Metrics aggregation window
         self._metrics_averaging_window = self.config.get("metrics_averaging_window_seconds", 10)
         # Persistence
-        self.persistence_path = Path(self.config.get("feeds_config_path", "backend/data/feeds_config.json"))
+        self.persistence_path = self.config.get("feeds_config_path", "backend/data/feeds_config.json")
         # Broadcast Optimization
         self.broadcast_queue = asyncio.Queue(maxsize=100)
         self._broadcast_worker_task: Optional[asyncio.Task] = None
@@ -520,10 +520,12 @@ class FeedManager:
             logger.error(f"Failed to save feeds persistence: {e}")
     def _load_persisted_feeds(self):
         """Loads feeds configuration from disk."""
-        if not self.persistence_path.exists():
+        if not os.path.exists(self.persistence_path):
             return
+
         try:
             with open(self.persistence_path, 'r') as f:
+
                 feeds_data = json.load(f)
             loaded_count = 0
             for feed_id, feed_data in feeds_data.items():

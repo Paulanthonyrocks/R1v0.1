@@ -149,17 +149,17 @@ class DatabaseManager:
                 # If we are in /home/user/R1v0.1/backend/app/utils/database.py, project_root is R1v0.1
                 path_obj = project_root / self.sqlite_db_path_str
 
-            self.sqlite_db_path = path_obj.resolve()
+            self.sqlite_db_path = str(path_obj.resolve())
 
-            if not self.sqlite_db_path.parent.exists():
+            if not os.path.exists(os.path.dirname(self.sqlite_db_path)):
                 try:
-                    self.sqlite_db_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.makedirs(os.path.dirname(self.sqlite_db_path), exist_ok=True)
                     logger.info(
-                        f"Created database directory: {self.sqlite_db_path.parent}"
+                        f"Created database directory: {os.path.dirname(self.sqlite_db_path)}"
                     )
                 except OSError as e:
                     raise ConfigError(
-                        f"Failed to create database directory {self.sqlite_db_path.parent}: {e}"
+                        f"Failed to create database directory {os.path.dirname(self.sqlite_db_path)}: {e}"
                     ) from e
 
             logger.info(f"SQLite database path configured to: {self.sqlite_db_path}")

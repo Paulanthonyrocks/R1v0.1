@@ -41,6 +41,8 @@ def inference_worker(
     from ..utils.monitoring import TrafficMonitor
     from ..utils.process import start_parent_monitor
     
+    import torch
+    
     def _serialize_tracked_vehicles_with_map(
         tracked_vehicles: Dict[str, Dict], 
         scale_x: float = 1.0, 

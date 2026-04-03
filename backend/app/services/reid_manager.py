@@ -12,12 +12,12 @@ except ImportError:
     redis = None
     aredis = None
 import threading
-import torch
 
 logger = logging.getLogger("app.services.reid")
 
 class GlobalReIDManager:
     def __init__(self, config: dict):
+        import torch
         self.config = config
         self.reid_cfg = config.get("reid", {})
         self.similarity_threshold = self.reid_cfg.get("similarity_threshold", 0.85)

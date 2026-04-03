@@ -37,6 +37,9 @@ def ingestion_worker(
     from ..config import set_config
     set_config(config)
 
+    import torch
+    import torch.nn.functional as F
+
     start_parent_monitor(stop_event)
     print(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}", flush=True)
     import logging.config
