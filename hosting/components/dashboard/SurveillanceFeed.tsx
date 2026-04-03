@@ -190,6 +190,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (clickedVehicle) {
             const vid = clickedVehicle.vehicle_id;
             const gid = clickedVehicle.global_vehicle_id;
+            console.debug(`[SurveillanceFeed] Vehicle found: ${vid} (GID: ${gid || 'N/A'})`);
             
             setSelectedVehicleIds(prev => {
                 const newSet = new Set(prev);
@@ -685,3 +686,4 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';
 export default SurveillanceFeed;
+port default SurveillanceFeed;

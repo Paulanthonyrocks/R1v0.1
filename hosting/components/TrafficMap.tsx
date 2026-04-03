@@ -100,24 +100,34 @@ const TrafficMap: React.FC = () => {
 
       if (rendererRef.current && sceneRef.current && cameraRef.current && instancedMeshRef.current) {
         const mesh = instancedMeshRef.current;
+        let drawnCount = 0;
         
         // Update all instances
-        vehicles.forEach((v, i) => {
-          if (i >= 5000) return;
+        vehicles.forEach((v) => {
+          if (drawnCount >= 5000) return;
           
+          const isSelected = selectedIds.has(v.vehicle_id) || (v.global_vehicle_id && selectedIds.has(v.global_vehicle_id));
+          if (!showAll && !isSelected) return;
+
           // Dead Reckoning: Smooth extrapolation
-          const x = v.bbox[0] + (v.vx || 0) * dt;
-          const y = v.bbox[1] + (v.vy || 0) * dt;
-          const w = v.bbox[2] - v.bbox[0];
-          const h = v.bbox[3] - v.bbox[1];
+          // Assumption: bbox is in pixels or needs scaling. 
+          // If bbox is normalized [0, 1], scale by renderer size
+          const canvasW = rendererRef.current!.domElement.width / window.devicePixelRatio;
+          const canvasH = rendererRef.current!.domElement.height / window.devicePixelRatio;
+
+          const x = (v.bbox[0] + (v.vx || 0) * dt) * canvasW;
+          const y = (v.bbox[1] + (v.vy || 0) * dt) * canvasH;
+          const w = (v.bbox[2] - v.bbox[0]) * canvasW;
+          const h = (v.bbox[3] - v.bbox[1]) * canvasH;
 
           dummy.position.set(x + w/2, y + h/2, 0);
           dummy.scale.set(w, h, 1);
           dummy.updateMatrix();
-          mesh.setMatrixAt(i, dummy.matrix);
+          mesh.setMatrixAt(drawnCount, dummy.matrix);
+          drawnCount++;
         });
 
-        mesh.count = Math.min(vehicles.length, 5000);
+        mesh.count = drawnCount;
         mesh.instanceMatrix.needsUpdate = true;
         
         rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -130,27 +140,31 @@ const TrafficMap: React.FC = () => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [vehicles, dummy]);
+  }, [vehicles, dummy, showAll, selectedIds]);
 
-  return (
-    <section 
-      ref={containerRef}
-      className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden"
-    >
-      {/* Background Map */}
-      <LeafletMap />
+  useEffect(() => {
+    if (!containerRef.current || !rendererRef.current) return;
+    
+    const handleClick = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      // Normalize click coordinates to [0, 1] to match normalized bbox
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
 
-      {/* THREE.js overlay will be appended here */}
-      
-      <div className="absolute top-2 right-2 bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono z-[1002]">
-        Active Vehicles: {vehicles.length}
-      </div>
-    </section>
-  );
-};
+      console.debug(`[TrafficMap] Clicked at normalized: (${x.toFixed(3)}, ${y.toFixed(3)})`);
 
-export default TrafficMap; next = new Set(prev);
-          const id = clickedVehicle.global_vehicle_id || clickedVehicle.vehicle_id;
+      const clickedVehicle = vehicles.find(v => {
+        if (!v.bbox || !Array.isArray(v.bbox)) return false;
+        const [vx1, vy1, vx2, vy2] = v.bbox;
+        return x >= vx1 && x <= vx2 && y >= vy1 && y <= vy2;
+      });
+
+      if (clickedVehicle) {
+        const id = clickedVehicle.global_vehicle_id || clickedVehicle.vehicle_id;
+        console.debug(`[TrafficMap] Vehicle found: ${id}`);
+        setSelectedIds(prev => {
+          const next = new Set(prev);
           if (next.has(id)) next.delete(id);
           else next.add(id);
           return next;

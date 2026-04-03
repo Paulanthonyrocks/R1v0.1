@@ -112,10 +112,10 @@ class FeedManager:
         self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         import torch
         if not (self.config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available()):
-            # Allow at least 2 workers on multi-core CPU systems to handle partitioned feeds
+            # Allow more workers on multi-core CPU systems to handle partitioned feeds
             cpu_count = os.cpu_count() or 1
-            # We cap at 2 for CPU to avoid starving the event loop and ingestion workers
-            self._inference_pool_size = min(max(1, cpu_count - 1), self._inference_pool_size, 2)
+            # We cap at 8 for CPU to allow more throughput if user desires, though context switching might increase
+            self._inference_pool_size = min(max(1, cpu_count - 1), self._inference_pool_size, 8)
             logger.info(f"GPU unavailable. Using {self._inference_pool_size} CPU inference workers (CPU Cores: {cpu_count}).")
 
         redis_cfg = self.config.get("redis", {})
