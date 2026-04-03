@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import os
 import time
-from typing import Dict, AsyncGenerator, Optional, TYPE_CHECKING
+from typing import Dict, AsyncGenerator, Optional, TYPE_CHECKING, Any
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
