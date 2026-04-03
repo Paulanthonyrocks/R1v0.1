@@ -7,6 +7,7 @@ import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoSocket from '@/lib/useVideoSocket';
 import useAuth from '@/lib/hook/useAuth';
+import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
 import MetricsPanel from './MetricsPanel';
@@ -21,6 +22,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token, userRole } = useAuth();
+    const { client: wsClient } = useWebSocket(); // Add this line
 
     // Only subscribe if the feed is in an active state
     const shouldSubscribe = status === 'running' || status === 'starting';
