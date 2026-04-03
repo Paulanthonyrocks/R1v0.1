@@ -10,7 +10,23 @@ const TrafficMap: React.FC = () => {
   const [wsClient, setWsClient] = useState<WebSocketClient | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedGlobalId, setSelectedGlobalId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Sticky Selection Logic: Keep vehicles selected if their Global ID matches
+  useEffect(() => {
+    if (selectedGlobalId && vehicles) {
+      const matching = vehicles.find(v => v.global_vehicle_id === selectedGlobalId);
+      if (matching) {
+        setSelectedIds(prev => {
+          if (prev.has(matching.vehicle_id)) return prev;
+          const next = new Set(prev);
+          next.add(matching.vehicle_id);
+          return next;
+        });
+      }
+    }
+  }, [selectedGlobalId, vehicles]);
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
 

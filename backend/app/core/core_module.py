@@ -200,9 +200,14 @@ class CoreModule:
 
     def predict_only(self, width: int, height: int, current_time: float) -> Dict[str, Dict]:
         """Runs only the Kalman prediction step for smooth tracking during skipped detections."""
+        # Calculate skip factor based on time since last update
+        dt = current_time - getattr(self, '_last_track_time', current_time)
+        skip_factor = max(0, int(dt * self.fps) - 1)
+        self._last_track_time = current_time
+
         # Use an empty list of detections to trigger only predictions in the tracker
         # We pass a dummy frame shape to satisfy track clipping
-        self.vehicle_data = self.tracker.update([], current_time, (height, width))
+        self.vehicle_data = self.tracker.update([], current_time, (height, width), skip_factor=skip_factor)
         
         vis_tracks = {}
         for tid, track in self.vehicle_data.items():
@@ -437,7 +442,12 @@ class CoreModule:
                 enriched_detections.append((bbox, cls, dconf, None))
 
         # 4. Tracking (T2 Fix: immediately capture returned vehicle_data)
-        self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
+        # Calculate skip factor based on time since last track update
+        dt_track = current_time - getattr(self, '_last_track_time', current_time)
+        skip_factor = max(0, int(dt_track * self.fps) - 1)
+        self._last_track_time = current_time
+
+        self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape, skip_factor=skip_factor)
         
         # 5. Metadata Processing
         vis_tracks = {}

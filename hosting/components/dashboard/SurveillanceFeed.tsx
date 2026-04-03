@@ -50,6 +50,23 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [selectedVehicleGlobalId, setSelectedVehicleGlobalId] = useState<string | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    // Sticky Selection Logic: 
+    // If we have a global ID selected, ensure it's in the selectedVehicleIds set
+    // This handles cases where the tracker ID changes but ReID stays the same.
+    useEffect(() => {
+        if (selectedVehicleGlobalId && vehicles) {
+            const matchingVehicle = vehicles.find(v => v.global_vehicle_id === selectedVehicleGlobalId);
+            if (matchingVehicle) {
+                setSelectedVehicleIds(prev => {
+                    if (prev.has(matchingVehicle.vehicle_id)) return prev;
+                    const next = new Set(prev);
+                    next.add(matchingVehicle.vehicle_id);
+                    return next;
+                });
+            }
+        }
+    }, [selectedVehicleGlobalId, vehicles]);
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const toggleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -190,7 +207,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (clickedVehicle) {
             const vid = clickedVehicle.vehicle_id;
             const gid = clickedVehicle.global_vehicle_id;
-            console.debug(`[SurveillanceFeed] Vehicle found: ${vid} (GID: ${gid || 'N/A'})`);
             
             setSelectedVehicleIds(prev => {
                 const newSet = new Set(prev);

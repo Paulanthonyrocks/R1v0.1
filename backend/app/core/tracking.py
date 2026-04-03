@@ -67,7 +67,7 @@ class TrackingManager:
         
         return kf
 
-    def update(self, detections: List[Tuple], current_time: float, frame_shape: Tuple[int, int]) -> Dict[str, Dict]:
+    def update(self, detections: List[Tuple], current_time: float, frame_shape: Tuple[int, int], skip_factor: int = 0) -> Dict[str, Dict]:
         """Runs the tracking association pipeline (ByteTrack based)."""
         new_or_updated_tracks = {}
         h, w = frame_shape[:2]
@@ -75,7 +75,12 @@ class TrackingManager:
         # Dynamic Configuration parameters (allow updates from CoreModule)
         tracking_cfg = self.config.get("tracking", {})
         vd_cfg = self.config.get("vehicle_detection", {})
-        self.proximity_threshold = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
+        
+        # Adaptive Proximity: Increase search radius if frames were skipped
+        # base threshold is for adjacent frames.
+        base_proximity = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
+        self.proximity_threshold = base_proximity * (1.0 + (skip_factor * 0.5))
+        
         self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
         self.probation_threshold = tracking_cfg.get("probation_threshold") or vd_cfg.get("probation_threshold") or 3
         
@@ -109,9 +114,10 @@ class TrackingManager:
                 kf.F[1, 5] = dt
                 
                 # Adaptive Q: scale process noise by estimated speed
-                # Fast vehicles need looser predictions; slow ones need tighter
                 speed = math.sqrt(float(kf.x[4][0])**2 + float(kf.x[5][0])**2)
-                speed_factor = max(0.1, min(2.0, speed / 100.0))
+                # T6: Scale noise by dt/skip factor too - large gaps mean more uncertainty
+                dt_factor = max(1.0, dt * self.fps / 2.0)
+                speed_factor = max(0.1, min(5.0, (speed / 100.0) * dt_factor))
                 kf.Q = self._base_Q * speed_factor
                 
                 kf.predict()
@@ -126,12 +132,15 @@ class TrackingManager:
         
         if high_conf_dets and self.vehicle_data:
             track_pool = list(self.vehicle_data.values())
-            cost_matrix_1 = self._calculate_cost_matrix(high_conf_dets, track_pool, use_reid=True)
+            # T7: pass skip_factor to cost calculation for looser gating
+            cost_matrix_1 = self._calculate_cost_matrix(high_conf_dets, track_pool, use_reid=True, skip_factor=skip_factor)
             
             if cost_matrix_1.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_1)
                 for r, c in zip(row_ind, col_ind):
-                    if cost_matrix_1[r, c] < self.dynamic_matching_threshold:
+                    # T8: Allow looser matches when skipping frames
+                    match_thresh = self.dynamic_matching_threshold * (1.0 + min(1.0, skip_factor * 0.1))
+                    if cost_matrix_1[r, c] < match_thresh:
                         track = track_pool[c]
                         self._update_track(track, high_conf_dets[r], current_time)
                         matched_tracks_1.add(track["vehicle_id"])
@@ -144,7 +153,7 @@ class TrackingManager:
         # 4. Second Association: Low Confidence (IoU Only)
         matched_tracks_2 = set()
         if low_conf_dets and unmatched_tracks_1:
-            cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False)
+            cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False, skip_factor=skip_factor)
             second_pass_thresh = self.config.get("tracking", {}).get("second_pass_threshold", 0.5)
             if cost_matrix_2.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_2)
@@ -155,8 +164,29 @@ class TrackingManager:
                         matched_tracks_2.add(track["vehicle_id"])
                         new_or_updated_tracks[track["vehicle_id"]] = track
 
+        # T9: Third Association: ReID Recovery for lost mature tracks
+        # If skip is high, IoU often fails. Try matching by ReID alone for mature tracks.
+        unmatched_dets_final = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
+        unmatched_tracks_final = [t for t in unmatched_tracks_1 if t["vehicle_id"] not in matched_tracks_2]
+        
+        if unmatched_dets_final and unmatched_tracks_final and skip_factor > 2:
+            # ReID only match for high confidence detections and mature lost tracks
+            mature_lost = [t for t in unmatched_tracks_final if t.get("status") == "active"]
+            if mature_lost:
+                cost_reid = self._calculate_cost_matrix(unmatched_dets_final, mature_lost, use_reid=True, reid_only=True)
+                if cost_reid.size > 0:
+                    row_ind, col_ind = linear_sum_assignment(cost_reid)
+                    for r, c in zip(row_ind, col_ind):
+                        # Use a stricter threshold for ReID-only recovery
+                        if cost_reid[r, c] < 0.4:
+                            track = mature_lost[c]
+                            self._update_track(track, unmatched_dets_final[r], current_time)
+                            new_or_updated_tracks[track["vehicle_id"]] = track
+                            # Remove from unmatched pool
+                            matched_tracks_1.add(track["vehicle_id"]) 
+
         # 5. Finalize matches and handle lost
-        final_matched = matched_tracks_1.union(matched_tracks_2)
+        final_matched_all = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
             if tid not in final_matched:
                 # Tentative tracks that are missed are immediately dropped
@@ -210,7 +240,7 @@ class TrackingManager:
                 
         return self.vehicle_data
 
-    def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
+    def _calculate_cost_matrix(self, detections, tracks, use_reid=True, skip_factor=0, reid_only=False):
         num_dets = len(detections)
         num_tracks = len(tracks)
         if num_dets == 0 or num_tracks == 0:
@@ -252,13 +282,22 @@ class TrackingManager:
             det_cy = (det_bbox[1] + det_bbox[3]) / 2
             
             for t, track in enumerate(tracks):
+                if reid_only:
+                    if reid_sim_matrix is not None and det_emb is not None and track.get("embedding") is not None:
+                        # ReID-only cost: 1.0 - similarity
+                        costs[d, t] = 1.0 - reid_sim_matrix[d, t]
+                    continue
+
                 if "predicted_bbox" in track:
                     diou = self._bbox_diou(det_bbox, track["predicted_bbox"])
                     tr_cx = (track["predicted_bbox"][0] + track["predicted_bbox"][2]) / 2
                     tr_cy = (track["predicted_bbox"][1] + track["predicted_bbox"][3]) / 2
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
                     
-                    if diou > -0.5 or dist < 150: # Gate
+                    # Adaptive Gate: scale search radius by skip_factor
+                    gate_dist = 150 * (1.0 + (skip_factor * 0.5))
+                    
+                    if diou > -0.5 or dist < gate_dist: # Gate
                         motion_cost = 1.0 - diou
                         reid_cost = 0.0
                         if reid_sim_matrix is not None and det_emb is not None and track.get("embedding") is not None:
