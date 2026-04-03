@@ -511,12 +511,12 @@ vehicle_detection:
   car_classification_interval_frames: 60
   car_classifier_labels_path: models/car_labels.txt
   car_classifier_model_path: models/Car_Make_Model.tflite
-  confidence_threshold: 0.2
+  confidence_threshold: 0.1
   enabled: true
   frame_resolution:
   - 640
   - 480
-  low_confidence_threshold: 0.1
+  low_confidence_threshold: 0.05
   max_active_tracks: 100
   max_aspect_ratio: 4.0
   max_reid_per_frame: 2
