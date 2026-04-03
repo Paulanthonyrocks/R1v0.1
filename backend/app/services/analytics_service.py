@@ -401,7 +401,7 @@ class AnalyticsService:
         try:
             success = await self._db_manager.update_incident(incident_id, {"snapshot_path": snapshot_path})
             if success:
-                logger.info(f"Updated incident {incident_id} with snapshot: {snapshot_path}")
+                logger.debug(f"Updated incident {incident_id} with snapshot: {snapshot_path}")
                 
                 # Broadcast SNAPSHOT_READY
                 message = WebSocketMessage(

@@ -34,14 +34,14 @@ class IncidentManager:
         # Background task for auto-resolving stale incidents
         self._cleanup_task = None
         
-        logger.info("IncidentManager initialized.")
+        logger.debug("IncidentManager initialized.")
 
     def set_feed_manager(self, feed_manager):
         """Sets the feed manager and starts background tasks."""
         self._feed_manager = feed_manager
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._auto_resolve_loop())
-        logger.info("FeedManager set in IncidentManager.")
+        logger.debug("FeedManager set in IncidentManager.")
 
     async def _auto_resolve_loop(self):
         """Periodically clears active incident tracking for items not seen recently."""
@@ -171,7 +171,7 @@ class IncidentManager:
                 except Exception as e:
                     logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
 
-            logger.info(f"Successfully created incident {incident_id}: {description}")
+            logger.debug(f"Successfully created incident {incident_id}: {description}")
             return incident_id
 
         except Exception as e:
@@ -186,7 +186,7 @@ class IncidentManager:
                 "updated_at": datetime.now(timezone.utc).isoformat()
             })
             if success:
-                logger.info(f"Attached snapshot to incident {incident_id}: {snapshot_path}")
+                logger.debug(f"Attached snapshot to incident {incident_id}: {snapshot_path}")
                 
                 # Broadcast update so UI can show the snapshot
                 message = WebSocketMessage(

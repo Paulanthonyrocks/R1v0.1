@@ -261,7 +261,7 @@ class ServiceRegistry:
             
             # Link Feed Manager to Incident Manager
             self._incident_manager.set_feed_manager(self._feed_manager)
-            logger.info("FeedManager initialized and linked to IncidentManager.")
+            logger.debug("FeedManager initialized and linked to IncidentManager.")
         finally:
             self._initialization_stack.pop()
 

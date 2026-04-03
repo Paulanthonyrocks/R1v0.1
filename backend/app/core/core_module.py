@@ -544,7 +544,7 @@ class CoreModule:
                     "filename": filename,
                     "timestamp": float(time.time())
                 })
-            logger.info(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename} (Format: {fmt}, Quality: {quality})")
+            logger.debug(f"[{self.feed_id}] Saved snapshot for incident {incident_id}: {filename} (Format: {fmt}, Quality: {quality})")
         except Exception as e:
             logger.error(f"[{self.feed_id}] Failed to save snapshot: {e}")
 

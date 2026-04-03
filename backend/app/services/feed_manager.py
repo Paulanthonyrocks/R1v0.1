@@ -877,7 +877,7 @@ class FeedManager:
         }
         try:
             target_queue.put_nowait(cmd)
-            logger.info(f"Requested snapshot for feed {feed_id}, incident {incident_id} (Worker {worker_idx})")
+            logger.debug(f"Requested snapshot for feed {feed_id}, incident {incident_id} (Worker {worker_idx})")
         except queue.Full:
             logger.error(f"Failed to put snapshot command for {feed_id}: Inference command queue {worker_idx} full.")
         except Exception as e:
