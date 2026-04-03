@@ -138,7 +138,6 @@ class TrackingManager:
             if cost_matrix_1.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_1)
                 for r, c in zip(row_ind, col_ind):
-                    # T8: Allow looser matches when skipping frames
                     match_thresh = self.dynamic_matching_threshold * (1.0 + min(1.0, skip_factor * 0.1))
                     if cost_matrix_1[r, c] < match_thresh:
                         track = track_pool[c]
@@ -146,6 +145,8 @@ class TrackingManager:
                         matched_tracks_1.add(track["vehicle_id"])
                         matched_dets_1.add(r)
                         new_or_updated_tracks[track["vehicle_id"]] = track
+                    else:
+                        logger.debug(f"Association rejected: cost {cost_matrix_1[r, c]:.2f} > threshold {match_thresh:.2f}")
 
         unmatched_dets_1 = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
         unmatched_tracks_1 = [t for tid, t in self.vehicle_data.items() if tid not in matched_tracks_1]
