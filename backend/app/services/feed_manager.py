@@ -108,6 +108,16 @@ class FeedManager:
         self._db_queue: Optional[MPQueue] = ctx.Queue(maxsize=100000)
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
+        # Visualization Configuration
+        self._viz_colors = {
+            "moving": (0, 255, 0),       # Green
+            "stopped": (0, 0, 255),      # Red
+            "speeding": (255, 0, 0),     # Blue
+            "accelerating": (0, 165, 255), # Orange
+            "decelerating": (0, 255, 255), # Yellow
+            "lane_changing": (255, 0, 255), # Magenta
+            "unknown": (128, 128, 128),  # Gray
+        }
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
         perf_cfg = self.config.get("performance", {})
         self._inference_pool_size = perf_cfg.get("inference_pool_size", 2)
@@ -1021,6 +1031,35 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error in broadcast worker: {e}")
                 await asyncio.sleep(0.1)
+    def _draw_visualizations(self, frame: np.ndarray, vehicles: List[Dict]):
+        """Draws bounding boxes and labels on the frame once."""
+        if not vehicles:
+            return
+        for v in vehicles:
+            bbox = v.get("bbox")
+            if bbox is None: continue
+            try:
+                x1, y1, x2, y2 = map(int, bbox)
+            except (ValueError, TypeError): continue
+            
+            # Map behavior to color
+            behavior = v.get("behavior", "unknown")
+            color = self._viz_colors.get(behavior, self._viz_colors["unknown"])
+            
+            # Draw box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw label
+            gid = v.get("global_vehicle_id", "")
+            label = v.get("class_name", "veh")
+            conf = v.get("confidence", 0.0)
+            label_text = f"{gid or '?'}: {label} {conf:.2f}"
+            
+            (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+            y1_label = max(y1, h + 5)
+            cv2.rectangle(frame, (x1, y1_label - h - 5), (x1 + w, y1_label + 5), color, -1)
+            cv2.putText(frame, label_text, (x1, y1_label), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,0), 1)
+
     async def _read_result_queues(self):
         """Drains Inference output and forwards frames/raw data to Analytics process."""
         logger.info("Inference Result reader task started.")
@@ -1089,11 +1128,8 @@ class FeedManager:
                     # 1. Forward raw data to Analytics process for heavy lifting
                     # item format: (feed_id, frame_index, timestamp, vis_tracks, lane_boundaries, lane_lines, metrics, extra)
                     timestamp = time.time()
-                    # Optimization: Strip large binary data from 'extra' for AnalyticsWorker
-                    # AnalyticsWorker only needs 'calibration' and metadata, not image bytes
                     analytics_extra = {}
                     if isinstance(extra, dict):
-                        # Copy only safe/needed keys
                         for k in ["calibration", "is_keyframe"]:
                             val = extra.get(k)
                             if val is not None:
@@ -1103,43 +1139,59 @@ class FeedManager:
                         self._analytics_input_queue.put_nowait(analytics_item)
                     except queue.Full:
                         self._dropped_analytics_count += 1
-                        # Drop analytics for this frame if backed up
                     
-                    # 2. Immediate Frame Distribution (For video subscribers)
-                    # CRITICAL: If delivery_frame is a view into Shared Memory (np_frame), 
-                    # we MUST copy it before passing it to asynchronous queues because
-                    # the SHM handle will be unlinked at the end of this loop.
-                    async_delivery_frame = delivery_frame
+                    # --- Vectorized Post-Processing (Phase 2 Optimizations) ---
+                    # We draw overlays and pre-encode formats ONCE for all subscribers.
+                    viz_frame_bgr = None
+                    viz_frame_rgb = None
+                    viz_frame_jpeg = None
+                    
+                    # delivery_frame is the BGR buffer used for post-processing
+                    delivery_frame = np_frame if np_frame is not None else frame_bytes
+
                     if np_frame is not None:
-                        # Copy is required for async consumers since SHM will be unlinked shortly
-                        async_delivery_frame = np_frame.copy()
+                        # 1. Create a copy for visualization to keep clean original for analytics/DB/VideoWriter
+                        viz_frame_bgr = np_frame.copy()
+                        self._draw_visualizations(viz_frame_bgr, vehicles)
+                        
+                        # 2. Pre-compute RGB for WebRTC (aiortc converts everything to YUV/RGB)
+                        viz_frame_rgb = cv2.cvtColor(viz_frame_bgr, cv2.COLOR_BGR2RGB)
+                        
+                        # 3. Pre-compute JPEG for WebSocket/MJPEG subscribers
+                        success, jpeg_buf = cv2.imencode(".jpg", viz_frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                        if success:
+                            viz_frame_jpeg = jpeg_buf.tobytes()
+
+                    # 2. Immediate Frame Distribution (For video subscribers)
+                    # We pass a bundle containing all pre-computed formats
+                    payload = {
+                        "frame": viz_frame_jpeg if viz_frame_jpeg else frame_bytes,
+                        "raw_frame": np_frame,
+                        "metrics": metrics,
+                        "vehicles": vehicles
+                    }
                     
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
-                                sub_q.put_nowait({"frame": async_delivery_frame, "metrics": metrics, "vehicles": vehicles})
+                                sub_q.put_nowait(payload)
                             except asyncio.QueueFull:
                                 pass
-                    # 3. Route to Video Writer
+                    # 3. Route to Video Writer (Archival)
                     if entry.get("video_writer_queue"):
                         try:
-                            # Video writer needs bytes or numpy (use copy for SHM)
-                            entry["video_writer_queue"].put_nowait((async_delivery_frame, metrics))
+                            # Pass visualized BGR for archival
+                            entry["video_writer_queue"].put_nowait((viz_frame_bgr if viz_frame_bgr is not None else np_frame, metrics))
                         except queue.Full:
                             pass
                     # 4. Send to DB Queue for Persistence and ReID Registration
                     if self._db_queue:
-                         # Throttle database persistence to save space (Constraint Hardware Optimization)
-                         # Default to 5 seconds unless specified in config
                          db_throttle_sec = self.config.get("db_persistence_interval_sec", 5.0)
                          for v in vehicles:
                              vid = v.get("vehicle_id")
                              if vid is None: continue
                              last_write = self._last_vehicle_db_write.get((feed_id, vid), 0)
-                             # Write if it's new, or interval elapsed
-                             # Significant events like license plate detection already trigger writes in some places
                              if timestamp - last_write >= db_throttle_sec:
-                                 # Create a lightweight copy for the queue
                                  track_data = v.copy()
                                  track_data["feed_id"] = feed_id
                                  track_data["type"] = "vehicle_data"
@@ -1150,52 +1202,29 @@ class FeedManager:
                                      self._last_vehicle_db_write[(feed_id, vid)] = timestamp
                                  except queue.Full:
                                      pass
-                    # 5. Broadcast to WebRTC Peers
+                    
+                    # 5. Broadcast to WebRTC Peers (Use Pre-computed RGB)
                     if feed_id in self._webrtc_queues:
+                        delivery_obj = viz_frame_rgb if viz_frame_rgb is not None else np_frame
                         for pc_id, route_q in list(self._webrtc_queues[feed_id].items()):
                             try:
-                                route_q.put_nowait(async_delivery_frame)
+                                route_q.put_nowait(delivery_obj)
                             except asyncio.QueueFull:
-                                pass # Drop frame gracefully if WebRTC socket is lagging
-                    # 6. Broadcast Telemetry to WebSocket Clients
-                    if self._connection_manager:
-                        # Only broadcast if there are subscribers to save resources
-                        if hasattr(self._connection_manager, 'has_subscribers') and self._connection_manager.has_subscribers(feed_id):
-                            # Direct inline enqueue — avoids per-frame asyncio.Task overhead
-                            try:
-                                loop = asyncio.get_running_loop()
-                                msg_bytes = await loop.run_in_executor(
-                                    self._cpu_executor, self._serialize_broadcast_payload,
-                                    feed_id, frame_idx, delivery_frame, metrics, vehicles, extra
-                                )
-                                if msg_bytes:
-                                    try:
-                                        self.broadcast_queue.put_nowait({
-                                            "type": "video_frame",
-                                            "feed_id": feed_id,
-                                            "data": msg_bytes
-                                        })
-                                    except asyncio.QueueFull:
-                                        # Drop oldest to make room (real-time priority)
-                                        try:
-                                            self.broadcast_queue.get_nowait()
-                                            self.broadcast_queue.put_nowait({
-                                                "type": "video_frame",
-                                                "feed_id": feed_id,
-                                                "data": msg_bytes
-                                            })
-                                        except Exception:
-                                            pass
-                            except Exception as e:
-                                logger.error(f"Error enqueuing broadcast for {feed_id}: {e}")
+                                pass
                     
-                    # --- SHM Cleanup ---
+                    # 6. Broadcast Telemetry to WebSocket Clients (Use Pre-computed JPEG)
+                    if self._connection_manager:
+                        if hasattr(self._connection_manager, 'has_subscribers') and self._connection_manager.has_subscribers(feed_id):
+                            asyncio.create_task(
+                                self._dispatch_to_broadcast_queue(
+                                    feed_id, frame_idx, viz_frame_jpeg, metrics, vehicles, extra
+                                )
+                            )
+                    # --- SHM Cleanup (from vectorized path) ---
                     if shm_name_to_cleanup:
                         try:
                             # We must unlink high-resolution frames as they consume /dev/shm
-                            # Since we've already passed delivery_frame (the reference) to 
-                            # internal queues, we can close our local handle. 
-                            # The unlink will remove the global name.
+                            # Since we've already distributed copies, we can close our local handle. 
                             SharedFrameManager.cleanup_shm(shm_name_to_cleanup)
                         except Exception as e:
                             logger.error(f"Error cleaning up SHM {shm_name_to_cleanup}: {e}")
@@ -1222,6 +1251,35 @@ class FeedManager:
                     break
         except Exception as e:
             logger.warning(f"Error during final result queue drain: {e}")
+    async def _dispatch_to_broadcast_queue(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
+        """Offloads serialization and enqueues for WebSocket broadcast."""
+        try:
+            loop = asyncio.get_running_loop()
+            msg_bytes = await loop.run_in_executor(
+                self._cpu_executor, 
+                self._serialize_broadcast_payload,
+                feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
+            )
+            if msg_bytes:
+                try:
+                    self.broadcast_queue.put_nowait({
+                        "type": "video_frame",
+                        "feed_id": feed_id,
+                        "data": msg_bytes
+                    })
+                except asyncio.QueueFull:
+                    # Maintain real-time priority: drop oldest, keep newest
+                    try:
+                        self.broadcast_queue.get_nowait()
+                        self.broadcast_queue.put_nowait({
+                            "type": "video_frame",
+                            "feed_id": feed_id,
+                            "data": msg_bytes
+                        })
+                    except Exception: pass
+        except Exception as e:
+            logger.error(f"Error dispatching to broadcast: {e}")
+
     def _serialize_broadcast_payload(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
         """Synchronous: builds payload + JSON/msgpack serializes. Applies spatial debouncing."""
         try:
@@ -1297,14 +1355,17 @@ class FeedManager:
                 
                 if np_frame is not None:
                     try:
-                        # CPU Saver: Only encode for WebSocket at a target reduced rate (e.g. 5 FPS max)
-                        # or if this is a 'should_detect' frame which usually has interesting events.
-                        # For now, we encode at quality 60 to balance speed and visibility.
-                        success, enc_buffer = cv2.imencode(".jpg", np_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
-                        if success:
-                            payload["frame"] = enc_buffer.tobytes()
+                        # OPTIMIZATION: Only encode if we don't already have pre-computed bytes.
+                        # If frame_bytes is already bytes (pre-computed JPEG), we use it directly.
+                        if isinstance(frame_bytes, (bytes, bytearray)):
+                             payload["frame"] = frame_bytes
                         else:
-                            payload["frame"] = None
+                             # Legacy path: encode now if not pre-computed
+                             success, enc_buffer = cv2.imencode(".jpg", np_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                             if success:
+                                 payload["frame"] = enc_buffer.tobytes()
+                             else:
+                                 payload["frame"] = None
                     except Exception as e:
                         logger.error(f"Error encoding frame for broadcast: {e}")
                         payload["frame"] = None

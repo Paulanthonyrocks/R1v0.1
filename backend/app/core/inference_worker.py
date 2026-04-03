@@ -449,20 +449,29 @@ def inference_worker(
                                 metrics_obj.errors += 1
                                 continue
                         else:
-                            # FALLBACK PATH: Decode JPEG
+                            # FALLBACK PATH: Handle Raw Bytes OR Encoded JPEG
                             try:
-                                if isinstance(frame_bytes, str):
-                                    try:
-                                        frame_bytes = base64.b64decode(frame_bytes)
-                                    except Exception as e:
-                                        logger.error(f'Base64 decode error: {e}')
-                                nparr = np.frombuffer(frame_bytes, np.uint8)
-                                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                                if isinstance(frame_bytes, dict) and "raw_bytes" in frame_bytes:
+                                    # Handle raw numpy bytes from IngestionWorker (Zero-Decode path)
+                                    raw = frame_bytes["raw_bytes"]
+                                    shape = frame_bytes["shape"]
+                                    dtype = frame_bytes.get("dtype", "uint8")
+                                    frame = np.frombuffer(raw, dtype=dtype).reshape(shape)
+                                else:
+                                    # Handle legacy encoded JPEG bytes
+                                    if isinstance(frame_bytes, str):
+                                        try:
+                                            frame_bytes = base64.b64decode(frame_bytes)
+                                        except Exception as e:
+                                            logger.error(f'Base64 decode error: {e}')
+                                    nparr = np.frombuffer(frame_bytes, np.uint8)
+                                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
                                 if frame is None:
                                     metrics_obj.errors += 1
                                     continue
                             except Exception as e:
-                                logger.error(f"[Worker {worker_id}] JPEG decode error: {e}")
+                                logger.error(f"[Worker {worker_id}] Frame reconstruction error: {e}")
                                 metrics_obj.errors += 1
                                 continue
                     

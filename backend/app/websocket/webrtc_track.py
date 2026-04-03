@@ -43,11 +43,13 @@ class FeedStreamTrack(VideoStreamTrack):
                 import cv2
                 
                 if isinstance(frame_data, np.ndarray):
-                    # Convert BGR (OpenCV default) to RGB for PyAV
-                    rgb_frame = cv2.cvtColor(frame_data, cv2.COLOR_BGR2RGB)
-                    av_frame = av.VideoFrame.from_ndarray(rgb_frame, format='rgb24')
+                    # FeedManager now provides pre-converted RGB frames for WebRTC
+                    # to avoid redundant conversions for every peer.
+                    # We just need to check if we need to convert or if it's already RGB.
+                    # In our optimized pipeline, it's already RGB.
+                    av_frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
                 else:
-                    # In case it's JPEG bytes, we need to decode first
+                    # Fallback for legacy byte sources
                     nparr = np.frombuffer(frame_data, np.uint8)
                     bgr_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)

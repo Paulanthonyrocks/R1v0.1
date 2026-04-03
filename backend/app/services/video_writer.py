@@ -88,10 +88,14 @@ class VideoWriter:
                     break
                 
                 frame = None
-                if isinstance(frame_data, np.ndarray):
-                    frame = frame_data
-                elif isinstance(frame_data, bytes):
-                    np_arr = np.frombuffer(frame_data, np.uint8)
+                # FeedManager now sometimes sends (frame, metrics) tuples
+                actual_frame = frame_data[0] if isinstance(frame_data, tuple) else frame_data
+                
+                if isinstance(actual_frame, np.ndarray):
+                    frame = actual_frame
+                elif isinstance(actual_frame, bytes):
+                    # Fallback for legacy JPEG bytes
+                    np_arr = np.frombuffer(actual_frame, np.uint8)
                     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 
                 if frame is None:

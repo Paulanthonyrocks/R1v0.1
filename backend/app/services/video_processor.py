@@ -115,26 +115,29 @@ class VideoProcessor:
         self._recording_start_time = None
         return True
 
-    def _process_frame_sync(self, raw_frame_bytes: bytes, kpis: Dict) -> Optional[bytes]:
+    def _process_frame_sync(self, frame_input: Any, kpis: Dict) -> Optional[bytes]:
         """
-        Synchronous function to decode, draw, write to file, and re-encode.
-        Run this in a separate thread.
+        Synchronous function to draw overlays, write to file, and re-encode.
         """
-        # Check if we need to process at all.
         # We process if: 1. Recording OR 2. Overlays are enabled and there is data to draw
         has_detections = bool(kpis.get("detections"))
         should_process = self._is_recording or (self._draw_overlays_enabled and has_detections)
 
         if not should_process:
-            return raw_frame_bytes
+            # If not processing, return as is (if bytes) or re-encode if it's np
+            return frame_input if isinstance(frame_input, bytes) else None
 
         try:
-            # Decode
-            np_arr = np.frombuffer(raw_frame_bytes, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            # Handle mixed input types: Raw BGR from SHM (ndarray) or JPEG bytes
+            if isinstance(frame_input, np.ndarray):
+                frame = frame_input
+            else:
+                # Decode JPEG bytes to BGR
+                np_arr = np.frombuffer(frame_input, np.uint8)
+                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
             if frame is None:
-                return raw_frame_bytes
+                return frame_input if isinstance(frame_input, bytes) else None
 
             # Ensure consistent colorspace (OpenCV uses BGR)
             if len(frame.shape) == 2:
@@ -227,17 +230,24 @@ class VideoProcessor:
         
         try:
             while True:
+                # data format: {"frame": visualized_jpeg_or_raw_bytes, "raw_frame": np_bgr, "metrics": ..., "vehicles": ...}
                 data = await frame_queue.get()
-                raw_frame_bytes = data.get("frame")
-                if not raw_frame_bytes: continue
-                
+                visualized_jpeg = data.get("frame")
+                raw_frame_np = data.get("raw_frame")
                 kpis = data.get("metrics", {})
 
-                # Offload CPU-heavy decoding/drawing to thread
+                # If FeedManager provides a pre-encoded visualized frame, use it directly for streaming
+                # This makes the producer-subscriber model O(1) for encoding instead of O(N)
+                if isinstance(visualized_jpeg, bytes) and not self._is_recording:
+                    yield {"frame": visualized_jpeg, "kpis": kpis}
+                    continue
+
+                # If we are recording, we still offload the write to a thread pool
+                # but we prefer the raw_frame_np (no decoding needed!)
                 processed_jpeg_bytes = await loop.run_in_executor(
                     self._executor, 
                     self._process_frame_sync, 
-                    raw_frame_bytes, 
+                    visualized_jpeg if raw_frame_np is None else raw_frame_np, 
                     kpis
                 )
 
