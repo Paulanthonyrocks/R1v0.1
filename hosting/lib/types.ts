@@ -246,6 +246,7 @@ export interface VideoFrameMessage {
   metrics?: SurveillanceFeedMessage;
   vehicles?: { // Detailed vehicle data for frontend visualization
   vehicle_id: string;
+  global_vehicle_id?: string;
   bbox: [number, number, number, number];
   speed: number;
   license_plate: string;

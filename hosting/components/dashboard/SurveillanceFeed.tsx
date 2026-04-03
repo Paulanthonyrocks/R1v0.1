@@ -50,22 +50,48 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [selectedVehicleGlobalId, setSelectedVehicleGlobalId] = useState<string | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
-    // Sticky Selection Logic: 
-    // If we have a global ID selected, ensure it's in the selectedVehicleIds set
-    // This handles cases where the tracker ID changes but ReID stays the same.
+    // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
+    const stickyMapRef = useRef<Map<string, string>>(new Map());
+
+    // Sticky Selection Logic:
+    // When a tracked vehicle's tracker ID changes (e.g. due to frame-skip recovery
+    // or ReID-only re-acquisition), but its global_vehicle_id remains the same,
+    // automatically update the selection to follow the new tracker ID.
+    // Also promotes vehicle_id–based selections to global_vehicle_id when one appears.
     useEffect(() => {
-        if (selectedVehicleGlobalId && vehicles) {
-            const matchingVehicle = vehicles.find(v => v.global_vehicle_id === selectedVehicleGlobalId);
-            if (matchingVehicle) {
-                setSelectedVehicleIds(prev => {
-                    if (prev.has(matchingVehicle.vehicle_id)) return prev;
-                    const next = new Set(prev);
-                    next.add(matchingVehicle.vehicle_id);
-                    return next;
-                });
+        if (!vehicles || vehicles.length === 0) return;
+
+        setSelectedVehicleIds(prev => {
+            let next: Set<string> | null = null; // lazy copy – avoid re-render if nothing changed
+
+            for (const v of vehicles) {
+                const gid = v.global_vehicle_id;
+                if (!gid) continue;
+
+                // Case 1: global_vehicle_id is already selected → clean up any stale tracker ID
+                if (prev.has(gid)) {
+                    const lastKnown = stickyMapRef.current.get(gid);
+                    if (lastKnown && lastKnown !== v.vehicle_id && prev.has(lastKnown)) {
+                        if (!next) next = new Set(prev);
+                        next.delete(lastKnown);
+                    }
+                    stickyMapRef.current.set(gid, v.vehicle_id);
+                    continue;
+                }
+
+                // Case 2: vehicle was selected by its vehicle_id before a global_vehicle_id
+                // was assigned. Promote the selection to the global_vehicle_id for stickiness.
+                if (prev.has(v.vehicle_id)) {
+                    if (!next) next = new Set(prev);
+                    next.delete(v.vehicle_id);
+                    next.add(gid);
+                    stickyMapRef.current.set(gid, v.vehicle_id);
+                }
             }
-        }
-    }, [selectedVehicleGlobalId, vehicles]);
+
+            return next ?? prev;
+        });
+    }, [vehicles]);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -207,10 +233,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (clickedVehicle) {
             const vid = clickedVehicle.vehicle_id;
             const gid = clickedVehicle.global_vehicle_id;
-            
+            const idToToggle = gid || vid;
+            const isDeselecting = selectedVehicleIds.has(idToToggle);
+
             setSelectedVehicleIds(prev => {
                 const newSet = new Set(prev);
-                const idToToggle = gid || vid;
                 if (newSet.has(idToToggle)) {
                     newSet.delete(idToToggle);
                 } else {
@@ -219,15 +246,23 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 return newSet;
             });
 
+            // Update gallery panel & sticky map
             if (gid) {
-                setSelectedVehicleGlobalId(gid);
+                if (isDeselecting) {
+                    // Clear gallery only if this was the displayed global ID
+                    if (selectedVehicleGlobalId === gid) {
+                        setSelectedVehicleGlobalId(null);
+                    }
+                    stickyMapRef.current.delete(gid);
+                } else {
+                    setSelectedVehicleGlobalId(gid);
+                    stickyMapRef.current.set(gid, vid);
+                }
             } else {
                 setSelectedVehicleGlobalId(null);
             }
         } else {
-            // No vehicle clicked, user might expect to clear selection?
-            // setSelectedVehicleIds(new Set());
-            // setSelectedVehicleGlobalId(null);
+            // Click on empty area — no-op (preserve multi-selection)
         }
     };
 
