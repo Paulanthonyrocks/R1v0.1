@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import queue
 from multiprocessing import Queue as MPQueue
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
