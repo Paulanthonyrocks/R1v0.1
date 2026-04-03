@@ -133,26 +133,25 @@ def ingestion_worker(
                     }
 
                 fh, fw = resized.shape[:2]
-                try:
-                    central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
-                    metrics.frames_processed += 1
-                    processed_frames_count += 1
-                except queue.Full:
-                    # CRITICAL: If the queue is full and we created an SHM block, we MUST unlink it
-                    # to prevent a massive memory leak in /dev/shm
-                    if use_shm and "shm_name" in frame_data:
-                        try:
-                            SharedFrameManager.cleanup_shm(frame_data["shm_name"])
-                        except Exception as e:
-                            logger.error(f"Failed to cleanup SHM on queue drop: {e}")
-                    metrics.frames_dropped += 1
-                except Exception as e:
-                    # Cleanup SHM on other put errors as well
-                    if use_shm and "shm_name" in frame_data:
-                        try: SharedFrameManager.cleanup_shm(frame_data["shm_name"])
-                        except: pass
-                    metrics.errors += 1
-                    logger.error(f"Error putting frame to queue: {e}")
+                central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
+                metrics.frames_processed += 1
+                processed_frames_count += 1
+            except queue.Full:
+                # CRITICAL: If the queue is full and we created an SHM block, we MUST unlink it
+                # to prevent a massive memory leak in /dev/shm
+                if use_shm and "shm_name" in frame_data:
+                    try:
+                        SharedFrameManager.cleanup_shm(frame_data["shm_name"])
+                    except Exception as e:
+                        logger.error(f"Failed to cleanup SHM on queue drop: {e}")
+                metrics.frames_dropped += 1
+            except Exception as e:
+                # Cleanup SHM on other put errors as well
+                if use_shm and isinstance(frame_data, dict) and "shm_name" in frame_data:
+                    try: SharedFrameManager.cleanup_shm(frame_data["shm_name"])
+                    except: pass
+                metrics.errors += 1
+                logger.error(f"Error putting frame to queue: {e}")
 
             if metrics.frames_processed % 100 == 0:
                 logger.info(f"[{feed_id}] Processed {metrics.frames_processed} frames (Current skip: {current_skip})")
