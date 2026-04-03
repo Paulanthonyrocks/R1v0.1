@@ -318,13 +318,11 @@ def inference_worker(
                         # Re-calculate size after drain
                         q_size = central_input_queue.qsize()
 
-                    # Scale skip_frames up to 2x base value or 10 max
-                    # load_factor is 0.0 at 50% full, 1.0 at 100% full
+                    # Performance Optimization: More gradual skip scaling for CPU-only systems
                     load_factor = (q_size - (q_max * 0.5)) / (q_max * 0.5)
-                    # Use a more gradual scaling: base + (load_factor * 12) up to 15
-                    # Ensure we don't go below the base skip_frames (especially after a drain)
-                    adaptive_skip = max(skip_frames, int(skip_frames + (load_factor * 12)))
-                    current_skip = min(15, adaptive_skip)
+                    # Use a smaller scaling factor (6 instead of 12) to avoid jumping to 15 FPS skips too quickly
+                    adaptive_skip = max(skip_frames, int(skip_frames + (load_factor * 6)))
+                    current_skip = min(12, adaptive_skip) # Cap at 12 to maintain at least 1-2 FPS on target 15
                 else:
                     current_skip = skip_frames
 
@@ -338,7 +336,8 @@ def inference_worker(
                 # Collect batch of frames
                 batch_tasks = []
                 batch_size = config.get("performance", {}).get("batch_size", 1)
-                inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
+                # Increase timeout to allow batching to actually work on slow CPUs
+                inference_timeout = config.get("performance", {}).get("inference_timeout", 0.1)
 
                 try:
                     first_task = central_input_queue.get(timeout=0.1)

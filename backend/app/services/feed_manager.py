@@ -1092,21 +1092,29 @@ class FeedManager:
                     # --- Zero-Copy SHM Extraction ---
                     np_frame = None
                     shm_name_to_cleanup = None
-                    if isinstance(frame_bytes, dict) and "shm_name" in frame_bytes:
-                        try:
-                            shm_name = frame_bytes["shm_name"]
-                            shape = frame_bytes["shape"]
-                            dtype = frame_bytes["dtype"]
-                            # Access the shared memory buffer
-                            shm_np, shm_obj = SharedFrameManager.access_shm(shm_name, shape, dtype)
-                            # Make a LOCAL copy or just use the reference if we are within the same process
-                            # For WebRTC and Encoding, we can use the reference, but we must ensure 
-                            # cleanup happens AFTER all synchronous uses.
-                            np_frame = shm_np
-                            shm_name_to_cleanup = shm_name
-                        except Exception as e:
-                            logger.error(f"Failed to access SHM in FeedManager: {e}")
-                            np_frame = None
+                    if isinstance(frame_bytes, dict):
+                        if "shm_name" in frame_bytes:
+                            try:
+                                shm_name = frame_bytes["shm_name"]
+                                shape = frame_bytes["shape"]
+                                dtype = frame_bytes["dtype"]
+                                shm_np, _ = SharedFrameManager.access_shm(shm_name, shape, dtype)
+                                np_frame = shm_np
+                                shm_name_to_cleanup = shm_name
+                            except Exception as e:
+                                logger.error(f"Failed to access SHM in FeedManager: {e}")
+                                np_frame = None
+                        elif "raw_bytes" in frame_bytes:
+                            try:
+                                np_frame = np.frombuffer(
+                                    frame_bytes["raw_bytes"], 
+                                    dtype=frame_bytes.get("dtype", "uint8")
+                                ).reshape(frame_bytes["shape"])
+                                if frame_idx % 60 == 0:
+                                    logger.debug(f"[{feed_id}] Reconstructed np_frame from raw_bytes for frame {frame_idx}")
+                            except Exception as e:
+                                logger.error(f"Failed to reconstruct raw_bytes frame in FeedManager: {e}")
+                                np_frame = None
 
                     # 0. Enrich vehicles with global IDs from central manager
                     if vehicles and self._reid_manager:

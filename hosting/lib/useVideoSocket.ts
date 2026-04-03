@@ -40,9 +40,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const smoothedFrameTimeRef = useRef<number>(0);
     const lastFpsUpdateRef = useRef<number>(0);
     const lastStateUpdateRef = useRef<number>(0);
-    const lastVehiclesUpdateTimeRef = useRef<number>(0);
+    const lastVehiclesUpdateTimeRef = useRef<number>(performance.now());
+    const lastSuccessfulFrameTimeRef = useRef<number>(performance.now()); // Track last successful frame process
     const STATE_UPDATE_INTERVAL = 200; // Update UI state at most every 200ms (5fps)
     const ANNOTATION_PERSISTENCE_MS = 500; // Retain annotations for 500ms during lag
+    const FRAME_STALENESS_THRESHOLD = 5000; // 5 seconds of no frames = stale
     const FPS_EMA_ALPHA = 0.1;
 
     const frameCountRef = useRef<number>(0);
@@ -231,6 +233,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
         }
         lastFrameTimeRef.current = now;
+        lastSuccessfulFrameTimeRef.current = now;
     }, [streamId]);
 
     useEffect(() => {
@@ -251,6 +254,22 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         }
 
         const unsubscribeFrame = client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame, streamId);
+
+        const stalenessInterval = setInterval(() => {
+            const now = performance.now();
+            if (lastSuccessfulFrameTimeRef.current > 0 && 
+                now - lastSuccessfulFrameTimeRef.current > FRAME_STALENESS_THRESHOLD) {
+                if (frameRef.current) {
+                    console.warn(`[useVideoSocket] Video stream for ${streamId} is stale (>5s). Clearing frame.`);
+                    if (frameRef.current?.image instanceof ImageBitmap) {
+                        frameRef.current.image.close();
+                    }
+                    frameRef.current = null;
+                    setFrameRate(0);
+                    setError('Video stream timed out. Waiting for new frames...');
+                }
+            }
+        }, 1000);
 
         const unsubscribeStatus = client.onStatusChange((status, message) => {
             console.log(`[useVideoSocket] WebSocket status update: ${status}. Feed: ${streamId}. Client: ${client.getInstanceId()}`);
@@ -274,6 +293,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
             unsubscribeFrame();
             unsubscribeStatus();
+            clearInterval(stalenessInterval);
             if (frameRef.current?.image instanceof ImageBitmap) {
                 frameRef.current.image.close();
                 frameRef.current = null;
