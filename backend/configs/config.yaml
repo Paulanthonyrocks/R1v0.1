@@ -5,6 +5,8 @@ analytics_service:
     interval: 300
   traffic_prediction:
     enabled: false
+calibration:
+  drift_threshold_px: 3.0
 anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
