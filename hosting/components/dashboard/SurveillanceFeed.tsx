@@ -686,4 +686,3 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';
 export default SurveillanceFeed;
-port default SurveillanceFeed;
