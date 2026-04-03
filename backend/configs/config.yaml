@@ -43,7 +43,7 @@ feed_manager:
   error_check_interval: 5.0
   max_concurrent_feeds: 5
 file_watcher:
-  enabled: true
+  enabled: false
   watch_directory: data/new_sample_videos
 firebase_admin:
   auth_enabled: true
@@ -446,7 +446,7 @@ perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
 post_startup_processing:
-  enabled: true
+  enabled: false
   sample_feeds:
   - is_looped: true
     latitude: 34.0522
@@ -503,7 +503,7 @@ v2x:
   broadcast_ip: 255.255.255.255
   broadcast_port: 5005
   directive_interval_sec: 2.0
-  enabled: true
+  enabled: false
 vehicle_detection:
   bbox_expansion_factor: 0.05
   car_classification_enabled: false
@@ -588,16 +588,7 @@ websocket:
   ping_interval: 20
   pong_timeout: 90
   token_refresh_interval: 300
-
-erlay
-- Lane Lines
-websocket:
-  max_connections: 1000
-  ping_interval: 20
-  pong_timeout: 90
-  token_refresh_interval: 300
 simulation:
   enabled: false
 weather_service:
   enabled: false
-

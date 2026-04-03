@@ -37,6 +37,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [showROI, setShowROI] = useState<boolean>(false);
     const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
     const [showLaneOverlays, setShowLaneOverlays] = useState<boolean>(false);
+    const [showAllDetections, setShowAllDetections] = useState<boolean>(false);
+    const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
     const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
 
@@ -186,16 +188,29 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         });
 
         if (clickedVehicle) {
+            const vid = clickedVehicle.vehicle_id;
             const gid = clickedVehicle.global_vehicle_id;
-            console.log("Selected vehicle:", gid || clickedVehicle.vehicle_id);
+            
+            setSelectedVehicleIds(prev => {
+                const newSet = new Set(prev);
+                const idToToggle = gid || vid;
+                if (newSet.has(idToToggle)) {
+                    newSet.delete(idToToggle);
+                } else {
+                    newSet.add(idToToggle);
+                }
+                return newSet;
+            });
+
             if (gid) {
                 setSelectedVehicleGlobalId(gid);
             } else {
-                console.warn("Vehicle selected but no global_vehicle_id available yet.");
                 setSelectedVehicleGlobalId(null);
             }
         } else {
-            setSelectedVehicleGlobalId(null);
+            // No vehicle clicked, user might expect to clear selection?
+            // setSelectedVehicleIds(new Set());
+            // setSelectedVehicleGlobalId(null);
         }
     };
 
@@ -255,7 +270,9 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         showBoundingBoxes: showBoundingBoxes,
                         showVehicleDetails: showVehicleDetails,
                         showTrajectories: showTrajectories,
-                        showLaneOverlays: showLaneOverlays
+                        showLaneOverlays: showLaneOverlays,
+                        selectedVehicleIds: selectedVehicleIds,
+                        showAllDetections: showAllDetections
                     });
 
                     // Draw ROI - p.x and p.y are normalized [0, 1]
@@ -662,15 +679,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
            prevProps.feed.status === nextProps.feed.status &&
            prevProps.feed.name === nextProps.feed.name &&
            prevProps.feed.source === nextProps.feed.source &&
-           prevProps.minimalControls === nextProps.minimalControls &&
-           JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
-});
-
-SurveillanceFeed.displayName = 'SurveillanceFeed';
-export default SurveillanceFeed;);
-
-SurveillanceFeed.displayName = 'SurveillanceFeed';
-export default SurveillanceFeed;nextProps.feed.source &&
            prevProps.minimalControls === nextProps.minimalControls &&
            JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
 });
