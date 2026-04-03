@@ -296,7 +296,8 @@ def inference_worker(
                     # load_factor is 0.0 at 50% full, 1.0 at 100% full
                     load_factor = (q_size - (q_max * 0.5)) / (q_max * 0.5)
                     # Use a more gradual scaling: base + (load_factor * 12) up to 15
-                    adaptive_skip = int(skip_frames + (load_factor * 12))
+                    # Ensure we don't go below the base skip_frames (especially after a drain)
+                    adaptive_skip = max(skip_frames, int(skip_frames + (load_factor * 12)))
                     current_skip = min(15, adaptive_skip)
                 else:
                     current_skip = skip_frames
