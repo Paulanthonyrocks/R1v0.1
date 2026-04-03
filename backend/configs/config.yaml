@@ -507,6 +507,12 @@ v2x:
   broadcast_port: 5005
   directive_interval_sec: 2.0
   enabled: false
+route_optimization:
+  enabled: false
+personalized_routing:
+  enabled: false
+advanced_analytics:
+  enabled: false
 vehicle_detection:
   bbox_expansion_factor: 0.05
   car_classification_enabled: false

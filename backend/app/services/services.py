@@ -310,26 +310,29 @@ class ServiceRegistry:
         traffic_predictor = self._analytics_service.get_traffic_predictor()
 
         # Route Optimization Service
-        self._route_optimization_service = RouteOptimizationService(
-            traffic_predictor=traffic_predictor,
-            data_cache=data_cache,
-            weather_service=self._weather_service
-        )
-        logger.info("RouteOptimizationService initialized.")
+        if config.get("route_optimization", {}).get("enabled", True):
+            self._route_optimization_service = RouteOptimizationService(
+                traffic_predictor=traffic_predictor,
+                data_cache=data_cache,
+                weather_service=self._weather_service
+            )
+            logger.info("RouteOptimizationService initialized.")
 
         # Personalized Routing Service
-        self._personalized_routing_service = PersonalizedRoutingService(
-            database_manager=db_manager,
-            traffic_predictor=traffic_predictor,
-            data_cache=data_cache,
-        )
-        logger.info("PersonalizedRoutingService initialized.")
+        if config.get("personalized_routing", {}).get("enabled", True):
+            self._personalized_routing_service = PersonalizedRoutingService(
+                database_manager=db_manager,
+                traffic_predictor=traffic_predictor,
+                data_cache=data_cache,
+            )
+            logger.info("PersonalizedRoutingService initialized.")
 
         # Advanced Analytics Service
-        self._advanced_analytics_service = AdvancedAnalyticsService(
-            db_manager=db_manager
-        )
-        logger.info("AdvancedAnalyticsService initialized.")
+        if config.get("advanced_analytics", {}).get("enabled", True):
+            self._advanced_analytics_service = AdvancedAnalyticsService(
+                db_manager=db_manager
+            )
+            logger.info("AdvancedAnalyticsService initialized.")
 
     async def _initialize_optional_services(
         self, 
