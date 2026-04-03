@@ -146,9 +146,9 @@ def inference_worker(
     logger.info(f"[Worker {worker_id}] Inference device: {device}")
 
     if device.type == "cpu":
-        # Increase threads to 4 for better CPU utilization in Colab
-        torch.set_num_threads(4)
-        logger.info(f"[Worker {worker_id}] set torch.set_num_threads to 4 for CPU processing.")
+        # Decrease threads to 2 to match physical core count and avoid oversubscription
+        torch.set_num_threads(2)
+        logger.info(f"[Worker {worker_id}] set torch.set_num_threads to 2 for CPU processing.")
 
     model_path = vehicle_det_cfg.get("model_path")
 
@@ -621,10 +621,11 @@ def inference_worker(
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
                 
-                # Post-Processing Cleanup (including SHM)
-                for meta in batch_meta:
-                    if meta.get("shm_name"):
-                        SharedFrameManager.cleanup_shm(meta["shm_name"])
+                # Post-Processing Cleanup (Deferred to FeedManager for Zero-Copy pipeline)
+                # We NO LONGER cleanup SHM here if it's being passed back for broadcasting/WebRTC
+                # for meta in batch_meta:
+                #     if meta.get("shm_name"):
+                #         SharedFrameManager.cleanup_shm(meta["shm_name"])
 
                 now = time.time()
                 if now - last_metrics_log > 30.0:

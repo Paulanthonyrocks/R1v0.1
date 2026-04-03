@@ -109,9 +109,10 @@ class FeedManager:
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
-        self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        perf_cfg = self.config.get("performance", {})
+        self._inference_pool_size = perf_cfg.get("inference_pool_size", 2)
         import torch
-        if not (self.config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available()):
+        if not (perf_cfg.get("gpu_acceleration", False) and torch.cuda.is_available()):
             # Allow more workers on multi-core CPU systems to handle partitioned feeds
             cpu_count = os.cpu_count() or 1
             # We cap at 8 for CPU to allow more throughput if user desires, though context switching might increase
@@ -119,8 +120,11 @@ class FeedManager:
             logger.info(f"GPU unavailable. Using {self._inference_pool_size} CPU inference workers (CPU Cores: {cpu_count}).")
 
         redis_cfg = self.config.get("redis", {})
-        # We divide the QUEUE_MAX_SIZE among workers
-        per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
+        # Scale input queue size based on RAM and worker count
+        # Default to 250 frames (~225MB) to buffer spikes
+        config_q_max = perf_cfg.get("queue_max_size", 250)
+        per_worker_q_size = max(50, config_q_max // max(1, self._inference_pool_size))
+        
         use_redis = redis_cfg.get("enabled", False)
         if use_redis:
             try:
@@ -132,7 +136,7 @@ class FeedManager:
                     RedisQueue(f"inference_input_{i}", maxsize=per_worker_q_size) 
                     for i in range(self._inference_pool_size)
                 ]
-                self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
+                self._central_output_queue = RedisQueue("central_output", maxsize=config_q_max)
                 
                 # Flush queues to avoid stale/corrupt data from previous versions or crashes
                 for q in self._inference_input_queues:
@@ -145,7 +149,7 @@ class FeedManager:
                 use_redis = False
         if not use_redis:
             self._inference_input_queues = [ctx.Queue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
-            self._central_output_queue = ctx.Queue(maxsize=QUEUE_MAX_SIZE)
+            self._central_output_queue = ctx.Queue(maxsize=config_q_max)
             logger.info("Using Multiprocessing Queues for inference.")
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
@@ -1034,6 +1038,7 @@ class FeedManager:
                 if not items_buffer:
                     await asyncio.sleep(0.001)
                     continue
+                from app.core.worker_utils import SharedFrameManager
                 for item in items_buffer:
                     feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
                     entry = self.process_registry.get(feed_id)
@@ -1044,6 +1049,26 @@ class FeedManager:
                     if entry.get("timer") and frame_idx != entry.get("last_processed_idx"):
                         entry["timer"].tick("loop_total")
                         entry["last_processed_idx"] = frame_idx
+                        
+                    # --- Zero-Copy SHM Extraction ---
+                    np_frame = None
+                    shm_name_to_cleanup = None
+                    if isinstance(frame_bytes, dict) and "shm_name" in frame_bytes:
+                        try:
+                            shm_name = frame_bytes["shm_name"]
+                            shape = frame_bytes["shape"]
+                            dtype = frame_bytes["dtype"]
+                            # Access the shared memory buffer
+                            shm_np, shm_obj = SharedFrameManager.access_shm(shm_name, shape, dtype)
+                            # Make a LOCAL copy or just use the reference if we are within the same process
+                            # For WebRTC and Encoding, we can use the reference, but we must ensure 
+                            # cleanup happens AFTER all synchronous uses.
+                            np_frame = shm_np
+                            shm_name_to_cleanup = shm_name
+                        except Exception as e:
+                            logger.error(f"Failed to access SHM in FeedManager: {e}")
+                            np_frame = None
+
                     # 0. Enrich vehicles with global IDs from central manager
                     if vehicles and self._reid_manager:
                         reid_tasks = []
@@ -1079,17 +1104,22 @@ class FeedManager:
                     except queue.Full:
                         self._dropped_analytics_count += 1
                         # Drop analytics for this frame if backed up
+                    
                     # 2. Immediate Frame Distribution (For video subscribers)
+                    # Use np_frame if available (zero-copy), otherwise fallback to frame_bytes
+                    delivery_frame = np_frame if np_frame is not None else frame_bytes
+                    
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
-                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
+                                sub_q.put_nowait({"frame": delivery_frame, "metrics": metrics, "vehicles": vehicles})
                             except asyncio.QueueFull:
                                 pass
                     # 3. Route to Video Writer
                     if entry.get("video_writer_queue"):
                         try:
-                            entry["video_writer_queue"].put_nowait((frame_bytes, metrics))
+                            # Video writer needs bytes or numpy
+                            entry["video_writer_queue"].put_nowait((delivery_frame, metrics))
                         except queue.Full:
                             pass
                     # 4. Send to DB Queue for Persistence and ReID Registration
@@ -1119,7 +1149,7 @@ class FeedManager:
                     if feed_id in self._webrtc_queues:
                         for pc_id, route_q in list(self._webrtc_queues[feed_id].items()):
                             try:
-                                route_q.put_nowait(frame_bytes)
+                                route_q.put_nowait(delivery_frame)
                             except asyncio.QueueFull:
                                 pass # Drop frame gracefully if WebRTC socket is lagging
                     # 6. Broadcast Telemetry to WebSocket Clients
@@ -1131,7 +1161,7 @@ class FeedManager:
                                 loop = asyncio.get_running_loop()
                                 msg_bytes = await loop.run_in_executor(
                                     self._cpu_executor, self._serialize_broadcast_payload,
-                                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
+                                    feed_id, frame_idx, delivery_frame, metrics, vehicles, extra
                                 )
                                 if msg_bytes:
                                     try:
@@ -1153,6 +1183,18 @@ class FeedManager:
                                             pass
                             except Exception as e:
                                 logger.error(f"Error enqueuing broadcast for {feed_id}: {e}")
+                    
+                    # --- SHM Cleanup ---
+                    if shm_name_to_cleanup:
+                        try:
+                            # We must unlink high-resolution frames as they consume /dev/shm
+                            # Since we've already passed delivery_frame (the reference) to 
+                            # internal queues, we can close our local handle. 
+                            # The unlink will remove the global name.
+                            SharedFrameManager.cleanup_shm(shm_name_to_cleanup)
+                        except Exception as e:
+                            logger.error(f"Error cleaning up SHM {shm_name_to_cleanup}: {e}")
+
                 # Yield control
                 await asyncio.sleep(0.001)
             except Exception as e:
@@ -1217,29 +1259,39 @@ class FeedManager:
             # Phase 14: Video transmission is moved entirely to WebRTC Native.
             # We explicitly drop frame_bytes and bg images from the WebSocket packet.
             # UPDATE: Re-enabled WebSocket fallback for environments where WebRTC fails (e.g. Colab/Localtunnel)
-            if frame_bytes:
-                # OPTIMIZATION: If we received raw bytes, we must JPEG encode for the frontend
-                if isinstance(frame_bytes, dict) and "raw_bytes" in frame_bytes:
+            if frame_bytes is not None:
+                # OPTIMIZATION: Handle both raw bytes dict and direct numpy frames (from SHM)
+                np_frame = None
+                if isinstance(frame_bytes, np.ndarray):
+                    np_frame = frame_bytes
+                elif isinstance(frame_bytes, dict) and "raw_bytes" in frame_bytes:
                     try:
-                        # Reconstruct numpy array
                         np_frame = np.frombuffer(
                             frame_bytes["raw_bytes"], 
                             dtype=frame_bytes.get("dtype", "uint8")
                         ).reshape(frame_bytes["shape"])
-                        
-                        # Encode to JPEG for WebSocket (Quality 60 for bandwidth/CPU balance)
-                        # This runs in our ThreadPoolExecutor, so it doesn't block inference
+                    except Exception as e:
+                        logger.error(f"Error reconstructing frame from raw_bytes: {e}")
+                
+                if np_frame is not None:
+                    try:
+                        # CPU Saver: Only encode for WebSocket at a target reduced rate (e.g. 5 FPS max)
+                        # or if this is a 'should_detect' frame which usually has interesting events.
+                        # For now, we encode at quality 60 to balance speed and visibility.
                         success, enc_buffer = cv2.imencode(".jpg", np_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
                         if success:
                             payload["frame"] = enc_buffer.tobytes()
                         else:
                             payload["frame"] = None
                     except Exception as e:
-                        logger.error(f"Error encoding raw frame for broadcast: {e}")
+                        logger.error(f"Error encoding frame for broadcast: {e}")
                         payload["frame"] = None
                 else:
-                    # Legacy fallback
-                    payload["frame"] = frame_bytes
+                    # Legacy fallback or already encoded bytes
+                    if isinstance(frame_bytes, (bytes, bytearray)):
+                        payload["frame"] = frame_bytes
+                    else:
+                        payload["frame"] = None
             
             if extra:
                 if "rois" in extra:

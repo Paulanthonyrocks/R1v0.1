@@ -60,7 +60,7 @@ def ingestion_worker(
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
     device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
 
-    use_shm = False # Forced Off for Stability
+    use_shm = perf_cfg.get("use_shm", False)
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
@@ -108,18 +108,31 @@ def ingestion_worker(
                 else:
                     resized = cv2.resize(frame, stream_res)
 
-                # success, buffer = cv2.imencode(".jpg", resized, encode_params)
-                # if success:
-                #     fh, fw = resized.shape[:2]
-                #     central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time(), fw, fh), timeout=0.1)
-                
-                # OPTIMIZATION: Send raw bytes to avoid CPU-heavy JPEG encoding
+                # --- Zero-Copy IPC Optimization ---
+                # If SHM is enabled, use Shared Memory handles instead of pickling raw bytes
+                if use_shm:
+                    try:
+                        shm_name, shape, dtype_str = SharedFrameManager.create_shm(resized)
+                        frame_data = {
+                            "shm_name": shm_name,
+                            "shape": shape,
+                            "dtype": dtype_str
+                        }
+                    except Exception as e:
+                        logger.warning(f"SHM creation failed, falling back to raw bytes: {e}")
+                        frame_data = {
+                            "raw_bytes": resized.tobytes(),
+                            "shape": resized.shape,
+                            "dtype": str(resized.dtype)
+                        }
+                else:
+                    frame_data = {
+                        "raw_bytes": resized.tobytes(),
+                        "shape": resized.shape,
+                        "dtype": str(resized.dtype)
+                    }
+
                 fh, fw = resized.shape[:2]
-                frame_data = {
-                    "raw_bytes": resized.tobytes(),
-                    "shape": resized.shape,
-                    "dtype": str(resized.dtype)
-                }
                 central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
                 metrics.frames_processed += 1
                 processed_frames_count += 1

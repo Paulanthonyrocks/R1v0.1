@@ -442,6 +442,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
+  queue_max_size: 500
 perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
