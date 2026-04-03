@@ -188,7 +188,7 @@ class TrackingManager:
         # 5. Finalize matches and handle lost
         final_matched_all = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
-            if tid not in final_matched:
+            if tid not in final_matched_all:
                 # Tentative tracks that are missed are immediately dropped
                 if track.get("status") == "tentative":
                     continue
