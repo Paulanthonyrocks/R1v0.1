@@ -161,11 +161,11 @@ class VideoProcessor:
                     return jpeg_frame.tobytes()
             
             # If we recorded but didn't draw overlays, or drawing failed, return original
-            return raw_frame_bytes
+            return frame_input if isinstance(frame_input, bytes) else None
 
         except Exception as e:
             logger.error(f"Error in sync frame processing: {e}")
-            return raw_frame_bytes
+            return frame_input if isinstance(frame_input, bytes) else None
 
     def _handle_recording(self, frame: np.ndarray):
         """Helper to initialize writer and write frame."""
