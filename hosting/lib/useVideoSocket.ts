@@ -44,7 +44,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const lastSuccessfulFrameTimeRef = useRef<number>(performance.now()); // Track last successful frame process
     const STATE_UPDATE_INTERVAL = 200; // Update UI state at most every 200ms (5fps)
     const ANNOTATION_PERSISTENCE_MS = 500; // Retain annotations for 500ms during lag
-    const FRAME_STALENESS_THRESHOLD = 5000; // 5 seconds of no frames = stale
+    const FRAME_STALENESS_THRESHOLD = 20000; // Increased to 20s to accommodate low-FPS streams (e.g., 0.05 FPS)
     const FPS_EMA_ALPHA = 0.1;
 
     const frameCountRef = useRef<number>(0);
@@ -260,7 +260,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             if (lastSuccessfulFrameTimeRef.current > 0 && 
                 now - lastSuccessfulFrameTimeRef.current > FRAME_STALENESS_THRESHOLD) {
                 if (frameRef.current) {
-                    console.warn(`[useVideoSocket] Video stream for ${streamId} is stale (>5s). Clearing frame.`);
+                    console.warn(`[useVideoSocket] Video stream for ${streamId} is stale (>${FRAME_STALENESS_THRESHOLD/1000}s). Clearing frame.`);
                     if (frameRef.current?.image instanceof ImageBitmap) {
                         frameRef.current.image.close();
                     }
