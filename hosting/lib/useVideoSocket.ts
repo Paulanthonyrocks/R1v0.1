@@ -43,8 +43,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const lastVehiclesUpdateTimeRef = useRef<number>(performance.now());
     const lastSuccessfulFrameTimeRef = useRef<number>(performance.now()); // Track last successful frame process
     const STATE_UPDATE_INTERVAL = 200; // Update UI state at most every 200ms (5fps)
-    const ANNOTATION_PERSISTENCE_MS = 500; // Retain annotations for 500ms during lag
-    const FRAME_STALENESS_THRESHOLD = 20000; // Increased to 20s to accommodate low-FPS streams (e.g., 0.05 FPS)
+    const FRAME_STALENESS_THRESHOLD = 20000; // 20 seconds of no frames = stale
+    const ANNOTATION_PERSISTENCE_MS = FRAME_STALENESS_THRESHOLD; // Keep annotations until the stream is considered stale
     const FPS_EMA_ALPHA = 0.1;
 
     const frameCountRef = useRef<number>(0);
