@@ -1,12 +1,12 @@
 accel_threshold_mps2: 0.5
+advanced_analytics:
+  enabled: false
 analytics_service:
   node_congestion_broadcast:
     enabled: true
     interval: 300
   traffic_prediction:
     enabled: false
-calibration:
-  drift_threshold_px: 3.0
 anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
@@ -16,6 +16,8 @@ behavior_analysis:
   lane_change_buffer: 20
   speed_limit: 60
   stopped_speed_threshold_kmh: 5
+calibration:
+  drift_threshold_px: 3.0
 database:
   cache_size: 128
   chunk_size: 100
@@ -57,7 +59,11 @@ incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
 inference:
+  batch_size: 4
+  detection_model: models/yolov8n.engine
   device: cuda
+  num_workers: 1
+  use_tensorrt: true
 ingestion:
   shared_memory_ipc: false
 interface:
@@ -432,7 +438,6 @@ performance:
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
-  video_gpu_acceleration: true
   image_gpu_acceleration: true
   inference_pool_size: 2
   inference_timeout: 0.05
@@ -441,12 +446,15 @@ performance:
   memory_limit_percent: 95
   min_global_skip_factor: 1.0
   queue_fullness_threshold_for_skip_increase: 0.8
+  queue_max_size: 500
   skip_factor_adjustment_interval: 360.0
   skip_factor_decrease_step: 0.05
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  queue_max_size: 500
+  video_gpu_acceleration: true
+personalized_routing:
+  enabled: false
 perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
@@ -496,6 +504,10 @@ roi_processing:
   - 480
   enabled: false
   polygon_points: null
+route_optimization:
+  enabled: false
+simulation:
+  enabled: false
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:
@@ -508,12 +520,6 @@ v2x:
   broadcast_ip: 255.255.255.255
   broadcast_port: 5005
   directive_interval_sec: 2.0
-  enabled: false
-route_optimization:
-  enabled: false
-personalized_routing:
-  enabled: false
-advanced_analytics:
   enabled: false
 vehicle_detection:
   bbox_expansion_factor: 0.05
@@ -589,17 +595,15 @@ video_output:
   - 640
   - 480
 video_processing:
-  target_fps: 10
   adaptive_streaming: false
+  target_fps: 10
 vis_options_default:
 - Grid Overlay
 - Lane Lines
+weather_service:
+  enabled: false
 websocket:
   max_connections: 1000
   ping_interval: 20
   pong_timeout: 90
   token_refresh_interval: 300
-simulation:
-  enabled: false
-weather_service:
-  enabled: false
