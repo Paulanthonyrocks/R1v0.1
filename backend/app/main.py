@@ -1,7 +1,7 @@
 import os
 # --- Hardware Optimization Flags ---
-# Force CPU usage if USE_GPU is false or not set (since user is on CPU)
-if os.getenv("USE_GPU", "false").lower() == "false":
+# Default to GPU usage if USE_GPU is not set (since user is on GPU environment)
+if os.getenv("USE_GPU", "true").lower() == "false":
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "" # Clear any potential GPU capture options
     

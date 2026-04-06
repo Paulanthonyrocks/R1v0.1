@@ -67,6 +67,15 @@ class DatabaseError(Exception):
 
 
 # --- DatabaseManager (Merged and Corrected) ---
+# --- Retry Decorators ---
+from sqlalchemy.exc import OperationalError as SAOperationalError
+db_write_retry_decorator = retry(
+    wait=wait_exponential(multiplier=0.2, min=0.2, max=3),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type((sqlite3.OperationalError, SAOperationalError)),
+    reraise=True
+)
+
 class DatabaseManager:
     def __init__(self, config: Dict):
         self.sqlite_db_path: Optional[Path] = None

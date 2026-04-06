@@ -127,9 +127,10 @@ class CoreModule:
             self._init_ocr()
 
     def _check_gpu_availability(self) -> str:
-        """Checks for GPU availability for YOLO and engines."""
-        if torch.cuda.is_available():
-            logger.info(f"[{self.feed_id}] GPU detected. Using CUDA.")
+        """Checks for GPU availability for YOLO and engines, respecting config."""
+        use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
+        if use_gpu and torch.cuda.is_available():
+            logger.info(f"[{self.feed_id}] GPU acceleration enabled and detected. Using CUDA.")
             return "0" 
         return "cpu"
 

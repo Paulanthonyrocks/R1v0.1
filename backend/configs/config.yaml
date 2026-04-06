@@ -57,7 +57,7 @@ incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
 inference:
-  device: cpu
+  device: cuda
 ingestion:
   shared_memory_ipc: false
 interface:
@@ -418,7 +418,7 @@ ocr_engine:
     - -1
     - -1
   use_gemini_ocr: false
-  use_gpu_ocr: false
+  use_gpu_ocr: true
   use_tesseract: true
 openvino:
   reid_model_path: models/OpenVino/reid_model.xml
@@ -431,7 +431,9 @@ performance:
   batch_size: 1
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
-  gpu_acceleration: false
+  gpu_acceleration: true
+  video_gpu_acceleration: true
+  image_gpu_acceleration: true
   inference_pool_size: 2
   inference_timeout: 0.05
   long_sleep_after_increase: 10
@@ -549,7 +551,7 @@ vehicle_detection:
     model_path: ''
     similarity_threshold: 0.65
     use_appearance_in_tracking: true
-    use_openvino: true
+    use_openvino: false
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
@@ -562,7 +564,7 @@ vehicle_detection:
     enabled: true
   traffic_predictor:
     model_path: models/traffic_predictor_model.h5
-  use_openvino: true
+  use_openvino: false
   vehicle_class_ids:
   - 2
   - 3
