@@ -12,10 +12,6 @@ from multiprocessing import Queue as MPQueue, Event
 import torch
 import torch.nn.functional as F
 
-# from ..utils.video import FrameReader
-# from ..utils.process import start_parent_monitor
-# from .worker_utils import WorkerMetrics, SharedFrameManager
-
 logger = logging.getLogger("Ingestion")
 
 def ingestion_worker(
@@ -31,9 +27,8 @@ def ingestion_worker(
     """Lightweight process for frame capture."""
     from ..utils.video import FrameReader
     from ..utils.process import start_parent_monitor
-    from .worker_utils import WorkerMetrics, SharedFrameManager
+    from .worker_utils import SharedFrameManager
     
-    # Initialize global config for this process
     from ..config import set_config
     set_config(config)
 
@@ -53,17 +48,35 @@ def ingestion_worker(
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    metrics = WorkerMetrics(feed_id)
+    # Metrics tracking
+    frames_processed = 0
+    frames_dropped = 0
+    errors = 0
+
     video_processing_cfg = config.get("video_processing", {})
     target_fps = video_processing_cfg.get("target_fps", 15)
     perf_cfg = config.get("performance", {})
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
     device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
 
-    use_shm = perf_cfg.get("use_shm", False)
+    use_shm = perf_cfg.get("use_shm", True) # Default to True for optimization
     video_out_cfg = config.get("video_output", {})
-    stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+    inference_res = video_processing_cfg.get("inference_resolution", (1280, 720))
+
+    # Initialize Shared Memory Manager if enabled
+    shm_manager = None
+    if use_shm:
+        try:
+            # Create a ring buffer of 20 frames to avoid contention
+            shm_manager = SharedFrameManager(
+                name=f"shm_{feed_id}", 
+                frame_shape=(inference_res[1], inference_res[0], 3), 
+                num_buffers=20
+            )
+            logger.info(f"[{feed_id}] Shared memory ring buffer initialized.")
+        except Exception as e:
+            logger.error(f"[{feed_id}] Failed to init SHM: {e}. Falling back to raw_bytes.")
+            use_shm = False
 
     reader = None
     try:
@@ -74,7 +87,6 @@ def ingestion_worker(
         reader = FrameReader(source, max_queue_size=15, is_looped=is_looped, target_fps=target_fps, gpu_acceleration=gpu_acceleration)
         if not reader.start(): return
 
-        # Track internal frame count for skipping logic
         processed_frames_count = 0
         
         while not stop_event.is_set():
@@ -85,85 +97,60 @@ def ingestion_worker(
 
             frame_index, frame = result
             
-            # --- Early Skip Logic ---
-            # Check the shared skip array updated by the Inference Worker
             current_skip = 0
             if shared_skip_array is not None:
-                try:
-                    current_skip = shared_skip_array[worker_idx]
-                except Exception:
-                    pass
+                try: current_skip = shared_skip_array[worker_idx]
+                except Exception: pass
             
-            # If skip > 0, we only process 1 out of every (skip + 1) frames
-            # Use the frame_index if provided by the reader for consistency
             effective_index = frame_index if frame_index >= 0 else processed_frames_count
             if current_skip > 0 and (effective_index % (current_skip + 1) != 0):
                 continue
 
             try:
+                # Resize frame
                 if device.type == "cuda":
                     frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1).float().unsqueeze(0)
-                    resized_tensor = F.interpolate(frame_tensor, size=(stream_res[1], stream_res[0]), mode="bilinear")
+                    resized_tensor = F.interpolate(frame_tensor, size=(inference_res[1], inference_res[0]), mode="bilinear")
                     resized = resized_tensor.squeeze(0).permute(1, 2, 0).byte().cpu().numpy()
                 else:
-                    resized = cv2.resize(frame, stream_res)
+                    resized = cv2.resize(frame, inference_res)
 
-                # --- Zero-Copy IPC Optimization ---
-                # If SHM is enabled, use Shared Memory handles instead of pickling raw bytes
-                if use_shm:
-                    try:
-                        shm_name, shape, dtype_str = SharedFrameManager.create_shm(resized)
-                        frame_data = {
-                            "shm_name": shm_name,
-                            "shape": shape,
-                            "dtype": dtype_str
-                        }
-                    except Exception as e:
-                        logger.warning(f"SHM creation failed, falling back to raw bytes: {e}")
-                        frame_data = {
-                            "raw_bytes": resized.tobytes(),
-                            "shape": resized.shape,
-                            "dtype": str(resized.dtype)
-                        }
-                else:
+                # SHM Writing Logic
+                if use_shm and shm_manager:
+                    # Use the frame index to determine the buffer slot in the ring
+                    shm_index = effective_index % shm_manager.num_buffers
+                    shm_manager.write_frame(shm_index, resized)
                     frame_data = {
-                        "raw_bytes": resized.tobytes(),
+                        "shm_name": shm_manager.name,
+                        "shm_index": shm_index,
                         "shape": resized.shape,
                         "dtype": str(resized.dtype)
                     }
+                else:
+                    # Fallback to raw bytes (Slow path)
+                    frame_data = {"raw_bytes": resized.tobytes(), "shape": resized.shape, "dtype": str(resized.dtype)}
 
-                fh, fw = resized.shape[:2]
-                # Enforce source-side drop if queue is at capacity
+                fw, fh = resized.shape[:2]
                 q_max = config.get("performance", {}).get("queue_max_size", 50)
                 if central_input_queue.qsize() >= q_max:
-                    metrics.frames_dropped += 1
+                    frames_dropped += 1
                     continue
 
                 central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
-                metrics.frames_processed += 1
+                frames_processed += 1
                 processed_frames_count += 1
             except queue.Full:
-                # CRITICAL: If the queue is full and we created an SHM block, we MUST unlink it
-                # to prevent a massive memory leak in /dev/shm
-                if use_shm and "shm_name" in frame_data:
-                    try:
-                        SharedFrameManager.cleanup_shm(frame_data["shm_name"])
-                    except Exception as e:
-                        logger.error(f"Failed to cleanup SHM on queue drop: {e}")
-                metrics.frames_dropped += 1
+                frames_dropped += 1
             except Exception as e:
-                # Cleanup SHM on other put errors as well
-                if use_shm and isinstance(frame_data, dict) and "shm_name" in frame_data:
-                    try: SharedFrameManager.cleanup_shm(frame_data["shm_name"])
-                    except: pass
-                metrics.errors += 1
+                errors += 1
                 logger.error(f"Error putting frame to queue: {e}")
 
-            if metrics.frames_processed % 100 == 0:
-                logger.info(f"[{feed_id}] Processed {metrics.frames_processed} frames (Current skip: {current_skip})")
+            if frames_processed % 100 == 0:
+                logger.info(f"[{feed_id}] Processed {frames_processed} frames (Current skip: {current_skip})")
 
     finally:
         if reader: reader.stop()
+        if shm_manager: shm_manager.close()
         try: central_input_queue.put((feed_id, -999, b"", time.time()), timeout=1.0)
         except: pass
         logger.info(f"[{feed_id}] Ingestion terminated.")

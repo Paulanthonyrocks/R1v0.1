@@ -100,10 +100,8 @@ class GlobalReIDManager:
         """Persists the current gallery and mappings to disk using numpy (R1: replaces unsafe pickle)."""
         try:
             os.makedirs(os.path.dirname(self.persistence_path), exist_ok=True)
-            # R1 Fix: Use numpy savez instead of pickle to avoid arbitrary code execution risk
             save_path = self.persistence_path.replace('.pkl', '.npz')
             
-            # Serialize metadata and mappings as JSON strings (safe)
             meta_json = json.dumps(self.metadata_store)
             mappings_json = json.dumps(self.local_to_global)
             
@@ -123,7 +121,6 @@ class GlobalReIDManager:
 
     def load_state(self):
         """Loads the gallery and mappings from database, numpy, or legacy pickle."""
-        # 1. Try Database first (Preferred)
         if self.db_manager:
             try:
                 identities = self.db_manager.get_recent_reid_identities(limit=self.max_gallery_size)
@@ -134,7 +131,6 @@ class GlobalReIDManager:
                         gid = idt["global_id"]
                         emb_bytes = idt["embeddings"]
                         if not emb_bytes: continue
-                        
                         embedding = np.frombuffer(emb_bytes, dtype=np.float32)
                         loaded_ids.append(gid)
                         loaded_embs.append(embedding)
@@ -146,11 +142,9 @@ class GlobalReIDManager:
                             self.gallery_ids = loaded_ids
                             emb_matrix = np.vstack(loaded_embs)
                             self._embedding_dim = emb_matrix.shape[1]
-                            # R2: Pre-allocate buffer
                             self.gallery_matrix = np.zeros((self.max_gallery_size, self._embedding_dim), dtype=np.float32)
                             self.gallery_matrix[:len(loaded_ids)] = emb_matrix
                             self._gallery_write_idx = len(loaded_ids)
-                            # Update global_counter to avoid ID collisions
                             for gid in loaded_ids:
                                 if gid.startswith("GLB_"):
                                     try:
@@ -162,7 +156,6 @@ class GlobalReIDManager:
             except Exception as e:
                 logger.error(f"Failed to load ReID state from DB: {e}")
 
-        # 2. Try numpy format (R1: safe alternative to pickle)
         npz_path = self.persistence_path.replace('.pkl', '.npz')
         if os.path.exists(npz_path):
             try:
@@ -171,26 +164,21 @@ class GlobalReIDManager:
                 self.local_to_global = json.loads(str(data['mappings_json'][0]))
                 self.global_counter = int(data['global_counter'][0])
                 self.gallery_ids = list(data['gallery_ids'])
-                
                 if 'gallery_matrix' in data and len(data['gallery_matrix']) > 0:
                     emb_matrix = data['gallery_matrix']
                     self._embedding_dim = emb_matrix.shape[1]
-                    # R2: Pre-allocate buffer
                     self.gallery_matrix = np.zeros((self.max_gallery_size, self._embedding_dim), dtype=np.float32)
                     count = min(len(self.gallery_ids), self.max_gallery_size)
                     self.gallery_matrix[:count] = emb_matrix[:count]
                     self._gallery_write_idx = count
-                
                 logger.info(f"ReID state loaded from numpy: {npz_path}. Total IDs: {len(self.gallery_ids)}")
                 return
             except Exception as e:
                 logger.error(f"Failed to load ReID state from numpy: {e}")
 
-        # 3. Legacy pickle fallback (read-only migration path)
         if os.path.exists(self.persistence_path):
             try:
                 import pickle
-                logger.warning(f"Loading legacy pickle state from {self.persistence_path}. Will re-save as numpy.")
                 with open(self.persistence_path, 'rb') as f:
                     state = pickle.load(f)
                     self.metadata_store = state.get("metadata_store", {})
@@ -204,14 +192,10 @@ class GlobalReIDManager:
                         count = min(len(self.gallery_ids), self.max_gallery_size)
                         self.gallery_matrix[:count] = old_matrix[:count]
                         self._gallery_write_idx = count
-                
-                # Re-save as numpy immediately to migrate away from pickle
                 self.save_state()
                 logger.info(f"Migrated ReID state from pickle to numpy. Total IDs: {len(self.gallery_ids)}")
             except Exception as e:
                 logger.error(f"Failed to load legacy pickle state: {e}")
-        else:
-            logger.info("No ReID persistence found. Starting fresh.")
 
     def _normalize(self, vector: np.ndarray) -> np.ndarray:
         norm = np.linalg.norm(vector)
@@ -224,13 +208,10 @@ class GlobalReIDManager:
         return None
 
     def _sync_gpu_matrix(self):
-        """Moves the local gallery matrix to GPU for high-speed matching."""
         if self.device.type == "cpu" or self.gallery_matrix is None or self._gallery_write_idx == 0:
             self.gallery_matrix_gpu = None
             return
-
         try:
-            # R2: Only sync the filled portion of the buffer
             active_count = self._gallery_write_idx
             if self.gallery_matrix_gpu is None or self.gallery_matrix_gpu.shape[0] != active_count:
                 self.gallery_matrix_gpu = torch.from_numpy(
@@ -241,19 +222,14 @@ class GlobalReIDManager:
             self.gallery_matrix_gpu = None
 
     def match_only(self, embedding: np.ndarray) -> Optional[str]:
-        """Attempts to match an embedding against the gallery without registering a new one."""
         embedding = self._normalize(embedding)
         with self._lock:
             if self.gallery_matrix is not None and self._gallery_write_idx > 0:
-                # R2: Use only the filled portion of the pre-allocated buffer
                 active_matrix = self.gallery_matrix[:self._gallery_write_idx]
-                
-                # Try GPU Matching First
                 self._sync_gpu_matrix()
                 if self.gallery_matrix_gpu is not None:
                     try:
                         emb_tensor = torch.from_numpy(embedding).to(self.device).unsqueeze(1)
-                        # Perform dot product (Matrix Multiplication) on GPU
                         scores = torch.mm(self.gallery_matrix_gpu, emb_tensor).squeeze(1)
                         best_idx = torch.argmax(scores).item()
                         best_score = scores[best_idx].item()
@@ -262,9 +238,6 @@ class GlobalReIDManager:
                         return None
                     except Exception as e:
                         logger.error(f"GPU ReID matching failed: {e}")
-                        # Fallback to CPU
-
-                # CPU Fallback
                 scores = np.dot(active_matrix, embedding)
                 best_idx = np.argmax(scores)
                 if scores[best_idx] > self.similarity_threshold:
@@ -272,18 +245,15 @@ class GlobalReIDManager:
         return None
 
     def match_or_register(self, feed_id: str, local_id: str, embedding: np.ndarray, metadata: dict) -> str:
-        # Normalize immediately
         embedding = self._normalize(embedding)
         now = time.time()
 
-        # 1. Check Redis Mapping (local_id -> global_id) - OUTSIDE LOCK
         if self.redis:
             try:
                 mapping_key = f"reid:map:{feed_id}"
                 gid = self.redis.hget(mapping_key, local_id)
                 if gid:
                     gid = gid.decode('utf-8')
-                    # Update TTL and last_seen in Redis (Fire and forget-ish)
                     self.redis.expire(mapping_key, self.ttl_seconds)
                     self.redis.hset(f"reid:meta:{gid}", "last_seen", str(now))
                     self.redis.expire(f"reid:meta:{gid}", self.ttl_seconds)
@@ -296,9 +266,7 @@ class GlobalReIDManager:
         is_new = False
         global_id = None
 
-        # 2. Local Matching - INSIDE LOCK
         with self._lock:
-            # 2a. Check local cache again (for race conditions between threads)
             if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
                 gid = self.local_to_global[feed_id][local_id]
                 if gid in self.metadata_store:
@@ -306,12 +274,8 @@ class GlobalReIDManager:
                     global_id = gid
 
             if not global_id:
-                # 2b. Vectorized Search (Local fallback)
                 if self.gallery_matrix is not None and self._gallery_write_idx > 0:
-                    # R2: Use only the filled portion
                     active_matrix = self.gallery_matrix[:self._gallery_write_idx]
-                    
-                    # GPU/CPU Matching
                     self._sync_gpu_matrix()
                     if self.gallery_matrix_gpu is not None:
                         try:
@@ -333,11 +297,9 @@ class GlobalReIDManager:
                         global_id = best_match_id
                         self.metadata_store[global_id]["last_seen"] = now
 
-                # 2c. Register New Locally (With Redis-Atomic Counter if possible)
                 if not global_id:
                     if self.redis:
                         try:
-                            # Use Redis INCR for an atomic global ID across all servers
                             new_val = self.redis.incr("reid:global_counter")
                             global_id = f"GLB_{new_val}"
                             self.global_counter = new_val
@@ -350,10 +312,8 @@ class GlobalReIDManager:
                         self.global_counter += 1
                     
                     is_new = True
-                    
                     emb_dim = len(embedding)
                     if self.gallery_matrix is None:
-                        # First identity: allocate the full buffer
                         self._embedding_dim = emb_dim
                         self.gallery_matrix = np.zeros((self.max_gallery_size, emb_dim), dtype=np.float32)
                         self._gallery_write_idx = 0
@@ -362,8 +322,6 @@ class GlobalReIDManager:
                         self.gallery_matrix[self._gallery_write_idx] = embedding
                         self._gallery_write_idx += 1
                     else:
-                        # Gallery full: overwrite the oldest entry (circular)
-                        # Find oldest by last_seen
                         oldest_idx = 0
                         oldest_time = float('inf')
                         for idx, gid_check in enumerate(self.gallery_ids):
@@ -372,12 +330,10 @@ class GlobalReIDManager:
                                 oldest_time = ls
                                 oldest_idx = idx
                         
-                        # Remove old entry
                         old_gid = self.gallery_ids[oldest_idx]
                         if old_gid in self.metadata_store:
                             del self.metadata_store[old_gid]
                         
-                        # Overwrite slot
                         self.gallery_matrix[oldest_idx] = embedding
                         self.gallery_ids[oldest_idx] = global_id
                         
@@ -385,17 +341,11 @@ class GlobalReIDManager:
                             "last_seen": now,
                             "metadata": metadata
                         }
-                        
-                        # Update local mapping and skip the append below
                         if feed_id not in self.local_to_global:
                             self.local_to_global[feed_id] = {}
                         self.local_to_global[feed_id][local_id] = global_id
-                        
-                        # Jump to outside-lock sync (don't append to gallery_ids)
-                        # We already replaced inline above
                     
                     if not is_new or self._gallery_write_idx <= self.max_gallery_size:
-                        # Normal append path (when not overwriting)
                         if global_id not in self.gallery_ids:
                             self.gallery_ids.append(global_id)
                         self.metadata_store[global_id] = {
@@ -403,14 +353,11 @@ class GlobalReIDManager:
                             "metadata": metadata
                         }
 
-                # 2d. Update local mapping
                 if feed_id not in self.local_to_global:
                     self.local_to_global[feed_id] = {}
                 self.local_to_global[feed_id][local_id] = global_id
 
-        # 3. Persistent Sync - OUTSIDE LOCK
         if is_new:
-            # New Identity Sync
             if self.redis:
                 try:
                     self.redis.hset(f"reid:meta:{global_id}", mapping={
@@ -436,34 +383,27 @@ class GlobalReIDManager:
                 except Exception as e:
                     logger.error(f"Failed to save ReID to DB: {e}")
         
-        # Mapping Sync
         if self.redis:
             try:
                 self.redis.hset(f"reid:map:{feed_id}", local_id, global_id)
                 self.redis.expire(f"reid:map:{feed_id}", self.ttl_seconds)
             except Exception: pass
 
-        # 4. Periodic Cleanup (Throttled)
         if now - self.last_cleanup_time > 60:
-            # Cleanup still needs lock but it is infrequent
             with self._lock:
                 if now - self.last_cleanup_time > 60:
                     self._cleanup(now)
                     if self.redis:
-                        # Sync from redis could be slow, but it is infrequent
-                        # TODO: Consider making this async or a separate task
                         self._sync_from_redis()
         
         return global_id
 
     def _listen_for_updates(self):
-        """Background thread listening for new ReID identities via Pub/Sub."""
         if not self.redis: return
         try:
             pubsub = self.redis.pubsub()
             pubsub.subscribe("reid:new_identity")
             logger.info("Subscribed to reid:new_identity for distributed sync.")
-            
             for message in pubsub.listen():
                 if self._stop_sub: break
                 if message['type'] == 'message':
@@ -473,27 +413,19 @@ class GlobalReIDManager:
             logger.error(f"ReID Pub/Sub listener error: {e}")
 
     def _sync_single_id_from_redis(self, gid: str):
-        """Fetches a specific identity from Redis and adds it to local gallery."""
         if not self.redis or not gid: return
         if gid in self.gallery_ids: return
-        
         try:
-            # Load metadata
             meta = self.redis.hgetall(f"reid:meta:{gid}")
             if not meta: return
-            
-            # Load embedding
             emb_bytes = self.redis.get(f"reid:emb:{gid}")
             if not emb_bytes: return
-            
             embedding = np.frombuffer(emb_bytes, dtype=np.float32)
             embedding = self._normalize(embedding)
-            
             with self._lock:
                 if gid not in self.gallery_ids:
                     self.gallery_ids.append(gid)
                     if self.gallery_matrix is None:
-                        # R2: Pre-allocate full buffer on first sync
                         self.gallery_matrix = np.zeros((self.max_gallery_size, embedding.shape[0]), dtype=np.float32)
                         self.gallery_matrix[0] = embedding
                         self._gallery_write_idx = 1
@@ -501,55 +433,40 @@ class GlobalReIDManager:
                     elif self._gallery_write_idx < self.max_gallery_size:
                         self.gallery_matrix[self._gallery_write_idx] = embedding
                         self._gallery_write_idx += 1
-                    else:
-                        # Matrix is full, cleanup will handle it eventually
-                        pass
-                    
                     self.metadata_store[gid] = {
                         "last_seen": float(meta.get(b"last_seen", time.time())),
                         "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
                     }
-            logger.debug(f"Synced Recieved ReID Sync: {gid}")
         except Exception as e:
             logger.error(f"Failed to sync single ReID {gid}: {e}")
 
     def _sync_from_redis(self):
-        """Loads new identities from Redis gallery that are not in local matrix."""
+        """Loads new identities from Redis gallery and updates pre-allocated matrix."""
         if not self.redis: return
-        
         try:
-            # 1. Get all IDs from Redis gallery
             remote_ids = self.redis.lrange("reid:gallery", 0, -1)
             remote_ids = [rid.decode('utf-8') for rid in remote_ids]
-            
-            # 2. Find IDs we don't have locally
             local_id_set = set(self.gallery_ids)
             new_ids = [rid for rid in remote_ids if rid not in local_id_set]
-            
             if not new_ids: return
-            
             logger.info(f"Syncing {len(new_ids)} new ReID identities from Redis.")
-            
             for gid in new_ids:
-                # Load metadata
                 meta = self.redis.hgetall(f"reid:meta:{gid}")
                 if not meta: continue
-                
-                # Load embedding
                 emb_bytes = self.redis.get(f"reid:emb:{gid}")
                 if not emb_bytes: continue
-                
                 embedding = np.frombuffer(emb_bytes, dtype=np.float32)
-                
-                # Update local state
                 with self._lock:
-                    if gid not in self.gallery_ids: # Double check
+                    if gid not in self.gallery_ids:
                         self.gallery_ids.append(gid)
                         if self.gallery_matrix is None:
-                            self.gallery_matrix = embedding.reshape(1, -1)
-                        else:
-                            self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
-                        
+                            self.gallery_matrix = np.zeros((self.max_gallery_size, embedding.shape[0]), dtype=np.float32)
+                            self.gallery_matrix[0] = embedding
+                            self._gallery_write_idx = 1
+                            self._embedding_dim = embedding.shape[0]
+                        elif self._gallery_write_idx < self.max_gallery_size:
+                            self.gallery_matrix[self._gallery_write_idx] = embedding
+                            self._gallery_write_idx += 1
                         self.metadata_store[gid] = {
                             "last_seen": float(meta.get(b"last_seen", time.time())),
                             "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
@@ -558,13 +475,9 @@ class GlobalReIDManager:
             logger.error(f"Redis sync error: {e}")
 
     def _cleanup(self, now: float):
-        """Removes old entries from Matrix, Metadata, and Mappings."""
         self.last_cleanup_time = now
-        
-        # Identify indices to keep
         keep_indices = []
         expired_gids = set()
-
         for idx, gid in enumerate(self.gallery_ids):
             last_seen = self.metadata_store.get(gid, {}).get("last_seen", 0)
             if now - last_seen <= self.ttl_seconds:
@@ -573,21 +486,14 @@ class GlobalReIDManager:
                 expired_gids.add(gid)
                 if gid in self.metadata_store:
                     del self.metadata_store[gid]
-
-        # Enforce Max Size (Remove oldest if full)
         if len(keep_indices) > self.max_gallery_size:
-            # Sort keep_indices based on last_seen
             keep_indices.sort(key=lambda i: self.metadata_store[self.gallery_ids[i]]["last_seen"], reverse=True)
-            # Trim
             indices_to_remove = keep_indices[self.max_gallery_size:]
             keep_indices = keep_indices[:self.max_gallery_size]
-            
             for i in indices_to_remove:
                 gid = self.gallery_ids[i]
                 expired_gids.add(gid)
                 del self.metadata_store[gid]
-
-        # R2: Rebuild pre-allocated matrix from kept entries
         if len(keep_indices) < len(self.gallery_ids):
             new_ids = [self.gallery_ids[i] for i in keep_indices]
             if new_ids and self.gallery_matrix is not None:
@@ -600,8 +506,6 @@ class GlobalReIDManager:
                 self._gallery_write_idx = 0
             self.gallery_ids = new_ids
             logger.info(f"ReID Cleanup: Removed {len(expired_gids)} vehicles. Remaining: {len(new_ids)}")
-
-            # CLEANUP MAPPINGS (Fixes the memory leak)
             for feed_id in list(self.local_to_global.keys()):
                 self.local_to_global[feed_id] = {
                     lid: gid for lid, gid in self.local_to_global[feed_id].items() 

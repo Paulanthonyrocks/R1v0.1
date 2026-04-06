@@ -1,9 +1,10 @@
 import logging
 import time
-import psutil  # Needed for check_system_resources
+import psutil
 from typing import Dict, Any, Tuple, Optional, List
 from collections import deque, defaultdict
 import numpy as np
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,6 @@ class FrameTimer:
     def get_avg(self, name: str) -> float:
         """Get the average duration for a specific metric over the sliding window."""
         if not self.timings[name]:
-            # Fallback to _metrics if available
             return self._metrics.get(name, 0.0)
         return sum(self.timings[name]) / len(self.timings[name])
 
@@ -124,32 +124,21 @@ class TrafficMonitor:
         total_conf = 0.0
         
         for track_id, data in vehicles.items():
-            # 0. Data Sanitization: Ensure centroid exists if bbox is present
             if "centroid" not in data or data["centroid"] is None:
                 if "bbox" in data and data["bbox"]:
                     b = data["bbox"]
                     data["centroid"] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]
             
-            # Skip if we still don't have a centroid (shouldn't happen with valid tracks)
             if not data.get("centroid"):
                 continue
 
-            # Use global ID if available for unique counting, otherwise fallback to local track_id
             unique_id = data.get("global_vehicle_id") or track_id
             self.seen_vehicle_ids.add(unique_id)
             
-            # Bound seen_vehicle_ids to prevent memory growth
             if len(self.seen_vehicle_ids) > 10000:
                 self.seen_vehicle_ids.clear()
                 self.last_seen_cleanup = time.time()
-                logger.warning(f"TrafficMonitor: seen_vehicle_ids set cleared due to size limit (10k reached). Cumulative counts will be affected.")
-                self.anomalies.append({
-                    "type": "data_eviction",
-                    "timestamp": time.time(),
-                    "severity": "Warning",
-                    "details": "Vehicle ID buffer limit reached (10k). Cumulative counts reset for memory safety.",
-                    "action_required": "Consider increasing buffer size in config if this persists."
-                })
+                logger.warning(f"TrafficMonitor: seen_vehicle_ids set cleared due to size limit.")
             
             status = data.get("status", "active")
             if status == "active":
@@ -164,25 +153,20 @@ class TrafficMonitor:
                     pass
                 self.lane_counts[lane] = self.lane_counts.get(lane, 0) + 1
                 
-                # Speed History for Profile Analytics
                 speed = data.get("speed")
                 if speed is not None:
                     self.lane_speeds[lane].append(speed)
         
-        # Calculate Continuity: Ratio of Active vs Total tracked (active + predicting)
         total_tracked = len(vehicles)
         continuity = (active_count / total_tracked) if total_tracked > 0 else 1.0
         self.track_continuity_samples.append(continuity)
         
-        # Calculate instantaneous Health Score (0-100)
-        # Components: Confidence (40%), Continuity (40%), Update Gap (20%)
-        avg_conf = (total_conf / active_count) if active_count > 0 else 0.8 # default high if idle
+        avg_conf = (total_conf / active_count) if active_count > 0 else 0.8 
         
         now = time.time()
         gap = now - self.last_update_time
         self.last_update_time = now
         
-        # Gap Penalty: Ideal is 1/fps (e.g. 0.033). Penalty if > 1.0s
         gap_score = max(0, min(1, 1.0 - (gap / 2.0)))
         
         h_score = (avg_conf * 0.4 + continuity * 0.4 + gap_score * 0.2) * 100
@@ -252,19 +236,11 @@ class TrafficMonitor:
 
         congestion_score = 0.0
         if current_vehicle_count > 0:
-            # Speed penalty: 0 if at limit, 1 if stopped
             speed_penalty = 1.0 - (avg_speed_kmh / self.speed_limit_kmh) if self.speed_limit_kmh > 0 else 1.0
             speed_penalty = max(0, min(1, speed_penalty))
-            
-            # Density: normalized to 40 vehicles for a "packed" state
             density = current_vehicle_count / 40.0
-            
-            # Calculate raw score: combines density with a speed-based penalty.
-            # This ensures that a single stopped vehicle doesn't trigger high congestion.
-            # Max score of 100 reached when 40+ vehicles are stopped.
             raw_congestion_score = min(100.0, (density * speed_penalty * 80.0) + (density * 20.0))
             
-            # Apply EWMA Smoothing
             if self.smoothed_congestion_score == 0.0:
                 self.smoothed_congestion_score = raw_congestion_score
             else:
@@ -276,49 +252,33 @@ class TrafficMonitor:
             self.session_metrics["congestion_score_sum"] += congestion_score
             self.session_metrics["congestion_score_samples"] += 1
         else:
-            # If no vehicles, slowly decay congestion score rather than jumping to 0
-            # This handles transient detection drops
             self.smoothed_congestion_score *= (1 - self.congestion_alpha)
             if self.smoothed_congestion_score < 0.1:
                 self.smoothed_congestion_score = 0.0
             congestion_score = round(self.smoothed_congestion_score, 1)
 
-        session_avg_congestion_score = self.session_metrics["congestion_score_sum"] / self.session_metrics["congestion_score_samples"] if self.session_metrics["congestion_score_samples"] > 0 else 0.0
-
-        lane_occupancy: Dict[int, float] = {}
-        lane_queues: Dict[int, float] = {}
-        lane_speed_profiles: Dict[int, Dict[str, float]] = {}
-        
-        # 2. Per-Lane Metrics Initialization
         lane_cfg = self.config.get("lane_detection", {})
         num_lanes = lane_cfg.get("num_lanes", 4)
-        
-        # Initialize containers for ALL lanes (1 to num_lanes)
         current_lane_counts = {i: 0 for i in range(1, num_lanes + 1)}
         lane_occupancy = {i: 0.0 for i in range(1, num_lanes + 1)}
         lane_queues = {i: 0.0 for i in range(1, num_lanes + 1)}
-        lane_speed_profiles = {}
         
-        # Calculate Current Lane Counts (Snapshot from tracked_vehicles)
         for v in self.tracked_vehicles.values():
             lid = v.get("lane", -1)
             if 1 <= lid <= num_lanes:
                 current_lane_counts[lid] += 1
 
-        # Calculate Gap & Headway Analytics
         lane_gaps, lane_headways = self._calculate_gap_and_headway(num_lanes)
         
+        lane_speed_profiles = {}
         for i in range(1, num_lanes + 1):
-            # 2a. Occupancy & Queueing
             count = current_lane_counts[i]
             lane_occupancy[i] = min(100.0, (count * 15.0))
-            
             lane_vehicles = [v for v in self.tracked_vehicles.values() if v.get("lane") == i]
             stopped_in_lane = [v for v in lane_vehicles if v.get("speed", 0) < self.stopped_threshold_kmh]
             if len(stopped_in_lane) >= 3:
                 lane_queues[i] = len(stopped_in_lane) * 6.0
             
-            # 2b. Speed Profile for this lane
             speeds = list(self.lane_speeds.get(i, []))
             if len(speeds) >= 5:
                 lane_speed_profiles[i] = {
@@ -329,7 +289,6 @@ class TrafficMonitor:
             else:
                 lane_speed_profiles[i] = {"avg": 0.0, "p85": 0.0, "std": 0.0}
 
-        # 3. Aggregate Health Score
         avg_health = float(np.mean(self.health_history)) if self.health_history else 100.0
         health_status = "Healthy"
         if avg_health < 50: health_status = "Critical"
@@ -361,52 +320,34 @@ class TrafficMonitor:
         }
 
     def _calculate_gap_and_headway(self, num_lanes: int) -> Tuple[Dict[int, float], Dict[int, float]]:
-        """Calculates inter-vehicle distance (gap) and time-to-follower (headway)."""
         lane_gaps = {}
         lane_headways = {}
         now = time.time()
-        
         for lane_id in range(1, num_lanes + 1):
-            # Sort vehicles in this lane by Y (distance from camera)
             lane_vehicles = []
             for v in self.tracked_vehicles.values():
                 if v.get("lane") == lane_id:
-                    # Ensure we have centroid or bbox to work with
                     if "centroid" not in v and "bbox" in v:
                         b = v["bbox"]
                         v["centroid"] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]
-                    
-                    if "centroid" in v:
-                        lane_vehicles.append(v)
-
+                    if "centroid" in v: lane_vehicles.append(v)
             if len(lane_vehicles) < 2: continue
-            
-            # Use Y-coordinate as a proxy for depth (lower Y = further away)
-            lane_vehicles.sort(key=lambda v: v["centroid"][1], reverse=True) # Closest first
-            
+            lane_vehicles.sort(key=lambda v: v["centroid"][1], reverse=True) 
             gaps = []
             headways = []
             for i in range(len(lane_vehicles) - 1):
-                v_front = lane_vehicles[i+1] # the one ahead (further)
-                v_back = lane_vehicles[i]    # the one behind (closer)
-                
-                # Simple Euclidean distance in pixels (should ideally use ground_pos if available)
-                # But ground_pos needs calibration.
-                # Let's use ground_coordinates if they exist in the data
+                v_front = lane_vehicles[i+1] 
+                v_back = lane_vehicles[i]    
                 p1 = v_front.get("ground_coordinates")
                 p2 = v_back.get("ground_coordinates")
-                
                 if p1 and p2:
                     dist = math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
-                    speed = v_back.get("speed", 0.0) / 3.6 # m/s
-                    
+                    speed = v_back.get("speed", 0.0) / 3.6 
                     if dist > 0:
                         gaps.append(dist)
-                        if speed > 5.0: # Only calc headway if moving
+                        if speed > 5.0: 
                             headway = dist / speed
                             headways.append(headway)
-                            
-                            # Tailgating detection (Headway < 1.0s)
                             if headway < 1.0:
                                 self.anomalies.append({
                                     "type": "tailgating",
@@ -416,8 +357,6 @@ class TrafficMonitor:
                                     "details": f"Tailgating detected: Headway {headway:.2f}s",
                                     "location": v_back.get("centroid")
                                 })
-
             if gaps: lane_gaps[lane_id] = float(np.mean(gaps))
             if headways: lane_headways[lane_id] = float(np.mean(headways))
-            
         return lane_gaps, lane_headways

@@ -14,10 +14,13 @@ class CalibrationMonitor:
     def __init__(self, feed_id: str, config: dict):
         self.feed_id = feed_id
         self.config = config
-        self.drift_threshold = config.get("calibration", {}).get("drift_threshold_px", 3.0) # 3 pixel shift
         
-        # INCREASED: Use more features for more stable homography
-        self.orb = cv2.ORB_create(nfeatures=1000)
+        # Load calibration config or defaults
+        calib_cfg = config.get("calibration", {})
+        self.drift_threshold = calib_cfg.get("drift_threshold_px", 3.0) # 3 pixel shift
+        
+        # Increase nfeatures for more stable homography, but keep manageable for CPU
+        self.orb = cv2.ORB_create(nfeatures=config.get("performance", {}).get("orb_features", 1000))
         # BFMatcher using NORM_HAMMING without crossCheck (needed for knnMatch)
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
         
@@ -26,30 +29,39 @@ class CalibrationMonitor:
         self.reference_descs = None
         
         self.last_check_time = 0.0
-        self.check_interval = 300.0 # Check every 5 minutes
+        # Default check every 5 minutes, or use config
+        self.check_interval = calib_cfg.get("check_interval_sec", 300.0) 
+        
+        # Store last known homography to avoid re-computing too often
+        self._last_M = None
+        self._last_drift_score = 0.0
 
     def set_reference(self, frame: np.ndarray):
         """Sets the baseline frame for future drift checks."""
-        self.reference_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        self.reference_kpts, self.reference_descs = self.orb.detectAndCompute(self.reference_gray, None)
-        logger.info(f"[{self.feed_id}] Calibration reference frame captured with {len(self.reference_kpts)} features.")
+        if frame is None or frame.size == 0: return
+        try:
+            self.reference_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            self.reference_kpts, self.reference_descs = self.orb.detectAndCompute(self.reference_gray, None)
+            if self.reference_kpts:
+                 logger.info(f"[{self.feed_id}] Calibration reference frame captured with {len(self.reference_kpts)} features.")
+            else:
+                 logger.warning(f"[{self.feed_id}] Failed to extract features from reference frame.")
+        except Exception as e:
+            logger.error(f"[{self.feed_id}] Failed to set calibration reference: {e}")
 
     def check_drift(self, frame: np.ndarray) -> Tuple[float, bool, Optional[np.ndarray]]:
         """
         Estimates drift from reference. 
         Returns (drift_score, is_drifted, homography_matrix).
         """
-        if self.reference_descs is None:
+        if self.reference_descs is None or frame is None or frame.size == 0:
             return 0.0, False, None
             
         now = time.time()
-        # Internal check throttle (keep state but return early if too soon)
-        # Note: If we want real-time motion compensation, we might need to check every frame.
-        # But homography estimation is expensive.
-        # Let's keep the interval for "Drift Detection" but allow real-time for "Motion Comp"
-        # by checking if self.check_interval == 0.
+        # Internal check throttle
         if self.check_interval > 0 and (now - self.last_check_time < self.check_interval):
-            return 0.0, False, None
+            # Return last known status to allow continuous motion compensation if needed
+            return self._last_drift_score, self._last_drift_score > self.drift_threshold, self._last_M
             
         self.last_check_time = now
         
@@ -59,11 +71,10 @@ class CalibrationMonitor:
             kpts, descs = self.orb.detectAndCompute(current_gray, None)
             
             if descs is None or len(descs) < 50:
-                logger.warning(f"[{self.feed_id}] Not enough features for drift check.")
+                logger.warning(f"[{self.feed_id}] Not enough features for drift check ({len(descs) if descs is not None else 0}).")
                 return 0.0, False, None
                 
             # Use Lowe's ratio test for MUCH better match quality
-            # This filters out ambiguous matches that usually cause 'drift' noise
             matches = self.bf.knnMatch(self.reference_descs, descs, k=2)
             good_matches = []
             for m, n in matches:
@@ -79,7 +90,8 @@ class CalibrationMonitor:
                 good_matches = sorted(tmp_matches, key=lambda x: x.distance)[:40]
                 
             if len(good_matches) < 8:
-                return 0.0, False, None # Not enough points to trust
+                logger.debug(f"[{self.feed_id}] Too few good matches ({len(good_matches)}) for drift check.")
+                return 0.0, False, None
                 
             # Extract matched points
             src_pts = np.float32([self.reference_kpts[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
@@ -92,7 +104,6 @@ class CalibrationMonitor:
                 return 0.0, False, None
                 
             # Analyze M: Transform image corners and measure their Euclidean displacement
-            # This is a 'physical' measure of drift in pixels
             corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
             transformed_corners = cv2.perspectiveTransform(corners, M)
             
@@ -103,6 +114,10 @@ class CalibrationMonitor:
             is_drifted = drift_score > self.drift_threshold
             if is_drifted:
                 logger.warning(f"[{self.feed_id}] Calibration Drift Detected! Max Corner Shift: {drift_score:.2f}px (Threshold: {self.drift_threshold}px)")
+            
+            # Update state for throttled returns
+            self._last_M = M
+            self._last_drift_score = drift_score
                 
             return drift_score, is_drifted, M
             
