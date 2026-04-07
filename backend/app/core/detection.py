@@ -53,7 +53,7 @@ class DetectionEngine:
         x21, y21, x22, y22 = boxes2[:, 0:1], boxes2[:, 1:2], boxes2[:, 2:3], boxes2[:, 3:4]
         xA = np.maximum(x11, x21.T)
         yA = np.maximum(y11, y21.T)
-        xB =.minimum(x12, x22.T)
+        xB = np.minimum(x12, x22.T)
         yB = np.minimum(y12, y22.T)
         interArea = np.maximum(0, xB - xA) * np.maximum(0, yB - yA)
         boxAArea = (x12 - x11) * (y12 - y11)
