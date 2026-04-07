@@ -24,7 +24,6 @@ def inference_worker(
     db_queue: Optional[MPQueue] = None,
     shared_skip_array: Optional[Any] = None
 ):
-    # BUG #18 FIX: Import metrics from the correct module to avoid circular dependency
     from .metrics import WorkerMetrics, serialize_tracked_vehicles
     from .worker_utils import SharedFrameManager
     from ..core.core_module import CoreModule
@@ -128,7 +127,16 @@ def inference_worker(
                     continue
 
                 if feed_id not in core_modules:
-                    core_modules[feed_id] = CoreModule(feed_id=feed_id, config=config, preloaded_model=shared_model, preloaded_reid=shared_reid_embedder)
+                    # BUG #19 FIX: Pass all required arguments to CoreModule constructor
+                    core_modules[feed_id] = CoreModule(
+                        feed_id=feed_id,
+                        config=config,
+                        model_path=model_path,
+                        fps=config.get("video_processing", {}).get("target_fps", 15),
+                        db_queue=db_queue,
+                        preloaded_model=shared_model,
+                        preloaded_reid=shared_reid_embedder
+                    )
                     traffic_monitors[feed_id] = TrafficMonitor(config)
 
                 core = core_modules[feed_id]
