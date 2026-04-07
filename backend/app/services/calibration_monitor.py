@@ -54,7 +54,8 @@ class CalibrationMonitor:
         Estimates drift from reference. 
         Returns (drift_score, is_drifted, homography_matrix).
         """
-        if self.reference_descs is None or frame is None or frame.size == 0:
+        # BUG #11 FIX: Add explicit check for empty reference descriptors to prevent crash
+        if self.reference_descs is None or len(self.reference_descs) == 0 or frame is None or frame.size == 0:
             return 0.0, False, None
             
         now = time.time()

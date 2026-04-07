@@ -8,74 +8,81 @@ logger = logging.getLogger(__name__)
 class SharedFrameManager:
     """
     Manages a ring buffer of shared memory segments for zero-copy image transfer.
-    This prevents the overhead of pickling large NumPy arrays through Redis/Queues.
     """
-    def __init__(self, name: str, frame_shape: Tuple[int, int, int], dtype=np.uint8, num_buffers: int = 10):
+    def __init__(self, name: str, frame_shape: Tuple[int, int, int], dtype=np.uint8, num_buffers: int = 10, create=True):
         self.name = name
         self.frame_shape = frame_shape
         self.dtype = dtype
         self.num_buffers = num_buffers
         self.buffer_size = np.prod(frame_shape) * np.dtype(dtype).itemsize
-        
-        # Each buffer gets a unique name: name_0, name_1, ...
         self.shm_segments = []
-        try:
-            for i in range(num_buffers):
-                shm = shared_memory.SharedMemory(name=f"{name}_{i}", create=True, size=self.buffer_size)
+
+        for i in range(num_buffers):
+            try:
+                shm_name = f"{name}_{i}"
+                if create:
+                    shm = shared_memory.SharedMemory(name=shm_name, create=True, size=self.buffer_size)
+                else:
+                    shm = shared_memory.SharedMemory(name=shm_name, create=False)
                 self.shm_segments.append(shm)
-            logger.info(f"Created {num_buffers} shared memory buffers for {name} (Total: {num_buffers * self.buffer_size / 1024**2:.2f} MB)")
-        except FileExistsError:
-            # If segments already exist, attach to them
-            for i in range(num_buffers):
-                shm = shared_memory.SharedMemory(name=f"{name}_{i}")
-                self.shm_segments.append(shm)
-            logger.info(f"Attached to existing shared memory buffers for {name}")
+            except FileNotFoundError:
+                if not create:
+                    logger.error(f"SHM consumer tried to attach to non-existent segment: {shm_name}")
+                    raise
+                else: # Should not happen if create=True
+                    logger.error(f"Unexpected FileNotFoundError for {shm_name}")
+                    raise
+            except FileExistsError:
+                if create:
+                    # Producer trying to recreate, attach instead
+                    shm = shared_memory.SharedMemory(name=shm_name, create=False)
+                    self.shm_segments.append(shm)
+                else:
+                    # Consumer attaching, this is expected
+                    pass # Already handled by the create=False path
+
+        log_action = "Created" if create else "Attached to"
+        logger.info(f"{log_action} {num_buffers} shared memory buffers for {name}")
 
     def write_frame(self, index: int, frame: np.ndarray):
-        """Writes a frame into the specific buffer index."""
-        if index >= self.num_buffers:
-            index = index % self.num_buffers
-            
-        shm = self.shm_segments[index]
-        # Create a numpy array backed by the shared memory
+        """Writes a frame into a specific buffer index."""
+        shm = self.shm_segments[index % self.num_buffers]
         shared_array = np.ndarray(self.frame_shape, dtype=self.dtype, buffer=shm.buf)
-        # Copy the frame data into shared memory
         np.copyto(shared_array, frame)
 
     def get_frame(self, index: int) -> np.ndarray:
-        """Reads a frame from the specific buffer index."""
-        if index >= self.num_buffers:
-            index = index % self.num_buffers
-            
-        shm = self.shm_segments[index]
-        return np.ndarray(self.frame_shape, dtype=self.dtype, buffer=shm.buf)
+        """Reads a frame from a specific buffer index."""
+        shm = self.shm_segments[index % self.num_buffers]
+        # Return a copy to avoid downstream mutation issues if the buffer is overwritten
+        return np.ndarray(self.frame_shape, dtype=self.dtype, buffer=shm.buf).copy()
 
     def close(self):
-        """Closes and unlinks all shared memory segments."""
+        """Closes all shared memory file descriptors. Does NOT unlink."""
         for shm in self.shm_segments:
             shm.close()
+
+    def unlink(self):
+        """Closes and unlinks all shared memory segments. FOR PRODUCER USE ONLY."""
+        for shm in self.shm_segments:
             try:
-                shm.unlink()
+                shm.close()
+                shm.unlink() # This destroys the memory block
             except FileNotFoundError:
-                pass
-        logger.info(f"Cleaned up shared memory for {self.name}")
+                pass # Already unlinked
+            except Exception as e:
+                logger.error(f"Error unlinking SHM segment: {e}")
+        logger.info(f"Unlinked shared memory for {self.name}")
 
     @staticmethod
-    def access_shm(shm_name: str, shape: Tuple[int, int, int], dtype=np.uint8) -> Tuple[np.ndarray, shared_memory.SharedMemory]:
-        """
-        Utility for workers to attach to a specific SHM segment without the full manager.
-        Returns the numpy array and the shm handle (caller must close handle).
-        """
-        shm = shared_memory.SharedMemory(name=shm_name)
-        array = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
-        return array, shm
-
-    @staticmethod
-    def cleanup_shm(shm_name: str):
-        """Unlinks a specific SHM segment."""
+    def get_frame_from_shm(shm_info: Dict) -> Optional[np.ndarray]:
+        """Static method for consumers to access a single frame from shared memory."""
         try:
-            shm = shared_memory.SharedMemory(name=shm_name)
-            shm.close()
-            shm.unlink()
-        except Exception:
-            pass
+            # Use a short-lived SHM object to access the data
+            shm = shared_memory.SharedMemory(name=f"{shm_info['shm_name']}_{shm_info['shm_index']}")
+            frame_array = np.ndarray(shm_info['shape'], dtype=np.dtype(shm_info['dtype']), buffer=shm.buf)
+            frame_copy = frame_array.copy() # Essential to copy out the data
+            shm.close() # Immediately close the handle
+            return frame_copy
+        except (FileNotFoundError, KeyError) as e:
+            logger.warning(f"Could not access shared memory frame: {e}. It might have been cleaned up.")
+            return None

@@ -122,6 +122,7 @@ def inference_worker(
                 
                 if frame_index == -999:
                     if feed_id in core_modules: core_modules.pop(feed_id).cleanup()
+                    # BUG #15 FIX: Consumer only closes, never unlinks.
                     if feed_id in shm_managers: shm_managers.pop(feed_id).close()
                     continue
 
@@ -138,7 +139,8 @@ def inference_worker(
                     shm_name = frame_data["shm_name"]
                     if shm_name not in shm_managers:
                         try:
-                            shm_managers[shm_name] = SharedFrameManager(name=shm_name, frame_shape=frame_data["shape"], dtype=frame_data["dtype"], num_buffers=20)
+                            # Attach to existing SHM (create=False)
+                            shm_managers[shm_name] = SharedFrameManager(name=shm_name, frame_shape=frame_data["shape"], dtype=frame_data["dtype"], num_buffers=20, create=False)
                             logger.info(f"[{feed_id}] Attached to SHM ring buffer: {shm_name}")
                         except Exception as e:
                             logger.error(f"Failed to attach to SHM {shm_name}: {e}")

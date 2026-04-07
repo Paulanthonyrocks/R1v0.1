@@ -231,6 +231,7 @@ class TrafficMonitor:
 
         session_avg_speed = self.session_metrics["speed_sum"] / self.session_metrics["speed_samples"] if self.session_metrics["speed_samples"] > 0 else 0.0
         session_avg_congestion = self.session_metrics["congestion_sum"] / self.session_metrics["congestion_samples"] if self.session_metrics["congestion_samples"] > 0 else 0.0
+        session_avg_congestion_score = (self.session_metrics["congestion_score_sum"] / self.session_metrics["congestion_score_samples"]) if self.session_metrics["congestion_score_samples"] > 0 else 0.0
         is_congested = avg_speed_kmh < self.congestion_speed_threshold and current_vehicle_count > self.density_threshold
         high_density_lanes = [lane for lane, count in self.lane_counts.items() if count > self.density_threshold]
 

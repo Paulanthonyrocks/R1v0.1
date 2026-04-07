@@ -5,6 +5,7 @@ import math
 import numpy as np
 import torch
 import queue
+import hashlib
 from multiprocessing import Queue as MPQueue
 from typing import Dict, List, Tuple, Optional, Any, Set
 from pathlib import Path
@@ -265,6 +266,15 @@ class CoreModule:
                     if kf:
                         kf.x[0][0] = pt_stable[0]
                         kf.x[1][0] = pt_stable[1]
+                        # BUG #8 FIX: Also update width/height in KF state and reset velocities
+                        new_w = abs(pts_stable[1][0] - pts_stable[0][0])
+                        new_h = abs(pts_stable[1][1] - pts_stable[0][1])
+                        kf.x[2][0] = new_w
+                        kf.x[3][0] = new_h
+                        
+                        # Reset velocity and size-change components to prevent divergence.
+                        # The old velocity is invalid in the new reference frame.
+                        kf.x[4:8] = 0
                 
                 logger.debug(f"[{self.feed_id}] Homography-based motion compensation applied. Score: {drift_score:.4f}")
             except np.linalg.LinAlgError:
@@ -341,8 +351,8 @@ class CoreModule:
         detections = self.detector.fuse(detections)
 
         # Enrichment (ReID Embeddings)
-        enriched_detections = []
-        feed_offset = hash(self.feed_id) % self.reid_interval
+        # BUG #10 FIX: Use a deterministic hash to prevent process-dependent randomization
+        feed_offset = int(hashlib.md5(self.feed_id.encode()).hexdigest(), 16) % self.reid_interval
         effective_reid_interval = max(1, self.reid_interval // 2) if frame_index > 100 else self.reid_interval
         should_run_reid = (self.reid_embedder is not None and ((frame_index + feed_offset) % effective_reid_interval == 0))
 
@@ -404,10 +414,31 @@ class CoreModule:
             ground_pos = self.transformer.pixel_to_ground(cx, cy)
             if ground_pos: track["ground_coordinates"] = ground_pos
             
-            prev_time = track.get("last_speed_update_time")
-            if prev_time is None:
-                 prev_time = current_time - (1.0/self.fps)
+            prev_time = track.get("last_speed_update_time", current_time - (1.0/self.fps))
+            prev_speed_kmh = track.get("speed", 0.0)
+
             track["speed"] = self._estimate_speed_kalman(track, current_time, prev_time)
+            
+            # BUG #9 FIX: Calculate acceleration and direction for anomaly detection
+            time_diff = current_time - prev_time
+            if time_diff > 1e-6:
+                # accel in m/s^2. (speed is km/h)
+                accel_kmh_s = (track["speed"] - prev_speed_kmh) / time_diff
+                track["acceleration"] = (accel_kmh_s * 1000) / 3600.0
+            else:
+                track["acceleration"] = 0.0
+
+            # Direction from Kalman velocity state (vx, vy are in pixels/sec)
+            vx, vy = track.get("vx", 0), track.get("vy", 0)
+            # Use a threshold to prevent noise from setting direction
+            if abs(vx) > 1.0 or abs(vy) > 1.0:
+                if abs(vx) > abs(vy) * 1.5:
+                    track["direction"] = "East" if vx > 0 else "West"
+                elif abs(vy) > abs(vx) * 1.5:
+                    # In image coordinates, Y is down. So vy > 0 is South.
+                    track["direction"] = "South" if vy > 0 else "North"
+                # If diagonal, we can leave direction as is to avoid chatter.
+
             track["last_speed_update_time"] = current_time
             track["lane"] = self._estimate_lane((cx, cy))
 
@@ -580,6 +611,8 @@ class CoreModule:
                         "is_occluded": bool(data.get("is_occluded", False)),
                         "hits": int(data.get("hits", 0)),
                         "lane": int(data.get("lane", -1)),
+                        "acceleration": float(data.get("acceleration", 0.0)),
+                        "direction": str(data.get("direction", "Unknown"))
                     })
                     self._last_save_time[vehicle_id] = now
                 except queue.Full: pass

@@ -44,17 +44,16 @@ class DetectionEngine:
             raise
 
     def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
-        if roi_points:
-            self.roi_mask = np.zeros(resolution[::-1], dtype=np.uint8)
-            cv2.fillPoly(self.roi_mask, [np.array(roi_points, np.int32)], 255)
+        # This function is no longer needed as ROI is handled in CoreModule.
+        pass
 
     def _bbox_iou_matrix(self, boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
-        if boxes1.size == 0 or boxes2.size == 0: return np.empty((0,0))
+        if boxes1.size == 0 or boxes2.size == 0: return np.zeros((boxes1.shape[0], boxes2.shape[0]))
         x11, y11, x12, y12 = boxes1[:, 0:1], boxes1[:, 1:2], boxes1[:, 2:3], boxes1[:, 3:4]
         x21, y21, x22, y22 = boxes2[:, 0:1], boxes2[:, 1:2], boxes2[:, 2:3], boxes2[:, 3:4]
         xA = np.maximum(x11, x21.T)
         yA = np.maximum(y11, y21.T)
-        xB = np.minimum(x12, x22.T)
+        xB =.minimum(x12, x22.T)
         yB = np.minimum(y12, y22.T)
         interArea = np.maximum(0, xB - xA) * np.maximum(0, yB - yA)
         boxAArea = (x12 - x11) * (y12 - y11)
@@ -71,7 +70,7 @@ class DetectionEngine:
             if not past_detections: continue
             past_boxes = np.array([d[0] for d in past_detections])
             iou_matrix = self._bbox_iou_matrix(curr_boxes, past_boxes)
-            match_counts += (iou_matrix > self.fusion_min_iou).any(axis=1)
+            if iou_matrix.shape[0] > 0: match_counts += (iou_matrix > self.fusion_min_iou).any(axis=1)
         fused = [current_detections[i] for i, count in enumerate(match_counts) if count >= self.fusion_min_frames]
         return self._nms_dedup(fused)
 
@@ -90,11 +89,7 @@ class DetectionEngine:
 
     def detect(self, frame: np.ndarray, confidence_threshold: float) -> List[Tuple]:
         if not self.model: raise RuntimeError("Model not loaded")
-        if self.roi_mask is not None:
-            if self.roi_mask.shape != frame.shape[:2]:
-                self.roi_mask = cv2.resize(self.roi_mask, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-            frame = cv2.bitwise_and(frame, frame, mask=self.roi_mask)
-        
+        # BUG 13 FIX: Removed bitwise_and mask application. Cropping is done in CoreModule.
         results = self.model(frame, conf=confidence_threshold, classes=self.target_classes, verbose=False, device=self.device, half=False)
         detections = [(r.boxes.xyxy[0].cpu().numpy(), int(r.boxes.cls[0]), float(r.boxes.conf[0])) for r in results[0]]
         return self.fuse(detections)

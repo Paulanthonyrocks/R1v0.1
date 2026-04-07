@@ -59,21 +59,22 @@ def ingestion_worker(
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
     device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
 
-    use_shm = perf_cfg.get("use_shm", True) # Default to True for optimization
+    q_max = perf_cfg.get("queue_max_size", 50)
+    use_shm = perf_cfg.get("use_shm", True)
     video_out_cfg = config.get("video_output", {})
     inference_res = video_processing_cfg.get("inference_resolution", (1280, 720))
 
-    # Initialize Shared Memory Manager if enabled
     shm_manager = None
     if use_shm:
         try:
-            # Create a ring buffer of 20 frames to avoid contention
+            num_buffers = max(20, q_max + 10)
             shm_manager = SharedFrameManager(
                 name=f"shm_{feed_id}", 
                 frame_shape=(inference_res[1], inference_res[0], 3), 
-                num_buffers=20
+                num_buffers=num_buffers,
+                create=True # This is the producer
             )
-            logger.info(f"[{feed_id}] Shared memory ring buffer initialized.")
+            logger.info(f"[{feed_id}] Shared memory ring buffer initialized with {num_buffers} buffers.")
         except Exception as e:
             logger.error(f"[{feed_id}] Failed to init SHM: {e}. Falling back to raw_bytes.")
             use_shm = False
@@ -107,7 +108,6 @@ def ingestion_worker(
                 continue
 
             try:
-                # Resize frame
                 if device.type == "cuda":
                     frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1).float().unsqueeze(0)
                     resized_tensor = F.interpolate(frame_tensor, size=(inference_res[1], inference_res[0]), mode="bilinear")
@@ -115,23 +115,14 @@ def ingestion_worker(
                 else:
                     resized = cv2.resize(frame, inference_res)
 
-                # SHM Writing Logic
                 if use_shm and shm_manager:
-                    # Use the frame index to determine the buffer slot in the ring
                     shm_index = effective_index % shm_manager.num_buffers
                     shm_manager.write_frame(shm_index, resized)
-                    frame_data = {
-                        "shm_name": shm_manager.name,
-                        "shm_index": shm_index,
-                        "shape": resized.shape,
-                        "dtype": str(resized.dtype)
-                    }
+                    frame_data = {"shm_name": shm_manager.name, "shm_index": shm_index, "shape": resized.shape, "dtype": str(resized.dtype)}
                 else:
-                    # Fallback to raw bytes (Slow path)
                     frame_data = {"raw_bytes": resized.tobytes(), "shape": resized.shape, "dtype": str(resized.dtype)}
 
                 fw, fh = resized.shape[:2]
-                q_max = config.get("performance", {}).get("queue_max_size", 50)
                 if central_input_queue.qsize() >= q_max:
                     frames_dropped += 1
                     continue
@@ -145,12 +136,10 @@ def ingestion_worker(
                 errors += 1
                 logger.error(f"Error putting frame to queue: {e}")
 
-            if frames_processed % 100 == 0:
-                logger.info(f"[{feed_id}] Processed {frames_processed} frames (Current skip: {current_skip})")
-
     finally:
         if reader: reader.stop()
-        if shm_manager: shm_manager.close()
-        try: central_input_queue.put((feed_id, -999, b"", time.time()), timeout=1.0)
+        # BUG #15 FIX: As the producer, call unlink() to destroy the SHM segments.
+        if shm_manager: shm_manager.unlink()
+        try: central_input_queue.put((feed_id, -999, "", time.time(), 0, 0), timeout=1.0)
         except: pass
         logger.info(f"[{feed_id}] Ingestion terminated.")
