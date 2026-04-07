@@ -51,7 +51,7 @@ class TrackingManager:
         h, w = frame_shape[:2]
         
         tracking_cfg = self.config.get("tracking", {})
-        vd_cfg = config.get("vehicle_detection", {})
+        vd_cfg = self.config.get("vehicle_detection", {})
         self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
         self.probation_threshold = tracking_cfg.get("probation_threshold") or vd_cfg.get("probation_threshold") or 3
         
