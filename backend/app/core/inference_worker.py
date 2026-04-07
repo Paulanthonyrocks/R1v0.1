@@ -24,16 +24,16 @@ def inference_worker(
     db_queue: Optional[MPQueue] = None,
     shared_skip_array: Optional[Any] = None
 ):
-    from .metrics import WorkerMetrics, serialize_tracked_vehicles
+    from .metrics import WorkerMetrics, prepare_vehicles_for_transport
     from .worker_utils import SharedFrameManager
     from ..core.core_module import CoreModule
     from ..utils.monitoring import TrafficMonitor
     from ..utils.process import start_parent_monitor
     import torch
 
-    def _serialize_tracked_vehicles_with_map(tracked_vehicles, scale_x, scale_y):
+    def _prepare_vehicles_for_transport_with_map(tracked_vehicles, scale_x, scale_y):
         v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
-        return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
+        return prepare_vehicles_for_transport(tracked_vehicles, scale_x, scale_y, v_map)
 
     from ..config import set_config
     set_config(config)
@@ -127,7 +127,6 @@ def inference_worker(
                     continue
 
                 if feed_id not in core_modules:
-                    # BUG #19 FIX: Pass all required arguments to CoreModule constructor
                     core_modules[feed_id] = CoreModule(
                         feed_id=feed_id,
                         config=config,
@@ -202,11 +201,11 @@ def inference_worker(
 
                 fh, fw = frame.shape[:2]
                 scale_x, scale_y = 1.0 / fw, 1.0 / fh
-                serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks, scale_x, scale_y)
+                vehicles_for_transport = _prepare_vehicles_for_transport_with_map(vis_tracks, scale_x, scale_y)
 
                 try:
                     central_output_queue.put((
-                        meta['feed_id'], f_idx, meta['frame_data'], metrics_result, serialized_v, {}
+                        meta['feed_id'], f_idx, meta['frame_data'], metrics_result, vehicles_for_transport, {}
                     ))
                 except queue.Full:
                     metrics_obj.frames_dropped += 1
