@@ -351,7 +351,8 @@ class CoreModule:
         detections = self.detector.fuse(detections)
 
         # Enrichment (ReID Embeddings)
-        # BUG #10 FIX: Use a deterministic hash to prevent process-dependent randomization
+        # BUG #20 FIX: Initialize enriched_detections list before use
+        enriched_detections = []
         feed_offset = int(hashlib.md5(self.feed_id.encode()).hexdigest(), 16) % self.reid_interval
         effective_reid_interval = max(1, self.reid_interval // 2) if frame_index > 100 else self.reid_interval
         should_run_reid = (self.reid_embedder is not None and ((frame_index + feed_offset) % effective_reid_interval == 0))
