@@ -24,7 +24,9 @@ def inference_worker(
     db_queue: Optional[MPQueue] = None,
     shared_skip_array: Optional[Any] = None
 ):
-    from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, SharedFrameManager
+    # BUG #18 FIX: Import metrics from the correct module to avoid circular dependency
+    from .metrics import WorkerMetrics, serialize_tracked_vehicles
+    from .worker_utils import SharedFrameManager
     from ..core.core_module import CoreModule
     from ..utils.monitoring import TrafficMonitor
     from ..utils.process import start_parent_monitor
@@ -122,7 +124,6 @@ def inference_worker(
                 
                 if frame_index == -999:
                     if feed_id in core_modules: core_modules.pop(feed_id).cleanup()
-                    # BUG #15 FIX: Consumer only closes, never unlinks.
                     if feed_id in shm_managers: shm_managers.pop(feed_id).close()
                     continue
 
@@ -134,12 +135,10 @@ def inference_worker(
                 metrics_obj = metrics_map[feed_id]
                 frame = None
                 
-                # --- SHARED MEMORY LOGIC ---
                 if isinstance(frame_data, dict) and "shm_name" in frame_data:
                     shm_name = frame_data["shm_name"]
                     if shm_name not in shm_managers:
                         try:
-                            # Attach to existing SHM (create=False)
                             shm_managers[shm_name] = SharedFrameManager(name=shm_name, frame_shape=frame_data["shape"], dtype=frame_data["dtype"], num_buffers=20, create=False)
                             logger.info(f"[{feed_id}] Attached to SHM ring buffer: {shm_name}")
                         except Exception as e:
@@ -169,11 +168,10 @@ def inference_worker(
                 frames_to_infer.append(core._preprocess_frame(frame)[0])
                 inference_indices.append(len(batch_meta) - 1)
 
-            # Batch Inference
             batch_detections_map = {}
             if frames_to_infer:
                 try:
-                    model = get_model_for_feed(batch_meta[0]["feed_id"]) # Assume same model for batch
+                    model = get_model_for_feed(batch_meta[0]["feed_id"])
                     results = model(frames_to_infer, verbose=False, stream=False, conf=0.1, half=(device.type=="cuda"))
                     for i, res in enumerate(results):
                         meta_idx = inference_indices[i]
@@ -182,7 +180,6 @@ def inference_worker(
                 except Exception as e:
                     logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
 
-            # Tracking & Output
             for i, meta in enumerate(batch_meta):
                 core, metrics_obj = meta['core'], meta['metrics']
                 frame, f_idx = meta['frame'], meta['frame_index']
