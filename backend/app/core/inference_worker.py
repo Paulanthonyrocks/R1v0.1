@@ -181,7 +181,7 @@ def inference_worker(
 
             try:
                 central_output_queue.put((
-                    feed_id, frame_index, meta['frame_data'], metrics_result, vehicles_for_transport, {}
+                    feed_id, frame_index, frame_data, metrics_result, vehicles_for_transport, {}
                 ), timeout=0.01)
             except queue.Full:
                 metrics_obj.frames_dropped += 1
