@@ -1229,6 +1229,7 @@ class FeedManager:
         while not self._stop_reader_flag:
             try:
                 results_buffer = []
+                feed_ids_to_update = set()
                 try:
                     for _ in range(100):
                         results_buffer.append(self._analytics_output_queue.get_nowait())
