@@ -179,9 +179,12 @@ def inference_worker(
             scale_x, scale_y = 1.0 / fw, 1.0 / fh
             vehicles_for_transport = _prepare_vehicles_for_transport_with_map(vis_tracks, scale_x, scale_y)
 
+            # Encode frame as JPEG for frontend broadcast
+            encoded_frame = cv2.imencode('.jpg', frame)[1].tobytes()
+
             try:
                 central_output_queue.put((
-                    feed_id, frame_index, frame_data, metrics_result, vehicles_for_transport, {}
+                    feed_id, frame_index, encoded_frame, metrics_result, vehicles_for_transport, {}
                 ), timeout=0.01)
             except queue.Full:
                 metrics_obj.frames_dropped += 1
