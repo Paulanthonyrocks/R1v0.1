@@ -42,8 +42,10 @@ def analytics_worker_process(
         except queue.Empty:
             # This is expected when the queue is empty, so we just continue
             continue
+        except ValueError: 
+            logger.debug(f"Malformed analytics data: {data}")
+            continue
         except Exception as e:
             logger.error(f"Error in analytics worker: {e}", exc_info=True)
 
     logger.info("Analytics worker process stopped.")
-
