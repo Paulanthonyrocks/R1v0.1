@@ -417,7 +417,13 @@ class CoreModule:
                 enriched_detections.append((bbox, cls, dconf, None))
 
         # 4. Tracking (T2 Fix: immediately capture returned vehicle_data)
-        self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
+        # Calculate time delta for tracking
+        dt = 1.0 / self.fps
+        if hasattr(self, 'last_frame_time') and self.last_frame_time:
+            dt = current_time - self.last_frame_time
+        self.last_frame_time = current_time
+        
+        self.vehicle_data = self.tracker.update(enriched_detections, dt, frame.shape)
         
         # 5. Metadata Processing
         vis_tracks = {}
