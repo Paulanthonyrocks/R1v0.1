@@ -130,7 +130,7 @@ def inference_worker(
                     feed_id=feed_id, config=config, db_queue=db_queue,
                     model_path=config.get("vehicle_detection", {}).get("model_path"),
                     fps=config.get("video_processing", {}).get("target_fps", 15),
-                    preloaded_model=shared_model, preloaded_reid=shared_reid_embedder
+                    preloaded_model=shared_.mdel, preloaded_reid=shared_reid_embedder
                 )
                 traffic_monitors[feed_id] = TrafficMonitor(config, feed_id)
 
@@ -168,8 +168,7 @@ def inference_worker(
                 metrics_obj.frames_dropped += 1
                 continue
 
-            detections = core.detector.detect(frame) # Simplified: Assumes CoreModule handles preprocessing
-            vis_tracks, _, _, _ = core.detect_and_track(frame, frame_index, external_detections=detections, timestamp=timestamp)
+            vis_tracks, _, _, _ = core.detect_and_track(frame, frame_index, timestamp=timestamp)
             
             monitor = traffic_monitors[feed_id]
             monitor.update_vehicles(vis_tracks)
