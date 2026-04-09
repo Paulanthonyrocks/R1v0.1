@@ -35,12 +35,14 @@ def analytics_worker_process(
         try:
             # Get data from the input queue with a timeout
             data = input_queue.get(timeout=0.1)
-            feed_id, feed_metrics, vehicles, lanes, lines = data
+            # Data format: (feed_id, frame_idx, timestamp, vehicles, lane_boundaries, lane_lines, metrics, extra)
+            feed_id, frame_idx, timestamp, vehicles, lanes, lines, feed_metrics, extra = data
 
             # In the future, more complex analytics will go here.
             # For now, we just pass the data through.
             
             try:
+                # Output format expected by _read_analytics_results: (feed_id, feed_metrics, vehicles, lanes, lines)
                 output_queue.put((feed_id, feed_metrics, vehicles, lanes, lines), block=False)
             except queue.Full:
                 logger.warning(f"[{feed_id}] Analytics output queue is full. Dropping data.")
@@ -48,8 +50,8 @@ def analytics_worker_process(
         except queue.Empty:
             # This is expected when the queue is empty, so we just continue
             continue
-        except ValueError: 
-            logger.debug(f"Malformed analytics data: {data}")
+        except (ValueError, TypeError) as e: 
+            logger.error(f"Malformed analytics data received: {e}. Data: {data}")
             continue
         except Exception as e:
             logger.error(f"Error in analytics worker: {e}", exc_info=True)
