@@ -517,13 +517,13 @@ export class WebSocketClient implements IWebSocketClient {
                 }
             }
 
-            // If no pong is received within 120 seconds, consider connection timed out
+            // If no pong is received within 30 seconds, consider connection timed out
             const timeSinceLastPong = Date.now() - this.lastPongTime;
-            if (timeSinceLastPong > 120000) {
+            if (timeSinceLastPong > 30000) {
                 console.warn(`[WebSocketClient ${this.instanceId}] Connection timed out. Last activity: ${timeSinceLastPong}ms ago.`);
                 this.handleConnectionTimeout();
             }
-        }, 15000);
+        }, 10000);
     }
 
     private stopPingInterval(): void {
