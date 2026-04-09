@@ -1,3 +1,5 @@
+import queue
+
 try:
     self.output_queue.put((feed_id, feed_metrics, vehicles, lanes, lines), block=False)
 except queue.Full:
