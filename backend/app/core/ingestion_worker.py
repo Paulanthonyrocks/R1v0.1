@@ -9,8 +9,6 @@ import signal
 import json
 from typing import Dict, Any, Optional
 from multiprocessing import Queue as MPQueue, Event
-import torch
-import torch.nn.functional as F
 
 logger = logging.getLogger("Ingestion")
 
@@ -24,7 +22,7 @@ def ingestion_worker(
     shared_skip_array: Optional[Any] = None,
     worker_idx: int = 0
 ):
-    """Lightweight process for frame capture."""
+    """Lightweight process for frame capture and resizing, using CPU."""
     from ..utils.video import FrameReader
     from ..utils.process import start_parent_monitor
     from .worker_utils import SharedFrameManager
@@ -32,23 +30,22 @@ def ingestion_worker(
     from ..config import set_config
     set_config(config)
 
-    import torch
-    import torch.nn.functional as F
-
     start_parent_monitor(stop_event)
-    print(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}", flush=True)
-    import logging.config
+    logger.info(f"[Ingestion-{feed_id}] Process started. PID: {os.getpid()}")
+    
     try:
-        if "logging" in config: logging.config.dictConfig(config["logging"])
-        else: logging.basicConfig(level=logging.INFO)
-    except Exception as e: logging.basicConfig(level=logging.INFO)
+        if "logging" in config:
+            logging.config.dictConfig(config["logging"])
+        else:
+            logging.basicConfig(level=logging.INFO)
+    except Exception:
+        logging.basicConfig(level=logging.INFO)
 
     def signal_handler(signum, frame):
         stop_event.set()
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Metrics tracking
     frames_processed = 0
     frames_dropped = 0
     errors = 0
@@ -56,12 +53,13 @@ def ingestion_worker(
     video_processing_cfg = config.get("video_processing", {})
     target_fps = video_processing_cfg.get("target_fps", 15)
     perf_cfg = config.get("performance", {})
-    gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
-    device = torch.device("cuda" if gpu_acceleration and torch.cuda.is_available() else "cpu")
+    
+    # ISSUE 1 FIX: Force disable GPU for ingestion and resizing.
+    # All operations in this worker will be CPU-bound.
+    gpu_acceleration = False
 
     q_max = perf_cfg.get("queue_max_size", 50)
     use_shm = perf_cfg.get("use_shm", True)
-    video_out_cfg = config.get("video_output", {})
     inference_res = video_processing_cfg.get("inference_resolution", (1280, 720))
 
     shm_manager = None
@@ -72,7 +70,7 @@ def ingestion_worker(
                 name=f"shm_{feed_id}", 
                 frame_shape=(inference_res[1], inference_res[0], 3), 
                 num_buffers=num_buffers,
-                create=True # This is the producer
+                create=True
             )
             logger.info(f"[{feed_id}] Shared memory ring buffer initialized with {num_buffers} buffers.")
         except Exception as e:
@@ -83,63 +81,80 @@ def ingestion_worker(
     try:
         source = video_path
         if isinstance(video_path, str) and video_path.startswith("webcam:"):
-            try: source = int(video_path.split(":")[1])
-            except: source = 0
+            try: 
+                source = int(video_path.split(":")[1])
+            except (ValueError, IndexError): 
+                source = 0
+        
         reader = FrameReader(source, max_queue_size=15, is_looped=is_looped, target_fps=target_fps, gpu_acceleration=gpu_acceleration)
-        if not reader.start(): return
+        
+        if not reader.start(): 
+            logger.error(f"[{feed_id}] FrameReader failed to start.")
+            return
 
         processed_frames_count = 0
         
         while not stop_event.is_set():
             result = reader.read_raw()
             if result is None:
-                if reader.end_of_video: break
-                time.sleep(0.01); continue
-
-            frame_index, frame = result
-            
-            current_skip = 0
-            if shared_skip_array is not None:
-                try: current_skip = shared_skip_array[worker_idx]
-                except Exception: pass
-            
-            effective_index = frame_index if frame_index >= 0 else processed_frames_count
-            if current_skip > 0 and (effective_index % (current_skip + 1) != 0):
+                if reader.end_of_video:
+                    logger.info(f"[{feed_id}] End of video stream.")
+                    break
+                time.sleep(0.01)
                 continue
 
-            try:
-                if device.type == "cuda":
-                    frame_tensor = torch.from_numpy(frame).to(device).permute(2, 0, 1).float().unsqueeze(0)
-                    resized_tensor = F.interpolate(frame_tensor, size=(inference_res[1], inference_res[0]), mode="bilinear")
-                    resized = resized_tensor.squeeze(0).permute(1, 2, 0).byte().cpu().numpy()
-                else:
-                    resized = cv2.resize(frame, inference_res)
+            frame_index, frame = result
+            effective_index = frame_index if frame_index >= 0 else processed_frames_count
 
+            if shared_skip_array is not None:
+                try: 
+                    current_skip = shared_skip_array[worker_idx]
+                    if current_skip > 0 and (effective_index % (current_skip + 1) != 0):
+                        continue
+                except (IndexError, TypeError): pass
+
+            try:
+                # ISSUE 1 FIX: Always use OpenCV on CPU for resizing.
+                resized = cv2.resize(frame, inference_res, interpolation=cv2.INTER_LINEAR)
+
+                frame_data = {}
                 if use_shm and shm_manager:
-                    shm_index = effective_index % shm_manager.num_buffers
-                    shm_manager.write_frame(shm_index, resized)
-                    frame_data = {"shm_name": shm_manager.name, "shm_index": shm_index, "shape": resized.shape, "dtype": str(resized.dtype)}
+                    if not shm_manager.write_frame(effective_index, resized):
+                        frames_dropped += 1
+                        continue
+
+                    frame_data = {
+                        "shm_name": shm_manager.name, 
+                        "shm_index": effective_index,
+                        "shape": resized.shape, 
+                        "dtype": str(resized.dtype),
+                        "num_buffers": shm_manager.num_buffers
+                    }
                 else:
                     frame_data = {"raw_bytes": resized.tobytes(), "shape": resized.shape, "dtype": str(resized.dtype)}
 
-                fw, fh = resized.shape[:2]
+                fh, fw = resized.shape[:2]
                 if central_input_queue.qsize() >= q_max:
                     frames_dropped += 1
                     continue
 
-                central_input_queue.put((feed_id, frame_index, frame_data, time.time(), fw, fh), timeout=0.1)
+                central_input_queue.put((feed_id, effective_index, frame_data, time.time(), fw, fh), timeout=0.1)
                 frames_processed += 1
-                processed_frames_count += 1
             except queue.Full:
                 frames_dropped += 1
             except Exception as e:
                 errors += 1
-                logger.error(f"Error putting frame to queue: {e}")
+                logger.error(f"[{feed_id}] Error in ingestion loop: {e}", exc_info=True)
+            
+            processed_frames_count += 1
 
     finally:
         if reader: reader.stop()
-        # BUG #15 FIX: As the producer, call unlink() to destroy the SHM segments.
-        if shm_manager: shm_manager.unlink()
-        try: central_input_queue.put((feed_id, -999, "", time.time(), 0, 0), timeout=1.0)
-        except: pass
-        logger.info(f"[{feed_id}] Ingestion terminated.")
+        if shm_manager: shm_manager.close()
+        
+        try: 
+            central_input_queue.put((feed_id, -999, {}, time.time(), 0, 0), timeout=1.0)
+        except queue.Full: 
+            logger.warning(f"[{feed_id}] Could not send end-of-stream signal: queue full.")
+        
+        logger.info(f"[{feed_id}] Ingestion terminated. Processed={frames_processed}, Dropped={frames_dropped}, Errors={errors}")

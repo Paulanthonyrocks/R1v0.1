@@ -1290,6 +1290,34 @@ class DatabaseManager:
             raise DatabaseError(f"Failed to save alert: {e}") from e
     # ... (all your other synchronous and asynchronous database methods like get_alerts_filtered,
     #      save_alert, acknowledge_alert, get_raw_traffic_data_mongo, etc., remain here unchanged)
+    async def insert_alerts(self, alerts: List[Dict]):
+        """Inserts a batch of alerts into the database."""
+        sql = """INSERT INTO alerts (timestamp, severity, feed_id, message, details, acknowledged)
+                 VALUES (?, ?, ?, ?, ?, ?)"""
+        params = []
+        for alert in alerts:
+            params.append((
+                alert.get("timestamp", time.time()),
+                alert.get("severity", "INFO"),
+                alert.get("feed_id"),
+                alert.get("message", ""),
+                json.dumps(alert.get("details", {})),
+                0
+            ))
+        
+        try:
+            await asyncio.to_thread(self._execute_write_many, sql, params)
+        except Exception as e:
+            logger.error(f"Error inserting alerts batch: {e}")
+            raise DatabaseError(f"Failed to insert alerts batch: {e}") from e
+
+    def _execute_write_many(self, sql: str, params: List[tuple]):
+        """Helper for synchronous write many operations."""
+        self._validate_query(sql, ())
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                conn.executemany(sql, params)
+                conn.commit()
 
     async def get_alerts_filtered(
         self, filters: Dict, limit: int = 100, offset: int = 0

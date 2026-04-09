@@ -56,34 +56,41 @@ def inference_worker(
     traffic_monitors: Dict[str, TrafficMonitor] = {}
     pending_configs: Dict[str, Dict] = {}
     metrics_map: Dict[str, WorkerMetrics] = {}
-    shared_model = None
     shm_managers: Dict[str, SharedFrameManager] = {}
 
-    from ..services.reid_manager import GlobalReIDManager
-    local_reid_manager = GlobalReIDManager(config)
+    shared_model = None
+    shared_reid_embedder = None
+    models_loaded = False
 
-    vehicle_det_cfg = config.get("vehicle_detection", {})
     perf_cfg = config.get("performance", {})
     use_gpu = perf_cfg.get("gpu_acceleration", False)
     device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
     logger.info(f"[Worker {worker_id}] Inference device: {device}")
 
-    model_path = vehicle_det_cfg.get("model_path")
-    shared_reid_embedder = None
-    if model_path:
+    def _lazy_load_models():
+        nonlocal shared_model, shared_reid_embedder, models_loaded
+        if models_loaded: return
+        
+        logger.info(f"[Worker {worker_id}] First feed received. Lazily loading models...")
+        model_path = config.get("vehicle_detection", {}).get("model_path")
+        if not model_path: 
+            logger.error(f"[Worker {worker_id}] Model path not configured."); return
         try:
             from ultralytics import YOLO
             shared_model = YOLO(model_path)
             shared_model.to(device)
             logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
-            if vehicle_det_cfg.get("reid_enabled", True):
+            
+            if config.get("vehicle_detection", {}).get("reid_enabled", True):
                 from ..ml.reid_model import ReIDEmbedder
                 shared_reid_embedder = ReIDEmbedder(config)
                 logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+            models_loaded = True
         except Exception as e:
-            logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
+            logger.error(f"[Worker {worker_id}] Shared model load exception: {e}", exc_info=True)
 
-    def get_model_for_feed(f_id: str) -> YOLO:
+    def get_model_for_feed(f_id: str):
+        if not models_loaded: _lazy_load_models()
         return shared_model
 
     def handle_command(cmd):
@@ -97,118 +104,88 @@ def inference_worker(
                 while True:
                     cmd = command_queue.get_nowait()
                     handle_command(cmd)
-            except queue.Empty:
-                pass
+            except queue.Empty: pass
             
-            batch_tasks = []
             try:
-                first_task = central_input_queue.get(timeout=0.1)
-                if first_task:
-                    batch_tasks.append(first_task)
-                while len(batch_tasks) < perf_cfg.get("batch_size", 1):
-                    t = central_input_queue.get_nowait()
-                    if t: batch_tasks.append(t)
+                task = central_input_queue.get(timeout=0.1)
             except queue.Empty:
-                if not batch_tasks: continue
+                continue
+
+            feed_id, frame_index, frame_data, timestamp, fw, fh = task
+
+            if feed_id not in metrics_map: metrics_map[feed_id] = WorkerMetrics(feed_id)
+            if frame_index == -999: # End of stream signal
+                if feed_id in core_modules: core_modules.pop(feed_id).cleanup()
+                if feed_id in shm_managers: shm_managers.pop(feed_id).close()
+                if feed_id in traffic_monitors: traffic_monitors.pop(feed_id)
+                if feed_id in metrics_map: metrics_map.pop(feed_id)
+                continue
+
+            if feed_id not in core_modules:
+                _lazy_load_models()
+                if not models_loaded: 
+                    logger.warning(f"[{feed_id}] Models not loaded, skipping frame.")
+                    continue
+                core_modules[feed_id] = CoreModule(
+                    feed_id=feed_id, config=config, db_queue=db_queue,
+                    model_path=config.get("vehicle_detection", {}).get("model_path"),
+                    fps=config.get("video_processing", {}).get("target_fps", 15),
+                    preloaded_model=shared_model, preloaded_reid=shared_reid_embedder
+                )
+                traffic_monitors[feed_id] = TrafficMonitor(config, db_queue, feed_id)
+
+            core, metrics_obj = core_modules[feed_id], metrics_map[feed_id]
+            frame = None
             
-            frames_to_infer = []
-            inference_indices = []
-            batch_meta = []
-
-            for task in batch_tasks:
-                feed_id, frame_index, frame_data, timestamp, fw, fh = task
-
-                if feed_id not in metrics_map:
-                    metrics_map[feed_id] = WorkerMetrics(feed_id)
-                
-                if frame_index == -999:
-                    if feed_id in core_modules: core_modules.pop(feed_id).cleanup()
-                    if feed_id in shm_managers: shm_managers.pop(feed_id).close()
-                    continue
-
-                if feed_id not in core_modules:
-                    core_modules[feed_id] = CoreModule(
-                        feed_id=feed_id,
-                        config=config,
-                        model_path=model_path,
-                        fps=config.get("video_processing", {}).get("target_fps", 15),
-                        db_queue=db_queue,
-                        preloaded_model=shared_model,
-                        preloaded_reid=shared_reid_embedder
-                    )
-                    traffic_monitors[feed_id] = TrafficMonitor(config)
-
-                core = core_modules[feed_id]
-                metrics_obj = metrics_map[feed_id]
-                frame = None
-                
-                if isinstance(frame_data, dict) and "shm_name" in frame_data:
-                    shm_name = frame_data["shm_name"]
-                    if shm_name not in shm_managers:
-                        try:
-                            shm_managers[shm_name] = SharedFrameManager(name=shm_name, frame_shape=frame_data["shape"], dtype=frame_data["dtype"], num_buffers=20, create=False)
-                            logger.info(f"[{feed_id}] Attached to SHM ring buffer: {shm_name}")
-                        except Exception as e:
-                            logger.error(f"Failed to attach to SHM {shm_name}: {e}")
-                            continue
-                    
+            if isinstance(frame_data, dict) and "shm_name" in frame_data:
+                shm_name = frame_data["shm_name"]
+                if shm_name not in shm_managers:
                     try:
-                        frame = shm_managers[shm_name].get_frame(frame_data["shm_index"])
+                        shm_managers[shm_name] = SharedFrameManager(
+                            name=shm_name, 
+                            frame_shape=frame_data["shape"], 
+                            dtype=frame_data["dtype"],
+                            # CRITICAL #2 FIX: Use num_buffers from producer
+                            num_buffers=frame_data['num_buffers'],
+                            create=False # Consumer attaches
+                        )
+                        logger.info(f"[{feed_id}] Attached to SHM ring buffer: {shm_name}")
                     except Exception as e:
-                        logger.error(f"Error reading from SHM {shm_name}: {e}")
-                        continue
-                elif isinstance(frame_data, dict) and "raw_bytes" in frame_data:
-                    try:
-                        frame = np.frombuffer(frame_data["raw_bytes"], dtype=frame_data["dtype"]).reshape(frame_data["shape"])
-                    except Exception as e:
-                        logger.error(f"Raw buffer reconstruction error: {e}")
+                        logger.error(f"Failed to attach to SHM {shm_name}: {e}", exc_info=True)
                         continue
                 
-                if frame is None:
-                    continue
-
-                batch_meta.append({
-                    "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
-                    "frame_data": frame_data, "timestamp": timestamp,
-                    "core": core, "metrics": metrics_obj
-                })
-                frames_to_infer.append(core._preprocess_frame(frame)[0])
-                inference_indices.append(len(batch_meta) - 1)
-
-            batch_detections_map = {}
-            if frames_to_infer:
+                # CRITICAL #2 FIX: Use synchronized get_frame
+                frame = shm_managers[shm_name].get_frame(frame_data["shm_index"])
+            
+            elif isinstance(frame_data, dict) and "raw_bytes" in frame_data:
                 try:
-                    model = get_model_for_feed(batch_meta[0]["feed_id"])
-                    results = model(frames_to_infer, verbose=False, stream=False, conf=0.1, half=(device.type=="cuda"))
-                    for i, res in enumerate(results):
-                        meta_idx = inference_indices[i]
-                        formatted_dets = [((b[0], b[1], b[2], b[3]), b[4], b[5]) for b in res.boxes.data.cpu().numpy()]
-                        batch_detections_map[meta_idx] = formatted_dets
+                    frame = np.frombuffer(frame_data["raw_bytes"], dtype=frame_data["dtype"]).reshape(frame_data["shape"])
                 except Exception as e:
-                    logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
+                    logger.error(f"Raw buffer reconstruction error: {e}", exc_info=True)
+                    continue
+            
+            if frame is None:
+                metrics_obj.frames_dropped += 1
+                continue
 
-            for i, meta in enumerate(batch_meta):
-                core, metrics_obj = meta['core'], meta['metrics']
-                frame, f_idx = meta['frame'], meta['frame_index']
-                detections = batch_detections_map.get(i, [])
-                
-                vis_tracks, _, _, _ = core.detect_and_track(frame, f_idx, external_detections=detections, timestamp=meta["timestamp"])
-                
-                monitor = traffic_monitors[meta['feed_id']]
-                monitor.update_vehicles(vis_tracks)
-                metrics_result = monitor.get_metrics()
-                metrics_obj.frames_processed += 1
+            detections = core.detector.detect(frame) # Simplified: Assumes CoreModule handles preprocessing
+            vis_tracks, _, _, _ = core.detect_and_track(frame, frame_index, external_detections=detections, timestamp=timestamp)
+            
+            monitor = traffic_monitors[feed_id]
+            monitor.update_vehicles(vis_tracks)
+            metrics_result = monitor.get_metrics()
+            metrics_obj.frames_processed += 1
 
-                fh, fw = frame.shape[:2]
-                scale_x, scale_y = 1.0 / fw, 1.0 / fh
-                vehicles_for_transport = _prepare_vehicles_for_transport_with_map(vis_tracks, scale_x, scale_y)
+            fh, fw = frame.shape[:2]
+            scale_x, scale_y = 1.0 / fw, 1.0 / fh
+            vehicles_for_transport = _prepare_vehicles_for_transport_with_map(vis_tracks, scale_x, scale_y)
 
-                try:
-                    central_output_queue.put((
-                        meta['feed_id'], f_idx, meta['frame_data'], metrics_result, vehicles_for_transport, {}
-                    ))
-                except queue.Full:
-                    metrics_obj.frames_dropped += 1
+            try:
+                central_output_queue.put((
+                    feed_id, frame_index, meta['frame_data'], metrics_result, vehicles_for_transport, {}
+                ), timeout=0.01)
+            except queue.Full:
+                metrics_obj.frames_dropped += 1
 
             now = time.time()
             if now - last_metrics_log > 30.0:

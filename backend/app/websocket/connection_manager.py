@@ -131,10 +131,6 @@ class ConnectionManager:
             for cid in to_disconnect:
                 await self.disconnect(cid)
 
-
-
-
-
     async def subscribe_to_topic(self, client_id: str, topic: str):
         """Subscribe a client to a specific topic (like incidents)."""
         self.feed_subscriptions[topic].add(client_id)
