@@ -119,6 +119,7 @@ class ConnectionManager:
         # In this implementation, topics are mapped to feed_subscriptions keys
         if topic in self.feed_subscriptions:
             targets = list(self.feed_subscriptions[topic])
+            logger.info(f"Broadcasting to topic '{topic}': {len(targets)} clients")
             to_disconnect = []
             for cid in targets:
                 ws = self.active_connections.get(cid)
@@ -130,6 +131,8 @@ class ConnectionManager:
             
             for cid in to_disconnect:
                 await self.disconnect(cid)
+        else:
+            logger.debug(f"No subscribers for topic '{topic}'. Skipping broadcast.")
 
     async def subscribe_to_topic(self, client_id: str, topic: str):
         """Subscribe a client to a specific topic (like incidents)."""

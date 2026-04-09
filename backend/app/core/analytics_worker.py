@@ -4,6 +4,7 @@ import queue
 import signal
 import time
 from multiprocessing import Event, Queue as MPQueue
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ def analytics_worker_process(
     input_queue: MPQueue,
     output_queue: MPQueue,
     stop_event: Event,
+    heartbeat: Any = None,
 ):
     """
     High-level process for handling analytics data.
@@ -26,6 +28,10 @@ def analytics_worker_process(
     signal.signal(signal.SIGINT, signal_handler)
 
     while not stop_event.is_set():
+        # Update heartbeat to signal the process is alive
+        if heartbeat is not None:
+            heartbeat.value = time.time()
+
         try:
             # Get data from the input queue with a timeout
             data = input_queue.get(timeout=0.1)
