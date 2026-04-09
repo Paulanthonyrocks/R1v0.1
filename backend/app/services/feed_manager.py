@@ -406,13 +406,10 @@ class FeedManager:
         self._analytics_process = self._mp_ctx.Process(
             target=analytics_worker_process,
             args=(
-                0,
                 self.config,
                 self._analytics_input_queue,
                 self._analytics_output_queue,
-                self._db_queue,
-                self._analytics_stop_event,
-                self._analytics_heartbeat
+                self._analytics_stop_event
             ),
             daemon=True,
             name="AnalyticsWorker"
