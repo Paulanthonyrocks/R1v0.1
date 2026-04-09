@@ -1182,7 +1182,16 @@ class FeedManager:
                     debounced_vehicles.append({"vehicle_id": vid, "d": 1})
                 else:
                     # Full update + refresh dead-reckoning state
-                    debounced_vehicles.append(v)
+                    # --- NORMALIZATION STEP ---
+                    v_norm = v.copy()
+                    res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
+                    fw, fh = res[0], res[1]
+                    if "bbox" in v and len(v["bbox"]) == 4:
+                        v_norm["bbox"] = [v["bbox"][0] / fw, v["bbox"][1] / fh, v["bbox"][2] / fw, v["bbox"][3] / fh]
+                    if "vx" in v: v_norm["vx"] = v["vx"] / fw
+                    if "vy" in v: v_norm["vy"] = v["vy"] / fh
+                    
+                    debounced_vehicles.append(v_norm)
                     if feed_id not in self._last_sent_telemetry:
                         self._last_sent_telemetry[feed_id] = {}
                     self._last_sent_telemetry[feed_id][vid] = (curr_x, curr_y, curr_vx, curr_vy, now)
