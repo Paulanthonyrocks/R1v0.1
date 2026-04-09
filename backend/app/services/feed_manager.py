@@ -430,13 +430,10 @@ class FeedManager:
         self._analytics_process = self._mp_ctx.Process(
             target=analytics_worker_process,
             args=(
-                0,
                 self.config,
                 self._analytics_input_queue,
                 self._analytics_output_queue,
-                self._db_queue,
                 self._analytics_stop_event,
-                self._analytics_heartbeat
             ),
             daemon=True,
             name="AnalyticsWorker"
@@ -1711,7 +1708,7 @@ class FeedManager:
             except Exception: pass  # noqa: E701
         for fid in to_start:
             try:
-                await self.start_feed(fid)
+                await self.start__feed(fid)
             except Exception: pass  # noqa: E701
     # --- Helper Methods ---
     async def get_feed_config(self, feed_id: str) -> Optional[FeedConfigInfo]:

@@ -464,7 +464,7 @@ post_startup_processing:
   - is_looped: true
     latitude: 34.0522
     longitude: -118.2437
-    path: /content/sample_traffic.mp4
+    path: hosting/public/sample_traffic.mp4
 prediction_scheduler:
   accuracy_cache_ttl_minutes: 60
   default_low_data_weight: 0.75
