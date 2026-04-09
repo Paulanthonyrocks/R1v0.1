@@ -132,7 +132,7 @@ def inference_worker(
                     fps=config.get("video_processing", {}).get("target_fps", 15),
                     preloaded_model=shared_model, preloaded_reid=shared_reid_embedder
                 )
-                traffic_monitors[feed_id] = TrafficMonitor(config, db_queue, feed_id)
+                traffic_monitors[feed_id] = TrafficMonitor(config, feed_id)
 
             core, metrics_obj = core_modules[feed_id], metrics_map[feed_id]
             frame = None
