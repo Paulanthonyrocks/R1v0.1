@@ -49,3 +49,4 @@ memory.md
 gha-creds-*.json
 
 backend/configs/firrebase/service-account-key.json
+memory.md

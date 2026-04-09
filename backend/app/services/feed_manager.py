@@ -526,10 +526,12 @@ class FeedManager:
                     data = config_info.model_dump()
                     data["_is_looped_feed"] = entry.get("is_looped_feed", True)
                     feeds_data[feed_id] = data
-            self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.persistence_path, 'w') as f:
+            # BUG #18 FIX: Wrap path string in Path() to use .parent
+            save_path = Path(self.persistence_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, 'w') as f:
                 json.dump(feeds_data, f, indent=2)
-            logger.info(f"Saved {len(feeds_data)} feeds to {self.persistence_path}")
+            logger.info(f"Saved {len(feeds_data)} feeds to {save_path}")
         except Exception as e:
             logger.error(f"Failed to save feeds persistence: {e}")
     def _load_persisted_feeds(self):
