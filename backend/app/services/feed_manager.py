@@ -409,7 +409,8 @@ class FeedManager:
                 self.config,
                 self._analytics_input_queue,
                 self._analytics_output_queue,
-                self._analytics_stop_event
+                self._analytics_stop_event,
+                self._analytics_heartbeat
             ),
             daemon=True,
             name="AnalyticsWorker"
