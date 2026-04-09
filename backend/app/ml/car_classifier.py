@@ -20,15 +20,9 @@ class CarClassifier:
 
         try:
             import tensorflow as tf
-            # --- CRITICAL: Enable GPU Memory Growth ---
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus:
-                try:
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                    logger.info("CarClassifier: TensorFlow GPU memory growth enabled.")
-                except RuntimeError as e:
-                    logger.warning(f"CarClassifier: Memory growth must be set before GPUs have been initialized: {e}")
+            # FIX: TensorFlow hardware configuration should be moved to a centralized boot script.
+            # Removing tf.config.experimental.set_memory_growth from here to avoid RuntimeError
+            # if this class is instantiated multiple times or after other TF scripts.
             
             # Check for GPU acceleration config
             use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
@@ -36,8 +30,6 @@ class CarClassifier:
             
             if use_gpu:
                 try:
-                    # Attempt to load the GPU delegate
-                    # This library name is standard for Linux/Colab environments with TF installed
                     gpu_delegate = tf.lite.experimental.load_delegate('libtensorflowlite_gpu_delegate.so')
                     delegates.append(gpu_delegate)
                     logger.info("CarClassifier: GPU delegate loaded successfully.")
@@ -53,15 +45,11 @@ class CarClassifier:
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             
-            # Assuming input is (1, height, width, 3)
             self.input_shape = self.input_details[0]['shape']
             self.input_height = self.input_shape[1]
             self.input_width = self.input_shape[2]
             
             logger.info(f"Car classifier loaded. Input: {self.input_width}x{self.input_height}")
-            
-            # Labels (Placeholder - usually provided in a separate file)
-            # If we don't have them, we might need to add them later or find the source.
             self.labels = self._load_labels()
             
         except (ImportError, OSError) as e:
@@ -94,30 +82,18 @@ class CarClassifier:
             return None, 0.0
             
         try:
-            # 1. Preprocess
             img = cv2.resize(vehicle_crop, (self.input_width, self.input_height))
-            
-            # Handle int8 quantization
             if self.input_details[0]['dtype'] == np.int8:
                 input_scale, input_zero_point = self.input_details[0]['quantization']
                 if input_scale == 0: input_scale = 1.0
-                
-                # Standard TFLite quantization: q = real / scale + zero_point
-                # For models expecting 0..255 shifted to -128..127
                 img = (img.astype(np.float32) / input_scale + input_zero_point).astype(np.int8)
             else:
                 img = img.astype(np.float32) / 255.0
                 
             img = np.expand_dims(img, axis=0)
-            
-            # 2. Inference
             self.interpreter.set_tensor(self.input_details[0]['index'], img)
             self.interpreter.invoke()
-            
-            # 3. Postprocess
             output_tensor = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
-            
-            # Handle output quantization
             if self.output_details[0]['dtype'] == np.int8:
                 output_scale, output_zero_point = self.output_details[0]['quantization']
                 output_data = (output_tensor.astype(np.float32) - output_zero_point) * output_scale
@@ -126,7 +102,6 @@ class CarClassifier:
                 
             max_idx = np.argmax(output_data)
             confidence = float(output_data[max_idx])
-            
             label = f"Class_{max_idx}"
             if self.labels and max_idx < len(self.labels):
                 label = self.labels[max_idx]

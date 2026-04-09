@@ -21,7 +21,7 @@ class ReIDEmbedder:
         
         # Configuration options
         self.backbone_name = self.reid_cfg.get("backbone", "mobilenet_v3_small")
-        self.input_size = self.reid_cfg.get("input_size", (256, 256)) # Default to 256x256 as suggested
+        self.input_size = self.reid_cfg.get("input_size", (256, 256))
         self.embedding_dim = self.reid_cfg.get("embedding_dim", 128)
         self.use_onnx = self.reid_cfg.get("use_onnx", True)
         self.onnx_session = None
@@ -29,72 +29,22 @@ class ReIDEmbedder:
         logger.info(f"Initializing ReID Embedder ({self.backbone_name}) on {self.device}...")
         for h in logger.handlers: h.flush()
         
-        # Helper to load backbone with timeout to prevent hang
-        def _load_backbone_safe(name, weights_enum, use_weights: bool):
-            import threading
-            result_container = {}
-            
-            def _load():
-                try:
-                    logger.info(f"Attempting to load {name} (weights={use_weights})...")
-                    for h in logger.handlers: h.flush()
-                    if name == "resnet50":
-                        w = weights_enum.DEFAULT if use_weights else None
-                        result_container['model'] = models.resnet50(weights=w)
-                    elif name == "mobilenet_v3_small":
-                        w = weights_enum.DEFAULT if use_weights else None
-                        result_container['model'] = models.mobilenet_v3_small(weights=w)
-                    logger.info(f"Thread: Loaded {name} successfully.")
-                    for h in logger.handlers: h.flush()
-                except Exception as e:
-                    logger.error(f"Thread: Error loading {name}: {e}")
-                    result_container['error'] = e
-
-            # Start loading in a thread
-            t = threading.Thread(target=_load, daemon=True)
-            t.start()
-            t.join(timeout=30) # 30s timeout for download/load
-            
-            if t.is_alive():
-                logger.error(f"Timeout loading {name} weights! Network might be blocked. Fallback to random weights.")
-                # We can't kill the thread, but we can return a fresh model with random weights
-                if name == "resnet50":
-                    return models.resnet50(weights=None)
-                elif name == "mobilenet_v3_small":
-                    return models.mobilenet_v3_small(weights=None)
-            
-            if 'error' in result_container:
-                logger.error(f"Error loading {name}: {result_container['error']}. Fallback to random weights.")
-                if name == "resnet50":
-                    return models.resnet50(weights=None)
-                elif name == "mobilenet_v3_small":
-                    return models.mobilenet_v3_small(weights=None)
-            
-            if 'model' in result_container:
-                logger.info(f"Successfully loaded {name}.")
-                for h in logger.handlers: h.flush()
-                return result_container['model']
-            
-            return None
-
-        # Load backbone
+        # Load backbone - FIX: Removed dangerous threading workaround and internet downloads
+        # Weights should be packaged with the container or provided via model_path
         use_pretrained = not self.reid_cfg.get("model_path")
         
         if self.backbone_name == "resnet50":
-            self.backbone = _load_backbone_safe("resnet50", models.ResNet50_Weights, use_pretrained)
-            if self.backbone is None: # Should not happen with fallback
-                 self.backbone = models.resnet50(weights=None)
-            
+            # Use weights=None to avoid attempting to download from torch hub
+            # If use_pretrained is True but no path is given, we still use None to avoid hang
+            # and rely on custom weights loading later.
+            self.backbone = models.resnet50(weights=None)
             num_features = self.backbone.fc.in_features
             self.backbone.fc = nn.Sequential(
                 nn.Linear(num_features, self.embedding_dim),
                 nn.BatchNorm1d(self.embedding_dim)
             )
         elif self.backbone_name == "mobilenet_v3_small":
-            self.backbone = _load_backbone_safe("mobilenet_v3_small", models.MobileNet_V3_Small_Weights, use_pretrained)
-            if self.backbone is None:
-                 self.backbone = models.mobilenet_v3_small(weights=None)
-
+            self.backbone = models.mobilenet_v3_small(weights=None)
             num_features = self.backbone.classifier[0].in_features
             self.backbone.classifier = nn.Sequential(
                 nn.Linear(num_features, self.embedding_dim),
@@ -102,29 +52,26 @@ class ReIDEmbedder:
             )
         else:
             logger.warning(f"Unknown backbone {self.backbone_name}, falling back to mobilenet_v3_small")
-            self.backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+            self.backbone = models.mobilenet_v3_small(weights=None)
             num_features = self.backbone.classifier[0].in_features
             self.backbone.classifier = nn.Sequential(
                 nn.Linear(num_features, self.embedding_dim),
                 nn.BatchNorm1d(self.embedding_dim)
             )
             
-        # Load custom weights if provided
+        # Load custom weights if provided - THIS IS NOW THE PRIMARY WAY TO GET PRE-TRAINED WEIGHTS
         weights_path = self.reid_cfg.get("model_path")
         if weights_path:
             try:
                 project_root = Path(self.config.get("project_root_dir", ""))
                 full_weights_path = project_root / weights_path
                 
-                # --- NEW: Force ignore XML files before PyTorch crashes ---
                 if str(full_weights_path).endswith(".xml"):
                     logger.warning(f"Bypassing OpenVINO .xml file for PyTorch backbone: {full_weights_path}")
                 elif full_weights_path.exists():
                     logger.info(f"Loading custom weights from {full_weights_path}...")
-                    # Use weights_only=False for custom legacy weights
                     state_dict = torch.load(full_weights_path, map_location=self.device, weights_only=False)
                     
-                    # Filter out 'backbone.' or 'embedding_head.' prefixes
                     new_state_dict = {}
                     for k, v in state_dict.items():
                         if k.startswith("backbone."):
@@ -143,7 +90,10 @@ class ReIDEmbedder:
                     logger.warning(f"ReID weights file not found at {full_weights_path}")
             except Exception as e:
                 logger.error(f"Failed to load ReID weights: {e}")
-        
+        else:
+            if use_pretrained:
+                logger.warning("No model_path provided and weights=None used to prevent network hang. Model is using random initialization.")
+
         logger.info(f"Moving backbone to device: {self.device}")
         for h in logger.handlers: h.flush()
         self.backbone.to(self.device)
@@ -155,9 +105,6 @@ class ReIDEmbedder:
         if self.use_onnx:
             self._initialize_onnx()
         
-        # Standard ImageNet normalization for pre-trained models
-        logger.info("Creating transforms")
-        for h in logger.handlers: h.flush()
         self.transform = T.Compose([
             T.ToPILImage(),
             T.Resize(self.input_size),
@@ -173,7 +120,6 @@ class ReIDEmbedder:
         models_dir.mkdir(parents=True, exist_ok=True)
         onnx_path = models_dir / f"reid_{self.backbone_name}.onnx"
 
-        # 1. Export the model if it doesn't exist
         if not onnx_path.exists():
             logger.info(f"ONNX model not found at {onnx_path}. Exporting PyTorch model...")
             try:
@@ -195,7 +141,6 @@ class ReIDEmbedder:
                 self.onnx_session = None
                 return
 
-        # 2. Load the FP32 ONNX model into InferenceSession
         try:
             logger.info("Loading FP32 ONNX model...")
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if self.device == "cuda" else ['CPUExecutionProvider']
@@ -204,6 +149,7 @@ class ReIDEmbedder:
         except Exception as e:
             logger.error(f"Failed to load ONNX session: {e}")
             self.onnx_session = None
+
     def _center_crop_numpy(self, img: np.ndarray, crop_ratio: float = 0.7) -> np.ndarray:
         h, w = img.shape[:2]
         ch, cw = int(h * crop_ratio), int(w * crop_ratio)
@@ -212,17 +158,11 @@ class ReIDEmbedder:
 
     @torch.no_grad()
     def get_embedding(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Generates a normalized multi-scale embedding vector (full + center crop).
-        """
         if image.size == 0:
             return None
             
         try:
-            # Scale 1: Full image
             input_tensor_full = self.transform(image).unsqueeze(0).to(self.device)
-            
-            # Scale 2: Center crop
             crop_img = self._center_crop_numpy(image)
             input_tensor_crop = self.transform(crop_img).unsqueeze(0).to(self.device)
             
@@ -253,9 +193,6 @@ class ReIDEmbedder:
 
     @torch.no_grad()
     def get_batch_embeddings(self, images: List[np.ndarray]) -> List[Optional[np.ndarray]]:
-        """
-        Generates normalized embedding vectors for a batch of cropped vehicle images.
-        """
         if not images:
             return []
 
@@ -263,7 +200,6 @@ class ReIDEmbedder:
         indices = []
         embeddings_map = {}
 
-        # Pre-filter invalid images
         for idx, img in enumerate(images):
             if img is not None and img.size > 0:
                 valid_images.append(img)
@@ -275,7 +211,6 @@ class ReIDEmbedder:
             return [None] * len(images)
 
         try:
-            # Batch transform for multi-scale
             batch_tensors_full = []
             batch_tensors_crop = []
             for img in valid_images:
@@ -306,11 +241,9 @@ class ReIDEmbedder:
                 embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
                 embeddings_np = embeddings.cpu().numpy()
 
-            # Map back to original indices
             for i, idx in enumerate(indices):
                 embeddings_map[idx] = embeddings_np[i][:128]
 
-            # Construct result list in order
             return [embeddings_map.get(i) for i in range(len(images))]
 
         except Exception as e:
@@ -318,8 +251,4 @@ class ReIDEmbedder:
             return [None] * len(images)
 
     def compute_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """
-        Computes cosine similarity between two embeddings.
-        Since they are L2 normalized, this is just the dot product.
-        """
         return np.dot(emb1, emb2)

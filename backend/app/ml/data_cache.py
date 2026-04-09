@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone
 import numpy as np
@@ -11,6 +12,12 @@ class TrafficDataCache:
     def __init__(self, max_history_hours: int = 24):
         self.max_history_hours = max_history_hours
         self.location_data: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self._lock = threading.RLock()
+        
+        # Start background cleanup thread
+        self._stop_cleanup = threading.Event()
+        self._cleanup_thread = threading.Thread(target=self._bg_cleanup_loop, daemon=True)
+        self._cleanup_thread.start()
 
     def _get_location_key(self, latitude: float, longitude: float) -> str:
         """Create a unique key for a location, rounding to 4 decimal places for nearby grouping"""
@@ -29,15 +36,17 @@ class TrafficDataCache:
         # Add new data point, ensuring we use the datetime timestamp argument 
         # and it's not overwritten by anything in the 'data' dict
         data_point = {**data, "timestamp": timestamp}
-        logger.debug(f"Adding data point for {location_key}: {data_point}")
-        self.location_data[location_key].append(data_point)
-
-        logger.debug(
-            f"Data point added for {location_key}. Current points: {len(self.location_data[location_key])}"
-        )
         
-        # Clean old data for this location to prevent memory leak
-        self._clean_old_data(location_key)
+        with self._lock:
+            logger.debug(f"Adding data point for {location_key}: {data_point}")
+            self.location_data[location_key].append(data_point)
+
+            logger.debug(
+                f"Data point added for {location_key}. Current points: {len(self.location_data[location_key])}"
+            )
+            
+            # Clean old data for this location to prevent memory leak
+            self._clean_old_data(location_key)
 
     def _is_later_than(self, ts: Any, cutoff: datetime) -> bool:
         """Safely compare a timestamp (which could be float/str) with a cutoff datetime."""
@@ -60,6 +69,7 @@ class TrafficDataCache:
 
     def _clean_old_data(self, location_key: str):
         """Remove data points older than max_history_hours"""
+        # Note: This is called within self._lock in add_data_point and clean_all_locations
         if not self.location_data[location_key]:
             return
 
@@ -75,7 +85,9 @@ class TrafficDataCache:
     ) -> List[Dict[str, Any]]:
         """Get recent data points for a location"""
         location_key = self._get_location_key(latitude, longitude)
-        data = self.location_data.get(location_key, [])
+        
+        with self._lock:
+            data = list(self.location_data.get(location_key, []))
 
         if not data:
             return []
@@ -139,44 +151,62 @@ class TrafficDataCache:
         """
         logger.debug("Retrieving all location summaries.")
         summaries = []
-        # now = datetime.now() # For context if needed, though not directly used in "latest" logic below
 
-        for location_key, data_points in self.location_data.items():
-            if not data_points:
-                logger.debug(
-                    f"No data points for location_key: {location_key}. Skipping."
-                )
-                continue
+        with self._lock:
+            # We use list(self.location_data.items()) to avoid RuntimeError if the dict changes size
+            for location_key, data_points in list(self.location_data.items()):
+                if not data_points:
+                    logger.debug(
+                        f"No data points for location_key: {location_key}. Skipping."
+                    )
+                    continue
 
-            # Assume the last data point is the most recent one
-            # For robustness, one might sort by timestamp: `latest_point = sorted(data_points, key=lambda x: x['timestamp'])[-1]`
-            # But given how data is added and cleaned, the last one is likely the most recent.
-            latest_point = data_points[-1]
+                # Assume the last data point is the most recent one
+                latest_point = data_points[-1]
 
-            try:
-                lat_str, lon_str = location_key.split(",")
-                latitude = float(lat_str)
-                longitude = float(lon_str)
-            except ValueError:
-                logger.warning(
-                    f"Could not parse location_key: {location_key}. Skipping this entry."
-                )
-                continue
+                try:
+                    lat_str, lon_str = location_key.split(",")
+                    latitude = float(lat_str)
+                    longitude = float(lon_str)
+                except ValueError:
+                    logger.warning(
+                        f"Could not parse location_key: {location_key}. Skipping this entry."
+                    )
+                    continue
 
-            summary = {
-                **latest_point,
-                "id": location_key,
-                "name": f"Node at ({latitude:.4f}, {longitude:.4f})",
-                "latitude": latitude,
-                "longitude": longitude,
-            }
-            summaries.append(summary)
+                summary = {
+                    **latest_point,
+                    "id": location_key,
+                    "name": f"Node at ({latitude:.4f}, {longitude:.4f})",
+                    "latitude": latitude,
+                    "longitude": longitude,
+                }
+                summaries.append(summary)
+        
         logger.debug(f"Returning {len(summaries)} location summaries.")
         return summaries
 
     def clean_all_locations(self):
         """Iterate through all locations and clean old data."""
         logger.info("Starting cleanup of old data for all locations.")
-        for location_key in list(self.location_data.keys()):
-            self._clean_old_data(location_key)
+        with self._lock:
+            for location_key in list(self.location_data.keys()):
+                self._clean_old_data(location_key)
         logger.info("Finished cleanup of old data for all locations.")
+
+    def _bg_cleanup_loop(self):
+        """Background loop to clean all locations periodically"""
+        while not self._stop_cleanup.is_set():
+            try:
+                # Clean every hour
+                self.clean_all_locations()
+            except Exception as e:
+                logger.error(f"Error in background cleanup loop: {e}")
+            
+            # Sleep for 1 hour or until stopped
+            self._stop_cleanup.wait(timeout=3600)
+
+    def shutdown(self):
+        """Stop the background cleanup thread"""
+        self._stop_cleanup.set()
+        self._cleanup_thread.join()
