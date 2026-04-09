@@ -1236,9 +1236,7 @@ class FeedManager:
                     pass
                 if not results_buffer:
                     await asyncio.sleep(0.005) # Slower poll for analytics
-                    continue
-                feed_ids_to_update = set()
-                async with self._lock:
+                else:
                     for item in results_buffer:
                         feed_id, feed_metrics, vehicles, lanes, lines = item
                         entry = self.process_registry.get(feed_id)
