@@ -1,3 +1,7 @@
+import numpy as np
+import cv2
+from typing import Tuple
+
 def estimate_motion(self, frame: np.ndarray) -> Tuple[float, float]:
     """Returns (dx, dy) shift from previous frame."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
