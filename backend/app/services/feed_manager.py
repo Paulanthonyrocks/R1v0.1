@@ -1688,9 +1688,4 @@ class FeedManager:
             tasks.append(self._db_reader_task)
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
-    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
-
-andlers match your original structure)
-
-rs match your original structure)
 
