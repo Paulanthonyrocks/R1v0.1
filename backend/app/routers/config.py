@@ -1,12 +1,16 @@
 # backend/app/routers/config.py
 
 from typing import Dict, Any
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 
 from app.dependency_injection import (
     get_config,
     get_current_admin,
-)  # Added get_current_active_user
+    get_feed_manager,
+    get_container,
+    DependencyContainer as Container,
+    FeedManager,
+)
 from app.models.common import APIResponse  # Re-use standard response model
 import logging
 
