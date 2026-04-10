@@ -68,8 +68,8 @@ async def get_current_config(
     description="Triggers a reload of the config.yaml file and propagates changes to active services.",
 )
 async def reload_server_config(
-    current_user: dict = Depends(get_current_admin),
     background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_admin),
     feed_manager: FeedManager = Depends(get_feed_manager),
     container: Container = Depends(get_container),
 ) -> Dict[str, Any]:
