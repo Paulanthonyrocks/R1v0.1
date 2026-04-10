@@ -304,7 +304,7 @@
   .matrix-glow, .matrix-card__title, .matrix-card__content, .matrix-card__icon {
     text-shadow: 0 0 1px var(--lcd-text), 0 0 4px var(--lcd-text); /* Sharper, more defined glow */
     font-family: var(--font-lcd) !important;
-    animation: lcd-glow 3s ease-in-out infinite alternate; /* Apply subtle flickering animation */
+    animation: lcd-glow 3s ease-in-out alternate; /* Apply subtle flickering animation */
   }
 
   /* Remove border radius and glass from nav */

@@ -6,6 +6,8 @@ interface StreamOverlayControlsProps {
   setShowOverlays: (value: boolean) => void;
   showBoundingBoxes: boolean;
   setShowBoundingBoxes: (value: boolean) => void;
+  showAllDetections: boolean;
+  setShowAllDetections: (value: boolean) => void;
   showVehicleDetails: boolean;
   setShowVehicleDetails: (value: boolean) => void;
   showROI: boolean;
@@ -52,6 +54,8 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   setShowOverlays,
   showBoundingBoxes,
   setShowBoundingBoxes,
+  showAllDetections,
+  setShowAllDetections,
   showVehicleDetails,
   setShowVehicleDetails,
   showROI,
