@@ -464,7 +464,7 @@ class CoreModule:
             if track["status"] == "active":
                 vis_tracks[tid] = track
             elif track["status"] == "predicting":
-                if (current_time - track["last_seen"]) < self.predict_timeout:
+                if (current_time - track.get("last_seen", current_time)) < self.predict_timeout:
                     vis_tracks[tid] = track
 
         self._save_vehicle_data(vis_tracks)
