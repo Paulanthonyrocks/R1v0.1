@@ -47,7 +47,7 @@ def process_frame_for_lanes(frame: Optional[np.ndarray], config: Dict[str, Any])
 
     lane_cfg = config.get("lane_detection", {})
     perf_cfg = config.get("performance", {})
-    use_gpu = perf_cfg.get("gpu_acceleration", False) and torch.cuda.is_available()
+    use_gpu = False
     
     if use_gpu:
         try:

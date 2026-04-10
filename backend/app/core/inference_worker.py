@@ -63,8 +63,7 @@ def inference_worker(
     models_loaded = False
 
     perf_cfg = config.get("performance", {})
-    use_gpu = perf_cfg.get("gpu_acceleration", False)
-    device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     logger.info(f"[Worker {worker_id}] Inference device: {device}")
 
     def _lazy_load_models():

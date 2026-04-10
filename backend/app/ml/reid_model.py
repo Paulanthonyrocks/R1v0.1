@@ -17,7 +17,7 @@ class ReIDEmbedder:
     def __init__(self, config: dict):
         self.config = config
         self.reid_cfg = config.get("vehicle_detection", {}).get("reid", {})
-        self.device = "cuda" if config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available() else "cpu"
+        self.device = "cpu"
         
         # Configuration options
         self.backbone_name = self.reid_cfg.get("backbone", "mobilenet_v3_small")
