@@ -41,11 +41,6 @@ __pycache__/
 
 
 colab/r1v0.1.ipynb
-.gemini/memory.md
-memory.md
-memory.md
-
-.gemini/
 gha-creds-*.json
 
 backend/configs/firrebase/service-account-key.json

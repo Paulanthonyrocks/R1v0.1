@@ -1541,9 +1541,9 @@ class FeedManager:
                 await self.start_feed(fid)
             except Exception: pass  # noqa: E701
     async def update_global_config(self, new_config: Dict[str, Any]):
-        \"\"\"
+        """
         Updates the global configuration and propagates changes to all active inference workers.
-        \"\"\"
+        """
         async with self._lock:
             self.config = new_config
             logger.info("FeedManager global configuration updated.")
@@ -1551,9 +1551,9 @@ class FeedManager:
         # Broadcast the updated config to all inference workers
         # We send a generic 'config_update' command with the full config
         cmd = {
-            \"type\": \"config_update\",
-            \"feed_id\": \"GLOBAL\",
-            \"data\": new_config
+            "type": "config_update",
+            "feed_id": "GLOBAL",
+            "data": new_config
         }
         
         sent_count = 0
