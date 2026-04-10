@@ -59,7 +59,7 @@ incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
 inference:
-  batch_size: 4
+  batch_size: 1
   detection_model: models/yolov8n.engine
   device: cpu
   num_workers: 1
@@ -439,7 +439,7 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: false
   image_gpu_acceleration: false
-  inference_pool_size: 2
+  inference_pool_size: 1
   inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
@@ -535,7 +535,7 @@ vehicle_detection:
   car_classification_interval_frames: 60
   car_classifier_labels_path: models/car_labels.txt
   car_classifier_model_path: models/Car_Make_Model.tflite
-  confidence_threshold: 0.05
+  confidence_threshold: 0.25
   enabled: true
   frame_resolution:
   - 640
@@ -566,10 +566,10 @@ vehicle_detection:
     similarity_threshold: 0.65
     use_appearance_in_tracking: true
     use_openvino: false
-  reid_enabled: true
+  reid_enabled: false
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 0
+  skip_frames: 2
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -604,7 +604,7 @@ video_output:
   - 480
 video_processing:
   adaptive_streaming: false
-  target_fps: 10
+  target_fps: 5
 vis_options_default:
 - Grid Overlay
 - Lane Lines

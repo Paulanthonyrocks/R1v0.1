@@ -1540,9 +1540,35 @@ class FeedManager:
             try:
                 await self.start_feed(fid)
             except Exception: pass  # noqa: E701
-    # --- Helper Methods ---
+    async def update_global_config(self, new_config: Dict[str, Any]):
+        \"\"\"
+        Updates the global configuration and propagates changes to all active inference workers.
+        \"\"\"
+        async with self._lock:
+            self.config = new_config
+            logger.info("FeedManager global configuration updated.")
+        
+        # Broadcast the updated config to all inference workers
+        # We send a generic 'config_update' command with the full config
+        cmd = {
+            \"type\": \"config_update\",
+            \"feed_id\": \"GLOBAL\",
+            \"data\": new_config
+        }
+        
+        sent_count = 0
+        for i, q in enumerate(self._inference_command_queues):
+            try:
+                q.put_nowait(cmd)
+                sent_count += 1
+            except queue.Full:
+                logger.warning(f"Inference command queue {i} full, global config update might be delayed.")
+            except Exception as e:
+                logger.error(f"Failed to send global config update to worker {i}: {e}")
+        
+        logger.info(f"Global configuration broadcasted to {sent_count} inference workers.")
+
     async def get_feed_config(self, feed_id: str) -> Optional[FeedConfigInfo]:
-        """Retrieves the configuration for a specific feed."""
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if entry:
