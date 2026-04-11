@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from multiprocessing import Queue as MPQueue, Event
 import torch
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger("Inference")
 
@@ -95,7 +96,23 @@ def inference_worker(
     def handle_command(cmd):
         pass # Simplified for this fix
 
+    def _async_encode_and_push(frame, feed_id, frame_index, metrics, vehicles):
+        \"\"\"Offloads JPEG encoding to a thread pool and pushes directly to the output queue.\"\"\"
+        try:
+            # CPU-bound encoding step
+            encoded_frame = cv2.imencode('.jpg', frame)[1].tobytes()
+            
+            # Push directly to the output queue from the thread
+            central_output_queue.put((
+                feed_id, frame_index, encoded_frame, metrics, vehicles, {}
+            ), timeout=0.1)
+        except Exception as e:
+            logger.error(f\"Async encoding error for {feed_id}: {e}\")
+
     last_metrics_log = time.time()
+
+    # Initialize ThreadPool for offloading JPEG encoding
+    encoder_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix=\"Encoder\")
 
     try:
         while not stop_event.is_set():
@@ -178,15 +195,11 @@ def inference_worker(
             scale_x, scale_y = 1.0 / fw, 1.0 / fh
             vehicles_for_transport = _prepare_vehicles_for_transport_with_map(vis_tracks, scale_x, scale_y)
 
-            # Encode frame as JPEG for frontend broadcast
-            encoded_frame = cv2.imencode('.jpg', frame)[1].tobytes()
-
-            try:
-                central_output_queue.put((
-                    feed_id, frame_index, encoded_frame, metrics_result, vehicles_for_transport, {}
-                ), timeout=0.01)
-            except queue.Full:
-                metrics_obj.frames_dropped += 1
+            # Offload JPEG encoding and queue delivery to the thread pool
+            encoder_pool.submit(
+                _async_encode_and_push, 
+                frame, feed_id, frame_index, metrics_result, vehicles_for_transport
+            )
 
             now = time.time()
             if now - last_metrics_log > 30.0:

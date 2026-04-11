@@ -10,7 +10,10 @@ from collections import deque, defaultdict
 logger = logging.getLogger(__name__)
 
 class FrameReader:
+    _capture_lock = threading.Lock() # Global lock for environment variable mutations
+
     def __init__(
+        self,
         self,
         source: Union[str, int],
         target_fps: Optional[int] = None,
@@ -88,25 +91,24 @@ class FrameReader:
         if self.gpu_acceleration:
             # Optimized FFMPEG HWAccel strings for different vendors
             hw_options = [
-                "hwaccel;cuvid|video_codec;h264_cuvid",
-                "hwaccel;qsv|video_codec;h264_qsv",
-                "hwaccel;vaapi"
+                \"hwaccel;cuvid|video_codec;h264_cuvid\",
+                \"hwaccel;qsv|video_codec;h264_qsv\",
+                \"hwaccel;vaapi\"
             ]
             
-            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options[0]}|{base_options}"
-            backend = cv2.CAP_FFMPEG
-            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).")
+            base_options = \"rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000\"
+            
+            with self._capture_lock:
+                os.environ[\"OPENCV_FFMPEG_CAPTURE_OPTIONS\"] = f\"{hw_options[0]}|{base_options}\"
+                cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+                os.environ.pop(\"OPENCV_FFMPEG_CAPTURE_OPTIONS\", None)
+            
+            logger.info(f\"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).\")
         else:
             # For CPU, ensure we don't have any GPU-related options lingering
-            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-            logger.debug(f"FrameReader '{self.source_name}' using CPU-only capture.")
-
-        cap = cv2.VideoCapture(self.source, backend)
-        
-        # Clear the global env var immediately after opening to minimize side effects on other threads
-        if self.gpu_acceleration:
-            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+            os.environ.pop(\"OPENCV_FFMPEG_CAPTURE_OPTIONS\", None)
+            logger.debug(f\"FrameReader '{self.source_name}' using CPU-only capture.\")
+            cap = cv2.VideoCapture(self.source, backend)
 
         if not cap.isOpened():
             logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
