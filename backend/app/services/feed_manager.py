@@ -1352,9 +1352,20 @@ class FeedManager:
         for v in vehicles:
             vid = v["vehicle_id"]
             current_ids.add(vid)
+            
+            # --- NORMALIZATION SETUP ---
+            res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
+            fw, fh = res[0], res[1]
+
             # If Keyframe or New Vehicle -> Full Update (Excluding large embeddings)
             if is_keyframe or vid not in last_states:
                 safe_v = {k: val for k, val in v.items() if k != "embedding"}
+                # Normalize coordinates in full update
+                if "bbox" in safe_v and len(safe_v["bbox"]) == 4:
+                    safe_v["bbox"] = [safe_v["bbox"][0] / fw, safe_v["bbox"][1] / fh, safe_v["bbox"][2] / fw, safe_v["bbox"][3] / fh]
+                if "vx" in safe_v: safe_v["vx"] = safe_v["vx"] / fw
+                if "vy" in safe_v: safe_v["vy"] = safe_v["vy"] / fh
+                
                 delta_vehicles.append(safe_v)
                 last_states[vid] = safe_v
                 continue
@@ -1362,10 +1373,10 @@ class FeedManager:
             last_v = last_states[vid]
             delta = {
                 "vehicle_id": vid,
-                "bbox": v["bbox"], # Always send position
+                "bbox": [v["bbox"][0] / fw, v["bbox"][1] / fh, v["bbox"][2] / fw, v["bbox"][3] / fh] if "bbox" in v and len(v["bbox"]) == 4 else v.get("bbox"),
                 "speed": v.get("speed", 0), # Always send speed
-                "vx": v.get("vx", 0), # Always send velocity for dead reckoning
-                "vy": v.get("vy", 0)
+                "vx": v.get("vx", 0) / fw if "vx" in v else 0,
+                "vy": v.get("vy", 0) / fh if "vy" in v else 0
             }
             # Check static fields for changes (Note: embedding is never in static_fields)
             for field in static_fields:
