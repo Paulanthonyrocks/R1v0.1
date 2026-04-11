@@ -14,7 +14,6 @@ class FrameReader:
 
     def __init__(
         self,
-        self,
         source: Union[str, int],
         target_fps: Optional[int] = None,
         max_queue_size: int = 128,
@@ -134,27 +133,25 @@ class FrameReader:
                 if self.is_file:
                     if self.is_looped:
                         logger.info(f"Looping video '{self.source_name}'")
-                        # Robust looping: Reopen the file to ensure a clean state
                         cap.release()
                         time.sleep(0.05) # Brief pause to release handles
                         
                         if self.gpu_acceleration:
-                             hw_options = "hwaccel;cuvid|video_codec;h264_cuvid"
-                             base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
-                             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options}|{base_options}"
-                             cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                             os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+                            hw_options = "hwaccel;cuvid|video_codec;h264_cuvid"
+                            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
+                            with self._capture_lock:
+                                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options}|{base_options}"
+                                cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+                                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
                         else:
-                             cap = cv2.VideoCapture(self.source)
+                            cap = cv2.VideoCapture(self.source)
                         
                         if not cap.isOpened():
-                             logger.error(f"Failed to reopen video '{self.source_name}' for looping.")
-                             self.end_of_video = True
-                             break
+                            logger.error(f"Failed to reopen video '{self.source_name}' for looping.")
+                            self.end_of_video = True
+                            break
                         
-                        # Reset reader state
                         self.frame_index = -1
-                        # Reset timing to prevent fast-forwarding after the pause
                         next_frame_time = time.time() 
                         continue
                     else:
@@ -205,7 +202,6 @@ class FrameReader:
             if sleep_time > 0:
                 time.sleep(sleep_time)
             else:
-                # If we are significantly behind (e.g. > 10 frames), reset to avoid burst
                 if sleep_time < -0.5:
                      next_frame_time = time.time()
 
@@ -241,7 +237,6 @@ class FrameReader:
         """Stops the thread safely."""
         self.stop_event.set()
         if self.thread and self.thread.is_alive():
-            # Wait for thread to finish to ensure cap is released safely
             self.thread.join(timeout=2.0)
         
         # Clear queue
@@ -264,14 +259,6 @@ class FrameReader:
 
     @property
     def isOpened(self) -> bool:
-        """
-        Check if the frame reader is actively reading frames.
-        
-        Provides API consistency with cv2.VideoCapture interface.
-        
-        Returns:
-            True if the reader thread is alive and video hasn't ended.
-        """
         return (
             self.thread is not None 
             and self.thread.is_alive() 
