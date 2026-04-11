@@ -91,23 +91,23 @@ class FrameReader:
         if self.gpu_acceleration:
             # Optimized FFMPEG HWAccel strings for different vendors
             hw_options = [
-                \"hwaccel;cuvid|video_codec;h264_cuvid\",
-                \"hwaccel;qsv|video_codec;h264_qsv\",
-                \"hwaccel;vaapi\"
+                "hwaccel;cuvid|video_codec;h264_cuvid",
+                "hwaccel;qsv|video_codec;h264_qsv",
+                "hwaccel;vaapi"
             ]
             
-            base_options = \"rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000\"
+            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
             
             with self._capture_lock:
-                os.environ[\"OPENCV_FFMPEG_CAPTURE_OPTIONS\"] = f\"{hw_options[0]}|{base_options}\"
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options[0]}|{base_options}"
                 cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                os.environ.pop(\"OPENCV_FFMPEG_CAPTURE_OPTIONS\", None)
+                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
             
-            logger.info(f\"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).\")
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).")
         else:
             # For CPU, ensure we don't have any GPU-related options lingering
-            os.environ.pop(\"OPENCV_FFMPEG_CAPTURE_OPTIONS\", None)
-            logger.debug(f\"FrameReader '{self.source_name}' using CPU-only capture.\")
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+            logger.debug(f"FrameReader '{self.source_name}' using CPU-only capture.")
             cap = cv2.VideoCapture(self.source, backend)
 
         if not cap.isOpened():
