@@ -43,8 +43,8 @@ export class APIClient {
             if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
                 console.log(`APIClient.getInstance called with different options. Updating instance...`);
                 
-                // Always use localhost:8000
-                APIClient.instance.baseURL = process.env.NEXT_PUBLIC_API_BASE_URL ||'http://localhost:8000';
+                // Always use the provided baseURL from options
+                APIClient.instance.baseURL = options.baseURL;
                 console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
                 
                 // Update timeout if it changed
