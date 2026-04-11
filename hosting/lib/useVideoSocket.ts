@@ -7,6 +7,8 @@ interface VehicleFrontendData {
     vehicle_id: string;
     global_vehicle_id?: string;
     bbox: [number, number, number, number];
+    prev_bbox?: [number, number, number, number];
+    last_update_time: number;
     speed: number;
     license_plate: string;
     class_id: number;
@@ -105,14 +107,27 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                 const existing = vehicleRegistryRef.current.get(vid);
                 if (existing) {
-                    // Merge new fields into existing state
-                    const updated = { ...existing, ...v };
+                    // LERP PREP: Store current bbox as previous before updating
+                    // Only update if the bbox actually changed to avoid resetting prev_bbox
+                    const bboxChanged = JSON.stringify(existing.bbox) !== JSON.stringify(v.bbox);
+                    
+                    const updated = { 
+                        ...existing, 
+                        ...v, 
+                        prev_bbox: bboxChanged ? existing.bbox : existing.prev_bbox,
+                        last_update_time: bboxChanged ? now : existing.last_update_time
+                    };
                     vehicleRegistryRef.current.set(vid, updated);
                     mergedVehicles.push(updated);
                 } else {
-                    // New vehicle
-                    vehicleRegistryRef.current.set(vid, v as VehicleFrontendData);
-                    mergedVehicles.push(v as VehicleFrontendData);
+                    // New vehicle: Initialize with current bbox as both prev and current
+                    const newVehicle = { 
+                        ...v, 
+                        prev_bbox: v.bbox, 
+                        last_update_time: now 
+                    } as VehicleFrontendData;
+                    vehicleRegistryRef.current.set(vid, newVehicle);
+                    mergedVehicles.push(newVehicle);
                 }
             });
         }
@@ -316,6 +331,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         const { image, index, vehicles: currentVehicles } = frameDataObj;
         if (!image) return;
 
+        const LERP_DURATION = 150; // ms to interpolate between updates
+        const now = performance.now();
+
         const { 
             showBoundingBoxes = true, 
             showVehicleDetails = true, 
@@ -370,7 +388,19 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                 if (!showAllDetections && !isSelected) return;
 
                 if (!v.bbox || !Array.isArray(v.bbox)) return; // Skip if no bbox (debounced or malformed)
+                
+                // --- Linear Interpolation (Lerp) for smooth movement ---
                 let [x1, y1, x2, y2] = v.bbox;
+                if (v.prev_bbox && v.last_update_time) {
+                    const dt = now - v.last_update_time;
+                    const alpha = Math.min(dt / LERP_DURATION, 1.0);
+                    
+                    const [px1, py1, px2, py2] = v.prev_bbox;
+                    x1 = px1 + (x1 - px1) * alpha;
+                    y1 = py1 + (y1 - py1) * alpha;
+                    x2 = px2 + (x2 - px2) * alpha;
+                    y2 = py2 + (y2 - py2) * alpha;
+                }
 
                 if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) {
                     return;
