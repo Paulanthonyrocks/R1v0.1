@@ -23,7 +23,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token, userRole } = useAuth();
-    const { client: wsClient } = useWebSocket();
+    const wsClient = useWebSocket();
     const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
     // Only subscribe if the feed is in an active state
@@ -508,8 +508,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 setShowTrajectories={isAdmin ? handleToggleTrajectories : setShowTrajectories}
                 showLaneOverlays={showLaneOverlays}
                 setShowLaneOverlays={setShowLaneOverlays}
-                showAllDetections={showAllDetections}
-                setShowAllDetections={setShowAllDetections}
                 showExclusionZones={showExclusionZones}
                 setShowExclusionZones={setShowExclusionZones}
                 onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}

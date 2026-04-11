@@ -362,7 +362,11 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
                           <Button 
                             size="sm" 
                             className="bg-lcd-text/20 text-lcd-text hover:bg-lcd-text/40 transition-colors h-7 text-[10px] font-bold border-2 border-lcd-text/50"
-                            onClick={() => onJumpToFeed?.(selectedIncident.feed_id)}
+                            onClick={() => {
+                              if (selectedIncident.feed_id) {
+                                onJumpToFeed?.(selectedIncident.feed_id);
+                              }
+                            }}
                           >
                             <ExternalLink className="h-3 w-3 mr-1" /> JUMP_TO_FEED
                           </Button>
