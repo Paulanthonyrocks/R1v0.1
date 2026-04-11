@@ -14,92 +14,55 @@
 @layer base {
   /* --- CSS Variable Definitions --- */
   :root {
-    /* --- Theme Variables (Nostalgic Traffic Control) --- */
-    /* Green background: #8CA17C -> hsl(93, 14%, 56%) */
-    /* Black foreground: #000000 -> hsl(0, 0%, 0%) */
-
-    --matrix-bg: 93 14% 56%; /* Muted pastel green */
-    --matrix-text: 0 0% 0%;   /* Black */
-
-    /* For 1-bit monochrome feel, related colors are either black or green */
-    --matrix: var(--matrix-text); /* Primary interactive elements are black */
-    --matrix-light: var(--matrix-text); /* Black */
-    --matrix-dark: var(--matrix-text);  /* Black */
-    --matrix-panel: var(--matrix-bg); /* Panels use the green background */
-    --matrix-border-color: var(--matrix-text); /* Borders are black */
-    --matrix-muted-text: var(--matrix-text); /* Muted text is black */
+    /* --- Industrial Tactical Palette --- */
+    --industrial-bg: 220 30% 5%;       /* Deep Carbon Black */
+    --industrial-panel: 220 30% 8%;    /* Slightly lighter panel */
+    --lcd-green: 93 70% 70%;          /* High-vis LCD Green (#B6FFB0 approx) */
+    --lcd-green-dim: 93 70% 40%;      /* Dimmed LCD Green */
     
-    /* --- Neon Blue (Example, ensure you define it if neon-text class is used) --- */
-    --neon-blue-hsl: 197 100% 50%; /* HSL for #00f7ff */ /* This can remain, not core to the theme */
-
-    /* --- Retro LCD Variables --- */
-    --lcd-bg-rgb: 182, 255, 176;
-    --lcd-text-rgb: 34, 34, 34;
+    --matrix-bg: var(--industrial-bg);
+    --matrix-text: var(--lcd-green);
+    
+    --lcd-bg-rgb: 18, 20, 18;         /* Dark base for LCD elements */
+    --lcd-text-rgb: 182, 255, 176;    /* High-vis green text */
     --lcd-bg: rgb(var(--lcd-bg-rgb));
     --lcd-text: rgb(var(--lcd-text-rgb));
-    --lcd-scanline: rgba(0,0,0,0.08);
-    --lcd-grid: rgba(0,0,0,0.04);
+    
+    --lcd-scanline: rgba(182, 255, 176, 0.05);
+    --lcd-grid: rgba(182, 255, 176, 0.03);
     --font-lcd: 'VT323', 'Share Tech Mono', monospace;
 
+    /* Shadcn Mapping */
+    --background: var(--industrial-bg);
+    --foreground: var(--lcd-green);
+    --card: var(--industrial-panel);
+    --card-foreground: var(--lcd-green);
+    --primary: var(--lcd-green);
+    --primary-foreground: var(--industrial-bg);
+    --secondary: var(--industrial-panel);
+    --secondary-foreground: var(--lcd-green);
+    --muted: 220 30% 15%;
+    --muted-foreground: 93 20% 60%;
+    --accent: var(--lcd-green);
+    --accent-foreground: var(--industrial-bg);
+    --border: var(--lcd-green-dim);
+    --input: var(--lcd-green-dim);
+    --ring: var(--lcd-green);
+    --radius: 0px; /* Sharp industrial edges */
 
-    /* --- Font Definitions --- */
-    /* The @import is now at the top of the file */
-    --font-matrix: "Press Start 2P", "VT323", "Share Tech Mono", monospace; /* Combined with fallback */
-    /* --font-sans: "Inter", sans-serif; */     /* Define if using Inter or another sans-serif */
-
-    /* --- Layout & Radius --- */
-    --radius: 0.625rem;             /* Base border radius (approx 10px) */
-
-    /* --- Shadcn Variable Mapping --- */
-    --background: var(--lcd-bg);
-    --foreground: var(--lcd-text);
-    --card: var(--lcd-bg);
-    --card-foreground: var(--lcd-text);
-
-    --primary: var(--lcd-text);
-    --primary-foreground: var(--lcd-bg);
-
-    --secondary: var(--lcd-bg);
-    --secondary-foreground: var(--lcd-text);
-
-    --muted: var(--matrix-text);               /* Muted elements (often backgrounds) are black */
-    --muted-foreground: var(--matrix-text);    /* Muted text (e.g., card descriptions) is black for visibility on non-muted backgrounds */
-
-    --accent: var(--matrix-text);              /* Accent elements are black */
-    --accent-foreground: var(--matrix-bg);     /* Text on accent elements is green */
-
-    --destructive: 0 84% 60%; /* Default red - keep for destructive actions */
-    --destructive-foreground: 0 0% 98%; /* Default light text on red */
-
-    --border: var(--matrix-border-color);      /* Black */
-    --input: var(--matrix-border-color);       /* Input border is black */
-    --ring: var(--matrix-border-color);        /* Focus ring is black */
-    /* --radius: var(--radius); /* This is fine, but since Shadcn's --radius is just 'radius', ensure Tailwind config matches if you use Shadcn's CLI */
-    
-    /* --- Colors for body background gradient & noise/scanlines --- */
-    /* For a solid green background, we can simplify these or make them subtle variations of green */
-    --background-start: var(--matrix-bg);
-    --background-end: var(--matrix-bg);
-    --noise-opacity: 0.01; /* Adjusted from 0.03 for matte LCD/film grain */
-    --scanline-opacity: 0.01; /* Global subtle scanlines, adjusted from 0.04 */
-    --scanline-width: 0.5px;
-    /* --content-scanline-opacity: 0.04; */ /* Removed as per refactor */
-
-    /* --- Transitions --- */
+    /* --- Transitions & Shadows --- */
     --transition-duration: 0.2s;
-
-    /* --- Shadows --- */
     --shadow-color: 0 0% 0%;
     --shadow-intensity: 0.2;
     --pixel-drop-shadow-value: 0 1px 2px rgba(0,0,0,0.25);
 
     /* Semantic Colors for Anomalies/Alerts */
-    --warning: 39 90% 50%; /* Deep Amber */
-    --warning-foreground: 0 0% 10%; /* Darker for contrast on amber, almost black */
-    --accent-anomaly: 270 70% 60%; /* Vibrant Purple */
-    --accent-anomaly-foreground: 0 0% 100%; /* White */
-    --info: 210 70% 55%; /* Noticeable Blue */
-    --info-foreground: 0 0% 100%; /* White */
+    --warning: 39 90% 50%;
+    --warning-foreground: 0 0% 10%;
+    --accent-anomaly: 270 70% 60%;
+    --accent-anomaly-foreground: 0 0% 100%;
+    --info: 210 70% 55%;
+    --info-foreground: 0 0% 100%;
     --danger: 0 84% 60%;
   }
 

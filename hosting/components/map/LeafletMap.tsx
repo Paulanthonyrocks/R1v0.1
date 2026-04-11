@@ -67,13 +67,16 @@ const LeafletMap: React.FC = () => {
   useEffect(() => {
     fixLeafletIcons();
 
-    if (mapRef.current && !leafletMap.current) {
+    if (!mapRef.current) return;
+    if (leafletMap.current) return;
+
+    try {
       // Define world bounds to prevent horizontal repetition
       const corner1 = L.latLng(-90, -180);
       const corner2 = L.latLng(90, 180);
       const bounds = L.latLngBounds(corner1, corner2);
 
-      leafletMap.current = L.map(mapRef.current, {
+      const map = L.map(mapRef.current, {
         center: [34.02, -118.02],
         zoom: 13,
         minZoom: 2,
@@ -84,38 +87,48 @@ const LeafletMap: React.FC = () => {
       });
 
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 20,
-        noWrap: true,
-        bounds: bounds
-      }).addTo(leafletMap.current);
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        maxZoom: 19,
+      }).addTo(map);
 
-      feedsLayer.current.addTo(leafletMap.current);
-      congestionLayer.current.addTo(leafletMap.current);
-      incidentsLayer.current.addTo(leafletMap.current);
-      roadNetworkLayer.current.addTo(leafletMap.current);
-      signalsLayer.current.addTo(leafletMap.current);
+      L.marker([34.02, -118.02]).addTo(map).bindPopup('CENTER POINT');
 
-      L.control.zoom({ position: 'bottomright' }).addTo(leafletMap.current);
+      feedsLayer.current.addTo(map);
+      congestionLayer.current.addTo(map);
+      incidentsLayer.current.addTo(map);
+      roadNetworkLayer.current.addTo(map);
+      signalsLayer.current.addTo(map);
+
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
       
-      // Subscribe to signal updates
-      const unsubscribe = wsClient.subscribe(WebSocketMessageType.SIGNAL_UPDATE, (data: any) => {
-          if (data?.signal_data) {
-              setSignalStates(prev => ({
-                  ...prev,
-                  [data.signal_data.signal_id]: data.signal_data
-              }));
-          }
-      });
+      leafletMap.current = map;
 
-      setTimeout(() => leafletMap.current?.invalidateSize(), 100);
-      return () => {
-          unsubscribe();
-          leafletMap.current?.remove();
-          leafletMap.current = null;
-      };
+      // Important: Force Leaflet to recalculate size after the DOM has settled
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 400);
+
+    } catch (error) {
+      console.error("Leaflet initialization failed:", error);
     }
+
+    // Separate subscription logic to avoid re-initializing map
+    const unsubscribe = wsClient.subscribe(WebSocketMessageType.SIGNAL_UPDATE, (data: any) => {
+        if (data?.signal_data) {
+            setSignalStates(prev => ({
+                ...prev,
+                [data.signal_data.signal_id]: data.signal_data
+            }));
+        }
+    });
+
+    return () => {
+        unsubscribe();
+        if (leafletMap.current) {
+            leafletMap.current.remove();
+            leafletMap.current = null;
+        }
+    };
   }, [wsClient]);
 
   // Sync layer visibility
@@ -317,8 +330,8 @@ const LeafletMap: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full relative bg-[#0a0a0a] overflow-hidden">
-      <div ref={mapRef} className="absolute inset-0 z-0" />
+    <div className="w-full h-full absolute inset-0 z-0 bg-[#0a0a0a] overflow-hidden">
+      <div ref={mapRef} className="absolute inset-0 z-10 w-full h-full" />
       
       {/* Search Bar */}
       <div className="absolute top-4 left-4 z-[1002] w-72 font-mono">
@@ -496,7 +509,7 @@ const LeafletMap: React.FC = () => {
       </div>
       
       {/* Matrix Overlay Effect */}
-      <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-[1000] shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
+      <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
     </div>
   );
 };

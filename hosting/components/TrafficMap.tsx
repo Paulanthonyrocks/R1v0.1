@@ -1,20 +1,24 @@
+"use client";
+
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import LeafletMap from '@/components/map/LeafletMap';
-import { WebSocketClient, WebSocketMessageType } from '../lib/websocket/WebSocketClient';
+import { useWebSocket } from '../lib/websocket/WebSocketProvider';
+import { WebSocketMessageType } from '../lib/websocket/WebSocketClient';
 import { useVehicleSelection } from '@/lib/context/VehicleSelectionContext';
 import { useVehicleTracking } from '../lib/hooks/useVehicleTracking';
 import { WebSocketVideoFrame } from '../lib/types/api';
+import { Activity, Crosshair, Trash2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 const TrafficMap: React.FC = () => {
   const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
-  const [wsClient, setWsClient] = useState<WebSocketClient | null>(null);
+  const client = useWebSocket();
   const [showAll, setShowAll] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
-  // Sticky Selection Logic: Keep vehicles selected if their Global ID matches
   useEffect(() => {
     if (selectedGlobalId && vehicles) {
       const matching = vehicles.find(v => v.global_vehicle_id === selectedGlobalId);
@@ -31,12 +35,7 @@ const TrafficMap: React.FC = () => {
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
 
-  // Connect to WebSocket
   useEffect(() => {
-    const client = new WebSocketClient(process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws');
-    client.activate();
-    client.connect(null); // Assuming auto-auth or no auth for dev
-
     const unsubscribe = client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: unknown) => {
       const frame = data as WebSocketVideoFrame;
       if (frame && frame.v) {
@@ -44,13 +43,10 @@ const TrafficMap: React.FC = () => {
       }
     });
 
-    setWsClient(client);
-
     return () => {
       unsubscribe();
-      client.destroy();
     };
-  }, [mergeVehicleUpdates]);
+  }, [client, mergeVehicleUpdates]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -59,7 +55,6 @@ const TrafficMap: React.FC = () => {
   const instancedMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
 
-  // WebGL Initialization
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -73,13 +68,15 @@ const TrafficMap: React.FC = () => {
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    renderer.domElement.style.pointerEvents = 'none';
     containerRef.current.appendChild(renderer.domElement);
 
-    // Create a simple plane geometry for the markers
     const geometry = new THREE.PlaneGeometry(1, 1);
-    const material = new THREE.MeshBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.8 });
+    const material = new THREE.MeshBasicMaterial({ color: 0xB6FFB0, transparent: true, opacity: 0.8 });
     
-    // Support up to 5000 vehicles in one draw call
     const instancedMesh = new THREE.InstancedMesh(geometry, material, 5000);
     instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(instancedMesh);
@@ -108,7 +105,6 @@ const TrafficMap: React.FC = () => {
     };
   }, []);
 
-  // Animation Loop (High-Performance WebGL)
   useEffect(() => {
     const animate = () => {
       const now = Date.now();
@@ -119,16 +115,12 @@ const TrafficMap: React.FC = () => {
         const mesh = instancedMeshRef.current;
         let drawnCount = 0;
         
-        // Update all instances
         vehicles.forEach((v) => {
           if (drawnCount >= 5000) return;
           
           const isSelected = selectedIds.has(v.vehicle_id) || (v.global_vehicle_id && selectedIds.has(v.global_vehicle_id));
           if (!showAll && !isSelected) return;
 
-          // Dead Reckoning: Smooth extrapolation
-          // Assumption: bbox is in pixels or needs scaling. 
-          // If bbox is normalized [0, 1], scale by renderer size
           const canvasW = rendererRef.current!.domElement.width / window.devicePixelRatio;
           const canvasH = rendererRef.current!.domElement.height / window.devicePixelRatio;
 
@@ -165,11 +157,8 @@ const TrafficMap: React.FC = () => {
     const handleClick = (e: MouseEvent) => {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      // Normalize click coordinates to [0, 1] to match normalized bbox
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
-
-      console.debug(`[TrafficMap] Clicked at normalized: (${x.toFixed(3)}, ${y.toFixed(3)})`);
 
       const clickedVehicle = vehicles.find(v => {
         if (!v.bbox || !Array.isArray(v.bbox)) return false;
@@ -181,8 +170,6 @@ const TrafficMap: React.FC = () => {
         const gid = clickedVehicle.global_vehicle_id;
         const vid = clickedVehicle.vehicle_id;
         const id = gid || vid;
-        
-        console.debug(`[TrafficMap] Vehicle found: ${id}`);
         
         setSelectedIds(prev => {
           const next = new Set(prev);
@@ -205,39 +192,6 @@ const TrafficMap: React.FC = () => {
   return (
     <section 
       ref={containerRef}
-      className="col-span-2 border border-[#00ff41]/30 rounded-md relative h-[600px] overflow-hidden"
+      className="border border-lcd-green/30 bg-industrial-panel relative h-full w-full overflow-hidden font-lcd"
     >
-      {/* Background Map */}
-      <LeafletMap />
-
-      {/* THREE.js overlay will be appended here */}
-      
-      <div className="absolute top-2 right-2 flex flex-col gap-2 z-[1002]">
-        <div className="bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono">
-          Active Vehicles: {vehicles.length}
-        </div>
-        <div className="bg-black/80 border border-[#00ff41]/30 text-[#00ff41] p-2 text-xs font-mono flex items-center gap-2">
-          <label className="cursor-pointer flex items-center gap-2">
-            <input 
-              type="checkbox" 
-              checked={showAll} 
-              onChange={e => setShowAll(e.target.checked)}
-              className="accent-[#00ff41]"
-            />
-            SHOW ALL
-          </label>
-        </div>
-        {selectedIds.size > 0 && (
-          <button 
-            onClick={() => setSelectedIds(new Set())}
-            className="bg-black/80 border border-red-500/50 text-red-500 p-1 text-[10px] font-mono hover:bg-red-500/20"
-          >
-            CLEAR SELECTION ({selectedIds.size})
-          </button>
-        )}
-      </div>
-    </section>
-  );
-};
-
-export default TrafficMap;
+      {/* Tactical Viewport Frame */}       <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-lcd-green z-[1003]" />       <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-lcd-green z-[1003]" />       <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-lcd-green z-[1003]" />       <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-lcd-green z-[1003]" />        {/* Viewport Overlays */}       <div className="absolute inset-0 pointer-events-none z-[1001] opacity-20">         <div className="absolute top-1/2 left-0 w-full h-px bg-lcd-green" />         <div className="absolute top-0 left-1/2 w-px h-full bg-lcd-green" />       </div>       <div className="absolute inset-0 pointer-events-none z-[1001] opacity-10 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,var(--lcd-green)_2px,var(--lcd-green)_4px)]" />        {/* Background Map */}       <LeafletMap />        {/* THREE.js overlay will be appended here */}              <div className="absolute top-4 right-4 flex flex-col gap-3 z-[1002] font-lcd">         <div className="bg-industrial-panel/90 border border-lcd-green/30 text-lcd-green p-3 text-xs uppercase tracking-widest shadow-lg backdrop-blur-sm">           <div className="flex items-center gap-2 mb-1 opacity-50 text-[9px]">             <Activity className="h-3 w-3" />             <span>Telemetry_Stream</span>           </div>           <div className="flex justify-between items-center gap-8">             <span>Active Units:</span>             <span className="font-bold">{vehicles.length}</span>           </div>         </div>          <div className="bg-industrial-panel/90 border border-lcd-green/30 text-lcd-green p-3 text-xs uppercase tracking-widest shadow-lg backdrop-blur-sm">           <label className="cursor-pointer flex items-center gap-3 group">             <div className="relative w-4 h-4 border border-lcd-green flex items-center justify-center overflow-hidden">                <input                   type="checkbox"                   checked={showAll}                   onChange={e => setShowAll(e.target.checked)}                  className="absolute opacity-0 w-full h-full cursor-pointer z-10"                />                <div className={cn("absolute w-full h-full bg-lcd-green transition-all duration-200", showAll ? "top-0" : "top-full")} />             </div>             <span className="group-hover:text-white transition-colors">Show All Units</span>           </label>         </div>          {selectedIds.size > 0 && (           <button              onClick={() => setSelectedIds(new Set())}             className="bg-red-500/10 border border-red-500/50 text-red-500 p-2 text-[10px] font-bold uppercase tracking-tighter hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2"           >             <Trash2 size={12} />             Clear Selection ({selectedIds.size})           </button>         )}       </div>              {/* Viewport Crosshair */}       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-[1002] opacity-30 text-lcd-green">         <Crosshair size={40} strokeWidth={1} />       </div>     </section>   ); };  export default TrafficMap;
