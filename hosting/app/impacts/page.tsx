@@ -19,15 +19,20 @@ const ImpactsPage: React.FC = () => (
                   </div>
                   <div className="flex bg-lcd-text/5 px-4 py-2 border-2 border-lcd-text font-bold text-[10px] uppercase tracking-widest items-center gap-4">
                       <div className="flex items-center gap-2">
-                          <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                          <div className="h-2 w-2 rounded-full bg-lcd-text animate-pulse" />
                           Sensor Array: Active
                       </div>
                   </div>
               </div>
           </div>
           
-          <div className="max-w-6xl mx-auto w-full">
-            <WeatherEventImpactPanel />
+          <div className="max-w-6xl mx-auto w-full matrix-card p-0 overflow-hidden">
+            <div className="matrix-card-header bg-lcd-text/10">
+                <span>Climate Impact Analysis // Environmental Telemetry</span>
+            </div>
+            <div className="p-4 md:p-8 bg-lcd-text/[0.02]">
+                <WeatherEventImpactPanel />
+            </div>
           </div>
       </DashboardShell>
   </AuthGuard>

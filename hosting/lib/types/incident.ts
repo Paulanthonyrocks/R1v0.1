@@ -1,9 +1,8 @@
 export enum IncidentStatus {
-    NEW = "NEW",
+    REPORTED = "REPORTED",
     ACKNOWLEDGED = "ACKNOWLEDGED",
-    INVESTIGATING = "INVESTIGATING",
     RESOLVED = "RESOLVED",
-    FALSE_ALARM = "FALSE_ALARM"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
 }
 
 export enum IncidentSeverity {

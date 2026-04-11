@@ -9,13 +9,6 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -23,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from '@/components/ui/label';
+import { APIClient } from '@/lib/api/APIClient';
 
 interface Signal {
   id: string;
@@ -41,19 +35,12 @@ const SignalsPage = () => {
   useEffect(() => {
     const fetchSignals = async () => {
       if (!token) return;
-      
+
       setFetching(true);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/signals`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Bypass-Tunnel-Reminder': 'true'
-          },
-        });
-        if (response.ok) {
-            const data = await response.json();
-            setSignals(data);
-        }
+        const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+        const data = await apiClient.get<Signal[]>('/api/v1/signals');
+        setSignals(data);
       } catch (error) {
         console.error('Error fetching signals:', error);
       } finally {
@@ -69,22 +56,9 @@ const SignalsPage = () => {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/signals/${selectedSignal}/set_phase`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'Bypass-Tunnel-Reminder': 'true'
-        },
-        body: JSON.stringify({ phase }),
-      });
-
-      if (response.ok) {
-        alert('Signal phase updated successfully');
-      } else {
-        const errData = await response.json();
-        alert(`Failed to update signal phase: ${errData.detail || 'Unknown error'}`);
-      }
+      const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+      await apiClient.post(`/api/v1/signals/${selectedSignal}/set_phase`, { phase });
+      alert('Signal phase updated successfully');
     } catch (error) {
       console.error('Error updating signal phase:', error);
       alert('Network error while updating signal phase');
@@ -112,9 +86,9 @@ const SignalsPage = () => {
                     </div>
                 </div>
             </div>
-  
+
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
-                <Card className="lg:col-span-2 matrix-card p-0 overflow-hidden">
+                <div className="lg:col-span-2 matrix-card p-0 overflow-hidden">
                     <div className="matrix-card-header bg-lcd-text/10">
                         <div className="flex items-center gap-2">
                             <SignalIcon size={14} />
@@ -146,7 +120,7 @@ const SignalsPage = () => {
                                       </SelectContent>
                                   </Select>
                               </div>
-  
+
                               <div className="space-y-3">
                                   <Label htmlFor="phase-select" className="text-[10px] uppercase font-black tracking-[0.1em] opacity-60">Commanded Operational Phase</Label>
                                   <div className="grid grid-cols-3 gap-4">
@@ -173,20 +147,20 @@ const SignalsPage = () => {
                                       ))}
                                   </div>
                               </div>
-  
+
                               <Button 
                                   onClick={updateSignalPhase} 
                                   disabled={!selectedSignal || !phase || loading}
                                   className="w-full matrix-btn-sleek h-16 text-xl tracking-widest bg-lcd-text text-lcd-bg"
-                              >
+                                >
                                   {loading ? <Loader2 className="animate-spin mr-3 h-6 w-6" /> : <Save className="mr-3 h-6 w-6" />}
                                   EXECUTE_COMMAND
-                              </Button>
+                                </Button>
                             </>
                         )}
                     </div>
-                </Card>
-  
+                </div>
+
                 <div className="lg:col-span-2 space-y-8">
                     <div className="matrix-card p-0 overflow-hidden">
                         <div className="matrix-card-header">
@@ -205,7 +179,7 @@ const SignalsPage = () => {
                                 <span className="text-[10px] font-black uppercase opacity-40">Command Latency</span>
                                 <span className="text-xs font-bold uppercase">42ms</span>
                             </div>
-                            
+
                             <div className="pt-4">
                                 <h3 className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-3">Operational Directives</h3>
                                 <div className="space-y-4">
@@ -233,5 +207,5 @@ const SignalsPage = () => {
       </AuthGuard>
     );
   };
-  
+
 export default SignalsPage;

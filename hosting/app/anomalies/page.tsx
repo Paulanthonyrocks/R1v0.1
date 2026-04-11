@@ -43,8 +43,8 @@ const AnomaliesPage = () => {
         <AuthGuard requiredRole={UserRole.AGENCY}>
             <DashboardShell>
                 <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-                    <h1 className="text-4xl font-bold uppercase tracking-tighter">Incident Reports</h1>
-                    <div className="flex items-center gap-4">
+                    <h1 className="text-4xl font-bold uppercase tracking-tighter font-lcd matrix-glow text-lcd-text">Incident Reports</h1>
+                    <div className="flex items-center gap-4 font-lcd">
                         <div className="flex items-center gap-2">
                             <span className="text-xs uppercase opacity-60">Total Active:</span>
                             <span className="text-2xl font-bold text-destructive">
@@ -65,10 +65,10 @@ const AnomaliesPage = () => {
                     {/* Filters Sidebar */}
                     <div className="md:col-span-1 space-y-6">
                         <div className="matrix-card p-4">
-                            <h2 className="text-sm font-bold uppercase mb-4 flex items-center gap-2">
+                            <h2 className="text-sm font-bold uppercase mb-4 flex items-center gap-2 font-lcd">
                                 <Filter size={14} /> Global Filters
                             </h2>
-                            <div className="space-y-4">
+                            <div className="space-y-4 font-lcd">
                                 <div>
                                     <label className="text-[10px] uppercase opacity-60 block mb-1">Search</label>
                                     <div className="relative">
@@ -78,7 +78,7 @@ const AnomaliesPage = () => {
                                             value={searchQuery}
                                             onChange={(e) => setSearchQuery(e.target.value)}
                                             placeholder="Keyword..."
-                                            className="w-full bg-lcd-text/5 border border-lcd-text/20 rounded p-1.5 pl-8 text-xs focus:outline-none focus:border-primary"
+                                            className="w-full bg-lcd-text/5 border border-lcd-text/20 rounded-none p-1.5 pl-8 text-xs focus:outline-none focus:border-lcd-text"
                                         />
                                     </div>
                                 </div>
@@ -113,7 +113,7 @@ const AnomaliesPage = () => {
                             </div>
                         </div>
 
-                        <div className="matrix-card p-4 opacity-70">
+                        <div className="matrix-card p-4 opacity-70 font-lcd">
                             <h3 className="text-[10px] font-bold uppercase mb-2 flex items-center gap-1">
                                 <CheckCircle size={12} className="text-matrix" /> Protocol
                             </h3>
@@ -127,11 +127,11 @@ const AnomaliesPage = () => {
                     {/* Alerts List */}
                     <div className="md:col-span-3">
                         {!isReady ? (
-                            <div className="py-20 text-center animate-pulse opacity-50">
+                            <div className="py-20 text-center animate-pulse opacity-50 font-lcd">
                                 <p className="tracking-widest uppercase font-bold">Synchronizing Uplink...</p>
                             </div>
                         ) : filteredAlerts.length === 0 ? (
-                            <div className="py-20 text-center border-2 border-dashed border-lcd-text/20 rounded opacity-50">
+                            <div className="py-20 text-center border-2 border-dashed border-lcd-text/20 rounded-none opacity-50 font-lcd">
                                 <p className="tracking-widest uppercase text-sm">No Filtered Incidents Found</p>
                             </div>
                         ) : (

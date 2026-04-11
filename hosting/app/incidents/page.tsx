@@ -22,6 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { incidentService } from '@/lib/services/incidentService';
+import { APIClient } from '@/lib/api/APIClient';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
@@ -34,19 +36,14 @@ export default function IncidentsPage() {
     const fetchIncidents = async () => {
         setLoading(true);
         try {
-            const url = new URL(`${API_BASE_URL}/api/v1/incidents`);
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            const url = `/api/v1/incidents`;
+            const params: Record<string, string> = {};
             if (statusFilter !== "ALL") {
-                url.searchParams.append("status", statusFilter);
+                params["status"] = statusFilter;
             }
-            const res = await fetch(url.toString(), {
-                headers: {
-                    'Bypass-Tunnel-Reminder': 'true'
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setIncidents(data);
-            }
+            const data = await apiClient.get<Incident[]>(url, params);
+            setIncidents(data);
         } catch (error) {
             console.error("Failed to fetch incidents:", error);
         } finally {
@@ -63,20 +60,14 @@ export default function IncidentsPage() {
 
     const handleUpdateStatus = async (id: string, newStatus: IncidentStatus) => {
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/incidents/${id}`, {
-                method: 'PATCH',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Bypass-Tunnel-Reminder': 'true'
-                },
-                body: JSON.stringify({ status: newStatus })
-            });
-            if (res.ok) {
-                // Optimistic update
-                setIncidents(prev => prev.map(inc => 
-                    inc.id === id ? { ...inc, status: newStatus } : inc
-                ));
-            }
+            // Use a generic PATCH since incidentService lacks a simple updateStatus
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            await apiClient.put(`/api/v1/incidents/${id}`, { status: newStatus });
+            
+            // Optimistic update
+            setIncidents(prev => prev.map(inc => 
+                inc.id === id ? { ...inc, status: newStatus } : inc
+            ));
         } catch (error) {
             console.error("Failed to update status:", error);
         }
@@ -93,7 +84,7 @@ export default function IncidentsPage() {
 
     const getStatusColor = (status: IncidentStatus) => {
         switch (status) {
-            case IncidentStatus.NEW: return "text-red-400";
+            case IncidentStatus.REPORTED: return "text-red-400";
             case IncidentStatus.ACKNOWLEDGED: return "text-yellow-400";
             case IncidentStatus.RESOLVED: return "text-green-400";
             default: return "text-gray-400";
@@ -152,7 +143,7 @@ export default function IncidentsPage() {
                         </SelectTrigger>
                         <SelectContent className="bg-lcd-bg border-2 border-lcd-text text-lcd-text font-lcd">
                             <SelectItem value="ALL">ALL REGISTRIES</SelectItem>
-                            <SelectItem value={IncidentStatus.NEW}>UNRESOLVED (NEW)</SelectItem>
+                            <SelectItem value={IncidentStatus.REPORTED}>UNRESOLVED (NEW)</SelectItem>
                             <SelectItem value={IncidentStatus.ACKNOWLEDGED}>PENDING (ACK)</SelectItem>
                             <SelectItem value={IncidentStatus.RESOLVED}>ARCHIVED (RESOLVED)</SelectItem>
                         </SelectContent>
@@ -190,7 +181,7 @@ export default function IncidentsPage() {
                                     </div>
                                 </div>
                                 <div className={cn("font-black tracking-widest text-[10px] px-3 py-1 border-2", 
-                                    incident.status === IncidentStatus.NEW ? "bg-red-600/10 text-red-600 border-red-600" :
+                                    incident.status === IncidentStatus.REPORTED ? "bg-red-600/10 text-red-600 border-red-600" :
                                     incident.status === IncidentStatus.ACKNOWLEDGED ? "bg-yellow-500/10 text-yellow-600 border-yellow-600" :
                                     "bg-green-600/10 text-green-700 border-green-700"
                                 )}>
@@ -234,7 +225,7 @@ export default function IncidentsPage() {
                                     </div>
                                     
                                     <div className="pt-4 border-t border-lcd-text/10 mt-4 flex gap-3">
-                                        {incident.status === IncidentStatus.NEW && (
+                                        {incident.status === IncidentStatus.REPORTED && (
                                             <Button 
                                                 onClick={() => handleUpdateStatus(incident.id, IncidentStatus.ACKNOWLEDGED)}
                                                 className="matrix-btn-sleek bg-yellow-400 text-black border-yellow-600 hover:bg-yellow-500 h-10 px-6 text-xs"

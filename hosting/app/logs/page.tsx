@@ -7,6 +7,7 @@ import { UserRole } from "@/lib/auth/roles";
 import { Search, Terminal, ShieldAlert, Info, X } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { APIClient } from '@/lib/api/APIClient';
 
 interface LogEntry {
     id: number;
@@ -18,38 +19,42 @@ interface LogEntry {
     source: string;
 }
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
 const SystemLogsPage = () => {
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'High' | 'Medium' | 'Low'>('ALL');
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(timer);
-  }, []);
+    const fetchLogs = async () => {
+        setLoading(true);
+        try {
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            // Assuming /api/v1/logs endpoint exists based on backend routers
+            const data = await apiClient.get<LogEntry[]>('/api/v1/logs');
+            setLogs(data);
+        } catch (error) {
+            console.error("Failed to fetch logs:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  const placeholderLogs: LogEntry[] = useMemo(() => {
-      return [...Array(20)].map((_, index) => ({
-        id: index,
-        title: `Kernel Event ${1024 + index}`,
-        description: `Subsystem ${["NETWORK", "AUTH", "STORAGE", "VISION"][index % 4]} reported a ${["synchronization", "validation", "allocation", "inference"][index % 4]} ${["exception", "timeout", "success", "notice"][index % 4]}. Internal trace hash: 0x${Math.random().toString(16).substring(2, 10).toUpperCase()}`,
-        timestamp: new Date(Date.now() - index * 1000 * 60 * 15).toISOString(),
-        type: ["Error", "Warning", "Info", "Audit"][index % 4],
-        severity: (["High", "Medium", "Low", "Low"][index % 4]) as 'High' | 'Medium' | 'Low',
-        source: ["edge-node-01", "central-hub", "firebase-bridge", "worker-cluster"][index % 4]
-      }));
+    fetchLogs();
   }, []);
 
   const filteredLogs = useMemo(() => {
-      return placeholderLogs.filter(log => {
+      return logs.filter(log => {
           const matchesSeverity = severityFilter === 'ALL' || log.severity === severityFilter;
           const matchesSearch = log.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                                log.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
                                log.source.toLowerCase().includes(searchQuery.toLowerCase());
           return matchesSeverity && matchesSearch;
       });
-  }, [placeholderLogs, severityFilter, searchQuery]);
+  }, [logs, severityFilter, searchQuery]);
 
   if (loading) return (
       <div className="bg-lcd-bg text-lcd-text h-screen flex flex-col items-center justify-center font-lcd">
@@ -63,8 +68,8 @@ const SystemLogsPage = () => {
       <DashboardShell>
           <div className="flex flex-col lg:flex-row justify-between items-end mb-8 gap-6">
               <div className="flex-1">
-                  <h1 className="text-4xl font-bold uppercase tracking-tighter mb-2">System Telemetry Logs</h1>
-                  <p className="text-lcd-text/60 max-w-2xl text-sm">
+                  <h1 className="text-4xl font-bold uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-2">System Telemetry Logs</h1>
+                  <p className="text-lcd-text/60 max-w-2xl text-sm font-lcd">
                       Low-level audit records from the traffic management engine. 
                       Monitoring real-time events across the distributed processing cluster.
                   </p>
@@ -76,7 +81,7 @@ const SystemLogsPage = () => {
                       <input
                         type="text"
                         placeholder="FILTER LOGS..."
-                        className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text rounded-none p-3 pl-10 w-full focus:outline-none focus:border-primary tracking-[0.1em] placeholder:text-lcd-text/30"
+                        className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text rounded-none p-3 pl-10 w-full focus:outline-none focus:border-lcd-text tracking-[0.1em] placeholder:text-lcd-text/30 font-lcd"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                       />
@@ -86,7 +91,7 @@ const SystemLogsPage = () => {
                           <button
                             key={s}
                             onClick={() => setSeverityFilter(s)}
-                            className={`px-4 py-1 text-[10px] uppercase transition-all font-bold ${severityFilter === s ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/20'}`}
+                            className={`px-4 py-1 text-[10px] uppercase transition-all font-bold font-lcd ${severityFilter === s ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/20'}`}
                           >
                               {s}
                           </button>
@@ -96,11 +101,11 @@ const SystemLogsPage = () => {
           </div>
 
           {/* Log List */}
-          <div className="matrix-card overflow-hidden">
+          <div className="matrix-card overflow-hidden p-0">
               <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm font-lcd">
                       <thead>
-                          <tr className="bg-lcd-text/10 text-primary border-b-2 border-lcd-text/20 uppercase text-[10px] font-bold tracking-widest">
+                          <tr className="bg-lcd-text/10 text-lcd-text border-b-2 border-lcd-text/20 uppercase text-[10px] font-bold tracking-widest">
                               <th className="p-4 text-left">Level</th>
                               <th className="p-4 text-left">Timestamp</th>
                               <th className="p-4 text-left">Event</th>
@@ -113,10 +118,10 @@ const SystemLogsPage = () => {
                               <tr key={log.id} className="border-b border-lcd-text/5 hover:bg-lcd-text/5 transition-colors group cursor-pointer" onClick={() => setSelectedLog(log)}>
                                   <td className="p-4 whitespace-nowrap">
                                       <span className={cn(
-                                          "px-2 py-0.5 text-[10px] font-bold uppercase",
-                                          log.severity === 'High' ? "bg-red-900 text-white" :
-                                          log.severity === 'Medium' ? "bg-yellow-900 text-white" :
-                                          "bg-green-900 text-white"
+                                          "px-2 py-0.5 text-[10px] font-bold uppercase border border-lcd-text",
+                                          log.severity === 'High' ? "bg-red-600 text-white" :
+                                          log.severity === 'Medium' ? "bg-yellow-600 text-black" :
+                                          "bg-green-600 text-white"
                                       )}>
                                           {log.severity}
                                       </span>
@@ -132,7 +137,7 @@ const SystemLogsPage = () => {
                                       <span className="text-[10px] bg-lcd-text/10 px-2 py-1 border border-lcd-text/20 uppercase font-bold">{log.source}</span>
                                   </td>
                                   <td className="p-4 text-right">
-                                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-primary hover:text-black">
+                                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-lcd-text hover:text-lcd-bg">
                                           <Info size={14} />
                                       </Button>
                                   </td>
@@ -158,12 +163,12 @@ const SystemLogsPage = () => {
                     <div className="flex items-center gap-4 mb-6 pb-4 border-b border-lcd-text/20">
                         <Terminal size={32} className="text-lcd-text" />
                         <div>
-                            <h2 className="text-2xl font-bold uppercase tracking-tighter">{selectedLog.title}</h2>
-                            <p className="text-[10px] uppercase opacity-60">Log ID: 0x{selectedLog.id.toString(16).padStart(4, '0')} | Source: {selectedLog.source}</p>
+                            <h2 className="text-2xl font-bold uppercase tracking-tighter font-lcd">{selectedLog.title}</h2>
+                            <p className="text-[10px] uppercase opacity-60 font-lcd">Log ID: 0x{selectedLog.id.toString(16).padStart(4, '0')} | Source: {selectedLog.source}</p>
                         </div>
                     </div>
 
-                    <div className="space-y-6">
+                    <div className="space-y-6 font-lcd">
                         <div className="grid grid-cols-2 gap-8">
                             <div>
                                 <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">Severity</label>
