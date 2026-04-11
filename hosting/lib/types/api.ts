@@ -50,6 +50,7 @@ export interface GlobalMetrics {
 // Vehicle & Tracking Types
 export interface VehicleData {
     vehicle_id: string;
+    global_vehicle_id?: string;
     bbox: [number, number, number, number]; // [x1, y1, x2, y2]
     class_id: number;
     class_name: string;

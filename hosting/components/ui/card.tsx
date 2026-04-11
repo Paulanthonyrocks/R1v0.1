@@ -7,12 +7,12 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "text-card-foreground flex flex-col gap-6 border py-6 shadow-sm", // Removed glossy-gradient, rounded-xl, backdrop-blur-sm
-        "border-lcd-text", // Explicitly set border color
-        "font-lcd", // Apply LCD font
-        "shadow-none", // Remove default shadow
-        "pixel-drop-shadow", // Apply pixel drop shadow
-        "rounded-none", // Remove rounded corners
+        "text-card-foreground flex flex-col border py-6 shadow-sm",
+        "border-lcd-text",
+        "font-lcd",
+        "shadow-none",
+        "pixel-drop-shadow",
+        "rounded-none",
         className
       )}
       {...props}

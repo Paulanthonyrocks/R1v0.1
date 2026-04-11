@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { ArrowRight, ArrowRightLeft, Info, MapPin, Activity, MoveRight, ExternalLink } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAPI } from '@/lib/hooks/useAPI';
-import useAuth from '@/lib/hook/useAuth';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';

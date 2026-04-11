@@ -2,7 +2,7 @@ import React, { createContext, useContext } from 'react';
 import { UserRole } from '@/lib/auth/roles';
 import { User, signOut, getAuth } from 'firebase/auth';
 import { app } from '@/lib/firebase';
-import useAuth from '../hook/useAuth';
+import { useAuth } from './AuthProvider';
 
 interface UserContextValue {
   userRole: UserRole;

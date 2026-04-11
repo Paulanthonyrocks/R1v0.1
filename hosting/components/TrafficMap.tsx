@@ -2,15 +2,16 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import LeafletMap from '@/components/map/LeafletMap';
 import { WebSocketClient, WebSocketMessageType } from '../lib/websocket/WebSocketClient';
+import { useVehicleSelection } from '@/lib/context/VehicleSelectionContext';
 import { useVehicleTracking } from '../lib/hooks/useVehicleTracking';
 import { WebSocketVideoFrame } from '../lib/types/api';
 
 const TrafficMap: React.FC = () => {
   const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
+  const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const [wsClient, setWsClient] = useState<WebSocketClient | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectedGlobalId, setSelectedGlobalId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Sticky Selection Logic: Keep vehicles selected if their Global ID matches
@@ -177,14 +178,22 @@ const TrafficMap: React.FC = () => {
       });
 
       if (clickedVehicle) {
-        const id = clickedVehicle.global_vehicle_id || clickedVehicle.vehicle_id;
+        const gid = clickedVehicle.global_vehicle_id;
+        const vid = clickedVehicle.vehicle_id;
+        const id = gid || vid;
+        
         console.debug(`[TrafficMap] Vehicle found: ${id}`);
+        
         setSelectedIds(prev => {
           const next = new Set(prev);
           if (next.has(id)) next.delete(id);
           else next.add(id);
           return next;
         });
+
+        if (gid) {
+          setSelectedGlobalId(id);
+        }
       }
     };
 

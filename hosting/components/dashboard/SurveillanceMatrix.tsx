@@ -42,12 +42,12 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
   };
 
   return (
-    <div className="flex flex-col h-full w-full space-y-4">
+    <div className="w-full space-y-4">
         {/* Matrix Toolbar */}
         <div className="matrix-card p-0 overflow-hidden">
             <div className="matrix-card-header h-12">
                 <div className="flex items-center gap-4">
-                    <h3 className="text-xs font-black uppercase tracking-widest font-lcd">
+                    <h3 className="text-xs font-bold uppercase tracking-widest font-lcd">
                         NODE_MATRIX_RENDER: <span className="text-primary">{layoutMode.toUpperCase()}</span>
                     </h3>
                     <div className="h-4 w-px bg-lcd-text/20"></div>
@@ -56,7 +56,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                             variant="ghost" 
                             size="sm" 
                             onClick={() => { setLayoutMode('grid'); setFocusedFeedId(null); }}
-                            className={cn("h-8 px-3 rounded-none transition-all font-black uppercase text-[10px]", layoutMode === 'grid' ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/10')}
+                            className={cn("h-8 px-3 rounded-none font-bold uppercase text-[10px]", layoutMode === 'grid' ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/10')}
                         >
                             <Grid size={14} className="mr-2" /> Grid
                         </Button>
@@ -64,7 +64,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                             variant="ghost" 
                             size="sm" 
                             onClick={() => { if (feeds.length > 0) { setLayoutMode('focus'); setFocusedFeedId(feeds[0].feed_id); }}}
-                            className={cn("h-8 px-3 rounded-none transition-all font-black uppercase text-[10px]", layoutMode === 'focus' ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/10')}
+                            className={cn("h-8 px-3 rounded-none font-bold uppercase text-[10px]", layoutMode === 'focus' ? 'bg-lcd-text text-lcd-bg' : 'hover:bg-lcd-text/10')}
                             disabled={feeds.length === 0}
                         >
                             <Maximize2 size={14} className="mr-2" /> Focus
@@ -72,7 +72,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                     </div>
                 </div>
                 
-                <div className="text-[10px] font-black opacity-60 uppercase tracking-widest">
+                <div className="text-[10px] font-bold opacity-60 uppercase tracking-widest">
                     Telemetry Uplinks: {feeds.filter(f => f.status === 'running').length} / {feeds.length}
                 </div>
             </div>
@@ -82,20 +82,20 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
         {feeds.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center border-4 border-dashed border-lcd-text/10 bg-lcd-text/5 p-12 opacity-30">
                 <VideoOff size={64} className="mb-6 opacity-20" />
-                <p className="tracking-[0.4em] font-black text-2xl uppercase">Sensor Array Offline</p>
+                <p className="tracking-widest font-bold text-2xl uppercase">Sensor Array Offline</p>
                 <p className="text-xs mt-4 font-bold uppercase tracking-widest">Awaiting local stream initialization</p>
             </div>
         ) : (
-            <div className="flex-1 min-h-0 relative">
+            <div className="relative">
                 {layoutMode === 'grid' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 h-full overflow-y-auto pr-4 custom-scrollbar">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 overflow-y-auto pr-4 custom-scrollbar">
                         {feeds.map((feed) => (
                             <div 
                                 key={feed.feed_id} 
-                                className="matrix-card p-0 group cursor-pointer hover:border-primary border-4 transition-all overflow-hidden"
+                                className="matrix-card p-0 group cursor-pointer hover:border-primary border-4 overflow-hidden"
                                 onClick={() => handleFeedClick(feed.feed_id)}
                             >
-                                <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-black uppercase flex justify-between group-hover:bg-primary group-hover:text-black transition-colors">
+                                <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase flex justify-between group-hover:bg-primary group-hover:text-black">
                                     <span>{feed.name?.toUpperCase() || `NODE_${feed.feed_id.slice(-4)}`}</span>
                                     <span>{feed.status.toUpperCase()}</span>
                                 </div>
@@ -103,7 +103,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     feed={feed} 
                                     minimalControls={true}
                                 />
-                                <div className="absolute inset-0 bg-transparent group-hover:bg-primary/5 pointer-events-none transition-colors"></div>
+                                <div className="absolute inset-0 bg-transparent group-hover:bg-primary/5 pointer-events-none"></div>
                             </div>
                         ))}
                     </div>
@@ -113,7 +113,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                     <div className="flex h-full gap-8">
                         {/* Main Stage */}
                         <div className="flex-1 h-full matrix-card p-0 border-4 border-primary relative overflow-hidden group">
-                            <div className="absolute top-0 left-0 right-0 z-10 bg-primary text-black px-3 py-1 text-[10px] font-black uppercase tracking-widest flex justify-between items-center">
+                            <div className="absolute top-0 left-0 right-0 z-10 bg-primary text-black px-3 py-1 text-[10px] font-bold uppercase tracking-widest flex justify-between items-center">
                                 <span>CRITICAL_PATH_MONITOR: {focusedFeedId.toUpperCase()}</span>
                                 <div className="flex items-center gap-2">
                                     <div className="h-2 w-2 rounded-full bg-black animate-pulse" />
@@ -133,7 +133,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                 <div 
                                     key={feed.feed_id}
                                     className={cn(
-                                        "matrix-card p-0 cursor-pointer border-4 transition-all group overflow-hidden",
+                                        "matrix-card p-0 cursor-pointer border-4 group overflow-hidden",
                                         focusedFeedId === feed.feed_id 
                                             ? 'border-primary scale-105 shadow-xl' 
                                             : 'border-lcd-text/20 opacity-60 hover:opacity-100 hover:border-lcd-text/50'
@@ -141,7 +141,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     onClick={() => setFocusedFeedId(feed.feed_id)}
                                 >
                                     <div className={cn(
-                                        "px-2 py-0.5 text-[7px] font-black uppercase flex justify-between",
+                                        "px-2 py-0.5 text-[7px] font-bold uppercase flex justify-between",
                                         focusedFeedId === feed.feed_id ? "bg-primary text-black" : "bg-lcd-text/20 text-lcd-text"
                                     )}>
                                         <span className="truncate">{feed.name?.toUpperCase() || `NODE_${feed.feed_id.slice(-4)}`}</span>

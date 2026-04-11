@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from '@/components/ui/badge';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
-import useAuth from '@/lib/hook/useAuth';
+import { useAuth } from '@/lib/auth/AuthProvider';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 

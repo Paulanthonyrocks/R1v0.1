@@ -1,15 +1,33 @@
-import { useEffect, useState } from 'react';
-import { auth } from '../firebase'; // Adjust this path to your Firebase auth instance
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { TokenManager } from '../auth/TokenManager'; // Import TokenManager
-import { UserRole } from '../auth/roles';
+'use client';
 
-const useAuth = () => {
+import { useEffect, useState, createContext, useContext, ReactNode } from 'react';
+import { auth } from '@/lib/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { TokenManager } from '@/lib/auth/TokenManager';
+import { UserRole } from '@/lib/auth/roles';
+
+interface AuthContextValue {
+  user: User | null;
+  token: string | null;
+  userRole: UserRole;
+  loading: boolean;
+}
+
+const AuthContext = createContext<AuthContextValue> ({
+  user: null,
+  token: null,
+  userRole: UserRole.VIEWER,
+  loading: true,
+});
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<UserRole>(UserRole.VIEWER);
   const [loading, setLoading] = useState(true);
-  const tokenManager = TokenManager.getInstance(); // Get TokenManager instance
+  const tokenManager = TokenManager.getInstance();
 
   useEffect(() => {
     if (!auth) {
@@ -17,9 +35,7 @@ const useAuth = () => {
       return;
     }
 
-    // This listener handles user sign-in and sign-out
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      console.log('[useAuth] onAuthStateChanged fired. User:', user ? user.uid : 'null');
       if (user) {
         setUser(user);
         const idTokenResult = await user.getIdTokenResult();
@@ -29,32 +45,30 @@ const useAuth = () => {
         } else {
           setUserRole(UserRole.VIEWER);
         }
-        // The TokenManager will now handle getting the token and refreshing it.
         await tokenManager.updateToken(user);
         setToken(tokenManager.getCurrentToken());
       } else {
         setUser(null);
-        console.log('[useAuth] User logged out.');
-        setToken(null); // Clear token when user logs out
+        setToken(null);
         setUserRole(UserRole.VIEWER);
-        await tokenManager.updateToken(null); // Clear token in TokenManager
+        await tokenManager.updateToken(null);
       }
       setLoading(false);
     });
 
-    // This listener handles token refreshes for an existing user
     const unsubscribeTokenRefresh = tokenManager.onTokenRefresh((newToken) => {
-      console.log('[useAuth] onTokenRefresh fired. New token available.');
       setToken(newToken);
     });
 
     return () => {
       unsubscribe();
-      unsubscribeTokenRefresh(); // Clean up token refresh subscription
+      unsubscribeTokenRefresh();
     };
   }, [tokenManager]);
 
-  return { user, token, userRole, loading };
+  return (
+    <AuthContext.Provider value={{ user, token, userRole, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
 };
-
-export default useAuth;

@@ -16,7 +16,8 @@ import {
   MapPin,
   Video,
   Hash,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ExternalLink
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AlertData, IncidentStatus } from '@/lib/types';
@@ -28,9 +29,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 interface IncidentCommandCenterProps {
   alerts: AlertData[];
   onIncidentUpdated?: (incidentId: string, status: IncidentStatus) => void;
+  onJumpToFeed?: (feedId: string) => void;
 }
 
-const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, onIncidentUpdated }) => {
+const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, onIncidentUpdated, onJumpToFeed }) => {
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [notes, setNotes] = useState('');
@@ -356,7 +358,16 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-bold tracking-widest uppercase">Operator Intervention</span>
                       <div className="flex gap-2">
-                        {selectedIncident.status === 'REPORTED' && (
+                        {selectedIncident?.feed_id && (
+                          <Button 
+                            size="sm" 
+                            className="bg-lcd-text/20 text-lcd-text hover:bg-lcd-text/40 transition-colors h-7 text-[10px] font-bold border-2 border-lcd-text/50"
+                            onClick={() => onJumpToFeed?.(selectedIncident.feed_id)}
+                          >
+                            <ExternalLink className="h-3 w-3 mr-1" /> JUMP_TO_FEED
+                          </Button>
+                        )}
+                        {selectedIncident?.status === 'REPORTED' && (
                           <Button 
                             size="sm" 
                             className="bg-lcd-text text-lcd-bg hover:bg-white transition-colors h-7 text-[10px] font-bold"

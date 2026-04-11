@@ -6,7 +6,7 @@ import AuthGuard from '@/components/auth/AuthGuard';
 import { UserRole } from '@/lib/auth/roles';
 import { Signal as SignalIcon, Loader2, Save, AlertCircle, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import useAuth from '@/lib/hook/useAuth';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import {
   Card,

@@ -227,6 +227,16 @@
     @apply opacity-30 cursor-not-allowed grayscale;
   }
 
+  .matrix-highlight-flash {
+    animation: matrix-flash 1s ease-in-out 2;
+    z-index: 10;
+  }
+
+  @keyframes matrix-flash {
+    0%, 100% { border-color: var(--lcd-text); box-shadow: none; }
+    50% { border-color: #fff; box-shadow: 0 0 20px var(--lcd-bg); }
+  }
+
   /* Scanline Overlay for elements */
   .scanline-overlay {
     @apply absolute inset-0 pointer-events-none overflow-hidden opacity-10;

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
-import useAuth from '@/lib/hook/useAuth';
+import { useAuth } from '@/lib/auth/AuthProvider';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 

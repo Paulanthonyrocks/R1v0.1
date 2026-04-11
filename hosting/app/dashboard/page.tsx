@@ -30,12 +30,26 @@ const DashboardPage: React.FC = () => {
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
   const hasAttemptedHistoryLoad = useRef(false);
-  const maxHistoryPoints = 60; // Keep 60 points (e.g., 1 minute of data if updated every second)
+  const maxHistoryPoints = 60; // Keep 60 points (e.g. 1 minute of data if updated every second)
+  const feedRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const handleAnomalySelect = (alert: AlertData) => {
     setSelectedAnomaly(alert);
     setIsAnomalyModalOpen(true);
   };
+
+  const handleJumpToFeed = (feedId: string) => {
+    const element = feedRefs.current.get(feedId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Optional: trigger a visual flash or highlight on the feed
+      element.classList.add('matrix-highlight-flash');
+      setTimeout(() => element.classList.remove('matrix-highlight-flash'), 2000);
+    }
+  };
+
+  // Update KPI history when new KPIs arrive
+
 
   // Update KPI history when new KPIs arrive
   useEffect(() => {
@@ -441,7 +455,11 @@ const DashboardPage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                   {isReady && feeds.length > 0 ? (
                     feeds.slice(0, 8).map(feed => (
-                      <div key={feed.feed_id} className="matrix-card p-0 group overflow-hidden">
+                      <div 
+                        key={feed.feed_id} 
+                        ref={el => { if (el) feedRefs.current.set(feed.feed_id, el); }}
+                        className="matrix-card p-0 group overflow-hidden"
+                      >
                         <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase flex justify-between">
                             <span>NODE_{feed.feed_id.slice(-4)}</span>
                             <span>{feed.status.toUpperCase()}</span>
@@ -486,6 +504,7 @@ const DashboardPage: React.FC = () => {
             <div className="mb-12">
               <IncidentCommandCenter 
                 alerts={alerts} 
+                onJumpToFeed={handleJumpToFeed}
                 onIncidentUpdated={(id, status) => {
                   // Alerts hook handles state update, but we can trigger local sync if needed
                 }}

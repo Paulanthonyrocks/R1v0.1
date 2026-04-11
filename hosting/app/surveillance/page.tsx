@@ -6,6 +6,7 @@ import { UserRole } from '@/lib/auth/roles';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 
 import SurveillanceMatrix from '@/components/dashboard/SurveillanceMatrix';
+import SurveillanceSummary from '@/components/dashboard/SurveillanceSummary';
 import { FeedStatusData } from '@/lib/types';
 import { Search, Play, Square, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -45,25 +46,9 @@ const SurveillancePage = () => {
       );
     }
 
-    if (feeds.length === 0) {
-      return (
-        <div className="flex flex-col justify-center items-center h-96 border-2 border-dashed border-lcd-text/20 rounded">
-          <p className="text-lcd-text text-lg tracking-widest uppercase font-bold mb-2">No Uplinks Found</p>
-          <p className="text-xs opacity-60 uppercase text-lcd-text">Add feeds via configuration to begin monitoring</p>
-        </div>
-      );
-    }
-
-    if (filteredFeeds.length === 0) {
-        return (
-            <div className="flex justify-center items-center h-64 opacity-50 text-lcd-text">
-                <p className="text-lg tracking-widest uppercase font-bold">No Match for &apos;{searchQuery}&apos;</p>
-            </div>
-        );
-    }
-
     return (
-      <div className="h-[calc(100vh-350px)] min-h-[500px]">
+      <div>
+        <SurveillanceSummary feeds={feeds} />
         <SurveillanceMatrix feeds={filteredFeeds} />
       </div>
     );
@@ -108,26 +93,6 @@ const SurveillancePage = () => {
                           </Button>
                       </div>
                   </div>
-              </div>
-          </div>
-
-          <div className="mb-8 flex items-center justify-between border-b-2 border-lcd-text/20 pb-4">
-              <div className="flex items-center gap-8 text-[10px] uppercase font-black tracking-widest">
-                  <div className="flex items-center gap-3 bg-green-500/10 px-3 py-1 border border-green-500/30">
-                      <div className="w-2 h-2 rounded-full bg-green-600 animate-pulse"></div>
-                      <span>ONLINE: {feeds.filter(f => f.status === 'running').length}</span>
-                  </div>
-                  <div className="flex items-center gap-3 bg-yellow-500/10 px-3 py-1 border border-yellow-500/30">
-                      <div className="w-2 h-2 rounded-full bg-yellow-600"></div>
-                      <span>INITIALIZING: {feeds.filter(f => f.status === 'starting').length}</span>
-                  </div>
-                  <div className="flex items-center gap-3 bg-red-500/10 px-3 py-1 border border-red-500/30 text-red-700">
-                      <div className="w-2 h-2 rounded-full bg-red-600"></div>
-                      <span>OFFLINE: {feeds.filter(f => f.status === 'stopped' || f.status === 'error').length}</span>
-                  </div>
-              </div>
-              <div className="text-[10px] font-bold opacity-30 uppercase tracking-[0.2em]">
-                  Registry Index: {filteredFeeds.length} / {feeds.length} Active
               </div>
           </div>
 

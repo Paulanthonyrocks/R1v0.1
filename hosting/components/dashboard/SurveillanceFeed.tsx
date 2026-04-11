@@ -6,8 +6,9 @@ import { cn } from "@/lib/utils";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoSocket from '@/lib/useVideoSocket';
-import useAuth from '@/lib/hook/useAuth';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
+import { useVehicleSelection } from '@/lib/context/VehicleSelectionContext';
 import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
 import MetricsPanel from './MetricsPanel';
@@ -22,7 +23,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const { feed_id, name: feedName, source, status } = feed;
     const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
     const { token, userRole } = useAuth();
-    const { client: wsClient } = useWebSocket(); // Add this line
+    const { client: wsClient } = useWebSocket();
+    const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
     // Only subscribe if the feed is in an active state
     const shouldSubscribe = status === 'running' || status === 'starting';
@@ -56,7 +58,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
     const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);
     const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
-    const [selectedVehicleGlobalId, setSelectedVehicleGlobalId] = useState<string | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
     // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
@@ -259,16 +260,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             if (gid) {
                 if (isDeselecting) {
                     // Clear gallery only if this was the displayed global ID
-                    if (selectedVehicleGlobalId === gid) {
-                        setSelectedVehicleGlobalId(null);
-                    }
-                    stickyMapRef.current.delete(gid);
+                    setSelectedGlobalId(null);
                 } else {
-                    setSelectedVehicleGlobalId(gid);
+                    setSelectedGlobalId(gid);
                     stickyMapRef.current.set(gid, vid);
                 }
             } else {
-                setSelectedVehicleGlobalId(null);
+                setSelectedGlobalId(null);
             }
         } else {
             // Click on empty area — no-op (preserve multi-selection)
@@ -533,11 +531,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             )}
             tabIndex={0}
         >
-            <div ref={containerRef} className="bg-black aspect-video flex items-center justify-center relative group overflow-hidden">
+            <div ref={containerRef} className="bg-black flex items-center justify-center relative group overflow-hidden">
                 {isLive ? (
                     <canvas
                         ref={canvasRef}
-                        className={cn("w-full h-full object-contain image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
+                        className={cn("w-full h-full image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
                         onClick={handleCanvasClick}
                     />
                 ) : (
@@ -720,18 +718,24 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 )}
 
                 {/* Identity Gallery Side Panel */}
-                {selectedVehicleGlobalId && (
+                {selectedGlobalId && (
                     <div className="absolute top-4 right-4 bottom-4 w-72 z-50 pointer-events-auto">
                         <IdentityGallery
-                            globalId={selectedVehicleGlobalId}
-                            onClose={() => setSelectedVehicleGlobalId(null)}
+                            globalId={selectedGlobalId}
+                            onClose={() => setSelectedGlobalId(null)}
                         />
                     </div>
                 )}
             </div>
-            <CardContent className="p-2 rounded-none">
-                <h4 className="font-medium text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">{component_name}</h4>
-                <p className="text-[10px] text-lcd-bg group-hover:text-lcd-text transition-colors truncate tracking-normal font-lcd matrix-glow">{component_node}</p>
+            <CardContent className="p-2">
+                <div className="flex items-center justify-between gap-2">
+                    <h4 className="font-bold text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">
+                        {component_name}
+                    </h4>
+                    <p className="text-xs text-lcd-bg/60 group-hover:text-lcd-text/80 transition-colors truncate tracking-normal font-lcd matrix-glow">
+                        {component_node}
+                    </p>
+                </div>
             </CardContent>
         </Card>
     );

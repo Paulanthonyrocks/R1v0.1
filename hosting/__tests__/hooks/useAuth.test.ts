@@ -1,5 +1,5 @@
 import { renderHook, act } from '@testing-library/react';
-import useAuth from '../../lib/hook/useAuth';
+import { useAuth } from '../../lib/auth/AuthProvider';
 import { auth } from '../../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { TokenManager } from '../../lib/auth/TokenManager';
