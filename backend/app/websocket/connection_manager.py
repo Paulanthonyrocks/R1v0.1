@@ -31,14 +31,62 @@ class ConnectionManager:
         self.client_roles: Dict[str, str] = {}
         self.last_pong: Dict[str, float] = {}
         self.keepalive_task: Optional[asyncio.Task] = None
+        # Per-client delivery buffers to isolate slow clients
+        self.client_queues: Dict[str, asyncio.Queue] = {}
+        self.client_tasks: Dict[str, asyncio.Task] = {}
 
-    async def connect(self, websocket: WebSocket, client_id: str, username: Optional[str] = None, role: str = "user"): 
+    async def connect(self, websocket: WebSocket, client_id: str, username: Optional[str] = None, role: str = \"user\"): 
         self.active_connections[client_id] = websocket
         self.client_roles[client_id] = role
         self.last_pong[client_id] = time.time()
-        logger.info(f"Client {client_id} (role: {role}) connected.")
+        
+        # Create a dedicated delivery queue and sender task for this client
+        # Maxsize=10 ensures we don't buffer too many old frames for slow clients
+        self.client_queues[client_id] = asyncio.Queue(maxsize=10)
+        self.client_tasks[client_id] = asyncio.create_task(self._client_sender_loop(client_id))
+        
+        logger.info(f\"Client {client_id} (role: {role}) connected. Delivery task started.\")
+
+    async def _client_sender_loop(self, client_id: str):
+        \"\"\"Dedicated loop per client to handle outgoing messages without blocking the global broadcaster.\"\"\"
+        try:
+            while True:
+                msg = await self.client_queues[client_id].get()
+                ws = self.active_connections.get(client_id)
+                if not ws:
+                    break
+                
+                try:
+                    if isinstance(msg, bytes):
+                        await ws.send_bytes(msg)
+                    elif isinstance(msg, str):
+                        await ws.send_text(msg)
+                    elif isinstance(msg, dict):
+                        await ws.send_json(msg)
+                    else:
+                        await ws.send_text(str(msg))
+                except Exception as e:
+                    logger.warning(f\"Send error for client {client_id}: {e}\")
+                    # Trigger disconnect on socket error
+                    await self.disconnect(client_id)
+                    break
+                finally:
+                    self.client_queues[client_id].task_done()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f\"Critical error in sender loop for {client_id}: {e}\")
 
     async def disconnect(self, client_id: str, websocket: Any = None):
+        # 1. Cancel sender task
+        if client_id in self.client_tasks:
+            self.client_tasks[client_id].cancel()
+            del self.client_tasks[client_id]
+        
+        # 2. Cleanup queue
+        if client_id in self.client_queues:
+            del self.client_queues[client_id]
+
         if client_id in self.active_connections:
             del self.active_connections[client_id]
         if client_id in self.client_roles:
@@ -48,7 +96,7 @@ class ConnectionManager:
         for feed_id in self.feed_subscriptions:
             if client_id in self.feed_subscriptions[feed_id]:
                 self.feed_subscriptions[feed_id].remove(client_id)
-        logger.info(f"Client {client_id} disconnected.")
+        logger.info(f\"Client {client_id} disconnected and delivery task stopped.\")
 
     async def send_personal_message(self, message: str, client_id: str):
         websocket = self.active_connections.get(client_id)
@@ -63,18 +111,20 @@ class ConnectionManager:
     async def broadcast_bytes_to_feed(self, feed_id: str, data: bytes):
         if feed_id in self.feed_subscriptions:
             client_ids = list(self.feed_subscriptions[feed_id])
-            if client_ids:
-                to_disconnect = []
-                for cid in client_ids:
-                    ws = self.active_connections.get(cid)
-                    if ws:
-                        try:
-                            await ws.send_bytes(data)
-                        except Exception:
-                            to_disconnect.append(cid)
-                
-                for cid in to_disconnect:
-                    await self.disconnect(cid)
+            for cid in client_ids:
+                q = self.client_queues.get(cid)
+                if q:
+                    try:
+                        # Real-time priority: if queue is full, drop the oldest frame
+                        # to make room for the newest one.
+                        if q.full():
+                            try:
+                                q.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                        q.put_nowait(data)
+                    except Exception as e:
+                        logger.debug(f\"Failed to queue bytes for {cid}: {e}\")
 
     def has_subscribers(self, feed_id: str) -> bool:
         return bool(self.feed_subscriptions.get(feed_id))
@@ -84,27 +134,29 @@ class ConnectionManager:
 
 
     async def broadcast(self, message: Any, feed_id: Optional[str] = None):
-        """Generic broadcast method for compatibility with FeedManager."""
+        \"\"\"Generic broadcast method for compatibility with FeedManager.\"\"\"
         if isinstance(message, bytes):
             if feed_id:
                 await self.broadcast_bytes_to_feed(feed_id, message)
             return
-
+        
         # Handle dict/string messages
         msg_str = json.dumps(message, cls=DateTimeEncoder) if isinstance(message, dict) else str(message)
         
         targets = list(self.feed_subscriptions[feed_id]) if feed_id else list(self.active_connections.keys())
-        to_disconnect = []
         for cid in targets:
-            ws = self.active_connections.get(cid)
-            if ws:
+            q = self.client_queues.get(cid)
+            if q:
                 try:
-                    await ws.send_text(msg_str)
-                except Exception:
-                    to_disconnect.append(cid)
-        
-        for cid in to_disconnect:
-            await self.disconnect(cid)
+                    # For telemetry/KPIs, we also prefer newest data over old
+                    if q.full():
+                        try:
+                            q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                    q.put_nowait(msg_str)
+                except Exception as e:
+                    logger.debug(f\"Failed to queue message for {cid}: {e}\")
 
 
     async def broadcast_to_feed(self, message: Any, feed_id: str):
