@@ -1,4 +1,84 @@
-File unchanged since last read. The content from the earlier read_file result in this conversation is still current — refer to that instead of re-reading.
+"use client";
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home, AlertTriangle, Camera, Navigation, TrendingUp, Terminal, Zap, CloudSun, ShieldCheck, Cpu, Activity, Radio } from 'lucide-react';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { cn } from '@/lib/utils';
+
+const DashboardHeader: React.FC = () => {
+    const pathname = usePathname();
+    const { isConnected } = useRealtimeUpdates();
+    const [time, setTime] = useState("");
+    const [coords, setCoords] = useState({ x: "00.00", y: "00.00" });
+
+    useEffect(() => {
+        const updateTime = () => setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+        updateTime();
+        const interval = setInterval(updateTime, 1000);
+        
+        const coordInterval = setInterval(() => {
+            setCoords({
+                x: (Math.random() * 100).toFixed(2).padStart(5, '0'),
+                y: (Math.random() * 100).toFixed(2).padStart(5, '0')
+            });
+        }, 3000);
+
+        return () => {
+            clearInterval(interval);
+            clearInterval(coordInterval);
+        };
+    }, []);
+
+    const allNavItems = [
+        { href: '/dashboard', label: 'DASHBOARD', icon: Home },
+        { href: '/dashboard/map', label: 'MAP', icon: MapIcon },
+        { href: '/dashboard/analytics', label: 'ANALYTICS', icon: BarChart3 },
+        { href: '/surveillance', label: 'FEEDS', icon: LayoutGrid },
+        { href: '/anomalies', label: 'ALERTS', icon: Zap },
+        { href: '/incidents', label: 'INCIDENTS', icon: AlertTriangle },
+        { href: '/signals', label: 'SIGNALS', icon: Signal },
+        { href: '/impacts', label: 'IMPACTS', icon: CloudSun },
+        { href: '/dashboard/tracking', label: 'TRACKING', icon: Navigation },
+        { href: '/dashboard/predictive', label: 'FORECASTS', icon: TrendingUp },
+        { href: '/logs', label: 'LOGS', icon: Terminal },
+    ];
+
+    // Only show these in the main bar to reduce clutter
+    const primaryNavItems = allNavItems.filter(item => 
+        ['/dashboard', '/dashboard/map', '/anomalies', '/logs'].includes(item.href)
+    );
+
+    return (
+        <header className="flex flex-col w-full sticky top-0 z-[100] font-lcd select-none bg-industrial-bg/30 backdrop-blur-3xl">
+            {/* TOP BAR: System Health Ticker */}
+            <div className="bg-lcd-green text-industrial-bg px-6 py-2 flex items-center justify-between text-[9px] font-bold uppercase tracking-widest border-b border-industrial-bg">
+                <div className="flex items-center gap-6 overflow-hidden">
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                        <ShieldCheck size={10} className="animate-pulse" />
+                        <span>SECURE_LINK: <span className="text-industrial-bg/80">ACTIVE</span></span>
+                    </div>
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                        <Cpu size={10} />
+                        <span>CORE_SYS: <span className="text-industrial-bg/80">NOMINAL</span></span>
+                    </div>
+                    <div className="hidden md:flex items-center gap-2 whitespace-nowrap opacity-70">
+                        <Radio size={10} />
+                        <span>SYNC_MODE: <span className="text-industrial-bg/80">QUANTUM_LOCK</span></span>
+                    </div>
+                    <div className="hidden lg:flex items-center gap-2 whitespace-nowrap opacity-70">
+                        <Activity size={10} />
+                        <span>LATENCY: <span className="text-industrial-bg/80">12ms</span></span>
+                    </div>
+                </div>
+                <div className="flex items-center gap-4 whitespace-nowrap">
+                    <span className="opacity-80">REGION: NORTH-SECTOR_01</span>
+                    <span className="bg-industrial-bg text-lcd-green px-1 animate-pulse">● LIVE</span>
+                </div>
+            </div>
+
             {/* MAIN HEADER BAR */}
             <div className="text-lcd-green flex items-center justify-between px-4 py-3 border-b border-lcd-green/40 relative font-mono">
                 
@@ -89,3 +169,8 @@ File unchanged since last read. The content from the earlier read_file result in
                     </div>
                 </div>
             </div>
+        </header>
+    );
+};
+
+export default DashboardHeader;

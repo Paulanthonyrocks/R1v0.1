@@ -193,12 +193,12 @@ class FeedManager:
         """Synchronous cleanup for interpreter exit."""
         logger.info("FeedManager executing atexit cleanup...")
         # 0. Cleanup Analytics Process
-        if self._analytics_process and self._analytics_process.is_alive():
-            logger.info(f"Terminating analytics process {self._analytics_process.pid} in atexit")
-            self._analytics_process.terminate()
-            self._analytics_process.join(timeout=0.5)
-            if self._analytics_process.is_alive():
-                self._analytics_process.kill()
+#         if self._analytics_process and self._analytics_process.is_alive():
+#             logger.info(f"Terminating analytics process {self._analytics_process.pid} in atexit")
+#             self._analytics_process.terminate()
+#             self._analytics_process.join(timeout=0.5)
+#             if self._analytics_process.is_alive():
+#                 self._analytics_process.kill()
         # 1. Cleanup Registry (Ingestion Workers)
         for feed_id, entry in list(self.process_registry.items()):
             # Close command queue
@@ -392,30 +392,30 @@ class FeedManager:
                 break
             await asyncio.sleep(0.1)
 # _start_analytics_worker removed
-    async def _stop_analytics_worker(self):
-        """Gracefully stops the analytics process."""
-        if self._analytics_process:
-            logger.info("Stopping Analytics Worker...")
-            self._analytics_stop_event.set()
-            # Drain output queue to unblock worker if needed
-            for _ in range(20):
-                try:
-                    self._analytics_output_queue.get_nowait()
-                except: pass
-                if not self._analytics_process.is_alive():
-                    break
-                await asyncio.sleep(0.1)
-            if self._analytics_process.is_alive():
-                self._analytics_process.terminate()
-            self._analytics_process = None
-        # Explicitly close queues
-        try:
-            self._analytics_input_queue.close()
-            self._analytics_input_queue.cancel_join_thread()
-            self._analytics_output_queue.close()
-            self._analytics_output_queue.cancel_join_thread()
-        except: pass
-    # Explicitly close queues
+#     async def _stop_analytics_worker(self):
+#         """Gracefully stops the analytics process."""
+#         if self._analytics_process:
+#             logger.info("Stopping Analytics Worker...")
+#             self._analytics_stop_event.set()
+#             # Drain output queue to unblock worker if needed
+#             for _ in range(20):
+#                 try:
+#                     self._analytics_output_queue.get_nowait()
+#                 except: pass
+#                 if not self._analytics_process.is_alive():
+#                     break
+#                 await asyncio.sleep(0.1)
+#             if self._analytics_process.is_alive():
+#                 self._analytics_process.terminate()
+#             self._analytics_process = None
+#         # Explicitly close queues
+#         try:
+#             self._analytics_input_queue.close()
+#             self._analytics_input_queue.cancel_join_thread()
+#             self._analytics_output_queue.close()
+#             self._analytics_output_queue.cancel_join_thread()
+#         except: pass
+#     # Explicitly close queues
         for q in self._inference_input_queues:
             try:
                 q.close()
@@ -1697,7 +1697,7 @@ class FeedManager:
         await self.stop_processing()
         await self.stop_all_feeds()
         await self._stop_inference_pool()
-        await self._stop_analytics_worker()
+        # await self._stop_analytics_worker()  # Removed: Analytics now handled by AnalyticsService
         # Save ReID state before shutting down
         if self._reid_manager:
             await asyncio.to_thread(self._reid_manager.save_state)
@@ -1714,5 +1714,6 @@ class FeedManager:
             tasks.append(self._db_reader_task)
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
+
 
 
