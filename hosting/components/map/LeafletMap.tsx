@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
@@ -21,13 +21,28 @@ const fixLeafletIcons = () => {
   });
 };
 
-const LeafletMap: React.FC<{ 
+const LeafletMap = forwardRef(({ activeLayer, activeLayers }: { 
   activeLayer: 'satellite' | 'vector' | 'thermal';
   activeLayers: Record<string, boolean>;
-}> = ({ activeLayer, activeLayers }) => {
+}, ref) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const wsClient = useWebSocket();
+
+  useImperativeHandle(ref, () => ({
+    zoomIn: () => {
+      leafletMap.current?.zoomIn();
+    },
+    zoomOut: () => {
+      leafletMap.current?.zoomOut();
+    },
+    center: () => {
+      leafletMap.current?.setView([34.02, -118.02]);
+    },
+    invalidateSize: () => {
+      leafletMap.current?.invalidateSize();
+    }
+  }));
 
   // Define custom icon to avoid default asset 404s in Next.js
   const defaultIcon = useRef(L.icon({
@@ -91,7 +106,15 @@ const LeafletMap: React.FC<{
         attributionControl: false,
       });
 
-      L.marker([34.02, -118.02], { icon: defaultIcon }).addTo(map).bindPopup('CENTER POINT');
+      const centerMarker = L.marker([34.02, -118.02], { 
+        icon: defaultIcon,
+        draggable: true 
+      }).addTo(map).bindPopup('CENTER POINT');
+
+      centerMarker.on('dragend', (e) => {
+        const position = e.target.getLatLng();
+        map.panTo(position);
+      });
 
       feedsLayer.current.addTo(map);
       congestionLayer.current.addTo(map);
@@ -99,7 +122,6 @@ const LeafletMap: React.FC<{
       roadNetworkLayer.current.addTo(map);
       signalsLayer.current.addTo(map);
 
-      L.control.zoom({ position: 'bottomright' }).addTo(map);
       leafletMap.current = map;
 
       // Initialize Tile Layer immediately
@@ -548,6 +570,6 @@ const LeafletMap: React.FC<{
       <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
     </div>
   );
-};
+});
 
 export default LeafletMap;

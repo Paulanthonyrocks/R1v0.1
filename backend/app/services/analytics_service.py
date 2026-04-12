@@ -176,7 +176,7 @@ class AnalyticsService:
         self._feed_manager = feed_manager
         logger.info("FeedManager set in AnalyticsService.")
 
-    async def predict_incident_likelihood(
+        async def predict_incident_likelihood(
         self, location: Dict[str, Any], prediction_time: datetime
     ) -> Dict[str, Any]:
         """
@@ -212,7 +212,6 @@ class AnalyticsService:
         # 2. Secondary: Use Anomaly Detector score as a likelihood proxy
         if self._anomaly_detector and recent_traffic_data:
             anomaly_result = self._anomaly_detector.detect_anomaly(recent_traffic_data)
-            # Map MAE/Z-score to a 0-1 likelihood (heuristic)
             score = min(0.9, anomaly_result.get("score", 0) / 5.0) 
             if anomaly_result.get("is_anomaly"):
                 return {
@@ -226,10 +225,9 @@ class AnalyticsService:
 
         # 3. Final Fallback: Statistical Rule-based prediction
         return self._traffic_predictor._rule_based_prediction(
-            location, prediction_time, pd.DataFrame(recent_traffic_data)
+            location, prediction_time, recent_traffic_data
         )
-
-    async def initialize_prediction_log_table(self):
+async def initialize_prediction_log_table(self):
         if not self._prediction_log_table_initialized:
             try:
                 async with self._db_manager.async_engine.begin() as conn:

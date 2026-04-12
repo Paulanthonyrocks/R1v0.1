@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize } from 'lucide-react';
+import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
 
@@ -22,6 +22,7 @@ const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
 
 const LiveMapPage: React.FC = () => {
   const { vehicles } = useVehicleTracking();
+  const mapRef = useRef<any>(null);
   const [activeLayer, setActiveLayer] = useState<'satellite' | 'vector' | 'thermal'>('satellite');
   const [showLayerControl, setShowLayerControl] = useState(false);
   const [showAllUnits, setShowAllUnits] = useState(false);
@@ -97,7 +98,14 @@ const LiveMapPage: React.FC = () => {
                 onChange={() => setActiveLayers(prev => ({ ...prev, [layer.id]: !(prev as any)[layer.id] }))} 
                 className="hidden" 
               />
-              <div className={cn("w-3 h-3 border border-lcd-green/50", (activeLayers as any)[layer.id] && "bg-lcd-green shadow-[0_0_5px_rgba(182,255,176,0.5)]")} />
+              <div className={cn(
+                "w-3 h-3 border flex items-center justify-center transition-all duration-200", 
+                (activeLayers as any)[layer.id] 
+                  ? "bg-lcd-green border-lcd-green" 
+                  : "border-lcd-green/30 bg-black/20"
+              )}>
+                {(activeLayers as any)[layer.id] && <Check size={8} className="text-industrial-bg stroke-[3px]" />}
+              </div>
               <layer.icon size={14} className="opacity-60 group-hover:opacity-100 transition-opacity" />
               <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
             </label>
@@ -110,7 +118,14 @@ const LiveMapPage: React.FC = () => {
                 onChange={e => setShowAllUnits(e.target.checked)} 
                 className="hidden" 
               />
-              <div className={cn("w-3 h-3 border border-lcd-green/50", showAllUnits && "bg-lcd-green shadow-[0_0_5px_rgba(182,255,176,0.5)]")} />
+              <div className={cn(
+                "w-3 h-3 border flex items-center justify-center transition-all duration-200", 
+                showAllUnits 
+                  ? "bg-lcd-green border-lcd-green" 
+                  : "border-lcd-green/30 bg-black/20"
+              )}>
+                {showAllUnits && <Check size={8} className="text-industrial-bg stroke-[3px]" />}
+              </div>
               <span className={cn("group-hover:translate-x-1 transition-transform", !showAllUnits && "opacity-40")}>Show All Units</span>
             </label>
           </div>
@@ -119,21 +134,43 @@ const LiveMapPage: React.FC = () => {
 
       {/* RIGHT HUD: Map Tools */}
       <div className="absolute right-6 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2 pointer-events-auto">
-        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Zoom In">
+        <button 
+          onClick={() => mapRef.current?.zoomIn()}
+          className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" 
+          title="Zoom In"
+        >
           <ZoomIn size={18} />
         </button>
-        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Zoom Out">
-          <ZoomOut size={18} />
+        <button 
+          onClick={() => mapRef.current?.zoomOut()}
+          className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" 
+          title="Zoom Out"
+        >
+          <ZoomIn size={18} />
         </button>
-        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Center View">
+        <button 
+          onClick={() => mapRef.current?.center()}
+          className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" 
+          title="Center View"
+        >
           <Navigation size={18} />
         </button>
-        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Full Screen">
+        <button 
+          onClick={() => {
+            if (document.fullscreenElement) {
+              document.exitFullscreen();
+            } else {
+              document.documentElement.requestFullscreen();
+            }
+          }}
+          className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" 
+          title="Full Screen"
+        >
           <Maximize size={18} />
         </button>
       </div>
 
-      <DynamicTrafficMap activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} />
+      <DynamicTrafficMap ref={mapRef} activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} />
     </div>
   );
 };

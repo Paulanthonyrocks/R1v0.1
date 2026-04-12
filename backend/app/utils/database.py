@@ -872,7 +872,7 @@ class DatabaseManager:
         if not metrics_list:
             return
 
-        # --- 1. SAVE TO SQLITE ---
+        # --- 1. SAVE TO SQLITE (Primary/Real-time) ---
         sql = text("""INSERT OR REPLACE INTO location_metrics (
             location_id, timestamp, vehicle_count, average_speed, 
             congestion_score, latitude, longitude
@@ -905,18 +905,25 @@ class DatabaseManager:
         try:
             async with self.async_engine.begin() as conn:
                 await conn.execute(sql, sqlite_params)
-            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite via async_engine.")
+            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite.")
         except (sqlite3.OperationalError, SQLAlchemyOperationalError) as e:
             logger.warning(f"Retrying: Failed to save location metrics to SQLite: {e}")
-            raise # RE-RAISE so @retry can catch it
+            raise 
         except Exception as e:
             logger.error(f"Unexpected error saving location metrics to SQLite: {e}")
-            # Don't re-raise generic exceptions unless you want them to trigger retries too
 
-        # --- 2. SAVE TO TIMESCALEDB ---
+        # --- 2. SAVE TO TIMESCALEDB (Archive - Optimized to be non-blocking) ---
         if not self.timescale_engine:
             return
+            
+        # Offload TimescaleDB write to a background task to avoid blocking the main pipeline
+        asyncio.create_task(self._async_save_to_timescale_metrics(metrics_list))
 
+        async def _async_save_to_timescale_metrics(self, metrics_list: List[Dict]):
+        """Background helper to save metrics to TimescaleDB without blocking the main pipeline."""
+        if not self.timescale_engine:
+            return
+        
         ts_sql = text("""
             INSERT INTO location_metrics (
                 location_id, timestamp, vehicle_count, average_speed, 
@@ -926,7 +933,7 @@ class DatabaseManager:
                 :congestion_score, :latitude, :longitude
             )
         """)
-
+        
         try:
             async with self.timescale_engine.begin() as conn:
                 ts_params = []
@@ -939,6 +946,8 @@ class DatabaseManager:
                             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         except ValueError:
                             ts = datetime.now(timezone.utc)
+                    else:
+                        ts = datetime.now(timezone.utc)
 
                     ts_params.append({
                         "location_id": m.get("id"),
@@ -949,14 +958,13 @@ class DatabaseManager:
                         "latitude": m.get("latitude"),
                         "longitude": m.get("longitude")
                     })
-
                 await conn.execute(ts_sql, ts_params)
-                logger.info(f"Saved {len(ts_params)} location metrics to TimescaleDB.")
+                logger.debug(f"Background save: {len(ts_params)} metrics to TimescaleDB.")
         except Exception as e:
-            logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
+            logger.error(f"Background TimescaleDB save failed: {e}")
 
-    async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
-        """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""
+
+async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:\n        """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""
         start_time_ts = time.time() - (hours * 3600)
 
         # 1. Try TimescaleDB

@@ -113,6 +113,10 @@ def ingestion_worker(
                         continue
                 except (IndexError, TypeError): pass
 
+            if central_input_queue.qsize() >= q_max:
+                frames_dropped += 1
+                continue
+
             try:
                 # ISSUE 1 FIX: Always use OpenCV on CPU for resizing.
                 resized = cv2.resize(frame, inference_res, interpolation=cv2.INTER_LINEAR)
@@ -134,10 +138,6 @@ def ingestion_worker(
                     frame_data = {"raw_bytes": resized.tobytes(), "shape": resized.shape, "dtype": str(resized.dtype)}
 
                 fh, fw = resized.shape[:2]
-                if central_input_queue.qsize() >= q_max:
-                    frames_dropped += 1
-                    continue
-
                 central_input_queue.put((feed_id, effective_index, frame_data, time.time(), fw, fh), timeout=0.1)
                 frames_processed += 1
             except queue.Full:

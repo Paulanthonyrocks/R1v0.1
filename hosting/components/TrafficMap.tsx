@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import LeafletMap from '@/components/map/LeafletMap';
 import { useWebSocket } from '../lib/websocket/WebSocketProvider';
@@ -11,20 +11,29 @@ import { WebSocketVideoFrame } from '../lib/types/api';
 import { Activity, Crosshair, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const TrafficMap: React.FC<{ 
+const TrafficMap = forwardRef<any, { 
   activeLayer: 'satellite' | 'vector' | 'thermal';
   activeLayers: Record<string, boolean>;
   showAllUnits: boolean;
-}> = ({ activeLayer, activeLayers, showAllUnits }) => {
-  const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
+}>(({ activeLayer, activeLayers, showAllUnits }, ref) => {
+  const { vehicles, mergeVehicleUpdates, getVehicles } = useVehicleTracking();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const client = useWebSocket();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const leafletMapRef = useRef<any>(null);
+
+  useImperativeHandle(ref, () => ({
+    zoomIn: () => leafletMapRef.current?.zoomIn(),
+    zoomOut: () => leafletMapRef.current?.zoomOut(),
+    center: () => leafletMapRef.current?.center(),
+    invalidateSize: () => leafletMapRef.current?.invalidateSize(),
+  }));
   
   useEffect(() => {
-    if (selectedGlobalId && vehicles) {
-      const matching = vehicles.find(v => v.global_vehicle_id === selectedGlobalId);
+    if (selectedGlobalId) {
+      const vehiclesList = getVehicles();
+      const matching = vehiclesList.find(v => v.global_vehicle_id === selectedGlobalId);
       if (matching) {
         setSelectedIds(prev => {
           if (prev.has(matching.vehicle_id)) return prev;
@@ -34,7 +43,7 @@ const TrafficMap: React.FC<{
         });
       }
     }
-  }, [selectedGlobalId, vehicles]);
+  }, [selectedGlobalId, getVehicles]);
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
 
@@ -118,7 +127,8 @@ const TrafficMap: React.FC<{
         const mesh = instancedMeshRef.current;
         let drawnCount = 0;
         
-        vehicles.forEach((v) => {
+        const currentVehicles = getVehicles();
+        currentVehicles.forEach((v) => {
           if (drawnCount >= 5000) return;
           
           const isSelected = selectedIds.has(v.vehicle_id) || (v.global_vehicle_id && selectedIds.has(v.global_vehicle_id));
@@ -152,7 +162,7 @@ const TrafficMap: React.FC<{
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [vehicles, dummy, showAllUnits, selectedIds]);
+  }, [dummy, showAllUnits, selectedIds, getVehicles]);
 
   useEffect(() => {
     if (!containerRef.current || !rendererRef.current) return;
@@ -211,48 +221,9 @@ const TrafficMap: React.FC<{
       <div className="absolute inset-0 pointer-events-none z-[1001] opacity-10 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,var(--lcd-green)_2px,var(--lcd-green)_4px)]" />
 
       {/* Background Map */}
-      <LeafletMap activeLayer={activeLayer} activeLayers={activeLayers} />
+      <LeafletMap ref={leafletMapRef} activeLayer={activeLayer} activeLayers={activeLayers} />
 
       {/* THREE.js overlay will be appended here */}
-
-      {/* Vehicle Tracking Controls */}
-      <div className="absolute top-4 right-4 flex flex-col gap-3 z-[1002] font-lcd">
-        <div className="bg-industrial-panel/90 border border-lcd-green/30 text-lcd-green p-3 text-xs uppercase tracking-widest shadow-lg backdrop-blur-sm">
-          <div className="flex items-center gap-2 mb-1 opacity-50 text-[9px]">
-            <Activity className="h-3 w-3" />
-            <span>Telemetry_Stream</span>
-          </div>
-          <div className="flex justify-between items-center gap-8">
-            <span>Active Units:</span>
-            <span className="font-bold">{vehicles.length}</span>
-          </div>
-        </div>
-
-        <div className="bg-industrial-panel/90 border border-lcd-green/30 text-lcd-green p-3 text-xs uppercase tracking-widest shadow-lg backdrop-blur-sm">
-          <label className="cursor-pointer flex items-center gap-3 group">
-            <div className="relative w-4 h-4 border border-lcd-green flex items-center justify-center overflow-hidden">
-              <input 
-                type="checkbox" 
-                checked={showAllUnits} 
-                onChange={e => {}} // Handled by parent now
-                className="absolute opacity-0 w-full h-full cursor-pointer z-10" 
-              />
-              <div className={cn("absolute w-full h-full bg-lcd-green transition-all duration-200", showAllUnits ? "top-0" : "top-full")} />
-            </div>
-            <span className="group-hover:text-white transition-colors">Show All Units</span>
-          </label>
-        </div>
-
-        {selectedIds.size > 0 && (
-          <button
-            onClick={() => setSelectedIds(new Set())}
-            className="bg-red-500/10 border border-red-500/50 text-red-500 p-2 text-[10px] font-bold uppercase tracking-tighter hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2"
-          >
-            <Trash2 size={12} />
-            Clear Selection ({selectedIds.size})
-          </button>
-        )}
-      </div>
 
       {/* Viewport Crosshair */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-[1002] opacity-30 text-lcd-green">
@@ -260,6 +231,6 @@ const TrafficMap: React.FC<{
       </div>
     </section>
   );
-};
+});
 
 export default TrafficMap;

@@ -135,6 +135,7 @@ class ConnectionManager:
                 await self.broadcast_bytes_to_feed(feed_id, message)
             return
         
+        # OPTIMIZATION: Serialize once, send many.
         msg_str = json.dumps(message, cls=DateTimeEncoder) if isinstance(message, dict) else str(message)
         targets = list(self.feed_subscriptions[feed_id]) if feed_id else list(self.active_connections.keys())
         for cid in targets:

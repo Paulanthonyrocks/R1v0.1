@@ -144,22 +144,14 @@ class FeedManager:
         # Initialize shared values before starting pool
         self.initialize_shared_values()
         self._start_inference_pool()
-        # Decoupled Analytics Process - use ctx
-        self._analytics_input_queue = ctx.Queue(maxsize=1000)
-        self._analytics_output_queue = ctx.Queue(maxsize=1000)
-        self._analytics_process: Optional[Process] = None
-        self._analytics_stop_event = ctx.Event()
-        self._analytics_heartbeat = ctx.Value("d", time.time())
-        self._analytics_start_time = time.time()
-        self._dropped_analytics_count = 0
-        self._start_analytics_worker()
+# Analytics Process bypassed for efficiency
         self._initialize_available_feeds()
         # Register cleanup on exit
         atexit.register(self._atexit_cleanup)
         # Start background readers and watchdog
         self._broadcast_worker_task = asyncio.create_task(self._broadcast_worker())
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
-        self._analytics_reader_task = asyncio.create_task(self._read_analytics_results())
+        # self._analytics_reader_task = None
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         self._maintenance_task = asyncio.create_task(self._maintenance_loop())
         # Executor for blocking ReID calls
@@ -398,24 +390,7 @@ class FeedManager:
             if all(not p.is_alive() for p in self._inference_pool):
                 break
             await asyncio.sleep(0.1)
-    def _start_analytics_worker(self):
-        """Launches the dedicated analytics process."""
-        from app.core.analytics_worker import analytics_worker_process
-        logger.info("Starting Analytics Worker process.")
-        self._analytics_start_time = time.time()
-        self._analytics_process = self._mp_ctx.Process(
-            target=analytics_worker_process,
-            args=(
-                self.config,
-                self._analytics_input_queue,
-                self._analytics_output_queue,
-                self._analytics_stop_event,
-                self._analytics_heartbeat
-            ),
-            daemon=True,
-            name="AnalyticsWorker"
-        )
-        self._analytics_process.start()
+# _start_analytics_worker removed
     async def _stop_analytics_worker(self):
         """Gracefully stops the analytics process."""
         if self._analytics_process:
@@ -1061,10 +1036,10 @@ class FeedManager:
                                 analytics_extra[k] = val
                     analytics_item = (feed_id, frame_idx, timestamp, vehicles, None, None, metrics, analytics_extra)
                     try:
-                        self._analytics_input_queue.put_nowait(analytics_item)
-                    except queue.Full:
+                        await self._process_analytics_frame(feed_id, metrics, vehicles)
+                    except Exception as e:
+                        logger.error(f"Error processing analytics frame for {feed_id}: {e}")
                         self._dropped_analytics_count += 1
-                        # Drop analytics for this frame if backed up
                     # 2. Immediate Frame Distribution (For video subscribers)
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
@@ -1233,73 +1208,52 @@ class FeedManager:
             if isinstance(obj, np.ndarray): return obj.tolist()
             return str(obj)
         return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-    async def _read_analytics_results(self):
-        """Drains Analytics output and triggers UI broadcasts."""
-        logger.info("Analytics Result reader task started.")
-        while not self._stop_reader_flag:
-            try:
-                results_buffer = []
-                feed_ids_to_update = set()
-                try:
-                    for _ in range(100):
-                        results_buffer.append(self._analytics_output_queue.get_nowait())
-                except queue.Empty:
-                    pass
-                if not results_buffer:
-                    await asyncio.sleep(0.005) # Slower poll for analytics
-                else:
-                    for item in results_buffer:
-                        feed_id, feed_metrics, vehicles, lanes, lines = item
-                        entry = self.process_registry.get(feed_id)
-                        if not entry: continue
-                        # Update Status to RUNNING if starting
-                        if entry["status"] == FeedOperationalStatusEnum.STARTING:
-                            entry["status"] = FeedOperationalStatusEnum.RUNNING
-                            logger.info(f"Feed '{feed_id}' transitioned from STARTING to RUNNING.")
-                            feed_ids_to_update.add(feed_id)
-                        # Update Latest Metrics
-                        entry["latest_metrics"] = feed_metrics
-                        entry["last_frame_time"] = time.time()
-                        # FIX: Pass metrics to AnalyticsService for DB persistence
-                        if self._analytics_service:
-                            asyncio.create_task(self._analytics_service.process_feed_metrics(
-                                feed_id, feed_metrics, vehicles
-                            ))
-                        # Enrich metrics with coordinates from registry if missing
-                        if "latitude" not in feed_metrics:
-                            if "latitude" in entry:
-                                feed_metrics["latitude"] = entry["latitude"]
-                            elif entry.get("config_info"):
-                                feed_metrics["latitude"] = entry["config_info"].latitude
-                        if "longitude" not in feed_metrics:
-                            if "longitude" in entry:
-                                feed_metrics["longitude"] = entry["longitude"]
-                            elif entry.get("config_info"):
-                                feed_metrics["longitude"] = entry["config_info"].longitude
-                        # Enrich with global IDs before broadcast
-                        if vehicles and self._reid_manager:
-                            for v in vehicles:
-                                if "vehicle_id" in v:
-                                    gid = self._reid_manager.get_global_id(feed_id, v["vehicle_id"])
-                                    if gid:
-                                        v["global_vehicle_id"] = gid
-                        # Broadcast to UI (Throttled via task checking)
-                        prev_task = self._active_broadcast_tasks.get(feed_id)
-                        if prev_task is None or prev_task.done():
-                            # We use None for frame_bytes here as Analytics process doesn't handle video
-                            # The UI will receive metric/vehicle updates separate from frames (or we merge if needed)
-                            # Actually, UI prefers merged. But for now, we broadcast metrics separately.
-                            task = asyncio.create_task(self._broadcast_analytics_update(feed_id, feed_metrics, vehicles))
-                            self._active_broadcast_tasks[feed_id] = task
-                # Perform periodic broadcasts
-                await self._perform_broadcasts(feed_ids_to_update, False, False)
-                # [FIX] Call periodic tasks (KPIs, resource checks)
-                await self._handle_periodic_tasks()
-                await asyncio.sleep(0)
-            except Exception as e:
-                logger.error(f"Error in analytics reader loop: {e}", exc_info=True)
-                await asyncio.sleep(1.0)
-    async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+    async def _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+        \"\"\"Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker).\"\"\"
+        entry = self.process_registry.get(feed_id)
+        if not entry: return
+
+        # Update Status to RUNNING if starting
+        if entry[\"status\"] == FeedOperationalStatusEnum.STARTING:
+            entry[\"status\"] = FeedOperationalStatusEnum.RUNNING
+            logger.info(f\"Feed '{feed_id}' transitioned from STARTING to RUNNING.\")
+        
+        # Update Latest Metrics
+        entry[\"latest_metrics\"] = metrics
+        entry[\"last_frame_time\"] = time.time()
+
+        # Pass metrics to AnalyticsService for DB persistence
+        if self._analytics_service:
+            asyncio.create_task(self._analytics_service.process_feed_metrics(
+                feed_id, metrics, vehicles
+            ))
+
+        # Enrich metrics with coordinates from registry if missing
+        if \"latitude\" not in metrics:
+            if \"latitude\" in entry:
+                metrics[\"latitude\"] = entry[\"latitude\"]
+            elif entry.get(\"config_info\"):
+                metrics[\"latitude\"] = entry[\"config_info\"].latitude
+        if \"longitude\" not in metrics:
+            if \"longitude\" in entry:
+                metrics[\"longitude\"] = entry[\"longitude\"]
+            elif entry.get(\"config_info\"):
+                metrics[\"longitude\"] = entry[\"config_info\"].longitude
+
+        # Enrich with global IDs before broadcast
+        if vehicles and self._reid_manager:
+            for v in vehicles:
+                if \"vehicle_id\" in v:
+                    gid = self._reid_manager.get_global_id(feed_id, v[\"vehicle_id\"])
+                    if gid:
+                        v[\"global_vehicle_id\"] = gid
+
+        # Broadcast to UI (Throttled via task checking)
+        prev_task = self._active_broadcast_tasks.get(feed_id)
+        if prev_task is None or prev_task.done():
+            task = asyncio.create_task(self._broadcast_analytics_update(feed_id, metrics, vehicles))
+            self._active_broadcast_tasks[feed_id] = task
+
         """Broadcasts processed analytics data to subscribers."""
         # Note: UI expects specific format. We reuse parts of _broadcast_video_frame logic
         # but without the base64 frame data to save bandwidth.
@@ -1721,8 +1675,7 @@ class FeedManager:
         tasks = []
         if self._result_reader_task:
             tasks.append(self._result_reader_task)
-        if self._analytics_reader_task:
-            tasks.append(self._analytics_reader_task)
+        # pass
         if self._watchdog_task:
             tasks.append(self._watchdog_task)
         if self._maintenance_task:
