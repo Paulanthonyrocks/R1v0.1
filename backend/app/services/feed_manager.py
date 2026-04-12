@@ -145,6 +145,7 @@ class FeedManager:
         self.initialize_shared_values()
         self._start_inference_pool()
 # Analytics Process bypassed for efficiency
+        self._dropped_analytics_count = 0
         self._initialize_available_feeds()
         # Register cleanup on exit
         atexit.register(self._atexit_cleanup)
