@@ -1209,7 +1209,7 @@ class FeedManager:
             if isinstance(obj, np.ndarray): return obj.tolist()
             return str(obj)
         return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-        def _filter_vehicles_for_delta(self, feed_id: str, vehicles: List[Dict]) -> List[Dict]:
+    def _filter_vehicles_for_delta(self, feed_id: str, vehicles: List[Dict]) -> List[Dict]:
         """Filters vehicles using dead-reckoning to send only significant updates."""
         if not vehicles:
             return []
@@ -1248,7 +1248,7 @@ class FeedManager:
 
 
 
-        async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+    async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
         """Sends a specialized analytics update (Delta) to the UI for a specific feed."""
         try:
             now = time.time()
@@ -1267,7 +1267,7 @@ class FeedManager:
                 await self._connection_manager.broadcast_to_feed(feed_id, serialized)
         except Exception as e:
             logger.error(f"Error in _broadcast_analytics_update for {feed_id}: {e}")
- _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+    async def _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
         """Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker)."""
         entry = self.process_registry.get(feed_id)
         if not entry: return
@@ -1714,4 +1714,5 @@ class FeedManager:
             tasks.append(self._db_reader_task)
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
+
 
