@@ -20,7 +20,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; "
-            \"img-src 'self' data: blob: *.openstreetmap.org *.arcgisonline.com *.cartocdn.com unpkg.com; \"
+            "img-src 'self' data: blob: *.openstreetmap.org *.arcgisonline.com *.cartocdn.com unpkg.com; \"
             "connect-src 'self' wss: https://api.mapbox.com https://tile.openstreetmap.org; "
             "font-src 'self' data:; "
             "frame-ancestors 'none';"
