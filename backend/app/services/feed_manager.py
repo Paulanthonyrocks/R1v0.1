@@ -1209,27 +1209,65 @@ class FeedManager:
             if isinstance(obj, np.ndarray): return obj.tolist()
             return str(obj)
         return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-    async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
-        """Sends a specialized analytics update to the UI for a specific feed."""
+        def _filter_vehicles_for_delta(self, feed_id: str, vehicles: List[Dict]) -> List[Dict]:
+        """Filters vehicles using dead-reckoning to send only significant updates."""
+        if not vehicles:
+            return []
+        
+        if feed_id not in self._last_sent_telemetry:
+            self._last_sent_telemetry[feed_id] = {}
+        
+        last_sent = self._last_sent_telemetry[feed_id]
+        deltas = []
+        now = time.time()
+        SPATIAL_THRESHOLD_SQ = 3.0**2
+        
+        for v in vehicles:
+            vid = v.get("vehicle_id")
+            if vid is None: continue
+            
+            # Current state
+            cx, cy = v.get("centroid", (0, 0))
+            vx, vy = v.get("velocity", (0, 0))
+            
+            if vid not in last_sent:
+                deltas.append(v)
+            else:
+                lx, ly, lvx, lvy, lts = last_sent[vid]
+                dt = now - lts
+                pred_x = lx + (lvx * dt)
+                pred_y = ly + (lvy * dt)
+                err_sq = (cx - pred_x)**2 + (cy - pred_y)**2
+                
+                if err_sq > SPATIAL_THRESHOLD_SQ or abs(vx - lvx) > 0.5 or abs(vy - lvy) > 0.5:
+                    deltas.append(v)
+            
+            last_sent[vid] = (cx, cy, vx, vy, now)
+            
+        return deltas
+
+
+
+        async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+        """Sends a specialized analytics update (Delta) to the UI for a specific feed."""
         try:
             now = time.time()
+            # APPLY DELTA FILTERING
+            delta_vehicles = self._filter_vehicles_for_delta(feed_id, vehicles)
+            
             payload = {
-                "t": "analytics_update", # Using short key 't' for type to match VIDEO_FRAME pattern
+                "t": "analytics_delta", # Changed type to 'analytics_delta'
                 "f": feed_id,
                 "m": metrics,
-                "v": vehicles,
+                "v": delta_vehicles,
                 "ts": now
             }
-            # Use the existing serialization helper
             serialized = self._serialize_msgpack(payload)
             if serialized:
-                # Broadcast to all clients subscribed to this feed
                 await self._connection_manager.broadcast_to_feed(feed_id, serialized)
         except Exception as e:
             logger.error(f"Error in _broadcast_analytics_update for {feed_id}: {e}")
-
-
-    async def _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+ _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
         """Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker)."""
         entry = self.process_registry.get(feed_id)
         if not entry: return

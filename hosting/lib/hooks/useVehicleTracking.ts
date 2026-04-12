@@ -8,24 +8,30 @@ interface VehicleStateMap {
 export const useVehicleTracking = () => {
     const vehicleStateRef = useRef<VehicleStateMap>({});
 
-    const mergeVehicleUpdates = useCallback((updates: VehicleData[]) => {
+    const mergeVehicleUpdates = useCallback((updates: any[]) => {
         const currentParams = vehicleStateRef.current;
-        const newFrameIds = new Set<string>();
+        const now = Date.now();
         
         updates.forEach(update => {
             const vid = update.vehicle_id;
-            newFrameIds.add(vid);
+            if (!vid) return;
 
             const existing = currentParams[vid];
-            if (existing) {
-                currentParams[vid] = { ...existing, ...update };
+            if (update.d === 1) {
+                // Heartbeat update: just refresh timestamp
+                if (existing) {
+                    currentParams[vid] = { ...existing, last_update: now };
+                }
             } else {
-                currentParams[vid] = update;
+                // Full or Partial update
+                currentParams[vid] = existing ? { ...existing, ...update, last_update: now } : { ...update, last_update: now };
             }
         });
 
+        // TTL Cleanup: Remove vehicles that haven't been updated in 2 seconds
         Object.keys(currentParams).forEach(vid => {
-            if (!newFrameIds.has(vid)) {
+            const v = currentParams[vid];
+            if (v && v.last_update && (now - v.last_update > 2000)) {
                 delete currentParams[vid];
             }
         });

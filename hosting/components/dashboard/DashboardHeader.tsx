@@ -48,13 +48,13 @@ const DashboardHeader: React.FC = () => {
 
     // Only show these in the main bar to reduce clutter
     const primaryNavItems = allNavItems.filter(item => 
-        ['/dashboard', '/dashboard/map', '/dashboard/analytics', '/surveillance', '/anomalies', '/logs'].includes(item.href)
+        ['/dashboard', '/dashboard/map', '/anomalies', '/logs'].includes(item.href)
     );
 
     return (
-        <header className="flex flex-col w-full sticky top-0 z-[100] font-lcd select-none bg-industrial-bg/60 backdrop-blur-xl">
+        <header className="flex flex-col w-full sticky top-0 z-[100] font-lcd select-none bg-industrial-bg/30 backdrop-blur-3xl">
             {/* TOP BAR: System Health Ticker */}
-            <div className="bg-lcd-green text-industrial-bg px-3 py-0.5 flex items-center justify-between text-[9px] font-bold uppercase tracking-widest border-b border-industrial-bg">
+            <div className="bg-lcd-green text-industrial-bg px-6 py-2 flex items-center justify-between text-[9px] font-bold uppercase tracking-widest border-b border-industrial-bg">
                 <div className="flex items-center gap-6 overflow-hidden">
                     <div className="flex items-center gap-2 whitespace-nowrap">
                         <ShieldCheck size={10} className="animate-pulse" />
@@ -80,7 +80,7 @@ const DashboardHeader: React.FC = () => {
             </div>
 
             {/* MAIN HEADER BAR */}
-            <div className="text-lcd-green flex items-center justify-between px-4 py-3 border-b-2 border-lcd-green shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative">
+            <div className="text-lcd-green flex items-center justify-between px-10 py-6 border-b-2 border-lcd-green shadow-[0_10px_30px_rgba(0,0,0,0.8)] relative">
                 
                 {/* LOGO SECTION: Refined Tactical Module */}
                 <div className="flex items-center gap-8 z-10">
@@ -88,7 +88,7 @@ const DashboardHeader: React.FC = () => {
                         <DropdownMenuTrigger asChild>
                             <div 
                                 id="mobile-menu-trigger"
-                                className="group relative flex items-center space-x-3 cursor-pointer px-4 py-1.5 border border-lcd-green/60 bg-lcd-green/10 hover:bg-lcd-green hover:text-industrial-bg transition-all duration-300"
+                                className="group relative flex items-center space-x-3 cursor-pointer px-6 py-2.5 border border-lcd-green/60 bg-lcd-green/10 hover:bg-lcd-green hover:text-industrial-bg transition-all duration-300"
                             >
                                 <div className="absolute top-0 left-0 w-1 h-1 border-t border-l border-lcd-green/60" />
                                 <div className="absolute top-0 right-0 w-1 h-1 border-t border-r border-lcd-green/60" />
@@ -121,7 +121,7 @@ const DashboardHeader: React.FC = () => {
                 </div>
                 
                 {/* NAVIGATION: Simplified and Spaced */}
-                <nav className="hidden xl:flex items-center h-full gap-4 z-10">
+                <nav className="hidden xl:flex items-center h-full gap-10 z-10">
                     {primaryNavItems.map((item) => (
                         <Link 
                             key={item.href} 
@@ -140,8 +140,8 @@ const DashboardHeader: React.FC = () => {
                 </nav>
 
                 {/* STATUS POD: Cleaned Frame */}
-                <div className="flex items-center gap-4 z-10">
-                    <div className="relative group hidden lg:flex items-center gap-6 px-4 py-1.5 bg-black/30 border border-lcd-green/60 shadow-[inset_0_0_10px_rgba(0,0,0,0.5)]">
+                <div className="flex items-center gap-10 z-10">
+                    <div className="relative group hidden lg:flex items-center gap-8 px-6 py-2 bg-black/30 border border-lcd-green/60 shadow-[inset_0_0_10px_rgba(0,0,0,0.5)]">
                         <div className="absolute top-0 left-0 w-1 h-1 border-t border-l border-lcd-green/60" />
                         <div className="absolute top-0 right-0 w-1 h-1 border-t border-r border-lcd-green/60" />
                         <div className="absolute bottom-0 left-0 w-1 h-1 border-b border-l border-lcd-green/60" />

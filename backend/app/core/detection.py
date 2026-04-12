@@ -37,8 +37,26 @@ class DetectionEngine:
             if preloaded_model:
                 self.model = preloaded_model
                 return
-            self.model = YOLO(self.model_path)
-            if self.model_path.endswith(".pt"): self.model.to(self.device)
+            
+            # Use YOLO to load the model
+            from ultralytics import YOLO
+            model = YOLO(self.model_path)
+            
+            # Optimization: Convert to ONNX if it's a PyTorch model
+            if self.model_path.endswith('.pt'):
+                onnx_path = self.model_path.replace('.pt', '.onnx')
+                if not os.path.exists(onnx_path):
+                    logger.info(f"Exporting {self.model_path} to ONNX for CPU acceleration...")
+                    model.export(format='onnx', imgsz=self.imgsz)
+                
+                # Reload using the ONNX file for faster inference
+                self.model = YOLO(onnx_path)
+                logger.info(f"Loaded ONNX accelerated model from {onnx_path}")
+            else:
+                self.model = model
+                
+            if hasattr(self.model, 'to'):
+                self.model.to(self.device)
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
