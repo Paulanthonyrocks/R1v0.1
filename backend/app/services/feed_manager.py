@@ -155,6 +155,7 @@ class FeedManager:
         # self._analytics_reader_task = None
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         self._maintenance_task = asyncio.create_task(self._maintenance_loop())
+        self._periodic_tasks_task = asyncio.create_task(self._periodic_tasks_loop())
         # Executor for blocking ReID calls
         self._reid_executor = ThreadPoolExecutor(max_workers=4)
         self._last_vehicle_db_write: Dict[Tuple[str, int], float] = {}
@@ -1418,6 +1419,19 @@ class FeedManager:
     # _broadcast_video_frame removed during pipeline optimization.
     # Its logic is consolidated into _serialize_broadcast_payload + broadcast_worker.
     # See _serialize_broadcast_payload and _broadcast_worker for the unified path.
+
+    async def _periodic_tasks_loop(self):
+        """Loop to trigger periodic KPI updates and resource checks."""
+        logger.info("Periodic tasks loop started.")
+        while not self._stop_reader_flag:
+            try:
+                await self._handle_periodic_tasks()
+                await asyncio.sleep(1.0) # Run once per second to check thresholds
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic tasks loop: {e}", exc_info=True)
+                await asyncio.sleep(5.0)
     async def _maintenance_loop(self):
         """Periodically prunes old database records and snapshot files to reclaim space."""
         logger.info("Maintenance loop started.")
@@ -1692,6 +1706,8 @@ class FeedManager:
                 if not self.frame_subscriber_queues[feed_id]:
                     del self.frame_subscriber_queues[feed_id]
     async def shutdown(self):
+        if hasattr(self, '_periodic_tasks_task') and self._periodic_tasks_task:
+            self._periodic_tasks_task.cancel()
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
         await self.stop_processing()
@@ -1714,6 +1730,7 @@ class FeedManager:
             tasks.append(self._db_reader_task)
         if tasks:
             await asyncio.wait(tasks, timeout=5.0)
+
 
 
 
