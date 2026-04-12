@@ -176,7 +176,7 @@ class AnalyticsService:
         self._feed_manager = feed_manager
         logger.info("FeedManager set in AnalyticsService.")
 
-        async def predict_incident_likelihood(
+    async def predict_incident_likelihood(
         self, location: Dict[str, Any], prediction_time: datetime
     ) -> Dict[str, Any]:
         """
@@ -227,18 +227,6 @@ class AnalyticsService:
         return self._traffic_predictor._rule_based_prediction(
             location, prediction_time, recent_traffic_data
         )
-async def initialize_prediction_log_table(self):
-        if not self._prediction_log_table_initialized:
-            try:
-                async with self._db_manager.async_engine.begin() as conn:
-                    await conn.run_sync(PredictionLogModel.metadata.create_all)
-                self._prediction_log_table_initialized = True
-                logger.info("PredictionLog table initialized/checked successfully.")
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize PredictionLog table: {e}", exc_info=True
-                )
-                raise
 
     async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]] = None):
         """
