@@ -21,27 +21,28 @@ const fixLeafletIcons = () => {
   });
 };
 
-const LeafletMap: React.FC = () => {
+const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> = ({ activeLayer }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const wsClient = useWebSocket();
-  
+
   // Layer Groups
   const feedsLayer = useRef<L.LayerGroup>(L.layerGroup());
   const congestionLayer = useRef<L.LayerGroup>(L.layerGroup());
   const incidentsLayer = useRef<L.LayerGroup>(L.layerGroup());
   const roadNetworkLayer = useRef<L.LayerGroup>(L.layerGroup());
   const signalsLayer = useRef<L.LayerGroup>(L.layerGroup());
-  
-  const markersRef = useRef<Record<string, L.Marker>>({});
+
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const feedMarkersRef = useRef<Record<string, L.Marker>>({});
+  const congestionMarkersRef = useRef<Record<string, L.Marker>>({});
   const segmentRef = useRef<Record<string, L.Polyline>>({});
   const incidentMarkersRef = useRef<Record<string, L.Marker>>({});
   const signalMarkersRef = useRef<Record<string, L.Marker>>({});
 
   const { feeds, nodeCongestionData, alerts, sendMessage } = useRealtimeUpdates();
   const router = useRouter();
-  
+
   const [activeLayers, setActiveLayers] = useState({
     feeds: true,
     congestion: true,
@@ -64,19 +65,21 @@ const LeafletMap: React.FC = () => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
+  // FIX 1: Map initialization is now a top-level useEffect, not nested.
+  // FIX 2: unsubscribe is declared before the cleanup return so it's in scope.
+  // FIX 3: Dependency array [wsClient] is correctly placed on this effect.
   useEffect(() => {
-    fixLeafletIcons();
+    if (!mapRef.current || leafletMap.current) return;
 
-    if (!mapRef.current) return;
-    if (leafletMap.current) return;
+    let map: L.Map;
+    let resizeObserver: ResizeObserver | null = null;
 
     try {
-      // Define world bounds to prevent horizontal repetition
       const corner1 = L.latLng(-90, -180);
       const corner2 = L.latLng(90, 180);
       const bounds = L.latLngBounds(corner1, corner2);
 
-      const map = L.map(mapRef.current, {
+      map = L.map(mapRef.current, {
         center: [34.02, -118.02],
         zoom: 13,
         minZoom: 2,
@@ -85,11 +88,6 @@ const LeafletMap: React.FC = () => {
         zoomControl: false,
         attributionControl: false,
       });
-
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-        maxZoom: 19,
-      }).addTo(map);
 
       L.marker([34.02, -118.02]).addTo(map).bindPopup('CENTER POINT');
 
@@ -100,38 +98,102 @@ const LeafletMap: React.FC = () => {
       signalsLayer.current.addTo(map);
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
-      
       leafletMap.current = map;
 
-      // Important: Force Leaflet to recalculate size after the DOM has settled
-      setTimeout(() => {
+      // Initialize Tile Layer immediately
+      const layers: Record<string, { url: string; attribution: string }> = {
+        vector: {
+          url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          attribution: '&copy; OpenStreetMap contributors',
+        },
+        satellite: {
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, iBird, USDA, USGS, ASTER, World Imaging with imagery rights',
+        },
+        thermal: {
+          url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+          attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        },
+      };
+      const selected = layers[activeLayer];
+      tileLayerRef.current = L.tileLayer(selected.url, {
+        attribution: selected.attribution,
+        maxZoom: 19,
+        crossOrigin: true
+      }).addTo(map);
+
+      resizeObserver = new ResizeObserver(() => {
         map.invalidateSize();
-      }, 400);
+      });
+      resizeObserver.observe(mapRef.current!);
+      
+      // Initial force resize
+      setTimeout(() => map.invalidateSize(), 100);
 
     } catch (error) {
       console.error("Leaflet initialization failed:", error);
     }
 
-    // Separate subscription logic to avoid re-initializing map
     const unsubscribe = wsClient.subscribe(WebSocketMessageType.SIGNAL_UPDATE, (data: any) => {
-        if (data?.signal_data) {
-            setSignalStates(prev => ({
-                ...prev,
-                [data.signal_data.signal_id]: data.signal_data
-            }));
-        }
+      if (data?.signal_data) {
+        setSignalStates(prev => ({
+          ...prev,
+          [data.signal_data.signal_id]: data.signal_data
+        }));
+      }
     });
 
     return () => {
-        unsubscribe();
-        if (leafletMap.current) {
-            leafletMap.current.remove();
-            leafletMap.current = null;
-        }
+      unsubscribe();
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      if (leafletMap.current) {
+        leafletMap.current.remove();
+        leafletMap.current = null;
+      }
     };
-  }, [wsClient]);
+  }, [wsClient]); // Note: activeLayer is NOT here to prevent map recreation on layer change
 
-  // Sync layer visibility
+  useEffect(() => {
+    if (!leafletMap.current || !mapRef.current) return;
+
+    const layers: Record<string, { url: string; attribution: string }> = {
+      vector: {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: '&copy; OpenStreetMap contributors',
+      },
+      satellite: {
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, iBird, USDA, USGS, ASTER, World Imaging with imagery rights',
+      },
+      thermal: {
+        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      },
+    };
+
+    const selected = layers[activeLayer];
+
+    if (tileLayerRef.current) {
+      tileLayerRef.current.remove();
+    }
+
+    try {
+      tileLayerRef.current = L.tileLayer(selected.url, {
+        attribution: selected.attribution,
+        maxZoom: 19,
+        crossOrigin: true
+      }).addTo(leafletMap.current);
+      
+      // Force a resize to ensure tiles are requested and rendered correctly
+      setTimeout(() => {
+        leafletMap.current?.invalidateSize();
+      }, 100);
+    } catch (e) {
+      console.warn("Failed to update tile layer:", e);
+    }
+  }, [activeLayer]);
   useEffect(() => {
     if (!leafletMap.current) return;
     activeLayers.feeds ? feedsLayer.current.addTo(leafletMap.current) : feedsLayer.current.remove();
@@ -146,14 +208,13 @@ const LeafletMap: React.FC = () => {
     if (!leafletMap.current || !feeds) return;
 
     feeds.forEach(feed => {
-      // Use config coords if available, otherwise fallback to top-level
       const lat = feed.config?.latitude || feed.latitude;
       const lng = feed.config?.longitude || feed.longitude;
 
       if (lat && lng) {
         const id = feed.feed_id;
         const statusColor = feed.status === 'running' ? '#00ff41' : feed.status === 'error' ? '#ff3e3e' : '#facc15';
-        
+
         const icon = L.divIcon({
           className: 'feed-marker',
           html: `<div style="
@@ -205,47 +266,42 @@ const LeafletMap: React.FC = () => {
         className: 'congestion-node',
         html: `<div style="width: ${size}px; height: ${size}px; background-color: ${color}; border-radius: 50%; border: 2px solid rgba(0,0,0,0.5); box-shadow: 0 0 10px ${color}; transition: all 0.5s ease;"></div>`,
         iconSize: [size, size],
-        iconAnchor: [size/2, size/2]
+        iconAnchor: [size / 2, size / 2]
       });
 
-      if (markersRef.current[id]) {
-        markersRef.current[id].setLatLng([lat, lon]);
-        markersRef.current[id].setIcon(icon);
+      if (congestionMarkersRef.current[id]) {
+        congestionMarkersRef.current[id].setLatLng([lat, lon]);
+        congestionMarkersRef.current[id].setIcon(icon);
       } else {
         const marker = L.marker([lat, lon], { icon }).addTo(congestionLayer.current);
         marker.on('click', () => setSelectedNode(node));
-        markersRef.current[id] = marker;
+        congestionMarkersRef.current[id] = marker;
       }
 
-      // Draw Signal Markers if applicable
       if (signal_id) {
-          const state = signalStates[signal_id];
-          const phaseColor = state?.current_phase?.includes('GREEN') ? '#00ff41' : 
-                            state?.current_phase?.includes('YELLOW') ? '#facc15' : 
-                            state?.current_phase?.includes('RED') ? '#ff3e3e' : '#555';
-          
-          const signalIcon = L.divIcon({
-              className: 'signal-marker',
-              html: `<div style="display: flex; flex-direction: column; gap: 2px; padding: 3px; background: #222; border: 1px solid #444; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.5);">
-                <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('RED') ? '#ff3e3e' : '#111'};"></div>
-                <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('YELLOW') ? '#facc15' : '#111'};"></div>
-                <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('GREEN') ? '#00ff41' : '#111'};"></div>
-              </div>`,
-              iconSize: [16, 32],
-              iconAnchor: [-10, 16] // Offset from node
-          });
+        const state = signalStates[signal_id];
+        const signalIcon = L.divIcon({
+          className: 'signal-marker',
+          html: `<div style="display: flex; flex-direction: column; gap: 2px; padding: 3px; background: #222; border: 1px solid #444; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.5);">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('RED') ? '#ff3e3e' : '#111'};"></div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('YELLOW') ? '#facc15' : '#111'};"></div>
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${state?.current_phase?.includes('GREEN') ? '#00ff41' : '#111'};"></div>
+          </div>`,
+          iconSize: [16, 32],
+          iconAnchor: [-10, 16]
+        });
 
-          if (signalMarkersRef.current[signal_id]) {
-              signalMarkersRef.current[signal_id].setLatLng([lat, lon]);
-              signalMarkersRef.current[signal_id].setIcon(signalIcon);
-          } else {
-              const marker = L.marker([lat, lon], { icon: signalIcon }).addTo(signalsLayer.current);
-              signalMarkersRef.current[signal_id] = marker;
-          }
+        if (signalMarkersRef.current[signal_id]) {
+          signalMarkersRef.current[signal_id].setLatLng([lat, lon]);
+          signalMarkersRef.current[signal_id].setIcon(signalIcon);
+        } else {
+          const marker = L.marker([lat, lon], { icon: signalIcon }).addTo(signalsLayer.current);
+          signalMarkersRef.current[signal_id] = marker;
+        }
       }
     });
 
-    // Draw road segments (same grid logic as before)
+    // Draw road segments
     const nodeMap = new Map();
     nodeCongestionData.forEach(n => nodeMap.set(n.id, n));
     nodeCongestionData.forEach(u => {
@@ -258,8 +314,14 @@ const LeafletMap: React.FC = () => {
             const edgeId = `${u.id}-${v.id}`;
             const avgScore = ((u.congestion_score || 0) + (v.congestion_score || 0)) / 2;
             const color = avgScore > 0.7 ? '#ff3e3e' : avgScore > 0.4 ? '#facc15' : '#00ff41';
-            if (segmentRef.current[edgeId]) segmentRef.current[edgeId].setStyle({ color, weight: 4 + avgScore * 6 });
-            else segmentRef.current[edgeId] = L.polyline([[u.latitude, u.longitude], [v.latitude, v.longitude]], { color, weight: 4, opacity: 0.6 }).addTo(roadNetworkLayer.current);
+            if (segmentRef.current[edgeId]) {
+              segmentRef.current[edgeId].setStyle({ color, weight: 4 + avgScore * 6 });
+            } else {
+              segmentRef.current[edgeId] = L.polyline(
+                [[u.latitude, u.longitude], [v.latitude, v.longitude]],
+                { color, weight: 4, opacity: 0.6 }
+              ).addTo(roadNetworkLayer.current);
+            }
           }
         });
       }
@@ -267,14 +329,13 @@ const LeafletMap: React.FC = () => {
   }, [nodeCongestionData, signalStates]);
 
   const handleSetPhase = (signalId: string, phase: string) => {
-      setIsChangingPhase(true);
-      sendMessage(WebSocketMessageType.SET_SIGNAL_PHASE, {
-          signal_id: signalId,
-          phase: phase,
-          duration_seconds: 30
-      });
-      // Visual feedback
-      setTimeout(() => setIsChangingPhase(false), 1000);
+    setIsChangingPhase(true);
+    sendMessage(WebSocketMessageType.SET_SIGNAL_PHASE, {
+      signal_id: signalId,
+      phase: phase,
+      duration_seconds: 30
+    });
+    setTimeout(() => setIsChangingPhase(false), 1000);
   };
 
   const handleSearch = (query: string) => {
@@ -287,33 +348,36 @@ const LeafletMap: React.FC = () => {
     const lowerQuery = query.toLowerCase();
     const results: SearchResult[] = [];
 
-    // Search Feeds
     if (feeds) {
       feeds.forEach(feed => {
-        if ((feed.name || feed.feed_id).toLowerCase().includes(lowerQuery) || 
-            feed.source.toLowerCase().includes(lowerQuery)) {
+        if (
+          (feed.name || feed.feed_id).toLowerCase().includes(lowerQuery) ||
+          feed.source.toLowerCase().includes(lowerQuery)
+        ) {
           results.push({ type: 'feed', data: feed, label: feed.name || feed.feed_id });
         }
       });
     }
 
-    // Search Nodes
     if (nodeCongestionData) {
       nodeCongestionData.forEach(node => {
-        if (node.id.toLowerCase().includes(lowerQuery) || 
-            node.name.toLowerCase().includes(lowerQuery)) {
+        // FIX 4: Guard against node.name being undefined before calling .toLowerCase()
+        if (
+          node.id.toLowerCase().includes(lowerQuery) ||
+          node.name?.toLowerCase().includes(lowerQuery)
+        ) {
           results.push({ type: 'node', data: node, label: `NODE: ${node.id}` });
         }
       });
     }
 
-    setSearchResults(results.slice(0, 10)); // Limit to 10 results
+    setSearchResults(results.slice(0, 10));
   };
 
   const selectResult = (result: any) => {
     setSearchQuery(result.label);
     setSearchResults([]);
-    
+
     let lat, lng;
     if (result.type === 'feed') {
       lat = result.data.config?.latitude || result.data.latitude;
@@ -330,27 +394,26 @@ const LeafletMap: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full absolute inset-0 z-0 bg-[#0a0a0a] overflow-hidden">
-      <div ref={mapRef} className="absolute inset-0 z-10 w-full h-full" />
-      
+    <div className="relative w-full h-full bg-[#0a0a0a] overflow-hidden">
+      <div ref={mapRef} className="absolute inset-0 z-0" />
+
       {/* Search Bar */}
       <div className="absolute top-4 left-4 z-[1002] w-72 font-mono">
         <div className="relative group">
           <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
             <Search className="w-4 h-4 text-[#00ff41]/50 group-focus-within:text-[#00ff41]" />
           </div>
-          <input 
-            type="text" 
-            className="block w-full p-2 pl-10 text-xs text-[#00ff41] bg-black/80 border border-[#00ff41]/30 focus:ring-1 focus:ring-[#00ff41] focus:border-[#00ff41] placeholder-[#00ff41]/30 backdrop-blur-sm" 
-            placeholder="QUERY FEED OR NODE ID..." 
+          <input
+            type="text"
+            className="block w-full p-2 pl-10 text-xs text-[#00ff41] bg-black/80 border border-[#00ff41]/30 focus:ring-1 focus:ring-[#00ff41] focus:border-[#00ff41] placeholder-[#00ff41]/30 backdrop-blur-sm"
+            placeholder="QUERY FEED OR NODE ID..."
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
             onFocus={() => setIsSearching(true)}
             onBlur={() => setTimeout(() => setIsSearching(false), 200)}
           />
         </div>
-        
-        {/* Search Results Dropdown */}
+
         {searchResults.length > 0 && isSearching && (
           <div className="absolute mt-1 w-full bg-black/95 border border-[#00ff41]/30 shadow-xl max-h-60 overflow-y-auto">
             {searchResults.map((result, idx) => (
@@ -388,12 +451,12 @@ const LeafletMap: React.FC = () => {
               { id: 'signals', icon: Zap, label: 'Signal Controllers' },
               { id: 'incidents', icon: AlertTriangle, label: 'Incident Events' }
             ].map(layer => (
-                <label key={layer.id} className="flex items-center gap-3 cursor-pointer group">
-                  <input type="checkbox" checked={(activeLayers as any)[layer.id]} onChange={() => setActiveLayers(prev => ({ ...prev, [layer.id]: !(prev as any)[layer.id] }))} className="hidden" />
-                  <div className={cn("w-3 h-3 border border-[#00ff41]/50", (activeLayers as any)[layer.id] && "bg-[#00ff41]")}></div>
-                  <layer.icon size={14} className="opacity-60" />
-                  <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
-                </label>
+              <label key={layer.id} className="flex items-center gap-3 cursor-pointer group">
+                <input type="checkbox" checked={(activeLayers as any)[layer.id]} onChange={() => setActiveLayers(prev => ({ ...prev, [layer.id]: !(prev as any)[layer.id] }))} className="hidden" />
+                <div className={cn("w-3 h-3 border border-[#00ff41]/50", (activeLayers as any)[layer.id] && "bg-[#00ff41]")}></div>
+                <layer.icon size={14} className="opacity-60" />
+                <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
+              </label>
             ))}
           </div>
         )}
@@ -409,57 +472,57 @@ const LeafletMap: React.FC = () => {
             </div>
             <X size={16} className="cursor-pointer hover:text-white" onClick={() => setSelectedNode(null)} />
           </div>
-          
+
           <div className="space-y-4">
             <div className="bg-[#00ff41]/5 p-3 border border-[#00ff41]/20 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-[#00ff41]"></div>
-                <div className="flex justify-between items-center text-xs mb-1">
-                  <span className="opacity-60 uppercase font-bold">Saturation</span>
-                  <span className={cn("font-bold", selectedNode.congestion_score > 0.7 ? "text-[#ff3e3e]" : "text-[#00ff41]")}>
-                    {(selectedNode.congestion_score * 100).toFixed(1)}%
-                  </span>
-                </div>
-                <div className="w-full bg-[#00ff41]/10 h-1 rounded-full overflow-hidden">
-                  <div className="bg-[#00ff41] h-full transition-all duration-1000" style={{ width: `${selectedNode.congestion_score * 100}%` }} />
-                </div>
+              <div className="absolute top-0 left-0 w-1 h-full bg-[#00ff41]"></div>
+              <div className="flex justify-between items-center text-xs mb-1">
+                <span className="opacity-60 uppercase font-bold">Saturation</span>
+                <span className={cn("font-bold", selectedNode.congestion_score > 0.7 ? "text-[#ff3e3e]" : "text-[#00ff41]")}>
+                  {(selectedNode.congestion_score * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="w-full bg-[#00ff41]/10 h-1 rounded-full overflow-hidden">
+                <div className="bg-[#00ff41] h-full transition-all duration-1000" style={{ width: `${selectedNode.congestion_score * 100}%` }} />
+              </div>
             </div>
 
             {selectedNode.signal_id ? (
-                <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-[#00ff41]/80">
-                        <Zap size={12} /> Signal Controller: {selectedNode.signal_id}
-                    </div>
-                    <div className="grid grid-cols-3 gap-1">
-                        {[
-                            { phase: 'GREEN', color: 'bg-[#00ff41]/20 border-[#00ff41] text-[#00ff41]' },
-                            { phase: 'YELLOW', color: 'bg-[#facc15]/20 border-[#facc15] text-[#facc15]' },
-                            { phase: 'RED', color: 'bg-[#ff3e3e]/20 border-[#ff3e3e] text-[#ff3e3e]' }
-                        ].map(p => (
-                            <button 
-                                key={p.phase}
-                                disabled={isChangingPhase}
-                                onClick={() => handleSetPhase(selectedNode.signal_id, p.phase)}
-                                className={cn(
-                                    "text-[9px] py-1 border transition-all hover:scale-105 active:scale-95",
-                                    p.color,
-                                    signalStates[selectedNode.signal_id]?.current_phase?.includes(p.phase) && "ring-2 ring-white ring-inset border-transparent",
-                                    isChangingPhase && "opacity-50 cursor-not-allowed"
-                                )}
-                            >
-                                {isChangingPhase && signalStates[selectedNode.signal_id]?.current_phase?.includes(p.phase) ? (
-                                    <Loader2 size={10} className="animate-spin mx-auto" />
-                                ) : p.phase}
-                            </button>
-                        ))}
-                    </div>
-                    <p className="text-[8px] opacity-40 text-center italic">Phase modification will affect node saturation in real-time.</p>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-[#00ff41]/80">
+                  <Zap size={12} /> Signal Controller: {selectedNode.signal_id}
                 </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {[
+                    { phase: 'GREEN', color: 'bg-[#00ff41]/20 border-[#00ff41] text-[#00ff41]' },
+                    { phase: 'YELLOW', color: 'bg-[#facc15]/20 border-[#facc15] text-[#facc15]' },
+                    { phase: 'RED', color: 'bg-[#ff3e3e]/20 border-[#ff3e3e] text-[#ff3e3e]' }
+                  ].map(p => (
+                    <button
+                      key={p.phase}
+                      disabled={isChangingPhase}
+                      onClick={() => handleSetPhase(selectedNode.signal_id, p.phase)}
+                      className={cn(
+                        "text-[9px] py-1 border transition-all hover:scale-105 active:scale-95",
+                        p.color,
+                        signalStates[selectedNode.signal_id]?.current_phase?.includes(p.phase) && "ring-2 ring-white ring-inset border-transparent",
+                        isChangingPhase && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      {isChangingPhase && signalStates[selectedNode.signal_id]?.current_phase?.includes(p.phase) ? (
+                        <Loader2 size={10} className="animate-spin mx-auto" />
+                      ) : p.phase}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[8px] opacity-40 text-center italic">Phase modification will affect node saturation in real-time.</p>
+              </div>
             ) : (
-                <div className="text-[9px] opacity-40 italic border border-white/5 p-2 bg-white/5 text-center">
-                    No active controller detected at this junction.
-                </div>
+              <div className="text-[9px] opacity-40 italic border border-white/5 p-2 bg-white/5 text-center">
+                No active controller detected at this junction.
+              </div>
             )}
-            
+
             <div className="grid grid-cols-2 gap-2 text-[10px]">
               <div className="bg-black border border-[#00ff41]/20 p-2">
                 <p className="opacity-40 uppercase text-[8px]">Avg Velocity</p>
@@ -473,41 +536,41 @@ const LeafletMap: React.FC = () => {
           </div>
         </div>
       )}
-      
+
       {/* Legend */}
       <div className="absolute bottom-6 left-6 z-[1001] bg-black/90 border border-[#00ff41]/30 p-3 font-mono text-[9px] text-[#00ff41] flex flex-col gap-2 shadow-2xl backdrop-blur-md">
         <div className="flex items-center gap-2 mb-1 border-b border-[#00ff41]/20 pb-1 uppercase font-bold opacity-60">
           <span>Map Legend</span>
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[#ff3e3e] shadow-[0_0_5px_#ff3e3e]"></div>
-              <span>CRITICAL</span>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-[#ff3e3e] shadow-[0_0_5px_#ff3e3e]"></div>
+            <span>CRITICAL</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-[#00ff41] shadow-[0_0_5px_#00ff41]"></div>
+            <span>OPTIMAL</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border border-[#ff3e3e] rotate-45 flex items-center justify-center text-[7px] font-bold text-[#ff3e3e]">!</div>
+            <span>INCIDENT</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-[1px]">
+              <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-full"></div>
+              <div className="w-1.5 h-1.5 bg-[#ff3e3e] rounded-full"></div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[#00ff41] shadow-[0_0_5px_#00ff41]"></div>
-              <span>OPTIMAL</span>
+            <span>SIGNAL</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border border-[#00ff41] rounded-sm flex items-center justify-center text-[7px] font-bold text-[#00ff41]">
+              <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-sm"></div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 border border-[#ff3e3e] rotate-45 flex items-center justify-center text-[7px] font-bold text-[#ff3e3e]">!</div>
-              <span>INCIDENT</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col gap-[1px]">
-                  <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-full"></div>
-                  <div className="w-1.5 h-1.5 bg-[#ff3e3e] rounded-full"></div>
-              </div>
-              <span>SIGNAL</span>
-            </div>
-             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 border border-[#00ff41] rounded-sm flex items-center justify-center text-[7px] font-bold text-[#00ff41]">
-                 <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-sm"></div>
-              </div>
-              <span>FEED</span>
-            </div>
+            <span>FEED</span>
+          </div>
         </div>
       </div>
-      
+
       {/* Matrix Overlay Effect */}
       <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
     </div>
