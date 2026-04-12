@@ -21,10 +21,23 @@ const fixLeafletIcons = () => {
   });
 };
 
-const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> = ({ activeLayer }) => {
+const LeafletMap: React.FC<{ 
+  activeLayer: 'satellite' | 'vector' | 'thermal';
+  activeLayers: Record<string, boolean>;
+}> = ({ activeLayer, activeLayers }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const wsClient = useWebSocket();
+
+  // Define custom icon to avoid default asset 404s in Next.js
+  const defaultIcon = useRef(L.icon({
+    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
+  })).current;
 
   // Layer Groups
   const feedsLayer = useRef<L.LayerGroup>(L.layerGroup());
@@ -43,14 +56,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
   const { feeds, nodeCongestionData, alerts, sendMessage } = useRealtimeUpdates();
   const router = useRouter();
 
-  const [activeLayers, setActiveLayers] = useState({
-    feeds: true,
-    congestion: true,
-    incidents: true,
-    roads: true,
-    signals: true
-  });
-  const [showLayerControl, setShowLayerControl] = useState(false);
   const [selectedNode, setSelectedNode] = useState<any>(null);
   const [signalStates, setSignalStates] = useState<Record<string, any>>({});
   const [isChangingPhase, setIsChangingPhase] = useState(false);
@@ -65,9 +70,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // FIX 1: Map initialization is now a top-level useEffect, not nested.
-  // FIX 2: unsubscribe is declared before the cleanup return so it's in scope.
-  // FIX 3: Dependency array [wsClient] is correctly placed on this effect.
   useEffect(() => {
     if (!mapRef.current || leafletMap.current) return;
 
@@ -89,7 +91,7 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
         attributionControl: false,
       });
 
-      L.marker([34.02, -118.02]).addTo(map).bindPopup('CENTER POINT');
+      L.marker([34.02, -118.02], { icon: defaultIcon }).addTo(map).bindPopup('CENTER POINT');
 
       feedsLayer.current.addTo(map);
       congestionLayer.current.addTo(map);
@@ -153,7 +155,7 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
         leafletMap.current = null;
       }
     };
-  }, [wsClient]); // Note: activeLayer is NOT here to prevent map recreation on layer change
+  }, [wsClient]);
 
   useEffect(() => {
     if (!leafletMap.current || !mapRef.current) return;
@@ -186,7 +188,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
         crossOrigin: true
       }).addTo(leafletMap.current);
       
-      // Force a resize to ensure tiles are requested and rendered correctly
       setTimeout(() => {
         leafletMap.current?.invalidateSize();
       }, 100);
@@ -203,7 +204,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
     activeLayers.signals ? signalsLayer.current.addTo(leafletMap.current) : signalsLayer.current.remove();
   }, [activeLayers]);
 
-  // Update Feeds Layer
   useEffect(() => {
     if (!leafletMap.current || !feeds) return;
 
@@ -252,7 +252,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
     });
   }, [feeds]);
 
-  // Update Node Congestion, Road Network & Signals
   useEffect(() => {
     if (!leafletMap.current || !nodeCongestionData) return;
 
@@ -301,7 +300,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
       }
     });
 
-    // Draw road segments
     const nodeMap = new Map();
     nodeCongestionData.forEach(n => nodeMap.set(n.id, n));
     nodeCongestionData.forEach(u => {
@@ -361,7 +359,6 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
 
     if (nodeCongestionData) {
       nodeCongestionData.forEach(node => {
-        // FIX 4: Guard against node.name being undefined before calling .toLowerCase()
         if (
           node.id.toLowerCase().includes(lowerQuery) ||
           node.name?.toLowerCase().includes(lowerQuery)
@@ -398,7 +395,7 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
       <div ref={mapRef} className="absolute inset-0 z-0" />
 
       {/* Search Bar */}
-      <div className="absolute top-4 left-4 z-[1002] w-72 font-mono">
+      <div className="absolute top-20 left-4 z-[1002] w-72 font-mono">
         <div className="relative group">
           <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
             <Search className="w-4 h-4 text-[#00ff41]/50 group-focus-within:text-[#00ff41]" />
@@ -435,31 +432,7 @@ const LeafletMap: React.FC<{ activeLayer: 'satellite' | 'vector' | 'thermal' }> 
 
       {/* HUD Overlays */}
       <div className="absolute top-4 right-4 z-[1002] flex flex-col gap-2">
-        <button onClick={() => setShowLayerControl(!showLayerControl)} className="bg-black/80 border border-[#00ff41]/30 p-2 text-[#00ff41] hover:bg-[#00ff41]/10 transition-colors">
-          <Layers size={20} />
-        </button>
-        {showLayerControl && (
-          <div className="bg-black/90 border border-[#00ff41]/30 p-4 w-48 font-mono text-xs text-[#00ff41] flex flex-col gap-3 shadow-2xl">
-            <div className="flex justify-between items-center mb-1 pb-1 border-b border-[#00ff41]/20">
-              <span className="font-bold uppercase">Intelligence Layers</span>
-              <X size={14} className="cursor-pointer" onClick={() => setShowLayerControl(false)} />
-            </div>
-            {[
-              { id: 'feeds', icon: Video, label: 'Surveillance Nodes' },
-              { id: 'congestion', icon: Activity, label: 'Congestion Heat' },
-              { id: 'roads', icon: MapIcon, label: 'Network Topology' },
-              { id: 'signals', icon: Zap, label: 'Signal Controllers' },
-              { id: 'incidents', icon: AlertTriangle, label: 'Incident Events' }
-            ].map(layer => (
-              <label key={layer.id} className="flex items-center gap-3 cursor-pointer group">
-                <input type="checkbox" checked={(activeLayers as any)[layer.id]} onChange={() => setActiveLayers(prev => ({ ...prev, [layer.id]: !(prev as any)[layer.id] }))} className="hidden" />
-                <div className={cn("w-3 h-3 border border-[#00ff41]/50", (activeLayers as any)[layer.id] && "bg-[#00ff41]")}></div>
-                <layer.icon size={14} className="opacity-60" />
-                <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
-              </label>
-            ))}
-          </div>
-        )}
+        {/* Layer Control removed and moved to TOP HUD in page.tsx */}
       </div>
 
       {/* Node & Signal Info Panel */}

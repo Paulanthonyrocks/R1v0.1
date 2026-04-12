@@ -3,9 +3,11 @@
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
+import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-// Dynamically import LeafletMap to avoid SSR issues as Leaflet requires the 'window' object
-const DynamicLeafletMap = dynamic(() => import('@/components/map/LeafletMap'), {
+// Dynamically import TrafficMap to avoid SSR issues with THREE.js and Leaflet
+const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
   ssr: false,
   loading: () => (
     <div className="fixed inset-0 bg-industrial-bg text-lcd-green font-lcd flex items-center justify-center z-50">
@@ -19,10 +21,97 @@ const DynamicLeafletMap = dynamic(() => import('@/components/map/LeafletMap'), {
 
 const LiveMapPage: React.FC = () => {
   const [activeLayer, setActiveLayer] = useState<'satellite' | 'vector' | 'thermal'>('satellite');
+  const [showLayerControl, setShowLayerControl] = useState(false);
+  const [activeLayers, setActiveLayers] = useState({
+    feeds: true,
+    congestion: true,
+    incidents: true,
+    roads: true,
+    signals: true
+  });
 
   return (
     <div className="relative w-full h-screen bg-industrial-bg overflow-hidden">
-      <DynamicLeafletMap activeLayer={activeLayer} />
+      <style jsx global>{`
+        .leaflet-marker-icon {
+          background-image: url('https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png') !important;
+        }
+        .leaflet-marker-shadow {
+          background-image: url('https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png') !important;
+        }
+      `}</style>
+      {/* TOP HUD: Title and Global Status */}
+      <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none px-6 py-4 flex items-center justify-between">
+         <div className="flex flex-col">
+            <h1 className="text-2xl font-bold uppercase tracking-[0.4em] text-lcd-green drop-shadow-[0_0_10px_rgba(182,255,176,0.5)] font-lcd">
+              Surveillance Grid
+            </h1>
+            <span className="text-[10px] text-lcd-green/50 uppercase tracking-widest font-mono">
+              Sector: North-01 // Status: Active // Sync: 100%
+            </span>
+         </div>
+         <div className="flex items-center gap-4">
+            <div className="bg-industrial-panel/80 border border-lcd-green/30 px-3 py-1 flex items-center gap-2 text-lcd-green text-[10px] uppercase tracking-tighter backdrop-blur-sm shadow-lg">
+               <Activity className="h-3 w-3 animate-pulse" />
+               <span>Real-time Telemetry Active</span>
+            </div>
+            
+            {/* Layer Control Toggle */}
+            <button 
+              onClick={() => setShowLayerControl(!showLayerControl)}
+              className="bg-industrial-panel/80 border border-lcd-green/30 p-2 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all backdrop-blur-sm shadow-lg pointer-events-auto"
+            >
+              <Layers size={16} />
+            </button>
+         </div>
+      </div>
+
+      {/* Layer Control Menu */}
+      {showLayerControl && (
+        <div className="absolute top-20 right-6 z-30 bg-industrial-panel/90 border border-lcd-green/30 p-4 w-56 font-mono text-xs text-lcd-green flex flex-col gap-3 shadow-2xl backdrop-blur-md pointer-events-auto">
+          <div className="flex justify-between items-center mb-1 pb-1 border-b border-lcd-green/20">
+            <span className="font-bold uppercase tracking-widest">Intelligence Layers</span>
+            <X size={14} className="cursor-pointer hover:text-white" onClick={() => setShowLayerControl(false)} />
+          </div>
+          {[
+            { id: 'feeds', icon: Video, label: 'Surveillance Nodes' },
+            { id: 'congestion', icon: Activity, label: 'Congestion Heat' },
+            { id: 'roads', icon: MapIcon, label: 'Network Topology' },
+            { id: 'signals', icon: Zap, label: 'Signal Controllers' },
+            { id: 'incidents', icon: AlertTriangle, label: 'Incident Events' }
+          ].map((layer) => (
+            <label key={layer.id} className="flex items-center gap-3 cursor-pointer group">
+              <input 
+                type="checkbox" 
+                checked={(activeLayers as any)[layer.id]} 
+                onChange={() => setActiveLayers(prev => ({ ...prev, [layer.id]: !(prev as any)[layer.id] }))} 
+                className="hidden" 
+              />
+              <div className={cn("w-3 h-3 border border-lcd-green/50", (activeLayers as any)[layer.id] && "bg-lcd-green shadow-[0_0_5px_rgba(182,255,176,0.5)]")} />
+              <layer.icon size={14} className="opacity-60 group-hover:opacity-100 transition-opacity" />
+              <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {/* RIGHT HUD: Map Tools */}
+      <div className="absolute right-6 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2 pointer-events-auto">
+        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Zoom In">
+          <ZoomIn size={18} />
+        </button>
+        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Zoom Out">
+          <ZoomOut size={18} />
+        </button>
+        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Center View">
+          <Navigation size={18} />
+        </button>
+        <button className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" title="Full Screen">
+          <Maximize size={18} />
+        </button>
+      </div>
+
+      <DynamicTrafficMap activeLayer={activeLayer} activeLayers={activeLayers} />
     </div>
   );
 };

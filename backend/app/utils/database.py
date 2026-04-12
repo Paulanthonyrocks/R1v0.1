@@ -677,8 +677,35 @@ class DatabaseManager:
             logger.error(f"Error getting incident {incident_id}: {e}")
             return None
 
+    async def get_incident_stats(self) -> Dict[str, Any]:
+        """Retrieves statistics on incident types and false positive rates."""
+        query = """
+            SELECT 
+                type, 
+                COUNT(*) as total, 
+                SUM(CASE WHEN status = 'FALSE_POSITIVE' THEN 1 ELSE 0 END) as false_positives
+            FROM incidents 
+            GROUP BY type
+        """
+        try:
+            async with self.get_session() as session:
+                result = await session.execute(text(query))
+                rows = result.all()
+                
+                type_counts = {}
+                for row in rows:
+                    inc_type = row[0]
+                    total = row[1]
+                    fps = row[2] or 0
+                    type_counts[inc_type] = {"total": total, "false_positive": fps}
+                
+                return {"type_counts": type_counts}
+        except Exception as e:
+            logger.error(f"Error getting incident stats: {e}")
+            return {"type_counts": {}}
+
     def _validate_query(self, query: str, params: tuple):
-        """S2 Fix: Validates that destructive queries use parameterized values.
+
         Parameterized queries with placeholders (?) are safe — SQL injection
         only happens when user input is concatenated into query strings."""
         destructive_keywords = ['DROP ', 'TRUNCATE ', 'ALTER TABLE']
