@@ -573,10 +573,3 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
 });
 
 export default LeafletMap;
-*/}
-      <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
-    </div>
-  );
-});
-
-export default LeafletMap;
