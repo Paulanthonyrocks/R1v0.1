@@ -1209,6 +1209,26 @@ class FeedManager:
             if isinstance(obj, np.ndarray): return obj.tolist()
             return str(obj)
         return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
+    async def _broadcast_analytics_update(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
+        """Sends a specialized analytics update to the UI for a specific feed."""
+        try:
+            now = time.time()
+            payload = {
+                "t": "analytics_update", # Using short key 't' for type to match VIDEO_FRAME pattern
+                "f": feed_id,
+                "m": metrics,
+                "v": vehicles,
+                "ts": now
+            }
+            # Use the existing serialization helper
+            serialized = self._serialize_msgpack(payload)
+            if serialized:
+                # Broadcast to all clients subscribed to this feed
+                await self._connection_manager.broadcast_to_feed(feed_id, serialized)
+        except Exception as e:
+            logger.error(f"Error in _broadcast_analytics_update for {feed_id}: {e}")
+
+
     async def _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
         """Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker)."""
         entry = self.process_registry.get(feed_id)
