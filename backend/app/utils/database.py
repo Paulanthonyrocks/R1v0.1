@@ -919,7 +919,8 @@ class DatabaseManager:
         # Offload TimescaleDB write to a background task to avoid blocking the main pipeline
         asyncio.create_task(self._async_save_to_timescale_metrics(metrics_list))
 
-        async def _async_save_to_timescale_metrics(self, metrics_list: List[Dict]):
+
+    async def _async_save_to_timescale_metrics(self, metrics_list: List[Dict]):
         """Background helper to save metrics to TimescaleDB without blocking the main pipeline."""
         if not self.timescale_engine:
             return
@@ -962,49 +963,6 @@ class DatabaseManager:
                 logger.debug(f"Background save: {len(ts_params)} metrics to TimescaleDB.")
         except Exception as e:
             logger.error(f"Background TimescaleDB save failed: {e}")
-
-
-async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:\n        """Retrieves historical location metrics from TimescaleDB (if available) or SQLite."""
-        start_time_ts = time.time() - (hours * 3600)
-
-        # 1. Try TimescaleDB
-        if self.timescale_engine:
-            start_time_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
-            sql = text("""
-                SELECT * FROM location_metrics 
-                WHERE location_id = :location_id 
-                AND timestamp >= :start_time
-                ORDER BY timestamp ASC
-            """)
-
-            try:
-                async with self.timescale_engine.connect() as conn:
-                    result = await conn.execute(sql, {"location_id": location_id, "start_time": start_time_dt})
-                    rows = [dict(row._mapping) for row in result]
-                    if rows:
-                        return rows
-            except Exception as e:
-                logger.error(f"Failed to query location metrics from TimescaleDB: {e}")
-
-        # 2. Try SQLite pre-aggregated metrics
-        sql = """
-            SELECT timestamp, vehicle_count, average_speed, congestion_score
-            FROM location_metrics
-            WHERE location_id = ? AND timestamp >= ?
-            ORDER BY timestamp ASC
-        """
-        try:
-            # FIX: Use asyncio.to_thread for queries too if they might be slow or block on lock
-            rows = await asyncio.to_thread(self._execute_query, sql, (location_id, start_time_ts))
-            if rows:
-                for row in rows:
-                    if isinstance(row["timestamp"], (int, float)):
-                        row["timestamp"] = datetime.fromtimestamp(row["timestamp"], tz=timezone.utc).isoformat()
-                return rows
-        except Exception as e:
-            logger.error(f"Failed to query location metrics from SQLite: {e}")
-
-        return []
 
     async def get_history_stats(self, feed_id: str, hours: int = 24, latitude: Optional[float] = None, longitude: Optional[float] = None) -> List[Dict]:
         """
