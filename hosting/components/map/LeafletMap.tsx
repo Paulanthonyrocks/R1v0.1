@@ -74,6 +74,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
   const [selectedNode, setSelectedNode] = useState<any>(null);
   const [signalStates, setSignalStates] = useState<Record<string, any>>({});
   const [isChangingPhase, setIsChangingPhase] = useState(false);
+  const [isSettingCenter, setIsSettingCenter] = useState(false);
 
   // Search State
   interface SearchResult {
@@ -111,9 +112,11 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
         draggable: true 
       }).addTo(map).bindPopup('CENTER POINT');
 
+      centerMarker.on('dragstart', () => setIsSettingCenter(true));
       centerMarker.on('dragend', (e) => {
         const position = e.target.getLatLng();
         map.panTo(position);
+        setIsSettingCenter(false);
       });
 
       feedsLayer.current.addTo(map);
@@ -532,39 +535,6 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
         </div>
       )}
 
-      {/* Legend */}
-      <div className="absolute bottom-6 left-6 z-[1001] bg-black/90 border border-[#00ff41]/30 p-3 font-mono text-[9px] text-[#00ff41] flex flex-col gap-2 shadow-2xl backdrop-blur-md">
-        <div className="flex items-center gap-2 mb-1 border-b border-[#00ff41]/20 pb-1 uppercase font-bold opacity-60">
-          <span>Map Legend</span>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-[#ff3e3e] shadow-[0_0_5px_#ff3e3e]"></div>
-            <span>CRITICAL</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-[#00ff41] shadow-[0_0_5px_#00ff41]"></div>
-            <span>OPTIMAL</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 border border-[#ff3e3e] rotate-45 flex items-center justify-center text-[7px] font-bold text-[#ff3e3e]">!</div>
-            <span>INCIDENT</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex flex-col gap-[1px]">
-              <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-full"></div>
-              <div className="w-1.5 h-1.5 bg-[#ff3e3e] rounded-full"></div>
-            </div>
-            <span>SIGNAL</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 border border-[#00ff41] rounded-sm flex items-center justify-center text-[7px] font-bold text-[#00ff41]">
-              <div className="w-1.5 h-1.5 bg-[#00ff41] rounded-sm"></div>
-            </div>
-            <span>FEED</span>
-          </div>
-        </div>
-      </div>
 
       {/* Matrix Overlay Effect */}
       <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />

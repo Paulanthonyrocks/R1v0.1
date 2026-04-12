@@ -21,7 +21,7 @@ class GlobalReIDManager:
         self.config = config
         self.reid_cfg = config.get("reid", {})
         self.similarity_threshold = self.reid_cfg.get("similarity_threshold", 0.85)
-        self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 1000)
+        h00)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)
         self.persistence_path = self.reid_cfg.get("persistence_path", "backend/data/reid_gallery.pkl")
         
@@ -184,7 +184,6 @@ class GlobalReIDManager:
 
                 write_idx = self._gallery_write_idx
                 if write_idx >= self.max_gallery_size:
-                    # BUG #12 FIX: Consolidate metadata assignment to happen once
                     oldest_idx = min(range(self._gallery_write_idx), key=lambda i: self.metadata_store.get(self.gallery_ids[i], {}).get("last_seen", float('inf')))
                     evicted_gid = self.gallery_ids[oldest_idx]
                     if evicted_gid in self.metadata_store:

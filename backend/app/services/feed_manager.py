@@ -50,7 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger("app.services.feed_manager")
 # Constants
 PROCESS_JOIN_TIMEOUT = 3.0
-QUEUE_MAX_SIZE = 500
+QUEUE_MAX_SIZE = 2000
 QUEUE_DRAIN_LIMIT = 100
 MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
 class FeedManager:

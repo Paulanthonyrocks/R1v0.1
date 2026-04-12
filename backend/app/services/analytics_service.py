@@ -62,7 +62,7 @@ class AnalyticsService:
         self._notification_service = notification_service
         self._incident_manager = incident_manager
         self._v2x_service = v2x_service
-        self._data_cache = TrafficDataCache()
+        self._data_cache = TrafficDataCache(max_history_hours=168)
         self._traffic_predictor_instance = traffic_predictor
         self._anomaly_detector_instance = None
         self._lane_calibrators: Dict[str, LaneCalibrator] = {} # feed_id -> LaneCalibrator
