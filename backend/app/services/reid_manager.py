@@ -21,7 +21,7 @@ class GlobalReIDManager:
         self.config = config
         self.reid_cfg = config.get("reid", {})
         self.similarity_threshold = self.reid_cfg.get("similarity_threshold", 0.85)
-        h00)
+        self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 5000)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)
         self.persistence_path = self.reid_cfg.get("persistence_path", "backend/data/reid_gallery.pkl")
         
