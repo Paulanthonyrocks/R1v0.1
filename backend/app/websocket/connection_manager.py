@@ -50,7 +50,10 @@ class ConnectionManager:
         """Dedicated loop per client to handle outgoing messages without blocking the global broadcaster."""
         try:
             while True:
-                msg = await self.client_queues[client_id].get()
+                queue = self.client_queues.get(client_id)
+                if not queue:
+                    break
+                msg = await queue.get()
                 ws = self.active_connections.get(client_id)
                 if not ws:
                     break
@@ -226,3 +229,4 @@ class ConnectionManager:
         if self.keepalive_task:
             self.keepalive_task.cancel()
             self.keepalive_task = None
+

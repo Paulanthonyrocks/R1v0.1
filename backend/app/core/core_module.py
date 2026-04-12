@@ -262,6 +262,11 @@ class CoreModule:
             except np.linalg.LinAlgError:
                 logger.warning(f"[{self.feed_id}] Singular homography matrix in motion compensation.")
 
+
+        # If permanent drift is detected, reset reference to baseline to stop warnings and update coordinates
+        if is_drifted and self.calib_monitor:
+            logger.info(f"[{self.feed_id}] Resetting calibration reference due to detected drift.")
+            self.calib_monitor.set_reference(frame)
         # 1. Lane Detection (Periodic)
         if (self.config.get("lane_detection", {}).get("enabled", False) and 
             process_frame_for_lanes and 
@@ -863,3 +868,4 @@ class CoreModule:
             if self.roi_polygon_points:
                 self.detector.initialize_roi(current_res, self.roi_polygon_points)
             logger.info(f"[{self.feed_id}] ROI/Exclusion zones updated. Masks re-initialized.")
+
