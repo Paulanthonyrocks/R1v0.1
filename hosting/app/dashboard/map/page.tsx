@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
 import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
 
 // Dynamically import TrafficMap to avoid SSR issues with THREE.js and Leaflet
 const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
@@ -20,8 +21,10 @@ const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
 });
 
 const LiveMapPage: React.FC = () => {
+  const { vehicles } = useVehicleTracking();
   const [activeLayer, setActiveLayer] = useState<'satellite' | 'vector' | 'thermal'>('satellite');
   const [showLayerControl, setShowLayerControl] = useState(false);
+  const [showAllUnits, setShowAllUnits] = useState(false);
   const [activeLayers, setActiveLayers] = useState({
     feeds: true,
     congestion: true,
@@ -51,9 +54,16 @@ const LiveMapPage: React.FC = () => {
             </span>
          </div>
          <div className="flex items-center gap-4">
-            <div className="bg-industrial-panel/80 border border-lcd-green/30 px-3 py-1 flex items-center gap-2 text-lcd-green text-[10px] uppercase tracking-tighter backdrop-blur-sm shadow-lg">
-               <Activity className="h-3 w-3 animate-pulse" />
-               <span>Real-time Telemetry Active</span>
+            <div className="bg-industrial-panel/80 border border-lcd-green/30 px-3 py-1 flex items-center gap-3 text-lcd-green text-[10px] uppercase tracking-tighter backdrop-blur-sm shadow-lg">
+               <div className="flex items-center gap-2">
+                 <Activity className="h-3 w-3 animate-pulse" />
+                 <span>Real-time Telemetry Active</span>
+               </div>
+               <div className="w-px h-3 bg-lcd-green/30" />
+               <div className="flex items-center gap-1 font-bold">
+                 <span>Units:</span>
+                 <span>{vehicles?.length || 0}</span>
+               </div>
             </div>
             
             {/* Layer Control Toggle */}
@@ -92,6 +102,18 @@ const LiveMapPage: React.FC = () => {
               <span className={cn("group-hover:translate-x-1 transition-transform", !(activeLayers as any)[layer.id] && "opacity-40")}>{layer.label}</span>
             </label>
           ))}
+          <div className="mt-2 pt-2 border-t border-lcd-green/20">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <input 
+                type="checkbox" 
+                checked={showAllUnits} 
+                onChange={e => setShowAllUnits(e.target.checked)} 
+                className="hidden" 
+              />
+              <div className={cn("w-3 h-3 border border-lcd-green/50", showAllUnits && "bg-lcd-green shadow-[0_0_5px_rgba(182,255,176,0.5)]")} />
+              <span className={cn("group-hover:translate-x-1 transition-transform", !showAllUnits && "opacity-40")}>Show All Units</span>
+            </label>
+          </div>
         </div>
       )}
 
@@ -111,7 +133,7 @@ const LiveMapPage: React.FC = () => {
         </button>
       </div>
 
-      <DynamicTrafficMap activeLayer={activeLayer} activeLayers={activeLayers} />
+      <DynamicTrafficMap activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} />
     </div>
   );
 };

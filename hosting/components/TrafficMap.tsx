@@ -14,11 +14,11 @@ import { cn } from '@/lib/utils';
 const TrafficMap: React.FC<{ 
   activeLayer: 'satellite' | 'vector' | 'thermal';
   activeLayers: Record<string, boolean>;
-}> = ({ activeLayer, activeLayers }) => {
+  showAllUnits: boolean;
+}> = ({ activeLayer, activeLayers, showAllUnits }) => {
   const { vehicles, mergeVehicleUpdates } = useVehicleTracking();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const client = useWebSocket();
-  const [showAll, setShowAll] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -263,3 +263,4 @@ const TrafficMap: React.FC<{
 };
 
 export default TrafficMap;
+lt TrafficMap;

@@ -705,7 +705,7 @@ class DatabaseManager:
             return {"type_counts": {}}
 
     def _validate_query(self, query: str, params: tuple):
-
+        """S2 Fix: Validates that destructive queries use parameterized values.
         Parameterized queries with placeholders (?) are safe — SQL injection
         only happens when user input is concatenated into query strings."""
         destructive_keywords = ['DROP ', 'TRUNCATE ', 'ALTER TABLE']
