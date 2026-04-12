@@ -1209,18 +1209,18 @@ class FeedManager:
             return str(obj)
         return msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
     async def _process_analytics_frame(self, feed_id: str, metrics: Dict, vehicles: List[Dict]):
-        \"\"\"Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker).\"\"\"
+        """Processes analytics results and triggers UI broadcasts (formerly in AnalyticsWorker)."""
         entry = self.process_registry.get(feed_id)
         if not entry: return
 
         # Update Status to RUNNING if starting
-        if entry[\"status\"] == FeedOperationalStatusEnum.STARTING:
-            entry[\"status\"] = FeedOperationalStatusEnum.RUNNING
-            logger.info(f\"Feed '{feed_id}' transitioned from STARTING to RUNNING.\")
+        if entry["status"] == FeedOperationalStatusEnum.STARTING:
+            entry["status"] = FeedOperationalStatusEnum.RUNNING
+            logger.info(f"Feed '{feed_id}' transitioned from STARTING to RUNNING.")
         
         # Update Latest Metrics
-        entry[\"latest_metrics\"] = metrics
-        entry[\"last_frame_time\"] = time.time()
+        entry["latest_metrics"] = metrics
+        entry["last_frame_time"] = time.time()
 
         # Pass metrics to AnalyticsService for DB persistence
         if self._analytics_service:
@@ -1229,24 +1229,24 @@ class FeedManager:
             ))
 
         # Enrich metrics with coordinates from registry if missing
-        if \"latitude\" not in metrics:
-            if \"latitude\" in entry:
-                metrics[\"latitude\"] = entry[\"latitude\"]
-            elif entry.get(\"config_info\"):
-                metrics[\"latitude\"] = entry[\"config_info\"].latitude
-        if \"longitude\" not in metrics:
-            if \"longitude\" in entry:
-                metrics[\"longitude\"] = entry[\"longitude\"]
-            elif entry.get(\"config_info\"):
-                metrics[\"longitude\"] = entry[\"config_info\"].longitude
+        if "latitude" not in metrics:
+            if "latitude" in entry:
+                metrics["latitude"] = entry["latitude"]
+            elif entry.get("config_info"):
+                metrics["latitude"] = entry["config_info"].latitude
+        if "longitude" not in metrics:
+            if "longitude" in entry:
+                metrics["longitude"] = entry["longitude"]
+            elif entry.get("config_info"):
+                metrics["longitude"] = entry["config_info"].longitude
 
         # Enrich with global IDs before broadcast
         if vehicles and self._reid_manager:
             for v in vehicles:
-                if \"vehicle_id\" in v:
-                    gid = self._reid_manager.get_global_id(feed_id, v[\"vehicle_id\"])
+                if "vehicle_id" in v:
+                    gid = self._reid_manager.get_global_id(feed_id, v["vehicle_id"])
                     if gid:
-                        v[\"global_vehicle_id\"] = gid
+                        v["global_vehicle_id"] = gid
 
         # Broadcast to UI (Throttled via task checking)
         prev_task = self._active_broadcast_tasks.get(feed_id)

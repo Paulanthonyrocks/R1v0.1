@@ -413,7 +413,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
   };
 
   return (
-    <div className="relative w-full h-full bg-[#0a0a0a] overflow-hidden">
+    <div className={cn("relative w-full h-full bg-[#0a0a0a] overflow-hidden", isSettingCenter && "cursor-crosshair")}>
       <div ref={mapRef} className="absolute inset-0 z-0" />
 
       {/* Search Bar */}
@@ -567,6 +567,13 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
       </div>
 
       {/* Matrix Overlay Effect */}
+      <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
+    </div>
+  );
+});
+
+export default LeafletMap;
+*/}
       <div className="absolute inset-0 pointer-events-none border-[1px] border-[#00ff41]/10 z-20 shadow-[inset_0_0_50px_rgba(0,255,65,0.05)]" />
     </div>
   );
