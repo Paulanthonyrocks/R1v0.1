@@ -1414,37 +1414,8 @@ class FeedManager:
                         logger.error(
                             f"Watchdog: Failed to restart video feed {feed_id}: {e}"
                         )
-                # --- Analytics Worker Monitoring ---
-                now = time.time()
-                last_hb = self._analytics_heartbeat.value
-                is_dead = self._analytics_process is None or not self._analytics_process.is_alive()
-                uptime = now - self._analytics_start_time
-                # Startup Grace Period: If started < 15s ago, only check if it's dead, not heartbeat
-                grace_period = 15.0
-                timeout_threshold = 60.0 # Increased from 30.0
-                should_restart = False
-                if is_dead:
-                    logger.warning(f"Watchdog: Analytics worker died. Restarting...")
-                    should_restart = True
-                elif uptime > grace_period and (now - last_hb > timeout_threshold):
-                    logger.warning(
-                        f"Watchdog: Analytics worker unresponsive (Uptime: {uptime:.1f}s, "
-                        f"LastHB: {now - last_hb:.1f}s). Restarting..."
-                    )
-                    should_restart = True
-                if should_restart:
-                    if self._analytics_process:
-                        if self._analytics_process.is_alive():
-                            logger.info(f"Watchdog: Killing unresponsive Analytics worker (PID {self._analytics_process.pid})")
-                            self._analytics_process.kill()
-                        # Reap the process to prevent zombies
-                        try:
-                            self._analytics_process.join(timeout=1.0)
-                        except Exception as e:
-                            logger.error(f"Error joining analytics process: {e}")
-                    self._start_analytics_worker()
-                    self._analytics_heartbeat.value = time.time()
                 # --- Periodic Summary Logging ---
+                now = time.time()
                 if (now - getattr(self, "_last_watchdog_log_time", 0)) > 30:
                     self._last_watchdog_log_time = now
                     if self._dropped_analytics_count > 0:
