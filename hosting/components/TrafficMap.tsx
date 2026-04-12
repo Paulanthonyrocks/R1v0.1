@@ -122,7 +122,7 @@ const TrafficMap: React.FC<{
           if (drawnCount >= 5000) return;
           
           const isSelected = selectedIds.has(v.vehicle_id) || (v.global_vehicle_id && selectedIds.has(v.global_vehicle_id));
-          if (!showAll && !isSelected) return;
+          if (!showAllUnits && !isSelected) return;
 
           const canvasW = rendererRef.current!.domElement.width / window.devicePixelRatio;
           const canvasH = rendererRef.current!.domElement.height / window.devicePixelRatio;
@@ -152,7 +152,7 @@ const TrafficMap: React.FC<{
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [vehicles, dummy, showAll, selectedIds]);
+  }, [vehicles, dummy, showAllUnits, selectedIds]);
 
   useEffect(() => {
     if (!containerRef.current || !rendererRef.current) return;
@@ -233,11 +233,11 @@ const TrafficMap: React.FC<{
             <div className="relative w-4 h-4 border border-lcd-green flex items-center justify-center overflow-hidden">
               <input 
                 type="checkbox" 
-                checked={showAll} 
-                onChange={e => setShowAll(e.target.checked)} 
+                checked={showAllUnits} 
+                onChange={e => {}} // Handled by parent now
                 className="absolute opacity-0 w-full h-full cursor-pointer z-10" 
               />
-              <div className={cn("absolute w-full h-full bg-lcd-green transition-all duration-200", showAll ? "top-0" : "top-full")} />
+              <div className={cn("absolute w-full h-full bg-lcd-green transition-all duration-200", showAllUnits ? "top-0" : "top-full")} />
             </div>
             <span className="group-hover:text-white transition-colors">Show All Units</span>
           </label>
@@ -263,4 +263,3 @@ const TrafficMap: React.FC<{
 };
 
 export default TrafficMap;
-lt TrafficMap;
