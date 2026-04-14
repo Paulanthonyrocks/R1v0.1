@@ -1,8 +1,6 @@
 import math
-import uuid
 import numpy as np
 import logging
-from collections import deque, Counter
 from typing import Dict, List, Tuple, Optional, Any
 from filterpy.kalman import KalmanFilter
 from scipy.optimize import linear_sum_assignment
@@ -15,153 +13,199 @@ class TrackingManager:
         self.fps = fps
         self.vehicle_data: Dict[str, Dict] = {}
         
+        # Configuration parameters
         tracking_cfg = config.get("tracking", {})
-        vd_cfg = config.get("vehicle_detection", {})
-        self.proximity_threshold = tracking_cfg.get("proximity_threshold") or vd_cfg.get("proximity_threshold") or 250
-        self.track_timeout = tracking_cfg.get("track_timeout") or vd_cfg.get("track_timeout") or 30
+        self.proximity_threshold = tracking_cfg.get("proximity_threshold", 150)
+        self.track_timeout = tracking_cfg.get("track_timeout", 30)
         self.dynamic_matching_threshold = tracking_cfg.get("dynamic_matching_threshold", 0.7)
-        self.appearance_weight = tracking_cfg.get("appearance_weight") or 0.5
+        self.appearance_weight = tracking_cfg.get("appearance_weight", 0.5)
+        self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
+        self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
         self.use_appearance_in_tracking = tracking_cfg.get("use_appearance_in_tracking", True)
-        self.probation_threshold = tracking_cfg.get("probation_threshold", 3)
-        self.occlusion_threshold = tracking_cfg.get("occlusion_threshold", 0.7)
-        self.max_active_tracks = vd_cfg.get("max_active_tracks", tracking_cfg.get("max_active_tracks", 50))
-        self.embedding_ema_alpha = tracking_cfg.get("embedding_ema_alpha", 0.1)
+        self.stationary_cleanup_timeout = tracking_cfg.get("stationary_cleanup_timeout", 300)
         
         self.global_id_counter = 0
 
-    def _init_kalman(self, cx, cy, w, h, dt_init=None):
+    def _init_kalman(self, cx, cy, w, h):
+        """Initializes a Kalman Filter for a new track."""
         kf = KalmanFilter(dim_x=8, dim_z=4)
-        dt = dt_init if dt_init is not None else 1.0 / self.fps
+        dt = 1.0 / self.fps
+        
+        # State: [x, y, w, h, vx, vy, vw, vh]
         kf.x = np.array([[cx], [cy], [w], [h], [0], [0], [0], [0]])
-        kf.F = np.array([[1,0,0,0,dt,0,0,0], [0,1,0,0,0,dt,0,0], [0,0,1,0,0,0,dt,0], [0,0,0,1,0,0,0,dt],
-                         [0,0,0,0,1,0,0,0], [0,0,0,0,0,1,0,0], [0,0,0,0,0,0,1,0], [0,0,0,0,0,0,0,1]])
-        kf.H = np.array([[1,0,0,0,0,0,0,0], [0,1,0,0,0,0,0,0], [0,0,1,0,0,0,0,0], [0,0,0,1,0,0,0,0]])
+        
+        # Transition matrix
+        kf.F = np.eye(8)
+        kf.F[0, 4] = dt
+        kf.F[1, 5] = dt
+        kf.F[2, 6] = dt
+        kf.F[3, 7] = dt
+        
+        # Measurement matrix
+        kf.H = np.zeros((4, 8))
+        kf.H[0, 0] = 1
+        kf.H[1, 1] = 1
+        kf.H[2, 2] = 1
+        kf.H[3, 3] = 1
+        
+        # Covariance matrices
         kf.P *= 10.0
         kf.R *= 1.0
-        kf.Q[4:,4:] *= 0.1 # Motion uncertainty
+        kf.Q *= 0.1
+        
         return kf
 
-    def update(self, detections: List[Tuple], dt: float, frame_shape: Tuple[int, int], skip_factor: int = 0) -> Dict[str, Dict]:
+    def update(self, detections: List[Tuple], current_time: float, frame_shape: Tuple[int, int]) -> Dict[str, Dict]:
+        """Runs the tracking association pipeline (ByteTrack based)."""
         new_or_updated_tracks = {}
         h, w = frame_shape[:2]
         
-        tracking_cfg = self.config.get("tracking", {})
-        vd_cfg = self.config.get("vehicle_detection", {})
-        self.track_timeout = tracking_cfg.get("track_timeout", vd_cfg.get("track_timeout", 30))
-        self.probation_threshold = tracking_cfg.get("probation_threshold", vd_cfg.get("probation_threshold", 3))
+        # 1. Separate detections
+        high_conf_dets = []
+        low_conf_dets = []
+        CONF_THRESH = self.config.get("confidence_threshold", 0.3)
+        LOW_CONF_THRESH = 0.1
         
-        CONF_THRESH, LOW_CONF_THRESH = vd_cfg.get("confidence_threshold", 0.3), vd_cfg.get("low_confidence_threshold", 0.1)
-        high_conf_dets, low_conf_dets = [d for d in detections if d[2] >= CONF_THRESH], [d for d in detections if LOW_CONF_THRESH <= d[2] < CONF_THRESH]
+        for det in detections:
+            bbox, cls, conf, emb = det
+            if conf >= CONF_THRESH:
+                high_conf_dets.append(det)
+            elif conf >= LOW_CONF_THRESH:
+                low_conf_dets.append(det)
 
-        for track in self.vehicle_data.values():
-            if kf := track.get("kalman_filter"): 
-                kf.F[0, 4] = kf.F[1, 5] = kf.F[2, 6] = kf.F[3, 7] = dt
+        # 2. Kalman Prediction
+        for tid, track in self.vehicle_data.items():
+            kf = track.get("kalman_filter")
+            if kf:
+                dt = current_time - track.get("last_prediction_time", track["last_seen"])
+                if dt <= 0.001: dt = 1.0 / self.fps
+                
+                kf.F[0, 4] = dt
+                kf.F[1, 5] = dt
                 kf.predict()
-                tx, ty, tw, th = kf.x[0,0], kf.x[1,0], kf.x[2,0], kf.x[3,0]
+                
+                tx, ty, tw, th = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
                 track["predicted_bbox"] = (tx - tw/2, ty - th/2, tx + tw/2, ty + th/2)
-            track["age"] = track.get("age", 0) + dt
+                track["last_prediction_time"] = current_time
 
-        matched_tracks_1, matched_dets_1 = self._associate(high_conf_dets, list(self.vehicle_data.values()), new_or_updated_tracks, dt)
-        unmatched_dets_1 = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
-        unmatched_tracks_1 = [t for t in self.vehicle_data.values() if t["vehicle_id"] not in matched_tracks_1]
-
-        matched_tracks_2, _ = self._associate(low_conf_dets, unmatched_tracks_1, new_or_updated_tracks, dt, use_reid=False)
-        unmatched_tracks_2 = [t for t in unmatched_tracks_1 if t["vehicle_id"] not in matched_tracks_2]
+        # 3. First Association: High Confidence (IoU + ReID)
+        matched_tracks_1 = set()
+        matched_dets_1 = set()
         
-        reid_matched_det_indices = set()
-        if unmatched_dets_1 and unmatched_tracks_2 and (mature_lost := [t for t in unmatched_tracks_2 if t.get("status") == "active"]):
-            cost_reid = self._calculate_cost_matrix(unmatched_dets_1, mature_lost, use_reid=True, reid_only=True)
-            if cost_reid.size > 0:
-                row_ind, col_ind = linear_sum_assignment(cost_reid)
+        if high_conf_dets and self.vehicle_data:
+            track_pool = list(self.vehicle_data.values())
+            cost_matrix_1 = self._calculate_cost_matrix(high_conf_dets, track_pool, use_reid=True)
+            
+            if cost_matrix_1.size > 0:
+                row_ind, col_ind = linear_sum_assignment(cost_matrix_1)
                 for r, c in zip(row_ind, col_ind):
-                    if cost_reid[r, c] < 0.4:
-                        self._update_track(mature_lost[c], unmatched_dets_1[r], dt)
-                        new_or_updated_tracks[mature_lost[c]["vehicle_id"]] = mature_lost[c]
-                        reid_matched_det_indices.add(r)
+                    if cost_matrix_1[r, c] < self.dynamic_matching_threshold:
+                        track = track_pool[c]
+                        self._update_track(track, high_conf_dets[r], current_time)
+                        matched_tracks_1.add(track["vehicle_id"])
+                        matched_dets_1.add(r)
+                        new_or_updated_tracks[track["vehicle_id"]] = track
 
-        for track in unmatched_tracks_2:
-            if track["age"] < self.track_timeout:
-                track["status"] = "predicting"
-                if "predicted_bbox" in track: 
-                    track["bbox"] = np.clip(track["predicted_bbox"], [0, 0, 0, 0], [w, h, w, h])
-                    new_or_updated_tracks[track["vehicle_id"]] = track
+        unmatched_dets_1 = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
+        unmatched_tracks_1 = [t for tid, t in self.vehicle_data.items() if tid not in matched_tracks_1]
 
-        for i, det in enumerate(unmatched_dets_1):
-            if i not in reid_matched_det_indices and len(new_or_updated_tracks) < self.max_active_tracks:
-                new_track = self._create_new_track(det, dt)
-                new_or_updated_tracks[new_track["vehicle_id"]] = new_track
+        # 4. Second Association: Low Confidence (IoU Only)
+        matched_tracks_2 = set()
+        if low_conf_dets and unmatched_tracks_1:
+            cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False)
+            if cost_matrix_2.size > 0:
+                row_ind, col_ind = linear_sum_assignment(cost_matrix_2)
+                for r, c in zip(row_ind, col_ind):
+                    if cost_matrix_2[r, c] < 0.5: # Fixed low conf thresh
+                        track = unmatched_tracks_1[c]
+                        self._update_track(track, low_conf_dets[r], current_time)
+                        matched_tracks_2.add(track["vehicle_id"])
+                        new_or_updated_tracks[track["vehicle_id"]] = track
 
+        # 5. Finalize matches and handle lost
+        final_matched = matched_tracks_1.union(matched_tracks_2)
+        for tid, track in self.vehicle_data.items():
+            if tid not in final_matched:
+                if (current_time - track["last_seen"]) < self.track_timeout:
+                    track["status"] = "predicting"
+                    if "predicted_bbox" in track:
+                        track["bbox"] = track["predicted_bbox"]
+                        # Clip to frame
+                        px1, py1, px2, py2 = track["bbox"]
+                        if px2 < 0 or px1 > w or py2 < 0 or py1 > h: continue
+                        new_or_updated_tracks[tid] = track
+
+        # 6. Initialize New Tracks
+        for det in unmatched_dets_1:
+            new_track = self._create_new_track(det, current_time)
+            new_or_updated_tracks[new_track["vehicle_id"]] = new_track
+            
         self.vehicle_data = new_or_updated_tracks
         return self.vehicle_data
 
-    def _associate(self, detections, tracks, new_or_updated_tracks, dt, use_reid=True):
-        matched_tracks, matched_dets = set(), set()
-        if not detections or not tracks: return matched_tracks, matched_dets
-        cost_matrix = self._calculate_cost_matrix(detections, tracks, use_reid=use_reid)
-        if cost_matrix.size > 0:
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            for r, c in zip(row_ind, col_ind):
-                if cost_matrix[r, c] < self.dynamic_matching_threshold:
-                    track = tracks[c]
-                    self._update_track(track, detections[r], dt)
-                    new_or_updated_tracks[track["vehicle_id"]] = track
-                    matched_tracks.add(track["vehicle_id"])
-                    matched_dets.add(r)
-        return matched_tracks, matched_dets
-
-    def _calculate_cost_matrix(self, detections, tracks, use_reid=True, reid_only=False):
-        num_dets, num_tracks = len(detections), len(tracks)
-        if num_dets == 0 or num_tracks == 0: return np.empty((0,0))
+    def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
+        num_dets = len(detections)
+        num_tracks = len(tracks)
+        costs = np.full((num_dets, num_tracks), 10000.0)
+        
+        for d, (det_bbox, det_cls, det_conf, det_emb) in enumerate(detections):
+            det_cx = (det_bbox[0] + det_bbox[2]) / 2
+            det_cy = (det_bbox[1] + det_bbox[3]) / 2
             
-        costs = np.full((num_dets, num_tracks), 1e5)
-        det_embs = np.array([d[3] for d in detections if d[3] is not None])
-        track_embs = np.array([t["embedding"] for t in tracks if t.get("embedding") is not None])
-
-        use_reid = use_reid and self.use_appearance_in_tracking and det_embs.size > 0 and track_embs.size > 0
-
-        if use_reid:
-            det_norms = np.linalg.norm(det_embs, axis=1, keepdims=True); det_embs_norm = det_embs / det_norms
-            track_norms = np.linalg.norm(track_embs, axis=1, keepdims=True); track_embs_norm = track_embs / track_norms
-            reid_sim_matrix = np.dot(det_embs_norm, track_embs_norm.T)
-
-        for d_idx, (det_bbox, _, _, det_emb) in enumerate(detections):
-            for t_idx, track in enumerate(tracks):
-                motion_cost = 1.0 - self._bbox_diou(det_bbox, track.get("predicted_bbox", track["bbox"]))
-                reid_cost = 0.0
-                if use_reid and det_emb is not None and track.get("embedding") is not None:
-                    try:
-                        det_sim_idx = next(i for i, v in enumerate(det_embs) if np.array_equal(v, det_emb))
-                        track_sim_idx = next(i for i, v in enumerate(track_embs) if np.array_equal(v, track["embedding"]))
-                        sim = reid_sim_matrix[det_sim_idx, track_sim_idx]
-                        reid_cost = (1.0 - sim) * self.appearance_weight
-                    except StopIteration: pass
-                if reid_only: costs[d_idx, t_idx] = 1.0 - sim if 'sim' in locals() else 1.0
-                else: costs[d_idx, t_idx] = motion_cost * (1 - self.appearance_weight) + reid_cost
+            for t, track in enumerate(tracks):
+                if "predicted_bbox" in track:
+                    giou = self._bbox_giou(det_bbox, track["predicted_bbox"])
+                    tr_cx = (track["predicted_bbox"][0] + track["predicted_bbox"][2]) / 2
+                    tr_cy = (track["predicted_bbox"][1] + track["predicted_bbox"][3]) / 2
+                    dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
+                    
+                    if giou > -0.5 or dist < 150: # Gate
+                        motion_cost = 1.0 - giou
+                        reid_cost = 0.0
+                        if use_reid and det_emb is not None and "embedding" in track:
+                            reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight
+                        
+                        costs[d, t] = motion_cost + reid_cost
         return costs
 
-    def _update_track(self, track, det, dt):
+    def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
         track["bbox"] = bbox
-        track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-        if emb is not None: 
-            current_emb = track.get("embedding")
-            new_emb = self.embedding_ema_alpha * emb + (1 - self.embedding_ema_alpha) * current_emb if current_emb is not None else emb
-            track["embedding"] = new_emb / np.linalg.norm(new_emb)
-        track["age"] += dt
-        track["hits"] = track.get("hits", 0) + 1
-        if track["hits"] >= self.probation_threshold: track["status"] = "active"
+        track["last_seen"] = current_time
+        track["status"] = "active"
         track["confidence"] = conf
-        if kf := track.get("kalman_filter"): kf.update(np.array([[(bbox[0]+bbox[2])/2], [(bbox[1]+bbox[3])/2], [bbox[2]-bbox[0]], [bbox[3]-bbox[1]]]))
+        track["class_id"] = cls
+        
+        # Update Kalman
+        kf = track.get("kalman_filter")
+        if kf:
+            cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            kf.update(np.array([[cx], [cy], [w], [h]]))
 
-    def _create_new_track(self, det, dt):
+    def _create_new_track(self, det, current_time):
         bbox, cls, conf, emb = det
-        cx, cy, w, h = (bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2, bbox[2]-bbox[0], bbox[3]-bbox[1]
-        return {"vehicle_id": uuid.uuid4().hex, "bbox": bbox, "centroid": (cx, cy), "class_id": cls, "confidence": conf, "age": dt, "status": "tentative", "hits": 1, "kalman_filter": self._init_kalman(cx, cy, w, h, dt_init=dt), "embedding": emb / np.linalg.norm(emb) if emb is not None else None}
+        self.global_id_counter += 1
+        return {
+            "vehicle_id": f"TRK_{self.global_id_counter}",
+            "bbox": bbox,
+            "centroid": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
+            "class_id": cls,
+            "confidence": conf,
+            "last_seen": current_time,
+            "status": "active",
+            "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
+            "embedding": emb,
+            "class_history": [cls]
+        }
 
-    def _bbox_diou(self, boxA, boxB):
-        inter = max(0, min(boxA[2], boxB[2]) - max(boxA[0], boxB[0])) * max(0, min(boxA[3], boxB[3]) - max(boxA[1], boxB[1]))
-        union = max(1e-6, (boxA[2]-boxA[0])*(boxA[3]-boxA[1]) + (boxB[2]-boxB[0])*(boxB[3]-boxB[1]) - inter)
-        iou = inter / union
-        d2 = ((boxA[0]+boxA[2])/2 - (boxB[0]+boxB[2])/2)**2 + ((boxA[1]+boxA[3])/2 - (boxB[1]+boxB[3])/2)**2
-        c2 = (max(boxA[2],boxB[2]) - min(boxA[0],boxB[0]))**2 + (max(boxA[3],boxB[3]) - min(boxA[1],boxB[1]))**2
-        return iou - d2/(c2 + 1e-6)
+    def _bbox_giou(self, boxA, boxB):
+        xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        union = areaA + areaB - inter
+        iou = inter / (union + 1e-6)
+        ex, ey, ex2, ey2 = min(boxA[0], boxB[0]), min(boxA[1], boxB[1]), max(boxA[2], boxB[2]), max(boxA[3], boxB[3])
+        e_area = (ex2 - ex) * (ey2 - ey)
+        return iou - (e_area - union) / (e_area + 1e-6)

@@ -1,11 +1,10 @@
 from typing import TypeVar, Generic, Optional
 from pydantic import BaseModel
-from app.models.validation import SanitizedBaseModel
 
 T = TypeVar("T")
 
 
-class APIResponse(SanitizedBaseModel, Generic[T]):
+class APIResponse(BaseModel, Generic[T]):
     status: str
     message: str
     data: Optional[T] = None

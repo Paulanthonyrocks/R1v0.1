@@ -16,13 +16,11 @@ from app.dependency_injection import get_current_active_user, get_prs, get_route
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.route_optimization_service import RouteOptimizationService
 
-from app.models.validation import SanitizedBaseModel
-
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-class RouteOptimizationRequest(SanitizedBaseModel):
+class RouteOptimizationRequest(BaseModel):
     start_location: LocationModel
     end_location: LocationModel
     departure_time: Optional[datetime] = None
@@ -36,7 +34,7 @@ class RouteOptimizationRequest(SanitizedBaseModel):
 
 
 # Pydantic model for suggestion feedback request body
-class SuggestionFeedbackRequest(SanitizedBaseModel):
+class SuggestionFeedbackRequest(BaseModel):
     suggestion_id: str
     interaction_status: str  # e.g., "accepted", "rejected", "ignored", "modified"
     feedback_text: Optional[str] = None

@@ -29,15 +29,15 @@ class RedisConfig(BaseModel):
     port: int = 6379
     db: int = 0
     password: Optional[str] = None
-    enabled: bool = False
+    enabled: bool = True
 
 class MongoDBConfig(BaseModel):
     uri: str = "mongodb://localhost:27017/"
     database_name: str = "traffic_hub"
-    enabled: bool = False
+    enabled: bool = True
 
 class PerformanceConfig(BaseModel):
-    gpu_acceleration: bool = False
+    gpu_acceleration: bool = True
     video_gpu_acceleration: bool = False  # For HW accelerated decoding/encoding
     image_gpu_acceleration: bool = False  # For GPU-based image ops (resizing, etc.)
     inference_pool_size: int = 2
@@ -68,25 +68,8 @@ class AppConfig(BaseSettings):
     feeds_config_path: str = "feeds_config.json"
     snapshots_dir: str = "snapshots"
     
-    # Snapshot management
-    snapshot_format: str = "webp" # More efficient than jpg
-    snapshot_quality: int = 80
-    snapshot_max_width: int = 1280
-    snapshot_retention_days: int = 7
-    
-    # Maintenance management
-    maintenance_interval_hours: int = 24
-    db_retention_days: int = 7
-    
-    # Data collection management
-    hard_negative_quality: int = 70
-    hard_negative_max_samples_per_feed: int = 1000
-    hard_negative_retention_days: int = 3
-    
     class Config:
         env_file = ".env"
-        env_nested_delimiter = "__"
-        env_file_encoding = "utf-8"
         extra = "allow"
 
 # Module-level variable to hold the loaded configuration
@@ -118,19 +101,6 @@ def initialize_config(config_path: Optional[str] = None) -> AppConfig:
         
         # Configure logging
         if "logging" in raw_config:
-            # Create directories for log files if they don't exist
-            handlers = raw_config["logging"].get("handlers", {})
-            for handler_name, handler_config in handlers.items():
-                if "filename" in handler_config:
-                    log_file = Path(handler_config["filename"])
-                    # If filename is relative, make it relative to the parent of configs (backend root)
-                    if not log_file.is_absolute():
-                        log_file = (path_to_load.parent.parent / log_file).resolve()
-                        # Update the raw_config with the absolute path so dictConfig knows where to write
-                        handler_config["filename"] = str(log_file)
-                    
-                    log_file.parent.mkdir(parents=True, exist_ok=True)
-            
             logging.config.dictConfig(raw_config["logging"])
         
         # Validate with Pydantic
@@ -173,14 +143,6 @@ def get_current_config() -> AppConfig:
         raise RuntimeError("Config not initialized")
     return _config_instance
 
-def set_config(config_data: Dict[str, Any]) -> AppConfig:
-    """
-    Manually sets the global configuration instance from a dictionary.
-    Used for initializing child processes.
-    """
-    global _config_instance
-    _config_instance = AppConfig(**config_data)
-    return _config_instance
 
 # Optional: Function to reload config (similar logic to router, but maybe called differently)
 def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:

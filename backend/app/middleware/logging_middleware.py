@@ -12,8 +12,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next):
-        # Fix: Use perf_counter for accurate duration measurement (immune to NTP syncs)
-        start_time = time.perf_counter()
+        start_time = time.time()
 
         # Log request details
         logger.info(
@@ -22,8 +21,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        # Fix: Use perf_counter for accurate duration measurement
-        process_time = time.perf_counter() - start_time
+        process_time = time.time() - start_time
         # Log response details
         logger.info(
             f"Response: {request.method} {request.url.path} Status: {response.status_code} - Processed in {process_time:.4f}s"

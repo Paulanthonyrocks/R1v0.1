@@ -34,14 +34,6 @@ class ProcessedVideoResponse(BaseModel):
         from_attributes = True
 
 
-def get_video_manager() -> VideoManager:
-    config = get_current_config()
-    output_directory = config.get("video_output", {}).get(
-        "output_directory", "backend/data/processed_videos"
-    )
-    return VideoManager.get_instance(output_directory=output_directory)
-
-
 def convert_datetime_to_iso(obj):
     if isinstance(obj, datetime.datetime):
         return obj.isoformat()
@@ -56,16 +48,16 @@ def convert_datetime_to_iso(obj):
 
 
 @router.get("/stream/{stream_id:path}")
-async def stream_video(
-    stream_id: str,
-    current_user: dict = Depends(get_current_active_user),
-    video_manager: VideoManager = Depends(get_video_manager),
-):
+async def stream_video(stream_id: str, current_user: dict = Depends(get_current_active_user)):
     """Stream sample traffic video with real-time processing"""
 
     logger.info(
         f"GET /video/stream/{stream_id} endpoint called by user: {current_user.get('email')}"
     )
+    
+    config = get_current_config()
+    output_directory = config.get("video_output", {}).get("output_directory")
+    video_manager = VideoManager.get_instance(output_directory=output_directory)
 
     feed_manager = get_feed_manager()
     processor = video_manager.get_processor(stream_id, feed_manager)
@@ -81,6 +73,7 @@ async def stream_video(
         except Exception as e:
             logger.error(f"Error during video stream for {stream_id}: {e}", exc_info=True)
 
+
     return StreamingResponse(
         generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame"
     )
@@ -89,7 +82,7 @@ async def stream_video(
 @router.post("/record/start")
 async def start_video_recording(
     request: StartRecordingRequest,
-    video_manager: VideoManager = Depends(get_video_manager),
+    video_manager: VideoManager = Depends(VideoManager.get_instance),
     feed_manager=Depends(get_feed_manager),
 ):
     processor = video_manager.get_processor(request.stream_id, feed_manager)
@@ -112,9 +105,8 @@ async def start_video_recording(
 
 @router.post("/record/stop")
 async def stop_video_recording(
-    stream_id: str,
-    video_manager: VideoManager = Depends(get_video_manager),
-    feed_manager=Depends(get_feed_manager),
+    stream_id: str, video_manager: VideoManager = Depends(VideoManager.get_instance),
+    feed_manager=Depends(get_feed_manager)
 ):
     processor = video_manager.get_processor(stream_id, feed_manager)
     success = await processor.stop_recording()

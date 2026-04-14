@@ -13,12 +13,10 @@ from app.dependency_injection import (
     get_current_active_user,
     get_db,
     get_db_manager,
-    get_feed_manager,
 )
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
 from app.services.analytics_service_pro import AdvancedAnalyticsService
-from app.services.feed_manager import FeedManager
 from app.models.analysis import (
  AnomalyDetectionRequest,
  AllNodesCongestionResponse,
@@ -36,50 +34,48 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from app.models.validation import SanitizedBaseModel, SearchQuery
-
 # --- Pydantic Models for new endpoints ---
 
-class GetAverageTrafficRequest(SanitizedBaseModel):
+class GetAverageTrafficRequest(BaseModel):
  sensor_ids: List[str]
  start_time: datetime
  end_time: datetime
 
-class AverageTrafficResponse(SanitizedBaseModel):
+class AverageTrafficResponse(BaseModel):
  average_vehicle_count: float
  average_speed: float
 
-class IdentifyTrafficPatternRequest(SanitizedBaseModel):
+class IdentifyTrafficPatternRequest(BaseModel):
  sensor_id: str
  time_range: str # e.g., 'rush_hour', 'midnight'
 
-class TrafficPatternResponse(SanitizedBaseModel):
+class TrafficPatternResponse(BaseModel):
  average_vehicle_count: float
  average_speed: float
 
-class SimpleAnomalyDetectionRequest(SanitizedBaseModel):
+class SimpleAnomalyDetectionRequest(BaseModel):
  current_data: Dict[str, float] = Field(..., description="Current traffic data with keys like 'vehicle_count' and 'average_speed'")
  sensor_id: str = Field(..., description="ID of the sensor for which to detect anomalies")
  threshold: float = Field(..., description="Threshold for anomaly detection")
 
-class SimpleAnomalyDetectionResponse(SanitizedBaseModel):
+class SimpleAnomalyDetectionResponse(BaseModel):
  is_anomaly: bool
 
-class GetTimeSeriesRequest(SanitizedBaseModel):
+class GetTimeSeriesRequest(BaseModel):
     sensor_ids: List[str]
     start_time: datetime
     end_time: datetime
 
 # Using a generic Dict for time series data as DataFrame structure can vary
-class TimeSeriesDataResponse(SanitizedBaseModel):
+class TimeSeriesDataResponse(BaseModel):
     data: List[Dict[str, Any]]
     message: str = "Time series data retrieved successfully."
 
-class CalculateRollingAveragesRequest(SanitizedBaseModel):
+class CalculateRollingAveragesRequest(BaseModel):
     time_series_data: List[Dict[str, Any]]
     window_size: str
 
-class RollingAveragesResponse(SanitizedBaseModel):
+class RollingAveragesResponse(BaseModel):
     data: List[Dict[str, Any]]
     message: str = "Rolling averages calculated successfully."
 
@@ -497,23 +493,12 @@ async def get_forecast_vs_actual(
 async def get_feed_history_endpoint(
     feed_id: str,
     hours: int = Query(24, ge=1, le=168),
-    db: DatabaseManager = Depends(get_db_manager),
-    fm: FeedManager = Depends(get_feed_manager)
+    db: DatabaseManager = Depends(get_db_manager)
 ):
     try:
-        # Try to find coordinates for this feed to enable optimized lookup
-        lat, lon = None, None
-        try:
-            feed_config = await fm.get_feed_config(feed_id)
-            if feed_config:
-                lat = feed_config.latitude
-                lon = feed_config.longitude
-        except Exception as e:
-            logger.warning(f"Could not resolve coordinates for feed {feed_id}: {e}")
-
-        return await db.get_history_stats(feed_id, hours=hours, latitude=lat, longitude=lon)
+        return await db.get_history_stats(feed_id, hours=hours)
     except Exception as e:
-        logger.error(f"Error fetching history for {feed_id}: {e}", exc_info=True)
+        logger.error(f"Error fetching history for {feed_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch history")
 
 

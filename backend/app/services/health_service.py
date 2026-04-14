@@ -35,7 +35,7 @@ class SystemHealthService:
                         "status": status
                     }
                 )
-                await self.cm.broadcast_to_topic("system_health", message.model_dump())
+                await self.cm.broadcast_to_topic(message.model_dump_json(), topic="system_health")
                 
             except Exception as e:
                 logger.error(f"Error in health monitoring loop: {e}")

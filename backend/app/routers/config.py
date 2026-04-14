@@ -1,16 +1,12 @@
 # backend/app/routers/config.py
 
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends
 
 from app.dependency_injection import (
     get_config,
     get_current_admin,
-    get_feed_manager,
-    get_container,
-    DependencyContainer as Container,
-    FeedManager,
-)
+)  # Added get_current_active_user
 from app.models.common import APIResponse  # Re-use standard response model
 import logging
 
@@ -66,39 +62,10 @@ async def get_current_config(
     )
 
 
-@router.post(
-    "/reload",
-    summary="Reload Configuration",
-    description="Triggers a reload of the config.yaml file and propagates changes to active services.",
-)
-async def reload_server_config(
-    background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_admin),
-    feed_manager: FeedManager = Depends(get_feed_manager),
-    container: Container = Depends(get_container),
-) -> Dict[str, Any]:
-    try:
-        from app.config import reload_config
-        new_config = reload_config()
-        # Update the dependency injection container
-        container.set_config(new_config)
-        
-        # Notify FeedManager to update its internal config and workers
-        # We use a background task to avoid blocking the response
-        background_tasks.add_task(feed_manager.update_global_config, new_config)
-        
-        return APIResponse.success(
-            data=None,
-            message="Configuration reloaded and propagated to workers."
-        )
-    except Exception as e:
-        logger.error(f"Config reload failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to reload configuration: {str(e)}")
-
-
 # Architectural Note: Configuration Reload
 # Reloading configuration dynamically in a multi-worker FastAPI application (e.g., with Uvicorn workers)
-# is complex. Direct reloading of `config.yaml` via an API endpoint will only affect the specific
-# worker process that handles the request.
-# For this implementation, we rely on the FeedManager's ability to broadcast updates to
-# the inference workers.
+# is complex. Directly reloading `config.yaml` via an API endpoint will only affect the specific
+# worker process that handles the request, leading to inconsistent behavior across workers.
+# A robust solution requires a centralized configuration store (e.g., Redis, Consul) or
+# a signaling mechanism (e.g., SIGHUP to the master process) to ensure all workers update.
+# For this reason, the /reload endpoint has been removed to prevent partial updates.

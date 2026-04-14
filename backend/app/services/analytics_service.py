@@ -40,8 +40,6 @@ from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum
 
 from app.services.safety_monitor import SafetyMonitor
 from app.services.incident_manager import IncidentManager
-from app.services.v2x_service import V2XService
-from app.services.lane_calibrator import LaneCalibrator
 
 class AnalyticsService:
     def __init__(
@@ -53,7 +51,6 @@ class AnalyticsService:
         traffic_signal_service: Optional[TrafficSignalService] = None,
         notification_service: Optional[NotificationService] = None,
         incident_manager: Optional[IncidentManager] = None,
-        v2x_service: Optional[V2XService] = None,
     ):
         self.config = config
         self._connection_manager = connection_manager
@@ -61,11 +58,9 @@ class AnalyticsService:
         self._traffic_signal_service = traffic_signal_service
         self._notification_service = notification_service
         self._incident_manager = incident_manager
-        self._v2x_service = v2x_service
-        self._data_cache = TrafficDataCache(max_history_hours=168)
-        self._traffic_predictor_instance = traffic_predictor
+        self._data_cache = TrafficDataCache()
+        self._traffic_predictor_instance = None
         self._anomaly_detector_instance = None
-        self._lane_calibrators: Dict[str, LaneCalibrator] = {} # feed_id -> LaneCalibrator
         self._prediction_log_table_initialized = False
         
         # [NEW] Safety Monitor
@@ -89,79 +84,14 @@ class AnalyticsService:
         self._metrics_buffer_lock = asyncio.Lock()
         self._flush_interval = 60 # Flush every 60 seconds
         self._last_flush_time = time.time()
-        
-        # Alert Optimization State
-        self._last_optimization_time = time.time()
-        self._optimization_interval = 3600 # 1 hour
 
         logger.info("AnalyticsService initialized.")
-
-    async def _optimize_alert_thresholds(self):
-        """Periodically analyzes false positives and tunes safety monitor thresholds."""
-        try:
-            now = time.time()
-            if now - self._last_optimization_time < self._optimization_interval:
-                return
-            
-            self._last_optimization_time = now
-            logger.info("Starting automated alert suppression tuning...")
-            
-            # 1. Fetch recent incidents with FALSE_POSITIVE status
-            # For simplicity, we'll assume IncidentManager provides a way to get stats
-            # or we query DB directly.
-            if not self._incident_manager:
-                return
-                
-            stats = await self._incident_manager._db_manager.get_incident_stats()
-            # Expecting stats like: { "type_counts": { "stopped_vehicle": {"total": 100, "false_positive": 30} } }
-            
-            if not stats or "type_counts" not in stats:
-                return
-                
-            for inc_type, counts in stats["type_counts"].items():
-                fp_rate = counts.get("false_positive", 0) / max(1, counts.get("total", 0))
-                
-                if fp_rate > 0.2: # More than 20% false positives
-                    logger.warning(f"High false positive rate detected for {inc_type}: {fp_rate:.1%}. Auto-tuning thresholds...")
-                    
-                    # 2. Adjust SafetyMonitor thresholds
-                    # Map incident type to safety monitor settings
-                    if inc_type == "stopped_vehicle":
-                        current = self._safety_monitor.stopped_duration_threshold
-                        new_val = current * 1.5 # Be more conservative
-                        self._safety_monitor.stopped_duration_threshold = min(120.0, new_val)
-                        logger.info(f"Tuned stopped_duration_threshold: {current}s -> {self._safety_monitor.stopped_duration_threshold}s")
-                    
-                    elif inc_type == "wrong_way":
-                        current = getattr(self._safety_monitor, "wrong_way_duration_threshold", 1.5)
-                        new_val = current + 1.0
-                        self._safety_monitor.wrong_way_duration_threshold = min(10.0, new_val)
-                        logger.info(f"Tuned wrong_way_duration_threshold: {current}s -> {self._safety_monitor.wrong_way_duration_threshold}s")
-
-                    # 3. Log the optimization event as a system incident
-                    await self._incident_manager.create_incident(
-                        location={"latitude": 0, "longitude": 0},
-                        incident_type=IncidentTypeEnum.OTHER,
-                        severity=IncidentSeverityEnum.LOW,
-                        description=f"System optimization: Threshold for {inc_type} increased due to high FP rate ({fp_rate:.1%})",
-                        source_feed_id="system",
-                        bypass_debounce=True
-                    )
-        except Exception as e:
-            logger.error(f"Error in _optimize_alert_thresholds: {e}")
 
     @property
     def _traffic_predictor(self):
         if self._traffic_predictor_instance is None:
-            analytics_cfg = self.config.get("analytics_service", {})
-            prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
-            
-            if prediction_enabled:
-                logger.info("Lazy-loading TrafficPredictor...")
-                self._traffic_predictor_instance = TrafficPredictor(config=self.config)
-            else:
-                logger.debug("Traffic predictor requested but disabled in config.")
-                return None
+            logger.info("Lazy-loading TrafficPredictor...")
+            self._traffic_predictor_instance = TrafficPredictor(config=self.config)
         return self._traffic_predictor_instance
 
     @property
@@ -212,6 +142,7 @@ class AnalyticsService:
         # 2. Secondary: Use Anomaly Detector score as a likelihood proxy
         if self._anomaly_detector and recent_traffic_data:
             anomaly_result = self._anomaly_detector.detect_anomaly(recent_traffic_data)
+            # Map MAE/Z-score to a 0-1 likelihood (heuristic)
             score = min(0.9, anomaly_result.get("score", 0) / 5.0) 
             if anomaly_result.get("is_anomaly"):
                 return {
@@ -225,51 +156,84 @@ class AnalyticsService:
 
         # 3. Final Fallback: Statistical Rule-based prediction
         return self._traffic_predictor._rule_based_prediction(
-            location, prediction_time, recent_traffic_data
+            location, prediction_time, pd.DataFrame(recent_traffic_data)
         )
 
+    async def initialize_prediction_log_table(self):
+        if not self._prediction_log_table_initialized:
+            try:
+                async with self._db_manager.async_engine.begin() as conn:
+                    await conn.run_sync(PredictionLogModel.metadata.create_all)
+                self._prediction_log_table_initialized = True
+                logger.info("PredictionLog table initialized/checked successfully.")
+            except Exception as e:
+                logger.error(
+                    f"Failed to initialize PredictionLog table: {e}", exc_info=True
+                )
+                raise
+
     async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]] = None):
-        """
-        Entry point for feed metrics. Offloads heavy processing to background tasks.
-        """
-        # 1. Immediate bookkeeping (non-blocking)
+        # Placeholder for processing feed metrics
+        logger.debug(f"Processing metrics for feed {feed_id}: {metrics}")
+        # Extract latitude, longitude, and timestamp from metrics
         latitude = metrics.get("latitude")
         longitude = metrics.get("longitude")
+        timestamp = metrics.get(
+            "timestamp", time.time()
+        )
+
+        # Handle Anomalies
+        anomalies = metrics.get("anomalies", [])
+        now = time.time()
+        for anomaly in anomalies:
+            # Trigger Incident/Alert based on anomaly
+            severity_map = {
+                "Critical": IncidentSeverityEnum.CRITICAL,
+                "Warning": IncidentSeverityEnum.HIGH,
+                "INFO": IncidentSeverityEnum.MEDIUM
+            }
+            
+            # Create incident for significant anomalies if not recently reported
+            if anomaly.get("severity") in ["Critical", "Warning"]:
+                sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
+                asyncio.create_task(self._incident_manager.create_incident(
+                    location={"latitude": latitude, "longitude": longitude},
+                    incident_type=IncidentTypeEnum.OTHER,
+                    severity=sev,
+                    description=f"Automated Alert: {anomaly.get('details')}",
+                    source_feed_id=feed_id,
+                    details=anomaly
+                ))
+
+        # Safety Monitor Checks
+        if vehicles and self._safety_monitor:
+            alerts = self._safety_monitor.update(feed_id, vehicles, timestamp)
+            for alert in alerts:
+                # Convert Safety Alert to Incident
+                inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH
+                asyncio.create_task(self._incident_manager.create_incident(
+                    location={"latitude": latitude, "longitude": longitude},
+                    incident_type=IncidentTypeEnum.ACCIDENT if alert["subtype"] == "stopped_vehicle" else IncidentTypeEnum.OTHER,
+                    severity=inc_sev,
+                    description=alert["description"],
+                    source_feed_id=feed_id,
+                    details=alert["meta"]
+                ))
         
-        # Ensure timestamp is consistent
-        raw_timestamp = metrics.get("timestamp")
-        if raw_timestamp is None:
-            timestamp = datetime.now(timezone.utc)
-        elif isinstance(raw_timestamp, (int, float)):
-            timestamp = datetime.fromtimestamp(raw_timestamp, tz=timezone.utc)
-        elif isinstance(raw_timestamp, str):
-            try:
-                timestamp = datetime.fromisoformat(raw_timestamp)
-            except ValueError:
-                timestamp = datetime.now(timezone.utc)
-        else:
-            timestamp = datetime.now(timezone.utc)
-
-        # Update metrics with the normalized datetime object to ensure consistency across the system
-        metrics["timestamp"] = timestamp
-
-        # 2. Async Analytics Pipeline (Separated from process loop)
-        asyncio.create_task(self._async_analytics_pipeline(feed_id, metrics, vehicles, timestamp))
-
-        # Include calibration status in metrics for frontend HUD (needs to be synchronous for immediate broadcast)
+        # Include calibration status in metrics for frontend HUD
         if self._safety_monitor:
             metrics["calibration"] = self._safety_monitor.lane_calibrator.get_calibration_status(feed_id)
 
-        # 3. Buffer metrics for DB (fast)
         if latitude is not None and longitude is not None:
             self._data_cache.add_data_point(latitude, longitude, timestamp, metrics)
             
+            # Buffer for TimescaleDB
             async with self._metrics_buffer_lock:
                 self._metrics_buffer.append({
                     "id": self._data_cache._get_location_key(latitude, longitude),
                     "timestamp": timestamp,
-                    "vehicle_count": metrics.get("total_vehicles", 0),
-                    "average_speed": metrics.get("average_speed_kmh", 0.0),
+                    "vehicle_count": metrics.get("total_vehicles", metrics.get("vehicle_count", 0)),
+                    "average_speed": metrics.get("average_speed_kmh", metrics.get("average_speed", 0.0)),
                     "congestion_score": metrics.get("congestion_score", 0.0),
                     "latitude": latitude,
                     "longitude": longitude,
@@ -279,79 +243,13 @@ class AnalyticsService:
                     }
                 })
                 
+                # Check for flush
                 if len(self._metrics_buffer) >= 100 or (time.time() - self._last_flush_time > self._flush_interval):
                     asyncio.create_task(self._flush_metrics_to_db())
-
-    async def _async_analytics_pipeline(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]], timestamp: datetime):
-        """Heavy analytics processing running asynchronously."""
-        try:
-            latitude = metrics.get("latitude")
-            longitude = metrics.get("longitude")
-
-            # A. Handle Anomalies from Feed (e.g. Hard Braking)
-            anomalies = metrics.get("anomalies", [])
-            for anomaly in anomalies:
-                severity_map = {
-                    "Critical": IncidentSeverityEnum.CRITICAL,
-                    "Warning": IncidentSeverityEnum.HIGH,
-                    "INFO": IncidentSeverityEnum.MEDIUM
-                }
-                
-                if anomaly.get("severity") in ["Critical", "Warning"]:
-                    sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
-                    await self._incident_manager.create_incident(
-                        location={"latitude": latitude, "longitude": longitude},
-                        incident_type=IncidentTypeEnum.OTHER,
-                        severity=sev,
-                        description=f"Automated Alert: {anomaly.get('details')}",
-                        source_feed_id=feed_id,
-                        details=anomaly
-                    )
-
-            # B. Safety Monitor Checks (Stopped Vehicle, Wrong Way)
-            if vehicles and self._safety_monitor:
-                safety_timestamp = timestamp.timestamp()
-                alerts = self._safety_monitor.update(feed_id, vehicles, safety_timestamp)
-                for alert in alerts:
-                    inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH
-                    await self._incident_manager.create_incident(
-                        location={"latitude": latitude, "longitude": longitude},
-                        incident_type=IncidentTypeEnum.ACCIDENT if alert["subtype"] == "stopped_vehicle" else IncidentTypeEnum.OTHER,
-                        severity=inc_sev,
-                        description=alert["description"],
-                        source_feed_id=feed_id,
-                        details=alert["meta"]
-                    )
-            
-            # C. Pattern Anomaly Detection (AI-based)
-            # Fetch recent data for context
-            recent_data = self._data_cache.get_recent_data(latitude, longitude, hours=1)
-            if len(recent_data) > 5:
-                await self.detect_traffic_anomalies(recent_data)
-
-            # [NEW] D. V2X Feedback Loop
-            if self._v2x_service:
-                await self._v2x_service.process_analytics_trigger(feed_id, metrics)
-            
-            # [NEW] E. Autonomous Lane Nudge
-            if feed_id not in self._lane_calibrators:
-                self._lane_calibrators[feed_id] = LaneCalibrator(feed_id, self.config)
-            
-            calibrator = self._lane_calibrators[feed_id]
-            calibrator.accumulate(metrics.get("vehicles", []))
-            
-            # Periodically analyze for drift (every 500 frames processed by analytics)
-            if metrics.get("frame_index", 0) % 500 == 0:
-                nudge_result = await calibrator.analyze_and_nudge()
-                if nudge_result.get("status") == "nudge_required":
-                    logger.info(f"[{feed_id}] Autonomous Nudge Triggered: {nudge_result['data']}")
-                    # We can emit this as a special system alert/event
-                    await self._connection_manager.broadcast_to_feed(feed_id, {
-                        "type": "lane_nudge", "data": nudge_result["data"]
-                    })
-
-        except Exception as e:
-            logger.error(f"Error in async analytics pipeline: {e}", exc_info=True)
+        else:
+            logger.warning(
+                f"Metrics for feed {feed_id} missing latitude or longitude (Lat: {latitude}, Lon: {longitude}). Cannot add to TrafficDataCache."
+            )
 
     async def _flush_metrics_to_db(self):
         """Flushes the metrics buffer to the database."""
@@ -366,9 +264,6 @@ class AnalyticsService:
         try:
             await self._db_manager.save_location_metrics_batch(batch)
             logger.info(f"Flushed {len(batch)} metrics to database.")
-            
-            # Use this hook to check for alert optimization
-            asyncio.create_task(self._optimize_alert_thresholds())
         except Exception as e:
             logger.error(f"Error flushing metrics to database: {e}")
             # Optional: Put back in buffer or discard
@@ -387,7 +282,7 @@ class AnalyticsService:
         try:
             success = await self._db_manager.update_incident(incident_id, {"snapshot_path": snapshot_path})
             if success:
-                logger.debug(f"Updated incident {incident_id} with snapshot: {snapshot_path}")
+                logger.info(f"Updated incident {incident_id} with snapshot: {snapshot_path}")
                 
                 # Broadcast SNAPSHOT_READY
                 message = WebSocketMessage(
@@ -397,8 +292,9 @@ class AnalyticsService:
                         "snapshot_path": snapshot_path
                     }
                 )
+                from app.websocket.connection_manager import MessagePriority
                 await self._connection_manager.broadcast_to_topic(
-                    "incidents", message.model_dump()
+                    message.model_dump_json(), topic="incidents", priority=MessagePriority.HIGH
                 )
         except Exception as e:
             logger.error(f"Error updating incident snapshot: {e}")
@@ -778,8 +674,9 @@ class AnalyticsService:
         message = WebSocketMessage(
             type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION, data=notification.model_dump()
         )
+        from app.websocket.connection_manager import MessagePriority
         await self._connection_manager.broadcast_to_topic(
-            "operational_alerts", message.model_dump()
+            message.model_dump_json(), topic="operational_alerts", priority=MessagePriority.HIGH
         )
 
     async def send_user_specific_alert(self, user_id: str, notification_model: Any):
@@ -1036,8 +933,9 @@ class AnalyticsService:
             message = WebSocketMessage(
                 type=WebSocketMessageTypeEnum.NODE_CONGESTION_UPDATE, data=payload
             )
+            from app.websocket.connection_manager import MessagePriority
             await self._connection_manager.broadcast_to_topic(
-                "node_congestion", message.model_dump()
+                message.model_dump_json(), topic="node_congestion", priority=MessagePriority.NORMAL
             )
             logger.debug(
                 f"Broadcasted {len(nodes_for_broadcast)} node congestion updates."

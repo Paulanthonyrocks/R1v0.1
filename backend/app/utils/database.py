@@ -5,8 +5,6 @@ import sqlite3
 import threading
 import logging
 import time
-import os
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -22,7 +20,6 @@ from contextlib import asynccontextmanager, contextmanager
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from pymongo import MongoClient
 from pymongo.database import Database as MongoDatabase
 from pymongo.errors import (
@@ -67,15 +64,6 @@ class DatabaseError(Exception):
 
 
 # --- DatabaseManager (Merged and Corrected) ---
-# --- Retry Decorators ---
-from sqlalchemy.exc import OperationalError as SAOperationalError
-db_write_retry_decorator = retry(
-    wait=wait_exponential(multiplier=0.2, min=0.2, max=3),
-    stop=stop_after_attempt(5),
-    retry=retry_if_exception_type((sqlite3.OperationalError, SAOperationalError)),
-    reraise=True
-)
-
 class DatabaseManager:
     def __init__(self, config: Dict):
         self.sqlite_db_path: Optional[Path] = None
@@ -95,7 +83,6 @@ class DatabaseManager:
         # Initialize database connections
         self._init_from_config(config)
         self.lock = threading.Lock()
-        self._needs_vacuum = False  # S4: Background VACUUM scheduling flag
 
         # Initialize databases
         if self.sqlite_db_path:
@@ -111,10 +98,8 @@ class DatabaseManager:
         if self.sqlite_db_path:
             # --- THIS IS THE FIX ---
             # The "sqlite+aiosqlite" prefix tells SQLAlchemy to use the async aiosqlite driver.
-            # Increased timeout to 30s to handle "database is locked" errors in concurrent environments.
             self.async_engine = create_async_engine(
-                f"sqlite+aiosqlite:///{self.sqlite_db_path}",
-                connect_args={"timeout": 30.0}
+                f"sqlite+aiosqlite:///{self.sqlite_db_path}"
             )
             # ---------------------
 
@@ -158,17 +143,17 @@ class DatabaseManager:
                 # If we are in /home/user/R1v0.1/backend/app/utils/database.py, project_root is R1v0.1
                 path_obj = project_root / self.sqlite_db_path_str
 
-            self.sqlite_db_path = str(path_obj.resolve())
+            self.sqlite_db_path = path_obj.resolve()
 
-            if not os.path.exists(os.path.dirname(self.sqlite_db_path)):
+            if not self.sqlite_db_path.parent.exists():
                 try:
-                    os.makedirs(os.path.dirname(self.sqlite_db_path), exist_ok=True)
+                    self.sqlite_db_path.parent.mkdir(parents=True, exist_ok=True)
                     logger.info(
-                        f"Created database directory: {os.path.dirname(self.sqlite_db_path)}"
+                        f"Created database directory: {self.sqlite_db_path.parent}"
                     )
                 except OSError as e:
                     raise ConfigError(
-                        f"Failed to create database directory {os.path.dirname(self.sqlite_db_path)}: {e}"
+                        f"Failed to create database directory {self.sqlite_db_path.parent}: {e}"
                     ) from e
 
             logger.info(f"SQLite database path configured to: {self.sqlite_db_path}")
@@ -181,10 +166,11 @@ class DatabaseManager:
                 self.timescale_url = None
 
             mongo_config = config.get("mongodb") or {}
-            if mongo_config.get("enabled", True) and mongo_config.get("uri") and mongo_config.get("database_name"):
+            if mongo_config.get("uri") and mongo_config.get("database_name"):
                 self.mongo_uri = mongo_config["uri"]
                 
                 # Auto-adjust if in Docker and uri points to localhost
+                import os
                 is_colab = "COLAB_RELEASE_TAG" in os.environ
                 if Path("/.dockerenv").exists() and "localhost" in self.mongo_uri and not is_colab:
                     logger.info("Docker environment detected (non-Colab). Adjusting MongoDB URI from localhost to mongodb service name.")
@@ -356,8 +342,11 @@ class DatabaseManager:
                 conn.commit()
             logger.info("SQLite DB schema initialization check complete.")
             
+            # Auto-prune on startup
+            self.prune_old_data()
+            
         except (sqlite3.Error, DatabaseError) as e:
-            logger.error(f"DB init error in _initialize_sqlite_database: {e}", exc_info=True)
+            logger.error(f"DB init error: {e}", exc_info=True)
             raise DatabaseError(f"DB schema init fail: {e}") from e
 
     def _migrate_sqlite_database(self, cursor: sqlite3.Cursor):
@@ -383,107 +372,86 @@ class DatabaseManager:
                     logger.error(f"Failed to add column {col_name}: {e}")
 
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
-        logger.info("Calling _create_sqlite_tables")
-        try:
-            # ... (This method remains unchanged)
-            cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
-                    feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
-                    global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
-                    bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
-                    acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, 
-                    car_model TEXT, car_model_confidence REAL, car_color TEXT, flags TEXT,
-                    PRIMARY KEY (feed_id, track_id, timestamp))""")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
-            )
-            # S3: Compound index for cross-feed vehicle lookups
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_vt_global_timestamp ON vehicle_tracks(global_vehicle_id, timestamp DESC);"
-            )
-            cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
-                    license_plate TEXT PRIMARY KEY,
-                    appearance_id TEXT,
-                    vehicle_type TEXT,
-                    make TEXT,
-                    model TEXT,
-                    color TEXT,
-                    first_seen REAL,
-                    last_seen REAL,
-                    total_detections INTEGER DEFAULT 1,
-                    reid_gallery BLOB,
-                    flags TEXT)""")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_iv_appearance ON identified_vehicles(appearance_id);"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
-            )
-            cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
-                    global_id TEXT PRIMARY KEY,
-                    embeddings BLOB, -- Serialized numpy array
-                    metadata TEXT,   -- JSON metadata
-                    last_seen REAL NOT NULL
-            )""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reid_last_seen ON reid_identities(last_seen DESC);")
-            cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
-                    severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
-                    feed_id TEXT, -- Allow NULL for system alerts
-                    
-                    message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
-            
-            cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
-                    id TEXT PRIMARY KEY,
-                    feed_id TEXT,
-                    type TEXT NOT NULL,
-                    severity TEXT NOT NULL,
-                    description TEXT,
-                    status TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    latitude REAL,
-                    longitude REAL,
-                    snapshot_path TEXT,
-                    assigned_to TEXT,
-                    resolution_notes TEXT
-            )""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
-            
-            cursor.execute("""CREATE TABLE IF NOT EXISTS audit_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT,
-                    action TEXT NOT NULL,
-                    resource_type TEXT,
-                    resource_id TEXT,
-                    details TEXT,
-                    ip_address TEXT,
-                    timestamp REAL NOT NULL
-            )""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
+        # ... (This method remains unchanged)
+        cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
+                feed_id TEXT NOT NULL, track_id INTEGER NOT NULL, timestamp REAL NOT NULL, 
+                global_vehicle_id TEXT, class_id INTEGER, confidence REAL,
+                bbox_x1 REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL, center_x REAL, center_y REAL, speed REAL,
+                acceleration REAL, lane INTEGER, direction REAL, license_plate TEXT, ocr_confidence REAL, 
+                car_model TEXT, car_model_confidence REAL, car_color TEXT, flags TEXT,
+                PRIMARY KEY (feed_id, track_id, timestamp))""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vt_timestamp ON vehicle_tracks(timestamp DESC);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vt_global_id ON vehicle_tracks(global_vehicle_id);"
+        )
+        cursor.execute("""CREATE TABLE IF NOT EXISTS identified_vehicles (
+                license_plate TEXT PRIMARY KEY,
+                appearance_id TEXT,
+                vehicle_type TEXT,
+                make TEXT,
+                model TEXT,
+                color TEXT,
+                first_seen REAL,
+                last_seen REAL,
+                total_detections INTEGER DEFAULT 1,
+                reid_gallery BLOB,
+                flags TEXT)""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_appearance ON identified_vehicles(appearance_id);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
+        )
+        cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
+                global_id TEXT PRIMARY KEY,
+                embeddings BLOB, -- Serialized numpy array
+                metadata TEXT,   -- JSON metadata
+                last_seen REAL NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reid_last_seen ON reid_identities(last_seen DESC);")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
+                severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
+                feed_id TEXT, -- Allow NULL for system alerts
+                
+                message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
+        
+        cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
+                id TEXT PRIMARY KEY,
+                feed_id TEXT,
+                type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                snapshot_path TEXT,
+                assigned_to TEXT,
+                resolution_notes TEXT
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_timestamp ON incidents(timestamp DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);")
+        
+        cursor.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                details TEXT,
+                ip_address TEXT,
+                timestamp REAL NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
 
-            cursor.execute("""CREATE TABLE IF NOT EXISTS location_metrics (
-                    location_id TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    vehicle_count INTEGER,
-                    average_speed REAL,
-                    congestion_score REAL,
-                    latitude REAL,
-                    longitude REAL,
-                    PRIMARY KEY (location_id, timestamp))""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_lm_timestamp ON location_metrics(timestamp DESC);")
-            
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_vt_feed_timestamp ON vehicle_tracks(feed_id, timestamp DESC);")
-
-            # ... and other table creation statements ...
-            logger.debug("SQLite DB table creation check finished.")
-        except Exception as e:
-            logger.error(f"Error in _create_sqlite_tables: {e}")
+        # ... and other table creation statements ...
+        logger.debug("SQLite DB table creation check finished.")
 
     def _initialize_mongodb(self):
         """Initializes the MongoDB connection with a retry mechanism."""
@@ -526,69 +494,23 @@ class DatabaseManager:
             self.mongo_client = None
             self.mongo_db = None
 
-    def prune_old_data(self, config: Optional[Dict] = None, retention_days: int = 7) -> Dict[str, int]:
-        """
-        Prunes old records and files to reclaim space.
-        If config is provided, it also prunes snapshots and hard negatives.
-        """
-        results = {"db_pruned": 0, "snapshots_pruned": 0, "hard_negatives_pruned": 0}
+    def prune_old_data(self, retention_days: int = 7) -> int:
+        """Prunes vehicle tracks older than the specified number of days."""
         cutoff_time = time.time() - (retention_days * 24 * 3600)
-        
-        # 1. Prune Database
         sql = "DELETE FROM vehicle_tracks WHERE timestamp < ?"
         try:
             with self.lock:
                 with self._get_sqlite_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(sql, (cutoff_time,))
-                    results["db_pruned"] = cursor.rowcount
+                    deleted_count = cursor.rowcount
                     conn.commit()
-                    
-                    # S4 Fix: Don't VACUUM inline — set flag for background scheduling
-                    if results["db_pruned"] > 1000:
-                        self._needs_vacuum = True
-            
-            if results["db_pruned"] > 0:
-                logger.info(f"Pruned {results['db_pruned']} old records from vehicle_tracks.")
+            if deleted_count > 0:
+                logger.info(f"Pruned {deleted_count} old records from vehicle_tracks (older than {retention_days} days).")
+            return deleted_count
         except Exception as e:
-            logger.error(f"Error pruning database records: {e}")
-
-        # 2. Prune Files (if config provided)
-        if config:
-            data_dir = Path(config.get("data_dir", "backend/data"))
-            
-            # Prune Snapshots
-            snap_dir = Path(config.get("snapshots_dir", data_dir / "snapshots"))
-            if snap_dir.exists():
-                snap_retention = config.get("snapshot_retention_days", 7)
-                results["snapshots_pruned"] = self._prune_directory(snap_dir, snap_retention)
-                
-            # Prune Hard Negatives
-            hn_dir = data_dir / "hard_negatives"
-            if hn_dir.exists():
-                hn_retention = config.get("hard_negative_retention_days", 3)
-                results["hard_negatives_pruned"] = self._prune_directory(hn_dir, hn_retention)
-                
-        return results
-
-    def _prune_directory(self, directory: Path, retention_days: int) -> int:
-        """Helper to remove old files in a directory."""
-        count = 0
-        cutoff = time.time() - (retention_days * 24 * 3600)
-        try:
-            for item in directory.glob("**/*"):
-                if item.is_file() and item.stat().st_mtime < cutoff:
-                    try:
-                        item.unlink()
-                        count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to delete {item}: {e}")
-            
-            if count > 0:
-                logger.info(f"Pruned {count} files from {directory} (older than {retention_days} days).")
-        except Exception as e:
-            logger.error(f"Error pruning directory {directory}: {e}")
-        return count
+            logger.error(f"Error pruning old data: {e}")
+            return 0
 
     # --- Incident Management ---
     
@@ -677,43 +599,14 @@ class DatabaseManager:
             logger.error(f"Error getting incident {incident_id}: {e}")
             return None
 
-    async def get_incident_stats(self) -> Dict[str, Any]:
-        """Retrieves statistics on incident types and false positive rates."""
-        query = """
-            SELECT 
-                type, 
-                COUNT(*) as total, 
-                SUM(CASE WHEN status = 'FALSE_POSITIVE' THEN 1 ELSE 0 END) as false_positives
-            FROM incidents 
-            GROUP BY type
-        """
-        try:
-            async with self.get_session() as session:
-                result = await session.execute(text(query))
-                rows = result.all()
-                
-                type_counts = {}
-                for row in rows:
-                    inc_type = row[0]
-                    total = row[1]
-                    fps = row[2] or 0
-                    type_counts[inc_type] = {"total": total, "false_positive": fps}
-                
-                return {"type_counts": type_counts}
-        except Exception as e:
-            logger.error(f"Error getting incident stats: {e}")
-            return {"type_counts": {}}
-
     def _validate_query(self, query: str, params: tuple):
-        """S2 Fix: Validates that destructive queries use parameterized values.
-        Parameterized queries with placeholders (?) are safe — SQL injection
-        only happens when user input is concatenated into query strings."""
-        destructive_keywords = ['DROP ', 'TRUNCATE ', 'ALTER TABLE']
+        """Validates query for potential SQL injection risks."""
+        unsafe_keywords = ['DROP ', 'TRUNCATE ', 'DELETE FROM', 'ALTER TABLE']
         upper_query = query.upper()
-        for keyword in destructive_keywords:
-            if keyword in upper_query:
-                logger.error(f"Blocked potentially destructive query: {keyword.strip()}")
-                raise ValueError(f"Destructive SQL command detected: {keyword.strip()}")
+        if any(keyword in upper_query for keyword in unsafe_keywords):
+            if not params:
+                logger.error(f"Potentially unsafe query without parameters: {query}")
+                raise ValueError("Unsafe query detected: potentially destructive command without parameters")
 
     def _execute_write(self, sql: str, params: tuple):
         """Helper for synchronous write operations."""
@@ -723,46 +616,24 @@ class DatabaseManager:
                 conn.execute(sql, params)
                 conn.commit()
 
-    from sqlalchemy.exc import OperationalError as SAOperationalError
     db_write_retry_decorator = retry(
         wait=wait_exponential(multiplier=0.2, min=0.2, max=3),
         stop=stop_after_attempt(4),
-        retry=retry_if_exception_type((sqlite3.OperationalError, SAOperationalError)),
+        retry=retry_if_exception_type(sqlite3.OperationalError),
     )
 
     @db_write_retry_decorator
-    async def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> int:
-        """Saves a batch of vehicle tracking data in a single transaction via aiosqlite."""
+    def save_vehicle_data_batch(self, vehicle_data_list: List[Dict]) -> int:
+        """Saves a batch of vehicle tracking data in a single transaction."""
         if not vehicle_data_list:
             return 0
         
-        sql = text("""INSERT INTO vehicle_tracks (
+        sql = """INSERT OR REPLACE INTO vehicle_tracks (
             feed_id, track_id, timestamp, global_vehicle_id, class_id, confidence,
             bbox_x1, bbox_y1, bbox_x2, bbox_y2, center_x, center_y,
             speed, acceleration, lane, direction, license_plate, ocr_confidence, 
             car_model, car_model_confidence, car_color, flags
-        ) VALUES (
-            :feed_id, :track_id, :timestamp, :global_vehicle_id, :class_id, :confidence,
-            :bbox_x1, :bbox_y1, :bbox_x2, :bbox_y2, :center_x, :center_y,
-            :speed, :acceleration, :lane, :direction, :license_plate, :ocr_confidence, 
-            :car_model, :car_model_confidence, :car_color, :flags
-        )
-        ON CONFLICT(feed_id, track_id, timestamp) DO UPDATE SET
-            global_vehicle_id = COALESCE(excluded.global_vehicle_id, vehicle_tracks.global_vehicle_id),
-            class_id = excluded.class_id,
-            confidence = excluded.confidence,
-            bbox_x1 = excluded.bbox_x1, bbox_y1 = excluded.bbox_y1,
-            bbox_x2 = excluded.bbox_x2, bbox_y2 = excluded.bbox_y2,
-            center_x = excluded.center_x, center_y = excluded.center_y,
-            speed = excluded.speed, acceleration = excluded.acceleration,
-            lane = excluded.lane, direction = excluded.direction,
-            license_plate = COALESCE(excluded.license_plate, vehicle_tracks.license_plate),
-            ocr_confidence = COALESCE(excluded.ocr_confidence, vehicle_tracks.ocr_confidence),
-            car_model = COALESCE(excluded.car_model, vehicle_tracks.car_model),
-            car_model_confidence = COALESCE(excluded.car_model_confidence, vehicle_tracks.car_model_confidence),
-            car_color = COALESCE(excluded.car_color, vehicle_tracks.car_color),
-            flags = excluded.flags
-        """)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         
         batch_params = []
         for vd in vehicle_data_list:
@@ -774,31 +645,33 @@ class DatabaseManager:
             else:
                 flags_str = str(flags_val)
 
-            params = {
-                "feed_id": vd.get("feed_id", "unknown"),
-                "track_id": vd.get("track_id") or vd.get("vehicle_id"),
-                "timestamp": vd.get("timestamp", time.time()),
-                "global_vehicle_id": vd.get("global_vehicle_id"),
-                "class_id": vd.get("class_id"),
-                "confidence": vd.get("confidence"),
-                "bbox_x1": bbox[0], "bbox_y1": bbox[1], "bbox_x2": bbox[2], "bbox_y2": bbox[3],
-                "center_x": center[0], "center_y": center[1],
-                "speed": vd.get("speed"),
-                "acceleration": vd.get("acceleration"),
-                "lane": vd.get("lane"),
-                "direction": vd.get("direction"),
-                "license_plate": vd.get("license_plate"),
-                "ocr_confidence": vd.get("ocr_confidence"),
-                "car_model": vd.get("car_model"),
-                "car_model_confidence": vd.get("car_model_confidence"),
-                "car_color": vd.get("car_color"),
-                "flags": flags_str,
-            }
+            params = (
+                vd.get("feed_id", "unknown"),
+                vd.get("track_id") or vd.get("vehicle_id"),
+                vd.get("timestamp", time.time()),
+                vd.get("global_vehicle_id"),
+                vd.get("class_id"),
+                vd.get("confidence"),
+                bbox[0], bbox[1], bbox[2], bbox[3],
+                center[0], center[1],
+                vd.get("speed"),
+                vd.get("acceleration"),
+                vd.get("lane"),
+                vd.get("direction"),
+                vd.get("license_plate"),
+                vd.get("ocr_confidence"),
+                vd.get("car_model"),
+                vd.get("car_model_confidence"),
+                vd.get("car_color"),
+                flags_str,
+            )
             batch_params.append(params)
 
         try:
-            async with self.async_engine.begin() as conn:
-                await conn.execute(sql, batch_params)
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, batch_params)
+                    conn.commit()
             
             # --- DUAL WRITE TO TIMESCALEDB ---
             if self.timescale_engine:
@@ -807,10 +680,12 @@ class DatabaseManager:
             return len(batch_params)
         except Exception as e:
             logger.error(f"DB batch save failed: {e}")
-            raise
+            if isinstance(e, sqlite3.OperationalError):
+                raise
+            return 0
 
     async def _save_to_timescale_batch(self, vehicle_data_list: List[Dict]):
-        """Asynchronously saves a batch of data to TimescaleDB (S5: with retry)."""
+        """Asynchronously saves a batch of data to TimescaleDB."""
         if not self.timescale_engine:
             return
 
@@ -824,108 +699,38 @@ class DatabaseManager:
             )
         """)
         
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                async with self.timescale_engine.begin() as conn:
-                    params = []
-                    for vd in vehicle_data_list:
-                        center = vd.get("centroid") or vd.get("center") or [None, None]
-                        ts = datetime.fromtimestamp(vd.get("timestamp", time.time()), tz=timezone.utc)
-                        
-                        params.append({
-                            "feed_id": vd.get("feed_id", "unknown"),
-                            "track_id": str(vd.get("track_id") or vd.get("vehicle_id")),
-                            "timestamp": ts,
-                            "global_vehicle_id": vd.get("global_vehicle_id"),
-                            "class_id": vd.get("class_id"),
-                            "confidence": vd.get("confidence"),
-                            "center_x": center[0],
-                            "center_y": center[1],
-                            "speed": vd.get("speed"),
-                            "lane": vd.get("lane"),
-                            "direction": vd.get("direction"),
-                            "license_plate": vd.get("license_plate")
-                        })
-                    
-                    await conn.execute(sql, params)
-                return  # Success, exit retry loop
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"TimescaleDB batch save attempt {attempt + 1} failed: {e}. Retrying...")
-                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
-                else:
-                    logger.error(f"TimescaleDB batch save failed after {max_retries} attempts: {e}")
-
-    def _get_location_key(self, latitude: float, longitude: float) -> str:
-        """Create a unique key for a location, rounding to 4 decimal places for nearby grouping"""
-        return f"{round(latitude, 4)},{round(longitude, 4)}"
-
-    @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        stop=stop_after_attempt(5),
-        retry=retry_if_exception_type((sqlite3.OperationalError, SQLAlchemyOperationalError)),
-        reraise=True
-    )
-    async def save_location_metrics_batch(self, metrics_list: List[Dict]):
-        """Saves a batch of aggregated location metrics to SQLite and TimescaleDB."""
-        if not metrics_list:
-            return
-
-        # --- 1. SAVE TO SQLITE (Primary/Real-time) ---
-        sql = text("""INSERT OR REPLACE INTO location_metrics (
-            location_id, timestamp, vehicle_count, average_speed, 
-            congestion_score, latitude, longitude
-        ) VALUES (
-            :location_id, :timestamp, :vehicle_count, :average_speed, 
-            :congestion_score, :latitude, :longitude
-        )""")
-
-        sqlite_params = []
-        for m in metrics_list:
-            ts = m.get("timestamp")
-            if isinstance(ts, datetime):
-                ts = ts.timestamp()
-            elif isinstance(ts, str):
-                try:
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-                except ValueError:
-                    ts = time.time()
-
-            sqlite_params.append({
-                "location_id": m.get("id"),
-                "timestamp": ts,
-                "vehicle_count": m.get("vehicle_count"),
-                "average_speed": m.get("average_speed"),
-                "congestion_score": m.get("congestion_score"),
-                "latitude": m.get("latitude"),
-                "longitude": m.get("longitude")
-            })
-
         try:
-            async with self.async_engine.begin() as conn:
-                await conn.execute(sql, sqlite_params)
-            logger.info(f"Saved {len(sqlite_params)} location metrics to SQLite.")
-        except (sqlite3.OperationalError, SQLAlchemyOperationalError) as e:
-            logger.warning(f"Retrying: Failed to save location metrics to SQLite: {e}")
-            raise 
+            async with self.timescale_engine.begin() as conn:
+                params = []
+                for vd in vehicle_data_list:
+                    center = vd.get("centroid") or vd.get("center") or [None, None]
+                    ts = datetime.fromtimestamp(vd.get("timestamp", time.time()), tz=timezone.utc)
+                    
+                    params.append({
+                        "feed_id": vd.get("feed_id", "unknown"),
+                        "track_id": str(vd.get("track_id") or vd.get("vehicle_id")),
+                        "timestamp": ts,
+                        "global_vehicle_id": vd.get("global_vehicle_id"),
+                        "class_id": vd.get("class_id"),
+                        "confidence": vd.get("confidence"),
+                        "center_x": center[0],
+                        "center_y": center[1],
+                        "speed": vd.get("speed"),
+                        "lane": vd.get("lane"),
+                        "direction": vd.get("direction"),
+                        "license_plate": vd.get("license_plate")
+                    })
+                
+                await conn.execute(sql, params)
         except Exception as e:
-            logger.error(f"Unexpected error saving location metrics to SQLite: {e}")
+            logger.error(f"TimescaleDB batch save failed: {e}")
 
-        # --- 2. SAVE TO TIMESCALEDB (Archive - Optimized to be non-blocking) ---
+    async def save_location_metrics_batch(self, metrics_list: List[Dict]):
+        """Saves a batch of aggregated location metrics to TimescaleDB."""
         if not self.timescale_engine:
             return
-            
-        # Offload TimescaleDB write to a background task to avoid blocking the main pipeline
-        asyncio.create_task(self._async_save_to_timescale_metrics(metrics_list))
 
-
-    async def _async_save_to_timescale_metrics(self, metrics_list: List[Dict]):
-        """Background helper to save metrics to TimescaleDB without blocking the main pipeline."""
-        if not self.timescale_engine:
-            return
-        
-        ts_sql = text("""
+        sql = text("""
             INSERT INTO location_metrics (
                 location_id, timestamp, vehicle_count, average_speed, 
                 congestion_score, latitude, longitude
@@ -934,10 +739,10 @@ class DatabaseManager:
                 :congestion_score, :latitude, :longitude
             )
         """)
-        
+
         try:
             async with self.timescale_engine.begin() as conn:
-                ts_params = []
+                params = []
                 for m in metrics_list:
                     ts = m.get("timestamp")
                     if isinstance(ts, (int, float)):
@@ -947,10 +752,8 @@ class DatabaseManager:
                             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         except ValueError:
                             ts = datetime.now(timezone.utc)
-                    else:
-                        ts = datetime.now(timezone.utc)
-
-                    ts_params.append({
+                    
+                    params.append({
                         "location_id": m.get("id"),
                         "timestamp": ts,
                         "vehicle_count": m.get("vehicle_count"),
@@ -959,97 +762,58 @@ class DatabaseManager:
                         "latitude": m.get("latitude"),
                         "longitude": m.get("longitude")
                     })
-                await conn.execute(ts_sql, ts_params)
-                logger.debug(f"Background save: {len(ts_params)} metrics to TimescaleDB.")
+                
+                await conn.execute(sql, params)
+                logger.info(f"Saved {len(params)} location metrics to TimescaleDB.")
         except Exception as e:
-            logger.error(f"Background TimescaleDB save failed: {e}")
+            logger.error(f"Failed to save location metrics to TimescaleDB: {e}")
 
-
-    async def get_location_metrics(self, location_id: str, hours: int) -> List[Dict]:
-        """Retrieves pre-aggregated location metrics for a specific location and time window."""
-        # 1. Try TimescaleDB first if enabled
-        if self.timescale_url:
-            try:
-                async with self.timescale_engine.connect() as conn:
-                    start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-                    result = await conn.execute(
-                        text("SELECT location_id, timestamp, vehicle_count, average_speed, congestion_score, latitude, longitude "
-                             "FROM location_metrics WHERE location_id = :loc_id AND timestamp >= :start_time ORDER BY timestamp DESC"),
-                        {"loc_id": location_id, "start_time": start_time}
-                    )
-                    rows = result.fetchall()
-                    if rows:
-                        return [dict(row._mapping) for row in rows]
-            except Exception as e:
-                logger.warning(f"TimescaleDB fetch for location_metrics failed: {e}")
-        
-        # 2. Fallback to SQLite
-        if not self.sqlite_db_path:
+    async def get_location_metrics(self, location_id: str, hours: int = 24) -> List[Dict]:
+        """Retrieves historical location metrics from TimescaleDB."""
+        if not self.timescale_engine:
             return []
-        
-        import time
-        threshold = time.time() - (hours * 3600)
-        query = "SELECT * FROM location_metrics WHERE location_id = ? AND timestamp >= ? ORDER BY timestamp DESC"
-        params = (location_id, threshold)
-        
+
+        start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        sql = text("""
+            SELECT * FROM location_metrics 
+            WHERE location_id = :location_id 
+            AND timestamp >= :start_time
+            ORDER BY timestamp ASC
+        """)
+
         try:
-            return await asyncio.to_thread(self._execute_query, query, params)
+            async with self.timescale_engine.connect() as conn:
+                result = await conn.execute(sql, {"location_id": location_id, "start_time": start_time})
+                return [dict(row._mapping) for row in result]
         except Exception as e:
-            logger.error(f"SQLite fetch for location metrics for {location_id} failed: {e}")
+            logger.error(f"Failed to query location metrics from TimescaleDB: {e}")
             return []
-    async def get_history_stats(self, feed_id: str, hours: int = 24, latitude: Optional[float] = None, longitude: Optional[float] = None) -> List[Dict]:
+
+    async def get_history_stats(self, feed_id: str, hours: int = 24) -> List[Dict]:
         """
         Retrieves historical statistics (vehicle count, speed).
-        Tries TimescaleDB/SQLite 'location_metrics' first.
+        Tries TimescaleDB 'location_metrics' first.
         Falls back to aggregating 'vehicle_tracks' in SQLite.
         """
-        # 1. Try pre-aggregated metrics first (Fastest)
-        try:
-            # First try with feed_id directly as location_id
-            metrics = await self.get_location_metrics(feed_id, hours)
+        # 1. Try TimescaleDB (if configured and data exists)
+        if self.timescale_engine:
+            try:
+                metrics = await self.get_location_metrics(feed_id, hours)
+                if metrics:
+                    return metrics
+            except Exception as e:
+                logger.warning(f"TimescaleDB history fetch failed, falling back to SQLite: {e}")
 
-            # Fallback: AnalyticsService uses coordinate-based keys. Try that too.
-            if not metrics and latitude is not None and longitude is not None:
-                coord_id = self._get_location_key(latitude, longitude)
-                if coord_id != feed_id:
-                    logger.info(f"Retrying history fetch with coordinate-based ID: {coord_id}")
-                    metrics = await self.get_location_metrics(coord_id, hours)
-
-            if metrics:
-                # Map to format expected by dashboard
-                return [{
-                    "timestamp": m.get("timestamp"),
-                    "vehicle_count": m.get("vehicle_count"),
-                    "average_speed": m.get("average_speed"),
-                    "congestion_score": m.get("congestion_score", 0.0)
-                } for m in metrics]
-        except Exception as e:
-            logger.warning(f"Pre-aggregated history fetch failed: {e}")
-
-        # 2. Fallback to SQLite Aggregation (SLOW on large tables)
+        # 2. Fallback to SQLite Aggregation
         if not self.sqlite_db_path:
              return []
 
         # Calculate start timestamp
         start_ts = time.time() - (hours * 3600)
-
-        # Optimization: Use COUNT(track_id) instead of COUNT(DISTINCT track_id)
-        # In this context (per-hour buckets), the difference is usually negligible 
-        # but the performance gain is massive because SQLite doesn't need a temporary table for distinct values.
+        
         sql = """
             SELECT 
                 cast(timestamp / 3600 as int) * 3600 as time_bucket, -- Group by hour
-                count(track_id) / 3600.0 as vehicle_count, -- Approximate count per second * 3600 (actually just counts update rows)
-                avg(speed) as average_speed
-            FROM vehicle_tracks
-            WHERE feed_id = ? AND timestamp >= ?
-            GROUP BY time_bucket
-            ORDER BY time_bucket ASC
-        """
-        # Better query for unique vehicles:
-        sql_refined = """
-            SELECT 
-                cast(timestamp / 3600 as int) * 3600 as time_bucket,
                 count(distinct track_id) as vehicle_count,
                 avg(speed) as average_speed
             FROM vehicle_tracks
@@ -1057,41 +821,32 @@ class DatabaseManager:
             GROUP BY time_bucket
             ORDER BY time_bucket ASC
         """
-        # We'll use the refined one but with a strict timeout
-
+        
         try:
-            # Use a smaller timeout for the aggregation fallback to avoid 500 errors
-            # Reduced from 15s to 5s to ensure event loop remains responsive and proxy doesn't timeout
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._execute_history_query, sql_refined, (feed_id, start_ts)),
-                timeout=5.0
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"History aggregation timed out for {feed_id} after 5s")
-            return []
+            results = []
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (feed_id, start_ts))
+                    rows = cursor.fetchall()
+                    
+                    for row in rows:
+                        # Row keys depend on row_factory, usually case-insensitive or index
+                        # Using numeric indices is safer if row_factory varies
+                        ts = row[0]
+                        count = row[1]
+                        speed = row[2] if row[2] is not None else 0.0
+                        
+                        results.append({
+                            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc),
+                            "vehicle_count": count,
+                            "average_speed": speed,
+                            "congestion_score": 0.0 # Not easily calculable from raw tracks
+                        })
+            return results
         except Exception as e:
             logger.error(f"SQLite aggregation failed: {e}")
             return []
-    def _execute_history_query(self, sql: str, params: tuple) -> List[Dict]:
-        results = []
-        with self.lock:
-            with self._get_sqlite_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(sql, params)
-                rows = cursor.fetchall()
-                
-                for row in rows:
-                    ts = row[0]
-                    count = row[1]
-                    speed = row[2] if row[2] is not None else 0.0
-                    
-                    results.append({
-                        "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
-                        "vehicle_count": count,
-                        "average_speed": speed,
-                        "congestion_score": 0.0
-                    })
-        return results
 
     @db_write_retry_decorator
     def save_vehicle_data(self, vd: Dict) -> bool:
@@ -1147,16 +902,13 @@ class DatabaseManager:
                 raise DatabaseError(f"Failed save vehicle: {e}") from e
 
     @db_write_retry_decorator
-    async def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
+    def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
         """Upserts a vehicle identification record based on license plate."""
-        sql = text("""
+        sql = """
         INSERT INTO identified_vehicles (
             license_plate, appearance_id, vehicle_type, make, model, color, 
             first_seen, last_seen, reid_gallery, flags, total_detections
-        ) VALUES (
-            :license_plate, :appearance_id, :vehicle_type, :make, :model, :color, 
-            :first_seen, :last_seen, :reid_gallery, :flags, 1
-        )
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         ON CONFLICT(license_plate) DO UPDATE SET
             appearance_id = COALESCE(excluded.appearance_id, identified_vehicles.appearance_id),
             vehicle_type = COALESCE(excluded.vehicle_type, identified_vehicles.vehicle_type),
@@ -1167,7 +919,7 @@ class DatabaseManager:
             last_seen = excluded.last_seen,
             total_detections = identified_vehicles.total_detections + 1,
             flags = COALESCE(excluded.flags, identified_vehicles.flags)
-        """)
+        """
         try:
             lp = vehicle_data.get("license_plate")
             if not lp or lp == "Unknown":
@@ -1183,21 +935,22 @@ class DatabaseManager:
                     logger.warning(f"Failed to serialize ReID gallery for {lp}: {e}")
 
             now = vehicle_data.get("timestamp", time.time())
-            params = {
-                "license_plate": lp,
-                "appearance_id": vehicle_data.get("appearance_id") or vehicle_data.get("global_vehicle_id"),
-                "vehicle_type": vehicle_data.get("vehicle_type"),
-                "make": vehicle_data.get("make"),
-                "model": vehicle_data.get("model"),
-                "color": vehicle_data.get("color"),
-                "first_seen": now,
-                "last_seen": now,
-                "reid_gallery": gallery_blob,
-                "flags": vehicle_data.get("flags")
-            }
+            params = (
+                lp,
+                vehicle_data.get("appearance_id") or vehicle_data.get("global_vehicle_id"),
+                vehicle_data.get("vehicle_type"),
+                vehicle_data.get("make"),
+                vehicle_data.get("model"),
+                vehicle_data.get("color"),
+                now, # first_seen
+                now, # last_seen
+                gallery_blob,
+                vehicle_data.get("flags")
+            )
             
-            async with self.async_engine.begin() as conn:
-                await conn.execute(sql, params)
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.execute(sql, params)
             return True
         except Exception as e:
             logger.error(f"Error upserting identified vehicle {vehicle_data.get('license_plate')}: {e}")
@@ -1316,34 +1069,6 @@ class DatabaseManager:
             raise DatabaseError(f"Failed to save alert: {e}") from e
     # ... (all your other synchronous and asynchronous database methods like get_alerts_filtered,
     #      save_alert, acknowledge_alert, get_raw_traffic_data_mongo, etc., remain here unchanged)
-    async def insert_alerts(self, alerts: List[Dict]):
-        """Inserts a batch of alerts into the database."""
-        sql = """INSERT INTO alerts (timestamp, severity, feed_id, message, details, acknowledged)
-                 VALUES (?, ?, ?, ?, ?, ?)"""
-        params = []
-        for alert in alerts:
-            params.append((
-                alert.get("timestamp", time.time()),
-                alert.get("severity", "INFO"),
-                alert.get("feed_id"),
-                alert.get("message", ""),
-                json.dumps(alert.get("details", {})),
-                0
-            ))
-        
-        try:
-            await asyncio.to_thread(self._execute_write_many, sql, params)
-        except Exception as e:
-            logger.error(f"Error inserting alerts batch: {e}")
-            raise DatabaseError(f"Failed to insert alerts batch: {e}") from e
-
-    def _execute_write_many(self, sql: str, params: List[tuple]):
-        """Helper for synchronous write many operations."""
-        self._validate_query(sql, ())
-        with self.lock:
-            with self._get_sqlite_connection() as conn:
-                conn.executemany(sql, params)
-                conn.commit()
 
     async def get_alerts_filtered(
         self, filters: Dict, limit: int = 100, offset: int = 0

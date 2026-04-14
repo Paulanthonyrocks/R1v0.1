@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Dict, Any, Union, List
 from datetime import datetime, timezone
 import enum
-from app.models.validation import SanitizedBaseModel
 
 # Import FeedStatusData directly to avoid redefinition mismatch
 # app.models.feeds does not import websocket, so this is safe.
@@ -15,13 +14,13 @@ def get_utc_now_str() -> str:
 # --- 2. Local DTO definitions ---
 # Defined locally to avoid circular imports and enforce string timestamps for WebSocket payloads.
 
-class AlertData(SanitizedBaseModel):
+class AlertData(BaseModel):
     id: str
     severity: str
     message: str
     timestamp: str
 
-class SignalStateData(SanitizedBaseModel):
+class SignalStateData(BaseModel):
     signal_id: str
     current_phase: str
     status: str
@@ -31,7 +30,7 @@ class SignalStateData(SanitizedBaseModel):
 
 # --- 3. Specific Payload Models ---
 
-class RealtimeMetricsUpdate(SanitizedBaseModel):
+class RealtimeMetricsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     feed_id: str = Field(..., description="ID of the feed generating the metrics")
@@ -42,29 +41,28 @@ class RealtimeMetricsUpdate(SanitizedBaseModel):
         example={"vehicle_count": 15, "avg_speed_kmh": 45.6},
     )
 
-class GlobalRealtimeMetrics(SanitizedBaseModel):
+class GlobalRealtimeMetrics(BaseModel):
     timestamp: str = Field(default_factory=get_utc_now_str)
     metrics_source: Optional[str] = Field(None, description="Source of the metrics")
     congestion_index: Optional[float] = Field(None, example=45.5)
     average_speed_kmh: Optional[float] = Field(None, example=30.2)
     active_incidents_count: Optional[int] = Field(None, example=3)
     total_flow: Optional[int] = Field(None, example=1250)
-    global_health_score: Optional[float] = Field(None, example=98.5)
     feed_statuses: Optional[Dict[str, int]] = Field(
         None, example={"running": 5, "stopped": 2, "error": 1}
     )
     custom_metrics: Optional[Dict[str, Any]] = None
 
-class NewAlertNotification(SanitizedBaseModel):
+class NewAlertNotification(BaseModel):
     alert_data: AlertData
 
-class SignalStateUpdate(SanitizedBaseModel):
+class SignalStateUpdate(BaseModel):
     signal_data: SignalStateData
 
-class FeedStatusUpdate(SanitizedBaseModel):
+class FeedStatusUpdate(BaseModel):
     feed_status_data: FeedStatusData
 
-class GeneralNotification(SanitizedBaseModel):
+class GeneralNotification(BaseModel):
     message_type: str = Field(..., example="system_maintenance_scheduled")
     title: Optional[str] = None
     message: str
@@ -72,18 +70,18 @@ class GeneralNotification(SanitizedBaseModel):
     suggested_actions: Optional[List[str]] = None
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class ErrorNotification(SanitizedBaseModel):
+class ErrorNotification(BaseModel):
     error_code: Optional[str] = None
     message: str
     details: Optional[str] = None
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class AlertStatusUpdatePayload(SanitizedBaseModel):
+class AlertStatusUpdatePayload(BaseModel):
     alert_id: Union[int, str]
     status: str
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class NodeCongestionUpdateData(SanitizedBaseModel):
+class NodeCongestionUpdateData(BaseModel):
     id: str
     name: str
     latitude: float
@@ -93,10 +91,10 @@ class NodeCongestionUpdateData(SanitizedBaseModel):
     average_speed: Optional[float] = None
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class NodeCongestionUpdatePayload(SanitizedBaseModel):
+class NodeCongestionUpdatePayload(BaseModel):
     nodes: List[NodeCongestionUpdateData]
 
-class UserSpecificConditionAlert(SanitizedBaseModel):
+class UserSpecificConditionAlert(BaseModel):
     user_id: str
     alert_type: str
     title: str
@@ -108,32 +106,32 @@ class UserSpecificConditionAlert(SanitizedBaseModel):
 
 # --- 4. Specific Payload Models for WebSocket Communication ---
 
-class PingData(SanitizedBaseModel):
+class PingData(BaseModel):
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class PongData(SanitizedBaseModel):
+class PongData(BaseModel):
     timestamp: str = Field(default_factory=get_utc_now_str)
 
-class AuthSuccessData(SanitizedBaseModel):
+class AuthSuccessData(BaseModel):
     message: str = "Authentication successful."
     user_info: Optional[Dict[str, Any]] = None
 
 class AuthFailureData(ErrorNotification):
     pass
 
-class AuthenticateData(SanitizedBaseModel):
+class AuthenticateData(BaseModel):
     token: str
 
-class SubscribeData(SanitizedBaseModel):
+class SubscribeData(BaseModel):
     topic: str
 
-class UnsubscribeData(SanitizedBaseModel):
+class UnsubscribeData(BaseModel):
     topic: str
 
-class FeedIdData(SanitizedBaseModel):
+class FeedIdData(BaseModel):
     feed_id: str
 
-class VideoFrameData(BaseModel): # Skip sanitization for performance on raw frames
+class VideoFrameData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     feed_id: str
@@ -143,17 +141,12 @@ class VideoFrameData(BaseModel): # Skip sanitization for performance on raw fram
     metrics: Optional[Dict[str, Any]] = None
     vehicles: Optional[List[Dict[str, Any]]] = None
 
-class InitialFeedStatusesData(SanitizedBaseModel):
+class InitialFeedStatusesData(BaseModel):
     feeds: List[FeedStatusData]
 
-class UpdateFeedConfigData(SanitizedBaseModel):
+class UpdateFeedConfigData(BaseModel):
     feed_id: str
     updates: Dict[str, Any]
-
-class SetSignalPhaseData(SanitizedBaseModel):
-    signal_id: str
-    phase: str
-    duration_seconds: Optional[int] = None
 
 # --- 5. WebSocket Message Wrapper ---
 
@@ -195,9 +188,6 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE_TO_FEED = "subscribe_to_feed"
     UNSUBSCRIBE_FROM_FEED = "unsubscribe_from_feed"
     GET_INITIAL_FEED_STATUSES = "get_initial_feed_statuses"
-    GET_USER_ROLE = "get_user_role"
-    USER_ROLE = "user_role"
-    SET_SIGNAL_PHASE = "set_signal_phase"
     
     # Snapshot / Incident Notifications
     SNAPSHOT_READY = "snapshot_ready"
@@ -206,7 +196,7 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     INTERNAL_PING = "__internal_ping"
     INTERNAL_PONG = "__internal_pong"
 
-class WebSocketMessage(SanitizedBaseModel):
+class WebSocketMessage(BaseModel):
     """
     Optimized Wrapper. 
     'data' is generic Any/Dict to prevent Pydantic from running 

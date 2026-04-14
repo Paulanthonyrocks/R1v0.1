@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("app.ml.ocr")
 
@@ -25,38 +25,30 @@ class LocalOCR:
             logger.error(f"Failed to initialize EasyOCR: {e}")
             self.reader = None
 
-        def read_plate(self, image: np.ndarray) -> Optional[Tuple[str, float]]:
-            """
-            Reads license plate text from a cropped image and returns (text, confidence).
-            """
-            if self.reader is None:
+    def read_plate(self, image: np.ndarray) -> Optional[str]:
+        """
+        Reads license plate text from a cropped image.
+        """
+        if self.reader is None:
+            return None
+
+        try:
+            # EasyOCR works best with BGR or RGB. Our CoreModule provides RGB.
+            # We'll use detail=0 to just get the text strings
+            results = self.reader.readtext(image, detail=0)
+            
+            if not results:
                 return None
-    
-            try:
-                # Using detail=1 to get (bbox, text, confidence)
-                results = self.reader.readtext(image, detail=1)
-                
-                if not results:
-                    return None
-                
-                # Combine snippets and average confidence
-                texts = []
-                confs = []
-                for (bbox, text, conf) in results:
-                    clean_text = text.replace(" ", "").upper()
-                    if len(clean_text) >= 1:
-                        texts.append(clean_text)
-                        confs.append(conf)
-                
-                combined = "".join(texts)
-                avg_conf = sum(confs) / len(confs) if confs else 0.0
-                
-                # Basic validation: plates usually have at least 3 chars
-                if len(combined) >= 3:
-                    return combined, avg_conf
-                return None
-                
-            except Exception as e:
-                logger.error(f"EasyOCR read failed: {e}")
-                return None
-    
+            
+            # Combine results, usually it's just one or two snippets for a plate
+            # Clean up non-alphanumeric chars often found in plates
+            combined = "".join(results).replace(" ", "").upper()
+            
+            # Basic validation: plates usually have at least 3 chars
+            if len(combined) >= 3:
+                return combined
+            return None
+            
+        except Exception as e:
+            logger.error(f"EasyOCR read failed: {e}")
+            return None

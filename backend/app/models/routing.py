@@ -2,7 +2,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from enum import Enum
-from app.models.validation import SanitizedBaseModel
 
 
 class RoutePreferenceType(str, Enum):
@@ -32,7 +31,7 @@ class RoadType(str, Enum):
     TOLL_ROAD = "toll_road"
 
 
-class UserRoutePreferences(SanitizedBaseModel):
+class UserRoutePreferences(BaseModel):
     """User's general routing preferences"""
 
     user_id: str
@@ -48,7 +47,7 @@ class UserRoutePreferences(SanitizedBaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class RouteHistoryEntry(SanitizedBaseModel):
+class RouteHistoryEntry(BaseModel):
     """Single route history entry"""
 
     user_id: str
@@ -67,7 +66,7 @@ class RouteHistoryEntry(SanitizedBaseModel):
     feedback: Optional[str]
 
 
-class UserRoutingProfile(SanitizedBaseModel):
+class UserRoutingProfile(BaseModel):
     """Combined user routing profile with preferences and learned behaviors"""
 
     user_id: str
@@ -81,7 +80,7 @@ class UserRoutingProfile(SanitizedBaseModel):
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class PersonalizedRouteRequest(SanitizedBaseModel):
+class PersonalizedRouteRequest(BaseModel):
     """Request for a personalized route"""
 
     user_id: str
@@ -94,7 +93,7 @@ class PersonalizedRouteRequest(SanitizedBaseModel):
     max_alternatives: int = Field(default=3, ge=1, le=5)
 
 
-class PersonalizedRouteResponse(SanitizedBaseModel):
+class PersonalizedRouteResponse(BaseModel):
     """Response containing personalized route options"""
 
     primary_route: Dict[str, Any]
@@ -106,26 +105,26 @@ class PersonalizedRouteResponse(SanitizedBaseModel):
     confidence_score: float
 
 
-class SupportedAreaBounds(SanitizedBaseModel):
+class SupportedAreaBounds(BaseModel):
     north: float
     south: float
     east: float
     west: float
 
 
-class SupportedArea(SanitizedBaseModel):
+class SupportedArea(BaseModel):
     name: str
     bounds: SupportedAreaBounds
     coverage_level: str  # e.g., "high", "medium", "low"
 
 
-class SupportedAreasResponse(SanitizedBaseModel):
+class SupportedAreasResponse(BaseModel):
     """Response model for supported route optimization areas."""
     supported_areas: List[SupportedArea]
     last_updated: datetime
 
 
-class RouteAnalyticsEntry(SanitizedBaseModel):
+class RouteAnalyticsEntry(BaseModel):
     """Model for a single entry in route history analytics."""
     id: str
     origin: str
@@ -138,14 +137,14 @@ class RouteAnalyticsEntry(SanitizedBaseModel):
     weatherImpact: Optional[str]
 
 
-class RouteAnalyticsSummary(SanitizedBaseModel):
+class RouteAnalyticsSummary(BaseModel):
     """Model for aggregated route analytics summary."""
     total_routes: int
     avg_duration: float  # in seconds
     avg_traffic_impact: str
     common_weather_impacts: List[str]
 
-class RouteAnalyticsResponse(SanitizedBaseModel):
+class RouteAnalyticsResponse(BaseModel):
     """Response model for route history analytics."""
     routes: List[RouteAnalyticsEntry]
     analytics: RouteAnalyticsSummary

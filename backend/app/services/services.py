@@ -20,8 +20,6 @@ from app.services.retention import RetentionService
 from app.services.notification_service import NotificationService
 from app.services.incident_manager import IncidentManager
 from app.services.node_manager import NodeManager
-from app.services.simulation_service import SimulationService
-from app.services.v2x_service import V2XService
 from app.ml.traffic_predictor import TrafficPredictor
 
 logger = logging.getLogger(__name__)
@@ -35,7 +33,6 @@ class ServiceRegistry:
         self._feed_manager: Optional[FMClass] = None
         self._traffic_signal_service: Optional[TrafficSignalService] = None
         self._analytics_service: Optional[AnalyticsService] = None
-        self._simulation_service: Optional[SimulationService] = None
         self._route_optimization_service: Optional[RouteOptimizationService] = None
         self._personalized_routing_service: Optional[PersonalizedRoutingService] = None
         self._weather_service: Optional[WeatherService] = None
@@ -45,7 +42,6 @@ class ServiceRegistry:
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
         self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
-        self._v2x_service: Optional[V2XService] = None
         self._health_check_lock = asyncio.Lock()
         self._initialized = False
         
@@ -82,12 +78,6 @@ class ServiceRegistry:
         if self._advanced_analytics_service is None:
             raise RuntimeError("AdvancedAnalyticsService not initialized.")
         return self._advanced_analytics_service
-
-    @property
-    def simulation_service(self) -> SimulationService:
-        if self._simulation_service is None:
-            raise RuntimeError("SimulationService not initialized.")
-        return self._simulation_service
 
     @property
     def route_optimization_service(self) -> RouteOptimizationService:
@@ -136,12 +126,6 @@ class ServiceRegistry:
         if self._node_manager is None:
             raise RuntimeError("NodeManager not initialized.")
         return self._node_manager
-
-    @property
-    def v2x_service(self) -> V2XService:
-        if self._v2x_service is None:
-            raise RuntimeError("V2XService not initialized.")
-        return self._v2x_service
 
     async def initialize(
         self, 
@@ -232,22 +216,8 @@ class ServiceRegistry:
                 traffic_signal_service=self._traffic_signal_service,
                 notification_service=self._notification_service,
                 incident_manager=self._incident_manager,
-                v2x_service=self._v2x_service,
             )
             logger.info("AnalyticsService initialized.")
-
-            # Simulation Service
-            sim_cfg = config.get("simulation", {})
-            if sim_cfg.get("enabled", True):
-                self._simulation_service = SimulationService(
-                    analytics_service=self._analytics_service,
-                    traffic_signal_service=self._traffic_signal_service,
-                    interval=sim_cfg.get("interval", 2.0)
-                )
-                await self._simulation_service.start()
-                logger.info("SimulationService initialized and started.")
-            else:
-                logger.info("SimulationService disabled by config.")
 
             # Node Manager
             self._node_manager = NodeManager(config=config)
@@ -258,11 +228,10 @@ class ServiceRegistry:
             self._feed_manager = FMClass(config)
             self._feed_manager.set_connection_manager(connection_manager)
             self._feed_manager.set_analytics_service(self._analytics_service)
-            self._feed_manager.set_incident_manager(self._incident_manager)
             
             # Link Feed Manager to Incident Manager
             self._incident_manager.set_feed_manager(self._feed_manager)
-            logger.debug("FeedManager initialized and linked to IncidentManager.")
+            logger.info("FeedManager initialized and linked to IncidentManager.")
         finally:
             self._initialization_stack.pop()
 
@@ -310,29 +279,26 @@ class ServiceRegistry:
         traffic_predictor = self._analytics_service.get_traffic_predictor()
 
         # Route Optimization Service
-        if config.get("route_optimization", {}).get("enabled", True):
-            self._route_optimization_service = RouteOptimizationService(
-                traffic_predictor=traffic_predictor,
-                data_cache=data_cache,
-                weather_service=self._weather_service
-            )
-            logger.info("RouteOptimizationService initialized.")
+        self._route_optimization_service = RouteOptimizationService(
+            traffic_predictor=traffic_predictor,
+            data_cache=data_cache,
+            weather_service=self._weather_service
+        )
+        logger.info("RouteOptimizationService initialized.")
 
         # Personalized Routing Service
-        if config.get("personalized_routing", {}).get("enabled", True):
-            self._personalized_routing_service = PersonalizedRoutingService(
-                database_manager=db_manager,
-                traffic_predictor=traffic_predictor,
-                data_cache=data_cache,
-            )
-            logger.info("PersonalizedRoutingService initialized.")
+        self._personalized_routing_service = PersonalizedRoutingService(
+            database_manager=db_manager,
+            traffic_predictor=traffic_predictor,
+            data_cache=data_cache,
+        )
+        logger.info("PersonalizedRoutingService initialized.")
 
         # Advanced Analytics Service
-        if config.get("advanced_analytics", {}).get("enabled", True):
-            self._advanced_analytics_service = AdvancedAnalyticsService(
-                db_manager=db_manager
-            )
-            logger.info("AdvancedAnalyticsService initialized.")
+        self._advanced_analytics_service = AdvancedAnalyticsService(
+            db_manager=db_manager
+        )
+        logger.info("AdvancedAnalyticsService initialized.")
 
     async def _initialize_optional_services(
         self, 
@@ -352,14 +318,6 @@ class ServiceRegistry:
             logger.warning(f"EventService initialization failed (non-critical): {e}")
             self._event_service = None
 
-        # V2X Service
-        try:
-            self._v2x_service = V2XService(config=config)
-            logger.info("V2XService initialized.")
-        except Exception as e:
-            logger.warning(f"V2XService initialization failed (non-critical): {e}")
-            self._v2x_service = None
-
         # Retention Service
         try:
             self._retention_service = RetentionService(config=config)
@@ -376,7 +334,6 @@ class ServiceRegistry:
         # Shutdown in reverse order of dependency
         shutdown_tasks = [
             ("FeedManager", self._shutdown_feed_manager),
-            ("SimulationService", self._shutdown_simulation_service),
             ("RetentionService", self._shutdown_retention_service),
             ("IncidentManager", self._shutdown_incident_manager),
             ("AnalyticsService", self._shutdown_analytics_service),
@@ -402,11 +359,6 @@ class ServiceRegistry:
         if self._feed_manager:
             await self._feed_manager.shutdown()
             logger.info("FeedManager shutdown completed.")
-
-    async def _shutdown_simulation_service(self) -> None:
-        if self._simulation_service:
-            await self._simulation_service.stop()
-            logger.info("SimulationService shutdown completed.")
 
     async def _shutdown_retention_service(self) -> None:
         if self._retention_service:
@@ -453,7 +405,6 @@ class ServiceRegistry:
         self._feed_manager = None
         self._traffic_signal_service = None
         self._analytics_service = None
-        self._simulation_service = None
         self._route_optimization_service = None
         self._personalized_routing_service = None
         self._weather_service = None
@@ -500,12 +451,12 @@ class ServiceRegistry:
                     except Exception as e:
                         logger.error(f"Health check failed for {service_name}: {e}")
                         services_health[service_name] = {"status": "error", "healthy": False}
-                        overall_healthy = overall_healthy and False
+                        overall_healthy = False
                 else:
                     services_health[service_name] = {"status": "initialized", "healthy": True}
             else:
                 services_health[service_name] = {"status": "not initialized", "healthy": False}
-                overall_healthy = overall_healthy and False
+                overall_healthy = False
 
         # Check optional services (don't affect overall health)
         optional_services = [
@@ -607,10 +558,6 @@ def get_advanced_analytics_service() -> AdvancedAnalyticsService:
     return get_service_registry().advanced_analytics_service
 
 
-def get_simulation_service() -> SimulationService:
-    return get_service_registry().simulation_service
-
-
 def get_route_optimization_service() -> RouteOptimizationService:
     return get_service_registry().route_optimization_service
 
@@ -637,11 +584,3 @@ def get_retention_service() -> RetentionService:
 
 def get_incident_manager() -> IncidentManager:
     return get_service_registry().incident_manager
-
-def get_v2x_service() -> V2XService:
-    return get_service_registry().v2x_service
-
-    return get_service_registry().incident_manager
-
-def get_v2x_service() -> V2XService:
-    return get_service_registry().v2x_service

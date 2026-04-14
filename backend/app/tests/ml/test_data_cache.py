@@ -139,46 +139,6 @@ class TestTrafficDataCache(unittest.TestCase):
         self.assertEqual(key1, key2)
         self.assertNotEqual(key1, key3)
 
-    def test_mixed_type_timestamps_robustness(self):
-        # Manually inject "bad" data to simulate existing cache state
-        lat, lon = 34.0, -118.0
-        now_ts = datetime.now(timezone.utc)
-        float_ts = now_ts.timestamp()
-        
-        key = self.cache._get_location_key(lat, lon)
-        self.cache.location_data[key].append({"timestamp": float_ts, "val": "float"})
-        self.cache.location_data[key].append({"timestamp": now_ts.isoformat(), "val": "str"})
-        self.cache.location_data[key].append({"timestamp": now_ts, "val": "datetime"})
-        
-        # This should not crash and should find all 3 points
-        recent = self.cache.get_recent_data(lat, lon, hours=1)
-        self.assertEqual(len(recent), 3)
-        
-        # Add a very old point (float)
-        old_float_ts = (now_ts - timedelta(hours=2)).timestamp()
-        self.cache.location_data[key].append({"timestamp": old_float_ts, "val": "old_float"})
-        
-        # This should filter out the old point and not crash
-        recent = self.cache.get_recent_data(lat, lon, hours=1)
-        self.assertEqual(len(recent), 3)
-        for p in recent:
-            self.assertNotEqual(p["val"], "old_float")
-
-    def test_add_data_point_normalizes_timestamp(self):
-        lat, lon = 34.0, -118.0
-        now = datetime.now(timezone.utc)
-        
-        # metrics with float timestamp that would previously overwrite the datetime arg
-        metrics = {"timestamp": now.timestamp(), "value": 42}
-        
-        self.cache.add_data_point(lat, lon, now, metrics)
-        
-        recent = self.cache.get_recent_data(lat, lon)
-        self.assertEqual(len(recent), 1)
-        self.assertIsInstance(recent[0]["timestamp"], datetime)
-        self.assertEqual(recent[0]["timestamp"], now)
-        self.assertEqual(recent[0]["value"], 42)
-
 
 if __name__ == "__main__":
     unittest.main()

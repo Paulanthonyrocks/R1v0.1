@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import numpy as np
 from dataclasses import dataclass
@@ -35,6 +35,7 @@ class OptimizedRoute:
 
 class DataCache:
     def get_statistics(self, latitude, longitude, hours):
+        # Dummy implementation for now
         return {"average_speed": 50.0, "typical_congestion": 0.2}
 
 
@@ -42,25 +43,30 @@ class RouteOptimizer:
     def __init__(self, traffic_predictor, data_cache):
         self.road_graph = nx.DiGraph()
         self._initialize_road_graph()
-        self.traffic_predictor = traffic_predictor
-        self.data_cache = data_cache
 
     def _initialize_road_graph(self):
+        """Initialize the road network graph with default weights"""
+        # TODO: Load actual road network data
+        # For now, using a simple grid network for demonstration
         self._create_sample_grid_network()
 
     def _create_sample_grid_network(self):
+        """Create a sample grid network for testing"""
+        # Create a 5x5 grid of nodes
         for i in range(5):
             for j in range(5):
                 self.road_graph.add_node(
                     f"{i},{j}", lat=34.0 + i * 0.01, lon=-118.0 + j * 0.01
                 )
+
+        # Connect adjacent nodes
         for i in range(5):
             for j in range(5):
-                if i < 4:
+                if i < 4:  # Vertical connections
                     self.road_graph.add_edge(
                         f"{i},{j}", f"{i + 1},{j}", weight=1.0, distance_km=1.0
                     )
-                if j < 4:
+                if j < 4:  # Horizontal connections
                     self.road_graph.add_edge(
                         f"{i},{j}", f"{i},{j + 1}", weight=1.0, distance_km=1.0
                     )
@@ -73,39 +79,50 @@ class RouteOptimizer:
         end_lon: float,
         prediction_time: datetime,
     ) -> Dict[str, Any]:
+        """Predict traffic conditions for a route segment"""
+        # Create a dummy DataFrame for prediction
+        # In a real scenario, these values would come from actual sensor data or external APIs
         input_data = {
             "sensor_id": "dummy_sensor",
             "timestamp": prediction_time,
             "latitude": (start_lat + end_lat) / 2,
             "longitude": (start_lon + end_lon) / 2,
-            "vehicle_count": 50,
-            "average_speed": 40.0,
-            "congestion_level": 3.0,
-            "congestion_score": 50.0,
+            "vehicle_count": 50,  # Placeholder
+            "average_speed": 40.0,  # Placeholder
+            "congestion_level": 3.0,  # Placeholder
+            "congestion_score": 50.0,  # Placeholder
             "processing_timestamp": datetime.now(timezone.utc),
             "status": "simulated",
             "hour_of_day": prediction_time.hour,
             "day_of_week": prediction_time.weekday(),
             "is_weekend": prediction_time.weekday() >= 5,
-            "road_type": "major_artery",
-            "weather_conditions_temperature": 20.0,
-            "weather_conditions_precipitation": 0.0,
-            "truck_percentage": 0.15,
+            "road_type": "major_artery",  # Placeholder
+            "weather_conditions_temperature": 20.0,  # Placeholder
+            "weather_conditions_precipitation": 0.0,  # Placeholder
+            "truck_percentage": 0.15,  # Placeholder
             "is_outlier": False,
-            "incident_occurred": 0,
+            "incident_occurred": 0,  # Placeholder
         }
         input_df = pd.DataFrame([input_data])
+
+        # Get prediction for the segment
         prediction = self.traffic_predictor.predict_incident_likelihood(input_df)
+
+        # Calculate segment metrics
         base_duration = self._calculate_base_duration(
             start_lat, start_lon, end_lat, end_lon
         )
+
         congestion_factor = 1.0 + (prediction["incident_likelihood"] * 2)
         predicted_duration = base_duration * congestion_factor
+
+        # Get typical conditions from data cache
         typical_conditions = self.data_cache.get_statistics(
             latitude=(start_lat + end_lat) / 2,
             longitude=(start_lon + end_lon) / 2,
-            hours=1,
+            hours=1,  # Example: get stats for the next hour
         )
+
         return {
             "predicted_duration_mins": predicted_duration,
             "congestion_score": prediction["incident_likelihood"],
@@ -116,21 +133,31 @@ class RouteOptimizer:
     def _calculate_base_duration(
         self, start_lat: float, start_lon: float, end_lat: float, end_lon: float
     ) -> float:
+        """Calculate base duration for a segment based on distance"""
+        # Simple distance-based calculation (assume 60 km/h average speed)
         distance = self._haversine_distance(start_lat, start_lon, end_lat, end_lon)
-        return (distance / 60.0) * 60
+        return (distance / 60.0) * 60  # Convert to minutes
 
     def _haversine_distance(
         self, lat1: float, lon1: float, lat2: float, lon2: float
     ) -> float:
-        R = 6371
-        lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(np.radians, [lat1, lon1, lat2, lon2])
+        """Calculate the distance between two points using Haversine formula"""
+        R = 6371  # Earth's radius in kilometers
+
+        lat1_rad = np.radians(lat1)
+        lon1_rad = np.radians(lon1)
+        lat2_rad = np.radians(lat2)
+        lon2_rad = np.radians(lon2)
+
         dlat = lat2_rad - lat1_rad
         dlon = lon2_rad - lon1_rad
+
         a = (
             np.sin(dlat / 2) ** 2
             + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
         )
         c = 2 * np.arcsin(np.sqrt(a))
+
         return R * c
 
     def optimize_route(
@@ -144,22 +171,26 @@ class RouteOptimizer:
     ) -> OptimizedRoute:
         """Find the optimal route considering predicted traffic conditions"""
         try:
+            # Update graph weights based on predictions
             self._update_graph_weights(departure_time)
-            path, start_node, end_node = self._find_optimal_path(start_lat, start_lon, end_lat, end_lon)
-            if not path or not start_node or not end_node:
-                raise ValueError("Could not compute optimal path.")
-            
+
+            # Find the best route
+            path = self._find_optimal_path(start_lat, start_lon, end_lat, end_lon)
             route_segments = self._create_route_segments(path, departure_time)
+
+            # Calculate route metrics
             total_distance = sum(seg.distance_km for seg in route_segments)
             total_duration = sum(seg.predicted_duration_mins for seg in route_segments)
             avg_confidence = np.mean([seg.confidence for seg in route_segments])
-            
+
+            # Find alternative routes if requested
             alternatives = []
             if consider_alternatives:
                 alternatives = self._find_alternative_routes(
-                    start_node, end_node, path, departure_time
+                    start_lat, start_lon, end_lat, end_lon, departure_time
                 )
 
+            # Generate recommendations
             recommendations = self._generate_route_recommendations(
                 route_segments, alternatives, departure_time
             )
@@ -181,144 +212,189 @@ class RouteOptimizer:
             raise
 
     def _update_graph_weights(self, prediction_time: datetime):
+        """Update graph edge weights based on predicted conditions"""
         for u, v, data in self.road_graph.edges(data=True):
-            node_u, node_v = self.road_graph.nodes[u], self.road_graph.nodes[v]
+            node_u = self.road_graph.nodes[u]
+            node_v = self.road_graph.nodes[v]
+
             conditions = self.predict_segment_conditions(
-                node_u["lat"], node_u["lon"], node_v["lat"], node_v["lon"], prediction_time
+                node_u["lat"],
+                node_u["lon"],
+                node_v["lat"],
+                node_v["lon"],
+                prediction_time,
             )
+
+            # Update edge weight based on predicted duration
             self.road_graph[u][v]["weight"] = conditions["predicted_duration_mins"]
             self.road_graph[u][v]["congestion_score"] = conditions["congestion_score"]
 
     def _find_optimal_path(
         self, start_lat: float, start_lon: float, end_lat: float, end_lon: float
-    ) -> Tuple[Optional[List[str]], Optional[str], Optional[str]]:
-        """Find the optimal path in the graph using A* search."""
+    ) -> List[str]:
+        """Find the optimal path in the graph"""
         start_node = self._find_nearest_node(start_lat, start_lon)
         end_node = self._find_nearest_node(end_lat, end_lon)
-        
-        if not start_node or not end_node:
-            raise ValueError("Could not find nearest nodes for start/end points.")
-
-        end_node_data = self.road_graph.nodes[end_node]
-        
-        def heuristic(u, v):
-            node_u_data = self.road_graph.nodes[u]
-            dist = self._haversine_distance(node_u_data["lat"], node_u_data["lon"], end_node_data["lat"], end_node_data["lon"])
-            return dist / 2.16 # Admissible heuristic assuming max speed of 130km/h
 
         try:
-            path = nx.astar_path(
-                self.road_graph, start_node, end_node, heuristic=heuristic, weight="weight"
+            path = nx.shortest_path(
+                self.road_graph, start_node, end_node, weight="weight"
             )
-            return path, start_node, end_node
+            return path
         except nx.NetworkXNoPath:
             raise ValueError("No route found between the specified points")
 
     def _find_nearest_node(self, lat: float, lon: float) -> str:
-        return min(
-            self.road_graph.nodes,
-            key=lambda node: self._haversine_distance(
-                lat, lon, self.road_graph.nodes[node]["lat"], self.road_graph.nodes[node]["lon"]
-            ),
-        )
+        """Find the nearest node in the graph to the given coordinates"""
+        min_dist = float("inf")
+        nearest_node = None
+
+        for node, data in self.road_graph.nodes(data=True):
+            dist = self._haversine_distance(lat, lon, data["lat"], data["lon"])
+            if dist < min_dist:
+                min_dist = dist
+                nearest_node = node
+
+        return nearest_node
 
     def _create_route_segments(
         self, path: List[str], departure_time: datetime
     ) -> List[RouteSegment]:
+        """Create route segments from a path"""
         segments = []
         for i in range(len(path) - 1):
             u, v = path[i], path[i + 1]
-            node_u, node_v = self.road_graph.nodes[u], self.road_graph.nodes[v]
+            node_u = self.road_graph.nodes[u]
+            node_v = self.road_graph.nodes[v]
+
             edge_data = self.road_graph[u][v]
             conditions = self.predict_segment_conditions(
-                node_u["lat"], node_u["lon"], node_v["lat"], node_v["lon"],
-                departure_time + timedelta(minutes=sum(seg.predicted_duration_mins for seg in segments)),
+                node_u["lat"],
+                node_u["lon"],
+                node_v["lat"],
+                node_v["lon"],
+                departure_time
+                + timedelta(
+                    minutes=sum(seg.predicted_duration_mins for seg in segments)
+                ),
             )
-            segments.append(RouteSegment(
-                start_lat=node_u["lat"], start_lon=node_u["lon"], end_lat=node_v["lat"], end_lon=node_v["lon"],
-                distance_km=edge_data["distance_km"], typical_duration_mins=(edge_data["distance_km"] * 60 / 60),
-                predicted_duration_mins=conditions["predicted_duration_mins"], congestion_score=conditions["congestion_score"],
+
+            segment = RouteSegment(
+                start_lat=node_u["lat"],
+                start_lon=node_u["lon"],
+                end_lat=node_v["lat"],
+                end_lon=node_v["lon"],
+                distance_km=edge_data["distance_km"],
+                typical_duration_mins=edge_data["distance_km"]
+                * 60
+                / 60,  # Assuming 60 km/h
+                predicted_duration_mins=conditions["predicted_duration_mins"],
+                congestion_score=conditions["congestion_score"],
                 confidence=conditions["confidence"],
-            ))
+            )
+            segments.append(segment)
+
         return segments
 
     def _find_alternative_routes(
-        self, start_node: str, end_node: str, main_path: List[str], departure_time: datetime,
-        max_alternatives: int = 2, penalty_factor: float = 2.0
+        self,
+        start_lat: float,
+        start_lon: float,
+        end_lat: float,
+        end_lon: float,
+        departure_time: datetime,
+        max_alternatives: int = 2,
     ) -> List[List[RouteSegment]]:
-        """Find alternative routes by iteratively penalizing path edges and re-running A*."""
+        """Find alternative routes"""
         alternatives = []
-        if not main_path:
-            return alternatives
+        start_node = self._find_nearest_node(start_lat, start_lon)
+        end_node = self._find_nearest_node(end_lat, end_lon)
 
-        temp_graph = self.road_graph.copy()
-        paths_found = [main_path]
-        end_node_data = temp_graph.nodes[end_node]
+        try:
+            # Find k-shortest paths
+            paths = list(
+                nx.shortest_simple_paths(
+                    self.road_graph, start_node, end_node, weight="weight"
+                )
+            )
 
-        def heuristic(u, v):
-            node_u_data = temp_graph.nodes[u]
-            dist = self._haversine_distance(node_u_data["lat"], node_u_data["lon"], end_node_data["lat"], end_node_data["lon"])
-            return dist / 2.16
+            # Convert paths to route segments
+            for path in paths[
+                1 : max_alternatives + 1
+            ]:  # Skip the first path (main route)
+                segments = self._create_route_segments(path, departure_time)
+                alternatives.append(segments)
 
-        for _ in range(max_alternatives):
-            for path in paths_found:
-                for i in range(len(path) - 1):
-                    u, v = path[i], path[i+1]
-                    if temp_graph.has_edge(u, v):
-                        temp_graph[u][v]['weight'] *= penalty_factor
-            try:
-                new_path = nx.astar_path(temp_graph, start_node, end_node, heuristic=heuristic, weight="weight")
-                if new_path not in paths_found:
-                    segments = self._create_route_segments(new_path, departure_time)
-                    alternatives.append(segments)
-                    paths_found.append(new_path)
-                else:
-                    break
-            except nx.NetworkXNoPath:
-                logger.warning("No more alternative routes could be found.")
-                break
-            except Exception as e:
-                logger.error(f"Error finding an alternative route: {e}")
-                break
+        except nx.NetworkXNoPath:
+            logger.warning("No alternative routes found")
+
         return alternatives
 
     def _calculate_congestion_probability(self, segments: List[RouteSegment]) -> float:
-        if not segments:
-            return 0.0
-        return sum(1 for seg in segments if seg.congestion_score > 0.7) / len(segments)
+        """Calculate the probability of encountering significant congestion"""
+        high_congestion_segments = sum(
+            1 for seg in segments if seg.congestion_score > 0.7
+        )
+        return high_congestion_segments / len(segments) if segments else 0.0
 
     def _generate_route_recommendations(
-        self, main_route: List[RouteSegment], alternatives: List[List[RouteSegment]], departure_time: datetime
+        self,
+        main_route: List[RouteSegment],
+        alternatives: List[List[RouteSegment]],
+        departure_time: datetime,
     ) -> List[str]:
+        """Generate recommendations for the route"""
         recommendations = []
-        if self._calculate_congestion_probability(main_route) > 0.3:
+
+        # Analyze main route congestion
+        congestion_prob = self._calculate_congestion_probability(main_route)
+        if congestion_prob > 0.3:
             recommendations.append("High probability of congestion on this route")
+
+            # Suggest better departure time
             better_time = self._find_better_departure_time(main_route, departure_time)
             if better_time:
                 recommendations.append(
-                    f"Consider departing at {better_time.strftime('%H:%M')} for better conditions"
+                    f"Consider departing at {better_time.strftime('%H:%M')} "
+                    "for better conditions"
                 )
+
+        # Compare with alternatives
         if alternatives:
-            alt_durations = [sum(seg.predicted_duration_mins for seg in route) for route in alternatives]
+            alt_durations = [
+                sum(seg.predicted_duration_mins for seg in route)
+                for route in alternatives
+            ]
             main_duration = sum(seg.predicted_duration_mins for seg in main_route)
+
             for i, duration in enumerate(alt_durations):
-                if duration < main_duration * 0.9:
+                if duration < main_duration * 0.9:  # At least 10% faster
                     recommendations.append(
-                        f"Alternative route {i + 1} is significantly faster ({int(duration)} mins vs {int(main_duration)} mins)"
+                        f"Alternative route {i + 1} is significantly faster "
+                        f"({int(duration)} mins vs {int(main_duration)} mins)"
                     )
+
         return recommendations
 
     def _find_better_departure_time(
         self, route: List[RouteSegment], original_time: datetime, max_delay: int = 120
     ) -> Optional[datetime]:
-        best_time, min_congestion = None, float("inf")
-        for delay in range(0, max_delay, 15):
-            test_time, total_congestion = original_time + timedelta(minutes=delay), 0
+        """Find a better departure time within the next max_delay minutes"""
+        best_time = None
+        min_congestion = float("inf")
+
+        for delay in range(0, max_delay, 15):  # Check every 15 minutes
+            test_time = original_time + timedelta(minutes=delay)
+            total_congestion = 0
+
             for seg in route:
                 conditions = self.predict_segment_conditions(
                     seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon, test_time
                 )
                 total_congestion += conditions["congestion_score"]
+
             if total_congestion < min_congestion:
-                min_congestion, best_time = total_congestion, test_time
+                min_congestion = total_congestion
+                best_time = test_time
+
         return best_time if best_time != original_time else None

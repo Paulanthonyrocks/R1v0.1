@@ -1,133 +1,141 @@
+"""
+Shared utilities for video processing workers.
 
-import numpy as np
-from multiprocessing import shared_memory
+This module contains common classes and functions used by multiple worker processes
+to ensure consistency and reduce code duplication.
+"""
+
+import time
 import logging
-import atexit
-from typing import Tuple, Optional, Dict
+import numpy as np
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
-# CRITICAL #2 FIX: Add synchronization flags
-# 0: Free for producer
-# 1: Full/Ready for consumer
+# Worker Architecture Documentation
+WORKER_ARCHITECTURE_DOC = """
+WORKER ARCHITECTURE:
+- ingestion_worker.py: Capture frames from source → central_input_queue
+  Use for: Multi-feed systems where AI is shared across feeds
+  
+- inference_worker.py: Process frames from central_input_queue → AI results
+  Use for: GPU-bound scenarios where one GPU serves multiple feeds
+  
+- processing_worker.py: All-in-one (capture + AI + visualization)
+  Use for: Single-feed systems or when each feed needs isolated processing
+  
+DO NOT MIX: Choose either (ingestion + inference) OR (processing) per deployment
+"""
 
-class SharedFrameManager:
+
+class WorkerMetrics:
+    """Tracks performance metrics for worker processes."""
+    
+    def __init__(self, feed_id: str):
+        self.feed_id = feed_id
+        self.frames_processed = 0
+        self.frames_dropped = 0
+        self.errors = 0
+        self.start_time = time.time()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        uptime = time.time() - self.start_time
+        return {
+            "feed_id": self.feed_id,
+            "frames_processed": self.frames_processed,
+            "frames_dropped": self.frames_dropped,
+            "errors": self.errors,
+            "uptime_seconds": uptime,
+            "fps": self.frames_processed / uptime if uptime > 0 else 0
+        }
+    
+    def reset(self):
+        """Reset metrics while preserving feed_id."""
+        self.frames_processed = 0
+        self.frames_dropped = 0
+        self.errors = 0
+        self.start_time = time.time()
+
+
+def make_serializable(obj: Any) -> Any:
     """
-    Manages a ring buffer of shared memory segments for zero-copy image transfer
-    with a flag-based system for producer-consumer synchronization.
+    Convert numpy types to Python builtin types for JSON serialization.
+    
+    Args:
+        obj: Value that may contain numpy types
+        
+    Returns:
+        Python builtin type equivalent
     """
-    def __init__(self, name: str, frame_shape: Tuple[int, int, int], dtype=np.uint8, num_buffers: int = 10, create=True):
-        self.name = name
-        self.frame_shape = frame_shape
-        self.dtype = dtype
-        self.num_buffers = num_buffers
-        self.buffer_size = np.prod(frame_shape) * np.dtype(dtype).itemsize
-        self.shm_segments = []
-        self._creator = create
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
-        # Initialize shared memory for synchronization flags
-        self.flags_shm_name = f"{name}_flags"
+
+def serialize_tracked_vehicles(
+    tracked_vehicles: Dict[str, Dict], 
+    scale_x: float = 1.0, 
+    scale_y: float = 1.0,
+    vehicle_type_map: Optional[Dict[int, str]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Serialize tracked vehicle data for JSON transmission.
+    
+    Args:
+        tracked_vehicles: Dictionary of vehicle_id -> vehicle data
+        scale_x: X scaling factor for bbox coordinates
+        scale_y: Y scaling factor for bbox coordinates
+        vehicle_type_map: Optional mapping of class_id to class_name
+        
+    Returns:
+        List of serialized vehicle dictionaries
+    """
+    serialized_list = []
+    v_map = vehicle_type_map or {}
+    
+    for vehicle_id, data in tracked_vehicles.items():
         try:
-            if create:
-                self.flags_shm = shared_memory.SharedMemory(name=self.flags_shm_name, create=True, size=num_buffers)
-                self.flags = self.flags_shm.buf
-                # Initialize all buffers to state 0 (Free)
-                for i in range(num_buffers):
-                    self.flags[i] = 0
-            else:
-                self.flags_shm = shared_memory.SharedMemory(name=self.flags_shm_name, create=False)
-                self.flags = self.flags_shm.buf
+            c_id = data.get("class_id", -1)
+            c_name = v_map.get(c_id, "unknown")
+
+            bbox = data.get("bbox")
+            scaled_bbox = []
+            if bbox and len(bbox) == 4:
+                scaled_bbox = [
+                    bbox[0] * scale_x,
+                    bbox[1] * scale_y,
+                    bbox[2] * scale_x,
+                    bbox[3] * scale_y
+                ]
+
+            serialized_list.append({
+                "vehicle_id": str(vehicle_id),
+                "bbox": [make_serializable(x) for x in scaled_bbox],
+                "speed": make_serializable(data.get("speed", 0)),
+                "license_plate": str(data.get("license_plate", "Unknown")),
+                "class_id": int(c_id),
+                "class_name": c_name,
+                "behavior": str(data.get("behavior", "unknown")),
+                "confidence": make_serializable(data.get("confidence", 0)),
+                "is_occluded": bool(data.get("is_occluded", False)),
+                "lane": int(data.get("lane", -1)),
+                "status": str(data.get("status", "unknown")),
+                "vx": make_serializable(data.get("vx", 0)),
+                "vy": make_serializable(data.get("vy", 0)),
+                "ground_centroid": [make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
+                "car_model": data.get("car_model"),
+                "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),
+                "gallery_size": make_serializable(data.get("gallery_size", 0)),
+            })
         except Exception as e:
-            logger.error(f"Failed to create/attach to flags SHM {self.flags_shm_name}: {e}", exc_info=True)
-            raise
-
-        # Initialize shared memory for frame buffers
-        for i in range(num_buffers):
-            shm_name = f"{name}_{i}"
-            try:
-                shm = shared_memory.SharedMemory(name=shm_name, create=create, size=self.buffer_size)
-                self.shm_segments.append(shm)
-            except Exception as e:
-                logger.error(f"Failed to create/attach to frame SHM {shm_name}: {e}", exc_info=True)
-                self.unlink()  # Clean up any resources created so far
-                raise
-
-        # WARNING #3 FIX: Register unlink for cleanup on process exit
-        if create:
-            atexit.register(self.unlink)
-
-        log_action = "Created" if create else "Attached to"
-        logger.info(f"{log_action} {num_buffers} synchronized shared memory buffers for {name}")
-
-    def write_frame(self, index: int, frame: np.ndarray) -> bool:
-        """Writes a frame into a specific buffer, if it's free."""
-        buffer_index = index % self.num_buffers
-        
-        # If flag is 1, consumer hasn't read the last frame in this slot.
-        if self.flags[buffer_index] == 1:
-            return False  # Buffer is currently full
-
-        shm = self.shm_segments[buffer_index]
-        shared_array = np.ndarray(self.frame_shape, dtype=self.dtype, buffer=shm.buf)
-        np.copyto(shared_array, frame)
-        
-        # Set flag to 1 (Ready for consumer)
-        self.flags[buffer_index] = 1
-        return True
-
-    def get_frame(self, index: int) -> Optional[np.ndarray]:
-        """Reads a frame from a specific buffer, if it's ready."""
-        buffer_index = index % self.num_buffers
-        
-        # If flag is 0, producer hasn't written the frame yet (or it's been consumed).
-        if self.flags[buffer_index] == 0:
-            logger.warning(f"Attempted to read from unready SHM buffer {buffer_index} for index {index}")
-            return None # Frame not ready
-        
-        shm = self.shm_segments[buffer_index]
-        frame = np.ndarray(self.frame_shape, dtype=self.dtype, buffer=shm.buf)
-        
-        # Set flag to 0 (Free for producer) after we have the buffer reference
-        self.flags[buffer_index] = 0
-        
-        # WARNING #1 FIX: Return a read-only view to prevent mutation and copying
-        frame_view = frame.view()
-        frame_view.flags.writeable = False
-        return frame_view
-
-    def close(self):
-        """Closes all shared memory file descriptors without unlinking."""
-        for shm in self.shm_segments:
-            shm.close()
-        if hasattr(self, 'flags_shm') and self.flags_shm:
-            self.flags_shm.close()
-
-    def unlink(self):
-        """Closes and unlinks all shared memory segments. For producer/creator use only."""
-        self.close()
-        for shm in self.shm_segments:
-            try:
-                shm.unlink()
-            except FileNotFoundError:
-                pass
-        if hasattr(self, 'flags_shm') and self.flags_shm:
-            try:
-                self.flags_shm.unlink()
-            except FileNotFoundError:
-                pass
-        logger.info(f"Unlinked shared memory for {self.name}")
-
-    @staticmethod
-    def get_frame_from_shm(shm_info: Dict) -> Optional[np.ndarray]:
-        logger.warning("get_frame_from_shm is deprecated and bypasses synchronization.")
-        try:
-            shm_name_base = shm_info['shm_name']
-            buffer_index = shm_info['shm_index'] % shm_info.get('num_buffers', 20)
-            shm = shared_memory.SharedMemory(name=f"{shm_name_base}_{buffer_index}")
-            frame_array = np.ndarray(shm_info['shape'], dtype=np.dtype(shm_info['dtype']), buffer=shm.buf)
-            frame_copy = frame_array.copy()
-            shm.close()
-            return frame_copy
-        except Exception as e:
-            logger.warning(f"Could not access shared memory frame via static method: {e}.")
-            return None
+            logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")
+            continue
+    
+    return serialized_list

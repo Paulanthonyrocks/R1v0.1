@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 
 from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum, IncidentStatusEnum
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum
-from app.websocket.connection_manager import ConnectionManager
+from app.websocket.connection_manager import ConnectionManager, MessagePriority
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("app.services.incident_manager")
@@ -26,47 +26,16 @@ class IncidentManager:
         self._notification_service = notification_service
         self._feed_manager = None
         
-        # Stateful Tracking
-        # { debounce_key: { "incident_id": str, "last_seen": timestamp, "status": IncidentStatusEnum } }
-        self._active_incidents: Dict[str, Dict] = {}
+        # Debouncing: { "feed_id_anomaly_details": timestamp }
+        self._active_alerts = {}
         self._debounce_interval = self.config.get("incident_management", {}).get("debounce_interval", 300) # 5 mins
         
-        # Background task for auto-resolving stale incidents
-        self._cleanup_task = None
-        
-        logger.debug("IncidentManager initialized.")
+        logger.info("IncidentManager initialized.")
 
     def set_feed_manager(self, feed_manager):
-        """Sets the feed manager and starts background tasks."""
+        """Sets the feed manager to avoid circular imports."""
         self._feed_manager = feed_manager
-        if self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._auto_resolve_loop())
-        logger.debug("FeedManager set in IncidentManager.")
-
-    async def _auto_resolve_loop(self):
-        """Periodically clears active incident tracking for items not seen recently."""
-        while True:
-            try:
-                await asyncio.sleep(60)
-                now = time.time()
-                to_remove = []
-                for key, data in self._active_incidents.items():
-                    # If not seen for 10 minutes, stop tracking it as "active"
-                    # This doesn't necessarily RESOLVE it in the DB, just allows new alerts
-                    if now - data["last_seen"] > 600:
-                        to_remove.append(key)
-                
-                for key in to_remove:
-                    del self._active_incidents[key]
-                
-                # Hard limit on total size if cleanup didn't catch enough
-                if len(self._active_incidents) > 1000:
-                    # Remove oldest 200
-                    sorted_keys = sorted(self._active_incidents.keys(), key=lambda k: self._active_incidents[k]["last_seen"])
-                    for k in sorted_keys[:200]:
-                        del self._active_incidents[k]
-            except Exception as e:
-                logger.error(f"Error in incident cleanup loop: {e}")
+        logger.info("FeedManager set in IncidentManager.")
 
     async def create_incident(
         self,
@@ -80,23 +49,23 @@ class IncidentManager:
     ) -> Optional[str]:
         """
         Creates and saves a new incident report.
-        Includes stateful deduplication to prevent duplicate reports for the same event.
+        Includes debouncing logic to prevent duplicate reports for the same event.
         """
         try:
-            # 1. Stateful Deduplication
-            debounce_key = None
+            # 1. Debounce check
             if not bypass_debounce and source_feed_id:
-                # Create a robust key based on feed, type, and specific entity (e.g. vehicle_id)
-                entity_id = details.get("vehicle_id") or details.get("id") or "scene"
-                inc_type_str = incident_type.value if hasattr(incident_type, "value") else str(incident_type)
-                debounce_key = f"{source_feed_id}_{inc_type_str}_{entity_id}"
+                # Create a key based on feed and incident characteristics
+                # For safety alerts, we might use the vehicle ID or subtype
+                det_key = details.get("subtype") or details.get("details") or description
+                debounce_key = f"{source_feed_id}_{det_key}"
                 
                 now = time.time()
-                if debounce_key in self._active_incidents:
-                    active = self._active_incidents[debounce_key]
-                    active["last_seen"] = now
-                    logger.debug(f"Deduplicated active incident for {debounce_key}")
-                    return active["incident_id"]
+                last_time = self._active_alerts.get(debounce_key, 0)
+                if now - last_time < self._debounce_interval:
+                    logger.debug(f"Debounced duplicate incident for {source_feed_id}: {det_key}")
+                    return None
+                
+                self._active_alerts[debounce_key] = now
 
             # 2. Construct Incident Data
             incident_id = str(uuid.uuid4())
@@ -125,14 +94,6 @@ class IncidentManager:
                 logger.error(f"Failed to persist incident {incident_id} to database.")
                 return None
 
-            # Record in active incidents map
-            if debounce_key:
-                self._active_incidents[debounce_key] = {
-                    "incident_id": incident_id,
-                    "last_seen": time.time(),
-                    "status": IncidentStatusEnum.REPORTED
-                }
-
             # 4. Log Audit Event
             await self.log_audit_event(
                 user_id="SYSTEM",
@@ -155,8 +116,9 @@ class IncidentManager:
                 }
             )
             await self._connection_manager.broadcast_to_topic(
-                "incidents",
-                message.model_dump()
+                message.model_dump_json(),
+                topic="incidents",
+                priority=MessagePriority.HIGH
             )
 
             # 6. External Notifications
@@ -171,38 +133,12 @@ class IncidentManager:
                 except Exception as e:
                     logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
 
-            logger.debug(f"Successfully created incident {incident_id}: {description}")
+            logger.info(f"Successfully created incident {incident_id}: {description}")
             return incident_id
 
         except Exception as e:
             logger.error(f"Error in create_incident: {e}", exc_info=True)
             return None
-
-    async def attach_snapshot(self, incident_id: str, snapshot_path: str):
-        """Associates a high-res snapshot with an existing incident."""
-        try:
-            success = await self._db_manager.update_incident(incident_id, {
-                "snapshot_path": snapshot_path,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })
-            if success:
-                logger.debug(f"Attached snapshot to incident {incident_id}: {snapshot_path}")
-                
-                # Broadcast update so UI can show the snapshot
-                message = WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.GENERAL_NOTIFICATION,
-                    data={
-                        "message_type": "incident_snapshot_ready",
-                        "incident_id": incident_id,
-                        "snapshot_path": snapshot_path
-                    }
-                )
-                await self._connection_manager.broadcast_to_topic(
-                    "incidents",
-                    message.model_dump()
-                )
-        except Exception as e:
-            logger.error(f"Failed to attach snapshot to incident {incident_id}: {e}")
 
     async def update_status(
         self,
@@ -211,9 +147,7 @@ class IncidentManager:
         user_id: str = "SYSTEM",
         notes: Optional[str] = None
     ) -> bool:
-        """
-        Updates the status of an incident and logs the transition.
-        """
+        """Updates the status of an incident and logs the transition."""
         try:
             existing = await self._db_manager.get_incident_by_id(incident_id)
             if not existing:
@@ -233,15 +167,6 @@ class IncidentManager:
 
             success = await self._db_manager.update_incident(incident_id, updates)
             if success:
-                # Update status in active tracking
-                for key, data in list(self._active_incidents.items()):
-                    if data["incident_id"] == incident_id:
-                        if new_status in [IncidentStatusEnum.RESOLVED, IncidentStatusEnum.FALSE_POSITIVE]:
-                            del self._active_incidents[key]
-                        else:
-                            data["status"] = new_status
-                        break
-
                 await self.log_audit_event(
                     user_id=user_id,
                     action="STATUS_CHANGE",
@@ -261,8 +186,9 @@ class IncidentManager:
                     }
                 )
                 await self._connection_manager.broadcast_to_topic(
-                    "incidents",
-                    message.model_dump()
+                    message.model_dump_json(),
+                    topic="incidents",
+                    priority=MessagePriority.NORMAL
                 )
                 return True
             return False

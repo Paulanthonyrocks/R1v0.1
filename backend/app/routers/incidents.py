@@ -71,21 +71,6 @@ async def resolve_incident(
         raise HTTPException(status_code=400, detail="Failed to resolve incident")
     return await manager._db_manager.get_incident_by_id(incident_id)
 
-@router.post("/{incident_id}/false-positive", response_model=Incident)
-async def mark_false_positive(
-    incident_id: str,
-    notes: Optional[str] = Query(None),
-    user_id: str = Query("operator", alias="user_id"),
-    manager: IncidentManager = Depends(get_incident_manager)
-):
-    """Mark an incident as a false positive."""
-    success = await manager.update_status(
-        incident_id, IncidentStatus.FALSE_POSITIVE, user_id=user_id, notes=notes
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to mark as false positive")
-    return await manager._db_manager.get_incident_by_id(incident_id)
-
 @router.patch("/{incident_id}", response_model=Incident)
 async def update_incident(
     incident_id: str,

@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 import logging
-import torch
-import torch.nn.functional as F
 from typing import List, Tuple, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,53 +44,15 @@ def process_frame_for_lanes(frame: Optional[np.ndarray], config: Dict[str, Any])
         return None
 
     lane_cfg = config.get("lane_detection", {})
-    perf_cfg = config.get("performance", {})
-    use_gpu = False
     
-    if use_gpu:
-        try:
-            # 1. Grayscale & Blur on GPU
-            # Move frame to GPU: (H, W, C) -> (1, C, H, W)
-            frame_tensor = torch.from_numpy(frame).to("cuda").permute(2, 0, 1).float().unsqueeze(0)
-            
-            # Convert to Grayscale (Weighted average)
-            # Weights for BGR: [0.114, 0.587, 0.299]
-            weights = torch.tensor([0.114, 0.587, 0.299], device="cuda").view(1, 3, 1, 1)
-            gray_tensor = (frame_tensor * weights).sum(dim=1, keepdim=True)
-            
-            # Gaussian Blur
-            kernel_size = lane_cfg.get("gaussian_blur_kernel_size", 5)
-            if kernel_size > 1:
-                # Create 1D Gaussian kernel
-                sigma = 0.3 * ((kernel_size - 1) * 0.5 - 1) + 0.8
-                x = torch.linspace(-(kernel_size // 2), kernel_size // 2, kernel_size, device="cuda")
-                kernel_1d = torch.exp(-x.pow(2) / (2 * sigma**2))
-                kernel_1d = kernel_1d / kernel_1d.sum()
-                kernel_2d = kernel_1d.view(-1, 1) * kernel_1d.view(1, -1)
-                kernel_2d = kernel_2d.view(1, 1, kernel_size, kernel_size)
-                
-                # Apply 2D convolution
-                blur_tensor = F.conv2d(gray_tensor, kernel_2d, padding=kernel_size // 2)
-            else:
-                blur_tensor = gray_tensor
-                
-            # Back to CPU for Canny (OpenCV Canny is faster on CPU than naive GPU impls)
-            blur_gray = blur_tensor.squeeze().byte().cpu().numpy()
-            
-        except Exception as e:
-            logger.warning(f"GPU Lane Preprocessing failed, falling back: {e}")
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            kernel_size = lane_cfg.get("gaussian_blur_kernel_size", 5)
-            blur_gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
-    else:
-        # 1. Grayscale (CPU)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # 1. Grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 2. Gaussian Blur (CPU)
-        kernel_size = lane_cfg.get("gaussian_blur_kernel_size", 5)
-        blur_gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+    # 2. Gaussian Blur
+    kernel_size = lane_cfg.get("gaussian_blur_kernel_size", 5)
+    blur_gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
 
-    # 3. Canny Edge Detection (OpenCV)
+    # 3. Canny Edge Detection
     low_threshold = lane_cfg.get("canny_low_threshold", 50)
     high_threshold = lane_cfg.get("canny_high_threshold", 150)
     edges = cv2.Canny(blur_gray, low_threshold, high_threshold)

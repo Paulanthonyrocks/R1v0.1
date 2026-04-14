@@ -1,11 +1,9 @@
 import logging
 import json
-import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
-from app.dependency_injection import get_feed_manager, get_connection_manager, get_traffic_signal_service
+from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
-from app.services.traffic_signal_service import TrafficSignalService
 from app.utils.auth_utils import verify_firebase_token
 from app.dependency_injection import is_admin as is_admin_check
 from app.models.websocket import (
@@ -19,8 +17,7 @@ from app.models.websocket import (
     AuthenticateData,
     AuthSuccessData,
     AuthFailureData,
-    UpdateFeedConfigData,
-    SetSignalPhaseData
+    UpdateFeedConfigData
 )
 from app.models.user import User
 
@@ -31,8 +28,7 @@ async def message_receiver(
     websocket: WebSocket,
     client_id: str,
     connection_manager: ConnectionManager,
-    feed_manager: FeedManager,
-    traffic_signal_service: TrafficSignalService
+    feed_manager: FeedManager
 ):
     """
     Main loop for receiving and processing messages from a connected client.
@@ -57,8 +53,6 @@ async def message_receiver(
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
                     logger.debug(f"Received PING from {client_id}")
-                    # Record activity on PING (proof of life)
-                    connection_manager.record_pong(client_id)
                     # Echo back the correlation_id for RTT calculation
                     await connection_manager.send_personal_message(
                         WebSocketMessage(
@@ -121,14 +115,6 @@ async def message_receiver(
                     )
                     await connection_manager.send_personal_message(response.model_dump_json(), client_id)
 
-                elif msg_type == WebSocketMessageTypeEnum.GET_USER_ROLE:
-                    role = connection_manager.get_user_role(client_id)
-                    response = WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.USER_ROLE,
-                        data={"role": role}
-                    )
-                    await connection_manager.send_personal_message(response.model_dump_json(), client_id)
-
                 elif msg_type in [
                     WebSocketMessageTypeEnum.START_FEED,
                     WebSocketMessageTypeEnum.STOP_FEED,
@@ -168,39 +154,6 @@ async def message_receiver(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                                 data={"message": f"Operation failed: {str(e)}"}
-                            ).model_dump_json(),
-                            client_id
-                        )
-
-                elif msg_type == WebSocketMessageTypeEnum.SET_SIGNAL_PHASE:
-                    # Check Authorization
-                    user_role = connection_manager.get_user_role(client_id)
-                    if user_role != "admin":
-                        logger.warning(f"Unauthorized signal control attempt by {client_id} (role: {user_role})")
-                        await connection_manager.send_personal_message(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": "Unauthorized: Admin privileges required for signal control."}
-                            ).model_dump_json(),
-                            client_id
-                        )
-                        continue
-
-                    try:
-                        from app.models.signals import SignalPhaseEnum
-                        signal_data = SetSignalPhaseData(**data)
-                        phase = SignalPhaseEnum(signal_data.phase)
-                        await traffic_signal_service.set_signal_phase(
-                            signal_data.signal_id, 
-                            phase, 
-                            duration_seconds=signal_data.duration_seconds
-                        )
-                    except Exception as e:
-                        logger.error(f"Error setting signal phase: {e}")
-                        await connection_manager.send_personal_message(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": f"Signal control failed: {str(e)}"}
                             ).model_dump_json(),
                             client_id
                         )
@@ -249,7 +202,6 @@ async def websocket_endpoint(
     client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
-    traffic_signal_service: TrafficSignalService = Depends(get_traffic_signal_service),
     token: str | None = Query(None),
 ):
     """
@@ -292,7 +244,7 @@ async def websocket_endpoint(
         try:
             # Run the receiver loop directly.
             # The ConnectionManager handles keepalives (ping/pong) independently.
-            await message_receiver(websocket, client_id, connection_manager, feed_manager, traffic_signal_service)
+            await message_receiver(websocket, client_id, connection_manager, feed_manager)
 
         except Exception as e:
             logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)

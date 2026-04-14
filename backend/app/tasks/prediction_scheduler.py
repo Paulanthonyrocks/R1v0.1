@@ -265,7 +265,7 @@ class PredictionScheduler:
                     # Creating a unique topic per location for targeted messages
                     location_hash = abs(hash((location.latitude, location.longitude)))
                     await self.analytics_service._connection_manager.broadcast_to_topic(
-                        f"predictions:{location_hash}", message.model_dump()
+                        message, topic=f"predictions:{location_hash}"
                     )
                     logger.info(
                         f"Sent high likelihood notification for location {location.latitude},{location.longitude} with action: {action_taken}"

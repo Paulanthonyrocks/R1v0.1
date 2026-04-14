@@ -500,30 +500,20 @@ class TrafficPredictor:
         """Load a trained model from a file"""
         try:
             import tensorflow as tf
-            # Force CPU for traffic predictor to avoid conflict with YOLO GPU usage
-            tf.config.set_visible_devices([], 'GPU')
-            logger.info("TensorFlow GPU disabled for TrafficPredictor.")
         except ImportError:
             logger.error("TensorFlow is not available. Cannot load model.")
             return
-        except Exception as e:
-            logger.warning(f"Error configuring TensorFlow: {e}")
 
         try:
             # Use tf.keras.models.load_model
             # If the scaler was saved separately, load it here as well.
             # Example: self.scaler = load_scaler(path + ".scaler")
             # Ensure the path exists before attempting to load.
-            logger.info(f"Attempting to load TensorFlow model from {path}...")
-            # Flush logs to ensure we see this before potential hang
-            for h in logger.handlers: h.flush()
-            
             self.model = tf.keras.models.load_model(path)
             # Attempt to load the scaler as well if saved separately
             # This requires a separate saving/loading mechanism for the scaler
             # For simplicity here, we assume scaler will be fitted on dummy data if not loaded
-            logger.info(f"Model loaded successfully from {path}")
-            for h in logger.handlers: h.flush()
+            logger.info(f"Model loaded from {path}")
         except Exception as e:
             logger.error(f"Error loading model from {path}: {e}. Initializing a new model.", exc_info=True)
             self.model = None # Ensure model is None if loading fails

@@ -14,11 +14,6 @@ async def initialize_database(config: dict):
     if db_manager_instance is None:
         try:
             db_manager_instance = DBManagerClass(config)
-            
-            # Initial prune on startup to reclaim space
-            retention = config.get("db_retention_days", 7)
-            logger.info(f"Performing initial database and file pruning (retention: {retention} days)...")
-            db_manager_instance.prune_old_data(config=config, retention_days=retention)
 
             logger.info("DatabaseManager initialized successfully via app.database.")
         except Exception as e:

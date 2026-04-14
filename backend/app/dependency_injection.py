@@ -19,7 +19,6 @@ class DependencyContainer:
     
     def __init__(self):
         self._config: Dict[str, Any] = {}
-        self._connection_manager: Optional[ConnectionManager] = None
 
     def set_config(self, config: Any):
         """Set the configuration for the container."""
@@ -31,9 +30,9 @@ class DependencyContainer:
     # Factory methods for core services
     
     async def get_connection_manager(self) -> ConnectionManager:
-        if self._connection_manager is None:
-            self._connection_manager = ConnectionManager()
-        return self._connection_manager
+        # Return the singleton instance directly to avoid circular dependency
+        # with ServiceRegistry which requires ConnectionManager to initialize.
+        return ConnectionManager.get_instance()
 
     async def get_feed_manager(self) -> FeedManager:
         from app.services import get_feed_manager

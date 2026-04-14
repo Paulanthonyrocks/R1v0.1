@@ -10,8 +10,6 @@ from collections import deque, defaultdict
 logger = logging.getLogger(__name__)
 
 class FrameReader:
-    _capture_lock = threading.Lock() # Global lock for environment variable mutations
-
     def __init__(
         self,
         source: Union[str, int],
@@ -87,28 +85,14 @@ class FrameReader:
     def _read_frames_continuously(self) -> None:
         # Select backend and options based on GPU config
         backend = cv2.CAP_ANY
-        if self.gpu_acceleration:
-            # Optimized FFMPEG HWAccel strings for different vendors
-            hw_options = [
-                "hwaccel;cuvid|video_codec;h264_cuvid",
-                "hwaccel;qsv|video_codec;h264_qsv",
-                "hwaccel;vaapi"
-            ]
-            
-            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
-            
-            with self._capture_lock:
-                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options[0]}|{base_options}"
-                cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-            
-            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG (NVDEC).")
-        else:
-            # For CPU, ensure we don't have any GPU-related options lingering
-            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-            logger.debug(f"FrameReader '{self.source_name}' using CPU-only capture.")
-            cap = cv2.VideoCapture(self.source, backend)
+        if self.gpu_acceleration and self.is_file:
+            # Note: This requires OpenCV built with FFMPEG and specific environment setup
+            # We use CAP_FFMPEG to allow for hardware acceleration flags
+            backend = cv2.CAP_FFMPEG
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid" # Example for NVIDIA
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG.")
 
+        cap = cv2.VideoCapture(self.source, backend)
         if not cap.isOpened():
             logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
             self.started_event.set() # Unblock init
@@ -133,25 +117,19 @@ class FrameReader:
                 if self.is_file:
                     if self.is_looped:
                         logger.info(f"Looping video '{self.source_name}'")
+                        # Robust looping: Reopen the file to ensure a clean state
                         cap.release()
                         time.sleep(0.05) # Brief pause to release handles
-                        
-                        if self.gpu_acceleration:
-                            hw_options = "hwaccel;cuvid|video_codec;h264_cuvid"
-                            base_options = "rtsp_transport;tcp|reorder_queue_size;0|buffer_size;1024000"
-                            with self._capture_lock:
-                                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"{hw_options}|{base_options}"
-                                cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                                os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-                        else:
-                            cap = cv2.VideoCapture(self.source)
+                        cap = cv2.VideoCapture(self.source)
                         
                         if not cap.isOpened():
-                            logger.error(f"Failed to reopen video '{self.source_name}' for looping.")
-                            self.end_of_video = True
-                            break
+                             logger.error(f"Failed to reopen video '{self.source_name}' for looping.")
+                             self.end_of_video = True
+                             break
                         
+                        # Reset reader state
                         self.frame_index = -1
+                        # Reset timing to prevent fast-forwarding after the pause
                         next_frame_time = time.time() 
                         continue
                     else:
@@ -202,6 +180,7 @@ class FrameReader:
             if sleep_time > 0:
                 time.sleep(sleep_time)
             else:
+                # If we are significantly behind (e.g. > 10 frames), reset to avoid burst
                 if sleep_time < -0.5:
                      next_frame_time = time.time()
 
@@ -214,15 +193,6 @@ class FrameReader:
         """Returns (frame_index, frame) or None."""
         frame_data = self.get_frame()
         return (frame_data["frame_index"], frame_data["frame"]) if frame_data else None
-
-    def read_raw(self) -> Optional[Tuple[int, Any]]:
-        """Returns (frame_index, frame) directly without dict wrapper for lower overhead."""
-        try:
-            data = self.frames_queue.get_nowait()
-            self.frames_processed_count += 1
-            return (data["frame_index"], data["frame"])
-        except Empty:
-            return None
 
     def get_frame(self) -> Optional[Dict[str, Any]]:
         """Returns full dictionary including metadata or None."""
@@ -237,6 +207,7 @@ class FrameReader:
         """Stops the thread safely."""
         self.stop_event.set()
         if self.thread and self.thread.is_alive():
+            # Wait for thread to finish to ensure cap is released safely
             self.thread.join(timeout=2.0)
         
         # Clear queue
@@ -259,6 +230,14 @@ class FrameReader:
 
     @property
     def isOpened(self) -> bool:
+        """
+        Check if the frame reader is actively reading frames.
+        
+        Provides API consistency with cv2.VideoCapture interface.
+        
+        Returns:
+            True if the reader thread is alive and video hasn't ended.
+        """
         return (
             self.thread is not None 
             and self.thread.is_alive() 

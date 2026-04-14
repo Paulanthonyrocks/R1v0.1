@@ -172,7 +172,6 @@ async def get_vehicle_reid_gallery(
     """
     Returns the collection of appearance embeddings for a vehicle.
     """
-    print(f"Fetching gallery for global_id: {global_id}")
     identity = await db.get_reid_identity(global_id)
     if not identity:
         raise HTTPException(status_code=404, detail="ReID identity not found")
