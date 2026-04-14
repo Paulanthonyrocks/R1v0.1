@@ -1,10 +1,10 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1" # Force CPU-only mode
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # --- Hardware Optimization Flags ---
 # Force TensorFlow to only allocate memory as needed, preventing conflicts with PyTorch
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 # Suppress excessive TensorFlow logging
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import asyncio
 import logging
@@ -14,7 +14,6 @@ import multiprocessing
 import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
-import os
 import random
 import re
 from contextvars import ContextVar

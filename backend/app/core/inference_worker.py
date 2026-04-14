@@ -1,6 +1,7 @@
-from app.config import initialize_config
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1" # Force CPU-only mode
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+from app.config import initialize_config
 import cv2
 import logging
 import time
