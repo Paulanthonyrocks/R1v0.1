@@ -1,3 +1,4 @@
+data_dir: /content/data
 accel_threshold_mps2: 0.5
 advanced_analytics:
   enabled: true
@@ -590,6 +591,10 @@ video_input:
   queue_put_timeout_ms: 1000
   webcam_buffer_size: 20
   webcam_index: 0
+  sample_videos:
+  - /content/data/sample_traffic.mp4
+  - /content/data/sample_traffic_2.mp4
+  - /content/data/sample_traffic_3.mp4
 video_output:
   codec: mp4v
   enabled: false

@@ -484,6 +484,7 @@ class FeedManager:
                     # We also need to persist 'is_looped' as it's not in FeedConfigInfo
                     data = config_info.model_dump()
                     data["_is_looped_feed"] = entry.get("is_looped_feed", True)
+                    data["_is_sample_feed"] = entry.get("is_sample_feed", False)
                     feeds_data[feed_id] = data
             
             self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -507,6 +508,7 @@ class FeedManager:
                 try:
                     # Extract extra metadata
                     is_looped = feed_data.pop("_is_looped_feed", True)
+                    is_sample = feed_data.pop("_is_sample_feed", False)
                     
                     # Create FeedConfigInfo object
                     config_info = FeedConfigInfo(**feed_data)
@@ -524,11 +526,14 @@ class FeedManager:
                         "latest_metrics": None,
                         "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
                         "timer": FrameTimer(),
-                        "is_sample_feed": False,
+                        "is_sample_feed": is_sample,
                         "is_looped_feed": is_looped,
                         "config_info": config_info,
                         "last_broadcast_time": 0.0,
                     }
+                    
+                    if is_sample and feed_id not in self._sample_feed_ids:
+                        self._sample_feed_ids.append(feed_id)
                     
                     # Update ID counter
                     parts = feed_id.split('_')
@@ -622,6 +627,7 @@ class FeedManager:
         longitude: Optional[float],
         name_hint: Optional[str] = None,
         is_looped: bool = True,
+        is_sample_feed: bool = False,
     ) -> Dict[str, Any]:
         existing_feed_id = None
         
@@ -658,11 +664,14 @@ class FeedManager:
                     "latest_metrics": None,
                     "metrics_history": deque(maxlen=MAX_METRICS_HISTORY_LENGTH),
                     "timer": FrameTimer(),
-                    "is_sample_feed": False,
+                    "is_sample_feed": is_sample_feed,
                     "is_looped_feed": is_looped,
                     "config_info": feed_config,
                     "last_broadcast_time": 0.0,
                 }
+                
+                if is_sample_feed and feed_id not in self._sample_feed_ids:
+                    self._sample_feed_ids.append(feed_id)
                 
                 self._save_persisted_feeds()
                 target_feed_id = feed_id
@@ -676,6 +685,11 @@ class FeedManager:
                         entry["config_info"].latitude = latitude
                         entry["config_info"].longitude = longitude
                         logger.info(f"Updated coordinates for {target_feed_id} to ({latitude}, {longitude})")
+                
+                if is_sample_feed:
+                    self.process_registry[target_feed_id]["is_sample_feed"] = True
+                    if target_feed_id not in self._sample_feed_ids:
+                        self._sample_feed_ids.append(target_feed_id)
 
         if not existing_feed_id:
             await self._broadcast_feed_update(target_feed_id)

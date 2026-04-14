@@ -221,9 +221,9 @@ async def lifespan(app: FastAPI):
             p_enabled = p_cfg.get("enabled", True) if isinstance(p_cfg, dict) else getattr(p_cfg, "enabled", True)
             if p_enabled:
                 auto_start = loaded_config.get("auto_start_processing", True) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", True)
-                if not auto_start:
+                if auto_start:
                     await fm.start_processing()
-                    logger.info("Feed Manager started processing manually.")
+                    logger.info("Feed Manager started processing automatically.")
     except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
@@ -257,6 +257,22 @@ async def lifespan(app: FastAPI):
             for vf in watch_dir.glob("*"):
                 if vf.is_file() and watcher.event_handler._is_video_file(vf):
                     on_new_video(str(vf))
+
+        # 5.3 Post Startup Processing (Sample Feeds)
+        psp_cfg = loaded_config.get("post_startup_processing", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "post_startup_processing", {})
+        if psp_cfg.get("enabled", False) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "enabled", False):
+            sample_feeds = psp_cfg.get("sample_feeds", []) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "sample_feeds", [])
+            for feed in sample_feeds:
+                f_path = feed.get("path") if isinstance(feed, dict) else getattr(feed, "path")
+                create_background_task(fm.add_and_start_feed(
+                    source=f_path,
+                    is_looped=feed.get("is_looped", True) if isinstance(feed, dict) else getattr(feed, "is_looped", True),
+                    latitude=feed.get("latitude") if isinstance(feed, dict) else getattr(feed, "latitude"),
+                    longitude=feed.get("longitude") if isinstance(feed, dict) else getattr(feed, "longitude"),
+                    name_hint=feed.get("name") if isinstance(feed, dict) else getattr(feed, "name", Path(f_path).name),
+                    is_sample_feed=True
+                ))
+            logger.info(f"Scheduled {len(sample_feeds)} sample feeds for startup.")
 
     except Exception as e:
         logger.error(f"Optional Services Failed: {e}")
