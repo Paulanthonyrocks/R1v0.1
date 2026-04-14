@@ -66,7 +66,7 @@ const LiveMapPage: React.FC = () => {
                  <div className="w-px h-3 bg-lcd-green/30" />
                  <div className="flex items-center gap-1 font-bold">
                    <span>Units:</span>
-                   <span>{vehicles?.length || 0}</span>
+                   <span>{Object.keys(vehicles.current || {}).length}</span>
                  </div>
               </div>
               

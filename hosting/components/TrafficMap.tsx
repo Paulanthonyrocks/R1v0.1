@@ -173,7 +173,7 @@ const TrafficMap = forwardRef<any, {
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
 
-      const clickedVehicle = vehicles.find(v => {
+      const clickedVehicle = Object.values(vehicles.current || {}).find(v => {
         if (!v.bbox || !Array.isArray(v.bbox)) return false;
         const [vx1, vy1, vx2, vy2] = v.bbox;
         return x >= vx1 && x <= vx2 && y >= vy1 && y <= vy2;

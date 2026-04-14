@@ -1,8 +1,12 @@
 import { useState, useCallback, useRef } from 'react';
 import { VehicleData } from '../types/api';
 
+interface InternalVehicleState extends VehicleData {
+    last_update: number;
+}
+
 interface VehicleStateMap {
-    [key: string]: VehicleData;
+    [key: string]: InternalVehicleState;
 }
 
 export const useVehicleTracking = () => {
