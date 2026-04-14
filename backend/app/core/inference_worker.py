@@ -77,8 +77,6 @@ def inference_worker(
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
-    # Initialize global config for this process
-    initialize_config()
         logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
         stop_event.set()
     
@@ -127,8 +125,6 @@ def inference_worker(
             # Load YOLO
             engine_path = Path(full_model_path).with_suffix(".engine")
             if engine_path.exists():
-    # Initialize global config for this process
-    initialize_config()
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
                 from ultralytics import YOLO
                 import torch
@@ -146,8 +142,6 @@ def inference_worker(
 
             # Load ReID
             if vehicle_det_cfg.get("reid_enabled", True):
-    # Initialize global config for this process
-    initialize_config()
                 from ..ml.reid_model import ReIDEmbedder
                 logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
                 shared_reid_embedder = ReIDEmbedder(config)
@@ -159,8 +153,6 @@ def inference_worker(
             model_load_failed = True
 
     def handle_command(cmd):
-    # Initialize global config for this process
-    initialize_config()
         if not cmd: return
         try:
             cmd_type = cmd.get("type")
@@ -181,8 +173,6 @@ def inference_worker(
     
     try:
         while not stop_event.is_set():
-    # Initialize global config for this process
-    initialize_config()
             # Handle command queue
             try:
                 while True:
@@ -207,8 +197,6 @@ def inference_worker(
                 if batch_tasks:
                     start_wait = time.time()
                     while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
-    # Initialize global config for this process
-    initialize_config()
                         try:
                             t = central_input_queue.get_nowait()
                             if t is not None:
@@ -297,8 +285,6 @@ def inference_worker(
                     try:
                         results = shared_model(frames_to_infer, verbose=False, stream=False)
                         for i, res in enumerate(results):
-    # Initialize global config for this process
-    initialize_config()
                             meta_idx = inference_indices[i]
                             meta = batch_meta[meta_idx]
                             boxes_data = res.boxes.data.cpu().numpy()
@@ -315,8 +301,6 @@ def inference_worker(
 
                 # Tracking & Output
                 for i, meta in enumerate(batch_meta):
-    # Initialize global config for this process
-    initialize_config()
                     core, monitor, metrics_obj = meta['core'], meta['monitor'], meta['metrics']
                     frame, f_idx = meta['frame'], meta['frame_index']
                     
@@ -330,8 +314,6 @@ def inference_worker(
                         core._first_detection_done = True
                     
                     for vid, track in vis_tracks.items():
-    # Initialize global config for this process
-    initialize_config()
                         emb = track.get("embedding")
                         if emb:
                             global_id = local_reid_manager.match_only(np.array(emb))
@@ -341,8 +323,6 @@ def inference_worker(
                                     local_reid_manager.local_to_global[meta['feed_id']] = {}
                                 local_reid_manager.local_to_global[meta['feed_id']][vid] = global_id
                         if not track.get("global_vehicle_id"):
-    # Initialize global config for this process
-    initialize_config()
                             mapped_id = local_reid_manager.get_global_id(meta['feed_id'], vid)
                             if mapped_id: track["global_vehicle_id"] = mapped_id
                         
@@ -371,8 +351,6 @@ def inference_worker(
                 now = time.time()
                 if now - last_metrics_log > 30.0:
                       for fid, m in metrics_map.items():
-    # Initialize global config for this process
-    initialize_config()
                           logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
                       last_metrics_log = now
 
@@ -383,6 +361,4 @@ def inference_worker(
         logger.error(f"[Worker {worker_id}] Fatal error: {e}", exc_info=True)
     finally:
         for feed_id, cm in core_modules.items(): cm.cleanup()
-    # Initialize global config for this process
-    initialize_config()
         logger.info(f"Inference process {os.getpid()} terminated.")
