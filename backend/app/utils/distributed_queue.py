@@ -12,10 +12,17 @@ class RedisQueue:
     Matches the basic interface of multiprocessing.Queue for easy swap-in.
     """
     def __init__(self, name: str, maxsize: int = 0):
-        self.redis = get_redis_client()
+        self._redis = None
+        self.name = name
         self.key = f"q:{name}"
         self.maxsize = maxsize
         logger.info(f"Initialized RedisQueue '{name}'")
+
+    @property
+    def redis(self):
+        if self._redis is None:
+            self._redis = get_redis_client()
+        return self._redis
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the back of the queue."""
