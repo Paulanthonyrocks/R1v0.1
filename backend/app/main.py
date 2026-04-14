@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1" # Force CPU-only mode
 # --- Hardware Optimization Flags ---
 # Force TensorFlow to only allocate memory as needed, preventing conflicts with PyTorch
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
