@@ -50,7 +50,7 @@ file_watcher:
   enabled: false
   watch_directory: data/new_sample_videos
 firebase_admin:
-  auth_enabled: false
+  auth_enabled: true
   project_id: gen-lang-client-0230118708
   service_account_key_path: configs/firebase/service-account-key.json
   storage_bucket: r1v0-1.appspot.com
