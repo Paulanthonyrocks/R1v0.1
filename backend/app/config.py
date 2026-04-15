@@ -101,7 +101,22 @@ def initialize_config(config_path: Optional[str] = None) -> AppConfig:
         
         # Configure logging
         if "logging" in raw_config:
-            logging.config.dictConfig(raw_config["logging"])
+            # Resolve log paths relative to the backend directory
+            backend_dir = Path(__file__).parent.parent
+            logging_config = raw_config["logging"]
+            if "handlers" in logging_config:
+                for handler_name, handler_config in logging_config["handlers"].items():
+                    if "filename" in handler_config:
+                        log_file = Path(handler_config["filename"])
+                        if not log_file.is_absolute():
+                            # Resolve relative to backend directory
+                            log_file = backend_dir / log_file
+                        
+                        # Ensure the log directory exists
+                        log_file.parent.mkdir(parents=True, exist_ok=True)
+                        handler_config["filename"] = str(log_file)
+            
+            logging.config.dictConfig(logging_config)
         
         # Validate with Pydantic
         _config_instance = AppConfig(**raw_config)
