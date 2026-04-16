@@ -56,20 +56,7 @@ SNAPSHOT_DIR = BASE_DIR / "data" / "snapshots"
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Configuration Loading ---
-# Load configuration early to allow middleware setup and container initialization
-config_path = BASE_DIR / "configs" / "config.yaml"
-if not config_path.exists():
-    config_path = Path("/app/configs/config.yaml")
-
-try:
-    loaded_config = initialize_config(str(config_path))
-    container = get_container()
-    container.set_config(loaded_config)
-    logger.info(f"Configuration loaded from {config_path}")
-except Exception as e:
-    logger.critical(f"Failed to load configuration at startup: {e}")
-    # In a real app, we might want to exit here, but for now let's raise
-    raise RuntimeError(f"Config Load Failed: {e}")
+# Moved to lifespan to prevent recursive execution during multiprocessing spawn
 
 # --- Context Variables ---
 request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
@@ -145,6 +132,24 @@ class RequestIDMiddleware:
 # --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # --- CONFIGURATION & CONTAINER SETUP ---
+    config_path = BASE_DIR / "configs" / "config.yaml"
+    if not config_path.exists():
+        config_path = Path("/app/configs/config.yaml")
+
+    try:
+        loaded_config = initialize_config(str(config_path))
+        container = get_container()
+        container.set_config(loaded_config)
+        cfg_dict = to_dict(loaded_config)
+        logger.info(f"Configuration loaded from {config_path}")
+        
+        # Setup CORS now that we have the config
+        setup_cors(app, cfg_dict)
+    except Exception as e:
+        logger.critical(f"Failed to load configuration at startup: {e}")
+        raise RuntimeError(f"Config Load Failed: {e}")
+
     # --- STARTUP ---
     logger.info("--- Starting Route One Backend ---")
     
@@ -315,7 +320,6 @@ def to_dict(obj):
         return obj.dict()
     return obj
 
-cfg_dict = to_dict(loaded_config)
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
@@ -370,8 +374,6 @@ async def audit_middleware(request: Request, call_next):
             
     return response
 
-# Initialize CORS
-setup_cors(app, cfg_dict)
 
 @app.middleware("http")
 async def debug_options_middleware(request: Request, call_next):
