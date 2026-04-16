@@ -56,7 +56,26 @@ SNAPSHOT_DIR = BASE_DIR / "data" / "snapshots"
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Configuration Loading ---
-# Moved to lifespan to prevent recursive execution during multiprocessing spawn
+# Wrap in MainProcess guard to prevent recursive execution during multiprocessing spawn
+import multiprocessing
+loaded_config = None
+container = None
+cfg_dict = None
+
+if multiprocessing.current_process().name == 'MainProcess':
+    config_path = BASE_DIR / \"configs\" / \"config.yaml\"
+    if not config_path.exists():
+        config_path = Path(\"/app/configs/config.yaml\")
+
+    try:
+        loaded_config = initialize_config(str(config_path))
+        container = get_container()
+        container.set_config(loaded_config)
+        cfg_dict = to_dict(loaded_config)
+        logger.info(f\"Configuration loaded from {config_path}\")
+    except Exception as e:
+        logger.critical(f\"Failed to load configuration at startup: {e}\")
+        raise RuntimeError(f\"Config Load Failed: {e}\")
 
 # --- Context Variables ---
 request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
@@ -132,27 +151,9 @@ class RequestIDMiddleware:
 # --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- CONFIGURATION & CONTAINER SETUP ---
-    config_path = BASE_DIR / "configs" / "config.yaml"
-    if not config_path.exists():
-        config_path = Path("/app/configs/config.yaml")
-
-    try:
-        loaded_config = initialize_config(str(config_path))
-        container = get_container()
-        container.set_config(loaded_config)
-        cfg_dict = to_dict(loaded_config)
-        logger.info(f"Configuration loaded from {config_path}")
-        
-        # Setup CORS now that we have the config
-        setup_cors(app, cfg_dict)
-    except Exception as e:
-        logger.critical(f"Failed to load configuration at startup: {e}")
-        raise RuntimeError(f"Config Load Failed: {e}")
-
     # --- STARTUP ---
     logger.info("--- Starting Route One Backend ---")
-    
+
     # 1. System Info
     try:
         mem = psutil.virtual_memory()
@@ -343,6 +344,10 @@ rate_limits = {
     "/api/v1/feeds": RateLimitConfig(limit=30, window=60)
 }
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+
+# Initialize CORS
+if multiprocessing.current_process().name == 'MainProcess' and cfg_dict:
+    setup_cors(app, cfg_dict)
 
 # Audit Logger Middleware
 @app.middleware("http")
