@@ -409,7 +409,12 @@ async def serve_snapshot(file_path: str):
 async def root():
     return {"message": "Welcome to Route One API", "version": "1.1.0"}
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.get("/health/detailed")
+
 async def detailed_health_check():
     health = {"status": "ok", "services": {}}
     try:
