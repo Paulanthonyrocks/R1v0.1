@@ -166,7 +166,7 @@ class DatabaseManager:
                 self.timescale_url = None
 
             mongo_config = config.get("mongodb") or {}
-            if mongo_config.get("uri") and mongo_config.get("database_name"):
+            if mongo_config.get("enabled", False) and mongo_config.get("uri") and mongo_config.get("database_name"):
                 self.mongo_uri = mongo_config["uri"]
                 
                 # Auto-adjust if in Docker and uri points to localhost
