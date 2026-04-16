@@ -89,6 +89,10 @@ class AnalyticsService:
 
     @property
     def _traffic_predictor(self):
+        # Respect the enabled flag in config to prevent unnecessary lazy-loading
+        if not self.config.get("traffic_prediction", {}).get("enabled", False):
+            return None
+
         if self._traffic_predictor_instance is None:
             logger.info("Lazy-loading TrafficPredictor...")
             self._traffic_predictor_instance = TrafficPredictor(config=self.config)
