@@ -57,25 +57,24 @@ SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Configuration Loading ---
 # Wrap in MainProcess guard to prevent recursive execution during multiprocessing spawn
-import multiprocessing
 loaded_config = None
 container = None
 cfg_dict = None
 
 if multiprocessing.current_process().name == 'MainProcess':
-    config_path = BASE_DIR / \"configs\" / \"config.yaml\"
+    config_path = BASE_DIR / "configs" / "config.yaml"
     if not config_path.exists():
-        config_path = Path(\"/app/configs/config.yaml\")
+        config_path = Path("/app/configs/config.yaml")
 
     try:
         loaded_config = initialize_config(str(config_path))
         container = get_container()
         container.set_config(loaded_config)
         cfg_dict = to_dict(loaded_config)
-        logger.info(f\"Configuration loaded from {config_path}\")
+        logger.info(f"Configuration loaded from {config_path}")
     except Exception as e:
-        logger.critical(f\"Failed to load configuration at startup: {e}\")
-        raise RuntimeError(f\"Config Load Failed: {e}\")
+        logger.critical(f"Failed to load configuration at startup: {e}")
+        raise RuntimeError(f"Config Load Failed: {e}")
 
 # --- Context Variables ---
 request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
@@ -153,7 +152,7 @@ class RequestIDMiddleware:
 async def lifespan(app: FastAPI):
     # --- STARTUP ---
     logger.info("--- Starting Route One Backend ---")
-
+    
     # 1. System Info
     try:
         mem = psutil.virtual_memory()
@@ -321,6 +320,7 @@ def to_dict(obj):
         return obj.dict()
     return obj
 
+cfg_dict = to_dict(loaded_config) if loaded_config else None
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
@@ -379,7 +379,6 @@ async def audit_middleware(request: Request, call_next):
             
     return response
 
-
 @app.middleware("http")
 async def debug_options_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
@@ -421,7 +420,6 @@ async def health_check():
     return {"status": "ok"}
 
 @app.get("/health/detailed")
-
 async def detailed_health_check():
     health = {"status": "ok", "services": {}}
     try:
