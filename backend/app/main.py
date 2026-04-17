@@ -55,7 +55,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = BASE_DIR / "data" / "snapshots"
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def to_dict(obj):
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return obj
+
+cfg_dict = to_dict(loaded_config) if loaded_config else None
+
 # --- Configuration Loading ---
+
 # Wrap in MainProcess guard to prevent recursive execution during multiprocessing spawn
 loaded_config = None
 container = None
@@ -312,15 +323,6 @@ app = FastAPI(
     description="API for managing traffic analysis feeds, data, and real-time updates.",
     lifespan=lifespan
 )
-
-def to_dict(obj):
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "dict"):
-        return obj.dict()
-    return obj
-
-cfg_dict = to_dict(loaded_config) if loaded_config else None
 
 # --- Exception Handlers ---
 @app.exception_handler(Exception)
