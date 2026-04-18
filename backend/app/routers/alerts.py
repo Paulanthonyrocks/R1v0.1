@@ -14,6 +14,7 @@ from app.dependency_injection import (
 )
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
 from app.models.alerts import Alert as AlertModel, AlertSeverityEnum
+from app.models.user import User
 from ..websocket.connection_manager import ConnectionManager
 from app.models.websocket import (
     WebSocketMessage,
