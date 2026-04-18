@@ -211,7 +211,8 @@ class AnalyticsService:
 
         # Safety Monitor Checks
         if vehicles and self._safety_monitor:
-            alerts = self._safety_monitor.update(feed_id, vehicles, timestamp)
+            ts_float = timestamp.timestamp() if isinstance(timestamp, datetime) else timestamp
+            alerts = self._safety_monitor.update(feed_id, vehicles, ts_float)
             for alert in alerts:
                 # Convert Safety Alert to Incident
                 inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH

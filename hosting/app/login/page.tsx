@@ -67,7 +67,7 @@ const LoginPage: React.FC = () => {
         </div>
         <div className="flex items-center space-x-2">
           <Clock size={20} />
-          <span className="font-lcd matrix-glow">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          <span className="font-lcd matrix-glow">{currentTime}</span>
           <BatteryFull size={20} />
         </div>
       </header>
@@ -117,6 +117,19 @@ const LoginPage: React.FC = () => {
               {loading ? 'Logging In...' : 'Login'}
             </MatrixButton>
           </form>
+          <p className="text-center text-sm mt-4 tracking-normal"> {/* Added tracking-normal */}
+            Don&apos;t have an account?{' '}
+            <a href="/signup" className="text-lcd-text hover:underline tracking-normal font-lcd"> {/* Added tracking-normal */}
+              Sign up
+            </a>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LoginPage;    </form>
           <p className="text-center text-sm mt-4 tracking-normal"> {/* Added tracking-normal */}
             Don&apos;t have an account?{' '}
             <a href="/signup" className="text-lcd-text hover:underline tracking-normal font-lcd"> {/* Added tracking-normal */}
