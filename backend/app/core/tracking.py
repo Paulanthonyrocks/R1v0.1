@@ -172,20 +172,20 @@ class TrackingManager:
         bbox, cls, conf, emb = det
         track["bbox"] = bbox
         track["last_seen"] = current_time
-        track["status"] = \"active\"
+        track["status"] = "active"
         track["confidence"] = conf
         track["class_id"] = cls
         
         # Update Kalman
-        kf = track.get(\"kalman_filter\")
+        kf = track.get("kalman_filter")
         if kf:
             cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
             w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
             kf.update(np.array([[cx], [cy], [w], [h]]))
             
             # Extract pixel velocity from Kalman state [x, y, w, h, vx, vy, vw, vh]
-            track[\"vx\"] = float(kf.x[4][0])
-            track[\"vy\"] = float(kf.x[5][0])
+            track["vx"] = float(kf.x[4][0])
+            track["vy"] = float(kf.x[5][0])
 
     def _create_new_track(self, det, current_time):
         bbox, cls, conf, emb = det

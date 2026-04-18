@@ -249,9 +249,9 @@ class CoreModule:
                 track["speed"] = 0.0
             
             # Simple Filtering for Visualization
-            if track["status"] == \"active\":
+            if track["status"] == "active":
                 vis_tracks[tid] = track
-            elif track["status"] == \"predicting\":
+            elif track["status"] == "predicting":
                 if (current_time - track["last_seen"]) < self.predict_timeout:
                     vis_tracks[tid] = track
 
