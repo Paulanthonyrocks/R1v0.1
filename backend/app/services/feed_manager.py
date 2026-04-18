@@ -1101,49 +1101,49 @@ class FeedManager:
                             asyncio.create_task(self._analytics_service.update_incident_snapshot(inc_id, path))
                         continue
 
-                        # Route to Video Writer
-                        if entry.get("video_writer_queue"):
+                    # Route to Video Writer
+                    if entry.get("video_writer_queue"):
+                        try:
+                            entry["video_writer_queue"].put_nowait((frame_bytes, metrics))
+                        except queue.Full:
+                            pass
+
+                    # Update History
+                    if "metrics_history" not in entry or not isinstance(entry["metrics_history"], deque):
+                        entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
+                    entry["metrics_history"].append((now, metrics.copy()))
+                    
+                    while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
+                        entry["metrics_history"].popleft()
+
+                    # Distribute Frames to Subscribers (Internal)
+                    if feed_id in self.frame_subscriber_queues:
+                        for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
-                                entry["video_writer_queue"].put_nowait((frame_bytes, metrics))
-                            except queue.Full:
+                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
+                            except asyncio.QueueFull:
                                 pass
 
-                        # Update History
-                        if "metrics_history" not in entry or not isinstance(entry["metrics_history"], deque):
-                            entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
-                        entry["metrics_history"].append((now, metrics.copy()))
+                    # Analytics and Broadcast Throttling
+                    target_fps = self.config.get("video_output", {}).get("fps", 10)
+                    min_interval = 1.0 / target_fps
+                    last_broadcast = entry.get("last_broadcast_time", 0.0)
+                    
+                    if now - last_broadcast >= min_interval:
+                        # Only spawn if previous task for this feed finished (Backpressure)
+                        prev_task = self._active_broadcast_tasks.get(feed_id)
+                        if prev_task and not prev_task.done():
+                            # Skip this frame to avoid queueing up broadcasts
+                            continue
                         
-                        while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
-                            entry["metrics_history"].popleft()
+                        entry["last_broadcast_time"] = now
+                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                        self._active_broadcast_tasks[feed_id] = task
 
-                        # Distribute Frames to Subscribers (Internal)
-                        if feed_id in self.frame_subscriber_queues:
-                            for sub_q in self.frame_subscriber_queues[feed_id]:
-                                try:
-                                    sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
-                                except asyncio.QueueFull:
-                                    pass
-
-                        # Analytics and Broadcast Throttling
-                        target_fps = self.config.get("video_output", {}).get("fps", 10)
-                        min_interval = 1.0 / target_fps
-                        last_broadcast = entry.get("last_broadcast_time", 0.0)
-                        
-                        if now - last_broadcast >= min_interval:
-                            # Only spawn if previous task for this feed finished (Backpressure)
-                            prev_task = self._active_broadcast_tasks.get(feed_id)
-                            if prev_task and not prev_task.done():
-                                # Skip this frame to avoid queueing up broadcasts
-                                continue
-                            
-                            entry["last_broadcast_time"] = now
-                            task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
-                            self._active_broadcast_tasks[feed_id] = task
-
-                        # Analytics hook
-                        if self._analytics_service:
-                            # We can also track analytics tasks or just fire-and-forget if they are fast
-                            asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
+                    # Analytics hook
+                    if self._analytics_service:
+                        # We can also track analytics tasks or just fire-and-forget if they are fast
+                        asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
 
                 # Handle broadcasts and periodic tasks
                 await self._perform_broadcasts(feed_ids_to_update, False, False)

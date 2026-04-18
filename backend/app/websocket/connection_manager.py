@@ -219,6 +219,7 @@ class ConnectionManager:
                 try:
                     # Use a timeout for the actual socket send to detect dead sockets faster
                     if isinstance(message, bytes):
+                        logger.debug(f"Sending binary frame to {client_id}, size: {len(message)} bytes")
                         await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                     else:
                         await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
@@ -332,6 +333,7 @@ class ConnectionManager:
         """
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
+            logger.debug(f"No subscribers for feed {feed_id}, skipping broadcast.")
             return
 
         for client_id in subscribed_clients:
@@ -354,12 +356,14 @@ class ConnectionManager:
                 # Use frame_index to ensure deterministic skipping across connections if needed,
                 # or just use random for simplicity per-client.
                 if (frame_index % int(1/(1-skip_threshold))) != 0:
+                    logger.debug(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
                     continue
 
             try:
                 wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
                 self.client_queues[client_id].put_nowait(wrapped_msg)
             except asyncio.QueueFull:
+                logger.warning(f"Queue full for client {client_id}, dropping frame {frame_index}")
                 pass 
             except Exception as e:
                 logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
