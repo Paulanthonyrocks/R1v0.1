@@ -22,7 +22,7 @@ class RedisQueue:
     @property
     def redis(self):
         if self._redis is None:
-            self._redis = get_redis_client()
+            self._redis = get_redis_client(decode_responses=False)
         return self._redis
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
