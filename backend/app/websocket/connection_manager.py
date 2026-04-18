@@ -234,14 +234,14 @@ class ConnectionManager:
 
     def _calculate_queue_size(self, client_id: str) -> int:
         """Calculate adaptive queue size based on client latency."""
-        base_queue_size = 5
+        base_queue_size = 20
         latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
         
         # Higher latency = larger queue to buffer more frames
         if latency_ms > 200:
-            return 10
+            return 50
         elif latency_ms > 100:
-            return 7
+            return 30
         else:
             return base_queue_size
     
