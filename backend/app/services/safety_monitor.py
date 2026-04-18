@@ -119,6 +119,9 @@ class SafetyMonitor:
                 state["stopped_since"] = timestamp
             
             duration = timestamp - state["stopped_since"]
+            if hasattr(duration, "total_seconds"):
+                duration = duration.total_seconds()
+            
             if duration > self.stopped_duration_threshold:
                 # Trigger Alert
                 if self._should_alert(vid, "stopped", timestamp):
