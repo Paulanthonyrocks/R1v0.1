@@ -214,7 +214,8 @@ def inference_worker(
                 inference_indices = []
                 batch_meta = []
 
-                for task in batch_tasks:
+                for task_tuple in batch_tasks:
+                    msg_id, task = task_tuple
                     feed_id, frame_index, frame_bytes, extra_payload = task
                     timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
                     
@@ -223,6 +224,8 @@ def inference_worker(
                     
                     if frame_index == -888:
                          if feed_id in core_modules: core_modules[feed_id]._first_detection_done = False
+                         # Acknowledge control messages too
+                         central_input_queue.ack(msg_id)
                          continue
                     if frame_index == -999:
                          if feed_id in core_modules:
@@ -230,6 +233,8 @@ def inference_worker(
                          if feed_id in traffic_monitors: del traffic_monitors[feed_id]
                          pending_configs.pop(feed_id, None)
                          if feed_id in metrics_map: del metrics_map[feed_id]
+                         # Acknowledge control messages too
+                         central_input_queue.ack(msg_id)
                          continue
 
                     if feed_id not in core_modules:
@@ -266,13 +271,15 @@ def inference_worker(
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if frame is None:
                             metrics_obj.errors += 1
+                            central_input_queue.ack(msg_id) # Ack even on error to avoid poison pills
                             continue
                     
                     batch_meta.append({
                         "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
                         "frame_bytes": frame_bytes, "timestamp": timestamp,
                         "core": core, "monitor": monitor, "metrics": metrics_obj,
-                        "should_detect": should_detect, "first_detect": first_detect
+                        "should_detect": should_detect, "first_detect": first_detect,
+                        "msg_id": msg_id
                     })
 
                     if should_detect:
@@ -347,8 +354,12 @@ def inference_worker(
                         central_output_queue.put_nowait((
                             meta['feed_id'], f_idx, meta['frame_bytes'], metrics_result, serialized_v, extra
                         ))
+                        # Acknowledge message after successful put to output queue
+                        central_input_queue.ack(meta['msg_id'])
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
+                        # We still ack to avoid poison pills, but we log a drop
+                        central_input_queue.ack(meta['msg_id'])
                 
                 now = time.time()
                 if now - last_metrics_log > 30.0:

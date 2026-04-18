@@ -133,11 +133,11 @@ class FeedManager:
                 get_redis_client().ping()
                 
                 self._inference_input_queues = [
-                    RedisQueue(f"inference_input_{i}", maxsize=per_worker_q_size) 
+                    RedisStreamQueue(f"inference_input", group_name="inference-workers") 
                     for i in range(self._inference_pool_size)
                 ]
-                self._central_output_queue = RedisQueue("central_output", maxsize=QUEUE_MAX_SIZE)
-                logger.info("Using Redis for inference queues.")
+                self._central_output_queue = RedisStreamQueue("central_output", group_name="output-readers")
+                logger.info("Using Redis Streams for inference queues.")
             except Exception as e:
                 logger.warning(f"Redis enabled but connection failed: {e}. Falling back to multiprocessing queues.")
                 use_redis = False
