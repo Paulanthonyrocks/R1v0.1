@@ -234,14 +234,14 @@ class ConnectionManager:
 
     def _calculate_queue_size(self, client_id: str) -> int:
         """Calculate adaptive queue size based on client latency."""
-        base_queue_size = 20
+        base_queue_size = 100
         latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
         
         # Higher latency = larger queue to buffer more frames
         if latency_ms > 200:
-            return 50
+            return 500
         elif latency_ms > 100:
-            return 30
+            return 200
         else:
             return base_queue_size
     
@@ -268,10 +268,18 @@ class ConnectionManager:
             try:
                 # Wrap in prioritized object
                 wrapped_msg = PrioritizedMessage(priority, message)
+                
+                # For NORMAL priority, drop immediately if queue is heavily loaded to prevent head-of-line blocking
+                if priority == MessagePriority.NORMAL:
+                    queue = self.client_queues[client_id]
+                    if queue.qsize() >= queue.maxsize * 0.8:
+                        logger.debug(f"Client {client_id} queue heavily loaded ({queue.qsize()}/{queue.maxsize}). Dropping NORMAL message to maintain latency.")
+                        return
+
                 # Wait for slot in queue with timeout to avoid blocking forever
                 await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=0.5)
             except asyncio.TimeoutError:
-                 logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) to avoid blocking.")
+                logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) to avoid blocking.")
             except Exception as e:
                  logger.error(f"Failed to enqueue message for {client_id}: {e}")
 
