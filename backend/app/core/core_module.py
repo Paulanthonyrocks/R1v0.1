@@ -1,6 +1,7 @@
 import cv2
 import logging
 import time
+import math
 import numpy as np
 import torch
 import queue
@@ -236,10 +237,21 @@ class CoreModule:
             if ground_pos:
                 track["ground_coordinates"] = ground_pos
             
+            # --- Calculate Speed (km/h) ---
+            vx = track.get("vx", 0.0)
+            vy = track.get("vy", 0.0)
+            pixel_speed = math.sqrt(vx**2 + vy**2)
+            # Speed (m/s) = pixel_speed / pixels_per_meter
+            # Speed (km/h) = (pixel_speed / pixels_per_meter) * 3.6
+            if self.pixels_per_meter > 0:
+                track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6
+            else:
+                track["speed"] = 0.0
+            
             # Simple Filtering for Visualization
-            if track["status"] == "active":
+            if track["status"] == \"active\":
                 vis_tracks[tid] = track
-            elif track["status"] == "predicting":
+            elif track["status"] == \"predicting\":
                 if (current_time - track["last_seen"]) < self.predict_timeout:
                     vis_tracks[tid] = track
 
