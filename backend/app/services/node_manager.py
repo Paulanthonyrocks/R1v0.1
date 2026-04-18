@@ -6,6 +6,7 @@ import os
 import psutil
 from typing import Dict, List, Optional
 import redis
+from app.utils.redis_client import get_redis_client
 
 logger = logging.getLogger("app.services.node_manager")
 
@@ -15,14 +16,15 @@ class NodeManager:
     """
     def __init__(self, config: dict):
         self.config = config
-        self.redis_url = config.get("performance", {}).get("redis_url")
         self.node_id = config.get("node_id", f"node_{socket.gethostname()}_{os.getpid()}")
         self.heartbeat_interval = config.get("node_heartbeat_interval", 5.0)
         
-        self.redis = None
-        if self.redis_url:
-            self.redis = redis.from_url(self.redis_url, decode_responses=True)
-            logger.info(f"NodeManager initialized for {self.node_id} at {self.redis_url}")
+        try:
+            self.redis = get_redis_client(decode_responses=True)
+            logger.info(f"NodeManager initialized for {self.node_id} using shared Redis client")
+        except Exception as e:
+            self.redis = None
+            logger.info(f"Redis not available for NodeManager ({e}). Operating in single-node mode (heartbeat disabled).")
         
         self._heartbeat_task = None
         self._stop_event = asyncio.Event()
