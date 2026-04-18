@@ -78,6 +78,14 @@ class RedisQueue:
     def cancel_join_thread(self):
         pass
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_redis'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
 class RedisStreamQueue:
     """
     A scalable queue implementation using Redis Streams and Consumer Groups.
@@ -144,6 +152,14 @@ class RedisStreamQueue:
     def ack(self, message_id: str):
         """Acknowledges a message to mark it as processed."""
         self.redis.xack(self.key, self.group_name, message_id)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_redis'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     def qsize(self) -> int:
         """Returns the approximate size of the stream."""
