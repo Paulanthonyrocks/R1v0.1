@@ -1059,44 +1059,47 @@ class FeedManager:
 
                 feed_ids_to_update = set()
                 
-                # Process the items
-                async with self._lock:
-                    for item in items_buffer:
-                        feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
-                        
-                        entry = self.process_registry.get(feed_id)
-                        if not entry:
-                            continue
+                # Process the items without holding the global lock for the entire loop
+                for item in items_buffer:
+                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
+                    
+                    # Use a local copy of the entry to avoid holding the lock during the broadcast
+                    entry = self.process_registry.get(feed_id)
+                    if not entry:
+                        continue
 
-                        if entry["status"] == FeedOperationalStatusEnum.STARTING:
-                            entry["status"] = FeedOperationalStatusEnum.RUNNING
-                            feed_ids_to_update.add(feed_id)
-                            if feed_id in self._feed_running_events:
-                                self._feed_running_events[feed_id].set()
+                    # Status update requires lock as it changes state
+                    if entry["status"] == FeedOperationalStatusEnum.STARTING:
+                        async with self._lock:
+                            if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
+                                self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.RUNNING
+                                feed_ids_to_update.add(feed_id)
+                                if feed_id in self._feed_running_events:
+                                    self._feed_running_events[feed_id].set()
 
-                        # Update Metrics
-                        now = time.time()
-                        metrics["timestamp"] = datetime.now(timezone.utc)
-                        
-                        # Add location data from config
-                        if entry.get("config_info"):
-                            metrics["latitude"] = entry["config_info"].latitude
-                            metrics["longitude"] = entry["config_info"].longitude
-                            metrics["location_name"] = entry["config_info"].name
+                    # Update Metrics (Atomic update of dictionary value)
+                    now = time.time()
+                    metrics["timestamp"] = datetime.now(timezone.utc)
+                    
+                    # Add location data from config
+                    if entry.get("config_info"):
+                        metrics["latitude"] = entry["config_info"].latitude
+                        metrics["longitude"] = entry["config_info"].longitude
+                        metrics["location_name"] = entry["config_info"].name
 
-                        entry["latest_metrics"] = metrics
-                        entry["last_frame_time"] = now
-                        if entry.get("timer"):
-                            entry["timer"].tick()
+                    entry["latest_metrics"] = metrics
+                    entry["last_frame_time"] = now
+                    if entry.get("timer"):
+                        entry["timer"].tick()
 
-                        # Handle Special Message Types from Worker
-                        if extra and extra.get("type") == "snapshot":
-                            inc_id = extra.get("incident_id")
-                            path = extra.get("path")
-                            # Update the incident in DB with the snapshot path
-                            if self._analytics_service and inc_id:
-                                asyncio.create_task(self._analytics_service.update_incident_snapshot(inc_id, path))
-                            continue
+                    # Handle Special Message Types from Worker
+                    if extra and extra.get("type") == "snapshot":
+                        inc_id = extra.get("incident_id")
+                        path = extra.get("path")
+                        # Update the incident in DB with the snapshot path
+                        if self._analytics_service and inc_id:
+                            asyncio.create_task(self._analytics_service.update_incident_snapshot(inc_id, path))
+                        continue
 
                         # Route to Video Writer
                         if entry.get("video_writer_queue"):
