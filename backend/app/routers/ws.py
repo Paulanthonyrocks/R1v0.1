@@ -1,5 +1,6 @@
 import logging
 import json
+import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager
 from app.services.feed_manager import FeedManager
@@ -68,10 +69,10 @@ async def message_receiver(
                     
                     # Calculate RTT if we have a correlation_id and timestamp
                     rtt_ms = None
-                    if message.correlation_id and "timestamp" in data:
+                    if message.correlation_id and message.timestamp:
                         try:
                             # If client sends timestamp back, we can calculate RTT
-                            sent_time = float(data["timestamp"])
+                            sent_time = float(message.timestamp)
                             rtt_ms = (time.time() * 1000) - sent_time
                         except (ValueError, TypeError):
                             pass
