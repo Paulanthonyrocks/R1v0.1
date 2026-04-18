@@ -1,4 +1,4 @@
-import json
+import pickle
 import logging
 import time
 import queue
@@ -27,9 +27,8 @@ class RedisQueue:
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the back of the queue."""
-        # Serialize to JSON (or pickle for complex objects, but JSON is safer across langs)
-        # Note: Bbox and frames might be large, we might need a different strategy for frames
-        data = json.dumps(item)
+        # Use pickle for serialization to handle bytes and complex Python objects
+        data = pickle.dumps(item)
         
         if self.maxsize > 0:
             if self.qsize() >= self.maxsize:
@@ -52,13 +51,13 @@ class RedisQueue:
             # Redis blpop returns (key, value)
             res = self.redis.blpop(self.key, timeout=int(timeout) if timeout else 0)
             if res:
-                return json.loads(res[1])
+                return pickle.loads(res[1])
             else:
                 raise queue.Empty
         else:
             res = self.redis.lpop(self.key)
             if res:
-                return json.loads(res)
+                return pickle.loads(res)
             else:
                 raise queue.Empty
 
