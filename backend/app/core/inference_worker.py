@@ -202,7 +202,7 @@ def inference_worker(
                     res = central_input_queue.get(timeout=0.1)
                     if res:
                         try:
-                            msg_id, first_task = res
+                            msg_id, first_task = (res if len(res) == 2 and isinstance(res[1], tuple) else (None, res))
                         except ValueError:
                             logger.error(f'[Worker {worker_id}] Unpacking error! res type: {type(res)}, value: {res}')
                             raise
@@ -217,7 +217,7 @@ def inference_worker(
                             res = central_input_queue.get_nowait()
                             if res:
                                 try:
-                                    msg_id, t = res
+                                    msg_id, t = (res if len(res) == 2 and isinstance(res[1], tuple) else (None, res))
                                 except ValueError:
                                     logger.error(f'[Worker {worker_id}] Unpacking error (nowait)! res type: {type(res)}, value: {res}')
                                     raise
