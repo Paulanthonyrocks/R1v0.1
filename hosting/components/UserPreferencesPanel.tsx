@@ -26,6 +26,8 @@ interface UserPreferences {
 }
 
 const UserPreferencesPanel: React.FC = () => {
+  const { userRole } = useAuth();
+  const isAdmin = userRole === UserRole.ADMIN;
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +94,7 @@ const UserPreferencesPanel: React.FC = () => {
           <h1 className="text-4xl font-bold uppercase tracking-tighter text-lcd-bg matrix-glow">System Directives</h1>
           <Button 
             onClick={handleSave} 
-            disabled={loading}
+            disabled={loading || !isAdmin}
             className="bg-lcd-bg text-lcd-text hover:bg-white/90 transition-all font-bold uppercase tracking-widest rounded-none h-12 px-8"
           >
             <Save size={18} className="mr-2" /> Save Config
@@ -112,18 +114,21 @@ const UserPreferencesPanel: React.FC = () => {
                         name="preferHighways" 
                         checked={prefs.routePreferences.preferHighways} 
                         onChange={handleChange} 
+                        disabled={!isAdmin}
                       />
                       <PreferenceToggle 
                         label="Prioritize Scenic" 
                         name="preferScenicRoutes" 
                         checked={prefs.routePreferences.preferScenicRoutes} 
                         onChange={handleChange} 
+                        disabled={!isAdmin}
                       />
                       <PreferenceToggle 
                         label="Avoid Toll Corridors" 
                         name="avoidTolls" 
                         checked={prefs.routePreferences.avoidTolls} 
                         onChange={handleChange} 
+                        disabled={!isAdmin}
                       />
                   </div>
                   
@@ -136,6 +141,7 @@ const UserPreferencesPanel: React.FC = () => {
                             name="preferredDepartureTime"
                             value={prefs.routePreferences.preferredDepartureTime || ''}
                             onChange={handleChange}
+                            disabled={!isAdmin}
                             className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text p-2 pl-10 w-full focus:outline-none focus:border-lcd-text font-lcd font-bold uppercase"
                           />
                       </div>
@@ -156,6 +162,7 @@ const UserPreferencesPanel: React.FC = () => {
                             type="number"
                             value={prefs.trafficAlerts.notifyAheadMinutes}
                             onChange={e => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, notifyAheadMinutes: Number(e.target.value) } })}
+                            disabled={!isAdmin}
                             className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text p-2 w-full focus:outline-none focus:border-lcd-text font-lcd font-bold"
                           />
                       </div>
@@ -167,6 +174,7 @@ const UserPreferencesPanel: React.FC = () => {
                             max="5"
                             value={prefs.trafficAlerts.severityThreshold}
                             onChange={e => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, severityThreshold: Number(e.target.value) } })}
+                            disabled={!isAdmin}
                             className="bg-lcd-text/5 border-2 border-lcd-text/20 text-lcd-text p-2 w-full focus:outline-none focus:border-lcd-text font-lcd font-bold"
                           />
                       </div>
@@ -180,13 +188,15 @@ const UserPreferencesPanel: React.FC = () => {
                         icon={<CloudSun size={14} />}
                         checked={prefs.trafficAlerts.includeWeather} 
                         onChange={(e) => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeWeather: (e.target as HTMLInputElement).checked } })} 
+                        disabled={!isAdmin}
                       />
                       <PreferenceToggle 
                         label="Public Events" 
                         name="includeEvents" 
                         icon={<Calendar size={14} />}
                         checked={prefs.trafficAlerts.includeEvents} 
-                        onChange={(e) => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: (e.target as HTMLInputElement).checked } })} 
+                        onChange={(e) => setPrefs({ ...prefs, trafficAlerts: { ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: (e.target as HTMLInputElement).checked } })} 
+                        disabled={!isAdmin}
                       />
                   </div>
               </div>
@@ -209,8 +219,8 @@ const UserPreferencesPanel: React.FC = () => {
   );
 };
 
-const PreferenceToggle = ({ label, name, checked, onChange, icon }: { label: string, name: string, checked: boolean, onChange: (e: ChangeEvent<HTMLInputElement>) => void, icon?: React.ReactNode }) => (
-    <label className="flex items-center justify-between cursor-pointer group p-2 hover:bg-lcd-text/5 transition-colors">
+const PreferenceToggle = ({ label, name, checked, onChange, icon, disabled }: { label: string, name: string, checked: boolean, onChange: (e: ChangeEvent<HTMLInputElement>) => void, icon?: React.ReactNode, disabled?: boolean }) => (
+    <label className={cn("flex items-center justify-between cursor-pointer group p-2 transition-colors", disabled && "cursor-not-allowed opacity-60", !disabled && "hover:bg-lcd-text/5")}>
         <span className="flex items-center gap-2 text-sm uppercase font-bold tracking-wide">
             {icon} {label}
         </span>
@@ -220,6 +230,7 @@ const PreferenceToggle = ({ label, name, checked, onChange, icon }: { label: str
                 name={name}
                 checked={checked}
                 onChange={onChange}
+                disabled={disabled}
                 className="sr-only"
             />
             <div className={cn("w-10 h-5 bg-lcd-text/20 transition-colors rounded-none border border-lcd-text/40", checked && "bg-lcd-text border-lcd-text")}></div>

@@ -214,4 +214,4 @@ async def acknowledge_alert_endpoint(
         )
 
     return AlertModel(**updated_alert_data)
-data)
+

@@ -371,7 +371,7 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
                             <ExternalLink className="h-3 w-3 mr-1" /> JUMP_TO_FEED
                           </Button>
                         )}
-                        {selectedIncident?.status === 'REPORTED' && (
+                        {selectedIncident?.status === 'REPORTED' && isAdmin && (
                           <Button 
                             size="sm" 
                             className="bg-lcd-text text-lcd-bg hover:bg-white transition-colors h-7 text-[10px] font-bold"

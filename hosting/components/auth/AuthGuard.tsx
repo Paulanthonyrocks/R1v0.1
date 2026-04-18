@@ -33,7 +33,11 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
 
     // User is authenticated, check roles if required
     if (requiredRole) {
-      const hasAccess = userRole === requiredRole || userRole === UserRole.ADMIN;
+      const hasAccess = 
+        userRole === UserRole.ADMIN || 
+        userRole === requiredRole || 
+        (requiredRole === UserRole.VIEWER && userRole === UserRole.VIEWER);
+      
       if (!hasAccess) {
         console.warn(`AuthGuard: User with role ${userRole} attempted to access content requiring role ${requiredRole}. Redirecting to unauthorized.`);
         router.push('/unauthorized');
@@ -47,7 +51,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
   }
 
   // If authenticated and (no required role or has access), render children
-  if (user && (!requiredRole || userRole === requiredRole || userRole === UserRole.ADMIN)) {
+  if (user && (!requiredRole || userRole === UserRole.ADMIN || userRole === requiredRole || (requiredRole === UserRole.VIEWER && userRole === UserRole.VIEWER))) {
     return <>{children}</>;
   }
 
