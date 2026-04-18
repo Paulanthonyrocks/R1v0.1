@@ -431,6 +431,7 @@ class ConnectionManager:
                 clients_to_disconnect = []
 
                 if not self.active_connections:
+                    await asyncio.sleep(self.ping_interval)
                     continue
 
                 for client_id, connection in list(self.active_connections.items()):
