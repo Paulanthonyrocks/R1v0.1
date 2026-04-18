@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Any
 from app.database import get_database_manager
-from app.database.manager import DatabaseManager
+from app.utils import DatabaseManager
 import json
 from datetime import datetime, timezone
 

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BrainCircuit, Sparkles, AlertCircle, TrendingDown, ArrowRight, Activity } from 'lucide-react';
 import { cn } from "@/lib/utils";
+import { formatFeedName } from '@/lib/formatters';
 
 interface AIInsightsPanelProps {
     metrics: any;
@@ -21,15 +22,16 @@ const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ metrics, feedName, cl
 
             const speed = metrics.average_speed_kmh || 50;
             const count = metrics.total_vehicles || 0;
+            const displayFeedName = formatFeedName(feedName);
 
             if (speed < 20 && count > 10) {
-                setInsight(`Congestion spike detected at ${feedName}. Recommend adjusting signal timings at the upstream intersection to flush the queue.`);
+                setInsight(`Congestion spike detected at ${displayFeedName}. Recommend adjusting signal timings at the upstream intersection to flush the queue.`);
                 setPriority('high');
             } else if (count > 50) {
-                setInsight(`High volume trend observed. Flow is stable but approaching saturation. No immediate intervention required.`);
+                setInsight(`High volume trend observed at ${displayFeedName}. Flow is stable but approaching saturation. No immediate intervention required.`);
                 setPriority('medium');
             } else {
-                setInsight(`Normal flow patterns maintained. Current capacity utilization is at ${Math.min(100, (count / 20) * 100).toFixed(0)}%.`);
+                setInsight(`Normal flow patterns maintained at ${displayFeedName}. Current capacity utilization is at ${Math.min(100, (count / 20) * 100).toFixed(0)}%.`);
                 setPriority('low');
             }
         };
@@ -37,6 +39,7 @@ const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ metrics, feedName, cl
         const timer = setTimeout(generateMockInsight, 2000);
         return () => clearTimeout(timer);
     }, [metrics, feedName]);
+// ... (rest of file)
 
     const priorityConfig = {
         high: { color: 'text-red-500', border: 'border-red-500', bg: 'bg-red-500/10', label: 'CRITICAL', glow: 'shadow-[0_0_15px_rgba(239,68,68,0.4)]' },

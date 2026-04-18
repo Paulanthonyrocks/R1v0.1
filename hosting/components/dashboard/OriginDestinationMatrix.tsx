@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { cn } from '@/lib/utils';
+import { formatFeedName } from '@/lib/formatters';
 import { ArrowRight, ArrowRightLeft, Info, MapPin, Activity, MoveRight, ExternalLink } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAPI } from '@/lib/hooks/useAPI';
@@ -55,7 +57,7 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
         const feed = feeds.find(f => f.feed_id === id);
         if (feed) return feed.name;
         // Fallback to pretty ID
-        return id.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+        return formatFeedName(id);
     }, [feeds]);
 
     const matrixData = useMemo(() => {

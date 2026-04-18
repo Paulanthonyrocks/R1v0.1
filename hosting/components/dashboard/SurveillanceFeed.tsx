@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Play, Square, Maximize } from 'lucide-react';
 import { cn } from "@/lib/utils";
+import { formatFeedName, formatFeedSource } from "@/lib/formatters";
 import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoSocket from '@/lib/useVideoSocket';
@@ -111,8 +112,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const isLoading = !isConnected && !error;
     const isAdmin = userRole === UserRole.ADMIN;
 
-    const component_name = feedName ?? `Feed ${feed_id}`;
-    const component_node = `Source: ${source ?? 'N/A'}`;
+    const component_name = formatFeedName(feedName, feed_id);
+    const component_node = `Source: ${formatFeedSource(source)}`;
 
     // Load existing ROI and filter settings if available
     useEffect(() => {
