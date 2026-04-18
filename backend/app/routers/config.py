@@ -43,10 +43,10 @@ def filter_sensitive_data(data: Any) -> Any:
 )
 async def get_current_config(
     config: Dict[str, Any] = Depends(get_config),
-    current_user: dict = Depends(get_current_admin),  # Protected
+    current_user: User = Depends(get_current_viewer),  # Protected for viewers and admins
 ) -> Dict[str, Any]:
     logger.info(
-        f"GET /config endpoint called by admin user: {current_user.get('uid', 'unknown_admin_uid')}"
+        f"GET /config endpoint called by user: {current_user.username}"
     )
     """
     Endpoint to retrieve the active configuration. Requires authentication.
@@ -69,3 +69,4 @@ async def get_current_config(
 # A robust solution requires a centralized configuration store (e.g., Redis, Consul) or
 # a signaling mechanism (e.g., SIGHUP to the master process) to ensure all workers update.
 # For this reason, the /reload endpoint has been removed to prevent partial updates.
+ to prevent partial updates.

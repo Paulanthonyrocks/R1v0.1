@@ -381,7 +381,7 @@ async def get_specific_feed_status(
 async def get_feed_kpis(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[User] = Depends(get_current_active_user_optional),
+    current_user: User = Depends(get_current_viewer),
 ):
     """Get the latest KPIs/metrics for a specific feed (including sample video)."""
     if current_user:
@@ -400,4 +400,4 @@ async def get_feed_kpis(
         return JSONResponse(
             content={"message": "No metrics available yet."}, status_code=202
         )
-    return JSONResponse(content=metrics)
+    return JSONResponse(content=metrics)t=metrics)

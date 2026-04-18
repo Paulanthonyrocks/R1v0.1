@@ -146,7 +146,7 @@ async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> Option
         # Allow unauthenticated access if needed, or raise 401
         # For now, returning None allows endpoints to decide or use Depends(get_current_active_user) which might fail if typed strictly
         return None
-        
+
     try:
         decoded_token = await verify_firebase_token(token)
         username = decoded_token.get("uid") or decoded_token.get("sub")
@@ -163,6 +163,20 @@ async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> Option
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+async def get_current_viewer(current_user: User = Depends(get_current_active_user)) -> User:
+    """Dependency to allow access to Admins and Viewers."""
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    if current_user.role not in ["admin", "viewer"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewer or Admin role required",
+        )
+    return current_user
 
 async def get_current_active_user_optional(token: str = Depends(oauth2_scheme)) -> Optional[User]:
     """Dependency to get the current active user, but don't fail if token is missing or invalid."""

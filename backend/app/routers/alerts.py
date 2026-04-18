@@ -60,7 +60,7 @@ async def get_alerts(
     ),
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
-    current_user: dict = Depends(get_current_active_user), # Secure this endpoint
+    current_user: User = Depends(get_current_viewer), # Secure this endpoint for viewers and admins
     db: DatabaseManager = Depends(get_db_manager),
 ) -> AlertsResponse:
     logger.info("GET /alerts endpoint called")
@@ -214,3 +214,4 @@ async def acknowledge_alert_endpoint(
         )
 
     return AlertModel(**updated_alert_data)
+data)
