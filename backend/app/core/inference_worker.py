@@ -184,6 +184,7 @@ def inference_worker(
                 pass
 
             try:
+                batch_tasks = []
                 # 1. Adaptive Batching: Increase batch size as queue depth grows
                 q_depth = central_input_queue.qsize()
                 base_batch_size = config.get("performance", {}).get("batch_size", 1)
