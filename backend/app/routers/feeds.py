@@ -400,4 +400,4 @@ async def get_feed_kpis(
         return JSONResponse(
             content={"message": "No metrics available yet."}, status_code=202
         )
-    return JSONResponse(content=metrics)t=metrics)
+    return JSONResponse(content=metrics)
