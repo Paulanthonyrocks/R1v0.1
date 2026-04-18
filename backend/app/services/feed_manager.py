@@ -1046,7 +1046,7 @@ class FeedManager:
                 try:
                     # Increased drain limit for high-throughput
                     for _ in range(200):
-                        items_buffer.append(self._central_output_queue.get_nowait())
+                        items_buffer.append(self._central_output_queue.get(block=False))
                 except queue.Empty:
                     pass
 

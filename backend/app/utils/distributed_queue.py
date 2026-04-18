@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import queue
 from typing import Any, Optional
 from .redis_client import get_redis_client
 
@@ -53,13 +54,13 @@ class RedisQueue:
             if res:
                 return json.loads(res[1])
             else:
-                raise Exception("Queue empty")
+                raise queue.Empty
         else:
             res = self.redis.lpop(self.key)
             if res:
                 return json.loads(res)
             else:
-                raise Exception("Queue empty")
+                raise queue.Empty
 
     def qsize(self) -> int:
         """Returns the approximate size of the queue."""
