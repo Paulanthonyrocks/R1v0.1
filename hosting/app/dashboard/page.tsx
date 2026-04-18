@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import AuthGuard from "@/components/auth/AuthGuard";
-import { Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck, ChevronRight, Loader2, BarChart2 } from 'lucide-react';
+import { Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck, ChevronRight, Loader2, BarChart2, Terminal, Cpu, Globe } from 'lucide-react';
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { Button } from '@/components/ui/button';
@@ -29,8 +29,8 @@ const DashboardPage: React.FC = () => {
   const [kpiHistory, setKpiHistory] = useState<TrendDataPoint[]>([]);
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const hasAttemptedHistoryLoad = useRef(false);
-  const maxHistoryPoints = 60; // Keep 60 points (e.g. 1 minute of data if updated every second)
   const feedRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const handleAnomalySelect = (alert: AlertData) => {
@@ -42,22 +42,15 @@ const DashboardPage: React.FC = () => {
     const element = feedRefs.current.get(feedId);
     if (element) {
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Optional: trigger a visual flash or highlight on the feed
       element.classList.add('matrix-highlight-flash');
       setTimeout(() => element.classList.remove('matrix-highlight-flash'), 2000);
     }
   };
 
-  // Update KPI history when new KPIs arrive
-
-
-  // Update KPI history when new KPIs arrive
   useEffect(() => {
     if (kpis) {
       setKpiHistory(prev => {
         const lastPoint = prev.length > 0 ? prev[prev.length - 1] : null;
-        
-        // Frontend local smoothing (alpha = 0.4) to further stabilize visuals
         const alpha = 0.4;
         const currentCongestion = kpis.congestion_index ?? 0;
         const currentSpeed = kpis.average_speed_kmh ?? 0;
@@ -78,15 +71,8 @@ const DashboardPage: React.FC = () => {
           health_score: kpis.global_health_score ?? 100
         };
 
-        // Append new point
         const updated = [...prev, newPoint];
-        // If we have a lot of history (e.g. from DB), we might want to keep it?
-        // But for real-time visualization, we usually limit the window.
-        // If we want to show 24h trend, we shouldn't slice to 60.
-        // Let's increase limit if we have history loaded, or handle separately.
-        // For now, let's just keep last 1000 points to accommodate mixed data
         const limit = prev.length > 60 ? 1000 : 60;
-
         if (updated.length > limit) {
           return updated.slice(updated.length - limit);
         }
@@ -95,10 +81,8 @@ const DashboardPage: React.FC = () => {
     }
   }, [kpis]);
 
-  // Load historical data
   useEffect(() => {
     const loadHistory = async () => {
-      // Find a suitable feed to show history for (running > first)
       const targetFeed = feeds.find(f => f.status === 'running') || feeds[0];
       if (!targetFeed || hasAttemptedHistoryLoad.current) return;
 
@@ -114,14 +98,12 @@ const DashboardPage: React.FC = () => {
           }));
 
           setKpiHistory(prev => {
-            // Only set if empty to avoid overwriting real-time updates
             if (prev.length === 0) return mappedHistory;
             return prev;
           });
         }
       } catch (err) {
         console.error("Failed to load feed history:", err);
-        // Allow retry after some time if it failed
         setTimeout(() => {
             hasAttemptedHistoryLoad.current = false;
         }, 30000);
@@ -133,15 +115,11 @@ const DashboardPage: React.FC = () => {
     }
   }, [isReady, feeds, kpiHistory.length]);
 
-  // Calculate trends for StatCards
   const calculateTrend = (history: TrendDataPoint[], key: keyof TrendDataPoint) => {
     if (history.length < 5) return { change: 'N/A', text: 'Insufficient data' };
-
     const recent = history[history.length - 1][key] as number;
     const previous = history[history.length - 5][key] as number;
-
     if (previous === 0) return { change: '+0%', text: 'Stable' };
-
     const diff = ((recent - previous) / previous) * 100;
     const sign = diff >= 0 ? '+' : '';
     return {
@@ -154,7 +132,6 @@ const DashboardPage: React.FC = () => {
   const speedTrend = useMemo(() => calculateTrend(kpiHistory, 'avg_speed'), [kpiHistory]);
   const flowTrend = useMemo(() => calculateTrend(kpiHistory, 'total_vehicles'), [kpiHistory]);
 
-  // Helper functions to determine status icons and colors
   const getCongestionStatusIcon = (val: number | undefined) => {
     if (val === undefined || val === null) return undefined;
     if (val > 70) return TrendingDown;
@@ -208,7 +185,6 @@ const DashboardPage: React.FC = () => {
     return "text-destructive";
   };
 
-  // Type guard for location object
   function isLatLng(obj: unknown): obj is { latitude: number; longitude: number } {
     return (
       typeof obj === 'object' &&
@@ -231,9 +207,18 @@ const DashboardPage: React.FC = () => {
           <div className="retro-title-container">
               <div className="flex flex-col md:flex-row justify-between items-end gap-4">
                   <div>
+                      <div className="flex items-center gap-3 mb-2">
+                          <div className="flex gap-1">
+                              <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse" />
+                              <div className="h-2 w-2 bg-yellow-500 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
+                              <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
+                          </div>
+                          <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-lcd-text/60">System Live // v4.2.0-stable</span>
+                      </div>
                       <h1 className="text-5xl font-black uppercase tracking-tighter font-lcd matrix-glow text-lcd-text mb-1">Command Dashboard</h1>
                       <div className="flex items-center gap-4">
                           <div className="flex items-center gap-2">
+                              <Terminal size={12} className="text-lcd-text/60" />
                               <span className="terminal-text text-[10px]">OS.TRAFFIC_HUB.SYS.01 // SESSION_ACTIVE</span>
                               <span className="text-[10px] opacity-40">// 128-BIT ENCRYPTION</span>
                           </div>
@@ -259,14 +244,24 @@ const DashboardPage: React.FC = () => {
                           </div>
                       </div>
                   </div>
-                  <div className="flex items-center gap-8 bg-lcd-text/5 p-4 border-2 border-lcd-text shadow-inner">
+                  <div className="flex items-center gap-8 bg-lcd-text/5 p-4 border-2 border-lcd-text shadow-inner relative overflow-hidden group">
+                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-lcd-text/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                       <div className="flex flex-col items-end">
-                          <span className="text-[9px] uppercase font-bold opacity-60">Node Integrity</span>
-                          <span className="text-3xl font-bold font-lcd tabular-nums text-primary">{runningFeeds}/{feeds.length}</span>
+                          <div className="flex items-center gap-2 opacity-60 mb-1">
+                              <Cpu size={10} />
+                              <span className="text-[9px] uppercase font-bold">Node Integrity</span>
+                          </div>
+                          <span className="text-3xl font-bold font-lcd tabular-nums text-primary relative">
+                              {runningFeeds}/{feeds.length}
+                              <span className="absolute -right-4 top-0 h-full w-1 bg-primary/30 animate-pulse" />
+                          </span>
                       </div>
                       <div className="w-px h-12 bg-lcd-text/20"></div>
                       <div className="flex flex-col items-end">
-                          <span className="text-[9px] uppercase font-bold opacity-60">Engine Status</span>
+                          <div className="flex items-center gap-2 opacity-60 mb-1">
+                              <Globe size={10} />
+                              <span className="text-[9px] uppercase font-bold">Engine Status</span>
+                          </div>
                           <div className="flex items-center gap-2">
                               <div className={cn(
                                   "h-2 w-2 rounded-full animate-pulse",
@@ -285,7 +280,7 @@ const DashboardPage: React.FC = () => {
           </div>
 
           {activeTab === 'overview' ? (
-            <>
+            <div className="animate-in fade-in duration-500">
               {/* Real-time Analytics Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
                 <StatCard
@@ -328,7 +323,7 @@ const DashboardPage: React.FC = () => {
                 {/* Trend Chart and Lane Analysis */}
                 <div className="xl:col-span-2 flex flex-col gap-8">
                   {/* Trend Chart */}
-                  <div className="matrix-card flex flex-col min-h-[500px]">
+                  <div className="matrix-card flex flex-col min-h-[500px] relative group">
                     <div className="matrix-card-header">
                       <div className="flex items-center gap-2">
                           <BarChart2 size={16} />
@@ -338,8 +333,9 @@ const DashboardPage: React.FC = () => {
                           Expand Dataset <ChevronRight size={10} />
                       </Link>
                     </div>
-                    <div className="matrix-card-content flex-1 flex flex-col">
-                      <div className="flex-1 w-full min-h-0 pt-4">
+                    <div className="matrix-card-content flex-1 flex flex-col relative overflow-hidden">
+                      <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] z-10 bg-[length:100%_2px,3px_100%]" />
+                      <div className="flex-1 w-full min-h-0 pt-4 z-0">
                         <FlowAnalysisChart data={kpiHistory} timeRange="day" isLoading={!isReady && kpiHistory.length === 0} />
                       </div>
                     </div>
@@ -499,9 +495,9 @@ const DashboardPage: React.FC = () => {
                         </Link>
                     </div>
                 )}
-            </>
+            </div>
           ) : (
-            <div className="mb-12">
+            <div className="mb-12 animate-in fade-in duration-500">
               <IncidentCommandCenter 
                 alerts={alerts} 
                 onJumpToFeed={handleJumpToFeed}
