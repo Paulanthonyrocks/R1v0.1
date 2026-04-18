@@ -184,15 +184,25 @@ def inference_worker(
                 pass
 
             try:
-                # Collect batch of frames
-                batch_tasks = []
-                batch_size = config.get("performance", {}).get("batch_size", 1)
+                # 1. Adaptive Batching: Increase batch size as queue depth grows
+                q_depth = central_input_queue.qsize()
+                base_batch_size = config.get("performance", {}).get("batch_size", 1)
+                
+                if q_depth > 200:
+                    batch_size = min(16, base_batch_size * 4)
+                elif q_depth > 100:
+                    batch_size = min(8, base_batch_size * 2)
+                else:
+                    batch_size = base_batch_size
+
                 inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
 
                 try:
-                    first_task = central_input_queue.get(timeout=0.1)
-                    if first_task is not None:
-                        batch_tasks.append(first_task)
+                    # RedisStreamQueue.get() returns (message_id, item)
+                    res = central_input_queue.get(timeout=0.1)
+                    if res:
+                        msg_id, first_task = res
+                        batch_tasks.append((msg_id, first_task))
                 except queue.Empty:
                     pass
 
@@ -200,9 +210,19 @@ def inference_worker(
                     start_wait = time.time()
                     while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
                         try:
-                            t = central_input_queue.get_nowait()
-                            if t is not None:
-                                batch_tasks.append(t)
+                            res = central_input_queue.get_nowait()
+                            if res:
+                                msg_id, t = res
+                                
+                                # 2. Smart Skip: If queue is critical, drop frames that aren't 'first detections'
+                                if q_depth > 200:
+                                    t_feed_id, t_frame_idx, _, _ = t
+                                    if t_frame_idx != -888 and t_frame_idx != -999:
+                                        if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
+                                            central_input_queue.ack(msg_id)
+                                            continue
+                                
+                                batch_tasks.append((msg_id, t))
                         except queue.Empty:
                             time.sleep(0.0005)
                             
