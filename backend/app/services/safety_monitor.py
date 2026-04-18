@@ -91,6 +91,8 @@ class SafetyMonitor:
             v["is_stopped"] = False
             if vid in self.vehicle_states and "stopped_since" in self.vehicle_states[vid]:
                 duration = timestamp - self.vehicle_states[vid]["stopped_since"]
+                if hasattr(duration, "total_seconds"):
+                    duration = duration.total_seconds()
                 if duration > self.stopped_duration_threshold:
                     v["is_stopped"] = True
                 
