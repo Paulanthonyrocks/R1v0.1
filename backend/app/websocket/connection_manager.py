@@ -209,12 +209,24 @@ class ConnectionManager:
         queue = self.client_queues.get(client_id)
         if not queue:
             return
+        
+        # Diagnostics tracking
+        msg_count = 0
+        last_diag_time = time.time()
 
         try:
             while True:
                 # PriorityQueue returns the highest priority (lowest value) item
                 prioritized_msg = await queue.get()
                 message = prioritized_msg.message
+                
+                # Periodic diagnostic logging
+                msg_count += 1
+                now = time.time()
+                if now - last_diag_time > 30.0:
+                    logger.debug(f"[Sender {client_id}] Queue size: {queue.qsize()} | Sent {msg_count} msgs in 30s")
+                    last_diag_time = now
+                    msg_count = 0
                 
                 try:
                     # Use a timeout for the actual socket send to detect dead sockets faster
@@ -427,9 +439,6 @@ class ConnectionManager:
         while not self._shutdown_event.is_set():
             try:
                 current_time = time.time()
-                # Create a reusable PING message with timestamp for RTT calculation
-                # Generating unique correlation_id per broadcast cycle (or per client if preferred)
-                # For now, one per cycle is enough to detect system-wide lag
                 common_correlation_id = str(int(current_time * 1000))
                 
                 ping_message_obj = WebSocketMessage(
@@ -440,35 +449,44 @@ class ConnectionManager:
                 )
                 ping_message_json = ping_message_obj.model_dump_json()
 
-                clients_to_disconnect = []
-
                 if not self.active_connections:
                     await asyncio.sleep(self.ping_interval)
                     continue
 
-                for client_id, connection in list(self.active_connections.items()):
+                # Process all clients concurrently to prevent one slow connection from blocking others
+                async def ping_client(client_id, connection):
                     if connection.client_state == 2: # WebSocketState.DISCONNECTED
-                        clients_to_disconnect.append(client_id)
-                        continue
-
+                        return client_id
+                    
                     # Check if PONG was received within timeout
                     last_pong_time = self.last_pong_received_time.get(client_id, 0)
                     if current_time - last_pong_time > self.pong_timeout + self.ping_interval: 
-                        logger.warning(f"Client {client_id} timed out (no PONG received). Last pong: {last_pong_time}, Now: {current_time}. Disconnecting.")
-                        clients_to_disconnect.append(client_id)
-                        continue
+                        logger.warning(f"Client {client_id} timed out (no PONG received). Disconnecting.")
+                        return client_id
+                    
+                    try:
+                        await self.send_personal_message(ping_message_json, client_id)
+                    except Exception:
+                        return client_id
+                    return None
 
-                    # Send PING via reliable queue
-                    await self.send_personal_message(ping_message_json, client_id)
+                results = await asyncio.gather(
+                    *[ping_client(cid, conn) for cid, conn in self.active_connections.items()],
+                    return_exceptions=True
+                )
+
+                # Disconnect timed-out clients
+                for res in results:
+                    if isinstance(res, str):
+                        await self.disconnect(res)
                 
-                for client_id in clients_to_disconnect:
-                    await self.disconnect(client_id)
-
+                await asyncio.sleep(self.ping_interval)
             except asyncio.CancelledError:
                 logger.info("Ping task cancelled.")
                 break
             except Exception as e:
                 logger.error(f"Error in ping task: {e}", exc_info=True)
+                await asyncio.sleep(1) # Prevent tight error loop
 
     async def shutdown(self):
         logger.info("Shutting down ConnectionManager...")
