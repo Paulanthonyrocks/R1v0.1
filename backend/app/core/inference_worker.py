@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from multiprocessing import Queue as MPQueue, Event
 
-from ..core.core_module import CoreModule
-from ..utils.monitoring import TrafficMonitor
-from ..utils.process import start_parent_monitor
+from app.core.core_module import CoreModule
+from app.utils.monitoring import TrafficMonitor
+from app.utils.process import start_parent_monitor
 from .worker_utils import WorkerMetrics, make_serializable, serialize_tracked_vehicles
 
 logger = logging.getLogger("Inference")
@@ -102,7 +102,7 @@ def inference_worker(
     shared_model = None
     
     # Initialize a local ReID manager for visual matching across loops
-    from ..services.reid_manager import GlobalReIDManager
+    from app.services.reid_manager import GlobalReIDManager
     local_reid_manager = GlobalReIDManager(config)
     
     # Pre-extract shared config
@@ -144,7 +144,7 @@ def inference_worker(
 
             # Load ReID
             if vehicle_det_cfg.get("reid_enabled", True):
-                from ..ml.reid_model import ReIDEmbedder
+                from app.ml.reid_model import ReIDEmbedder
                 logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
                 shared_reid_embedder = ReIDEmbedder(config)
                 logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")

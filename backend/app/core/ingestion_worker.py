@@ -9,10 +9,10 @@ import json
 from typing import Dict, Any, Optional
 from multiprocessing import Queue as MPQueue, Event
 
-from ..utils.video import FrameReader
-from ..utils.process import start_parent_monitor
+from app.utils.video import FrameReader
+from app.utils.process import start_parent_monitor
 from .worker_utils import WorkerMetrics
-from ..config import set_config_instance
+from app.config import set_config_instance
 
 logger = logging.getLogger("Ingestion")
 
