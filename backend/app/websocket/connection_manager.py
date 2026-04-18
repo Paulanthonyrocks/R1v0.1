@@ -41,7 +41,7 @@ class ConnectionManager:
         max_connections: int = 1000,
         token_refresh_interval: int = 300,
         ping_interval: int = 15,
-        pong_timeout: int = 60, # New: seconds to wait for a pong after a ping
+        pong_timeout: int = 120, # New: seconds to wait for a pong after a ping
     ):
         if hasattr(self, "_initialized") and self._initialized:
             return
