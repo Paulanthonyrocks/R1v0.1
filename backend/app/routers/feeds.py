@@ -3,12 +3,12 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-
 from app.dependency_injection import (
     get_feed_manager,
     get_current_active_user,
     get_current_active_user_optional,
     get_current_admin,
+    get_current_viewer,
 )
 from app.services.feed_manager import (
     FeedManager,
