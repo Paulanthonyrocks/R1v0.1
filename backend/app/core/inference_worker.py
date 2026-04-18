@@ -201,7 +201,11 @@ def inference_worker(
                     # RedisStreamQueue.get() returns (message_id, item)
                     res = central_input_queue.get(timeout=0.1)
                     if res:
-                        msg_id, first_task = res
+                        try:
+                            msg_id, first_task = res
+                        except ValueError:
+                            logger.error(f'[Worker {worker_id}] Unpacking error! res type: {type(res)}, value: {res}')
+                            raise
                         batch_tasks.append((msg_id, first_task))
                 except queue.Empty:
                     pass
@@ -212,17 +216,20 @@ def inference_worker(
                         try:
                             res = central_input_queue.get_nowait()
                             if res:
-                                msg_id, t = res
+                                try:
+                                    msg_id, t = res
+                                except ValueError:
+                                    logger.error(f'[Worker {worker_id}] Unpacking error (nowait)! res type: {type(res)}, value: {res}')
+                                    raise
                                 
                                 # 2. Smart Skip: If queue is critical, drop frames that aren't 'first detections'
                                 if q_depth > 200:
                                     t_feed_id, t_frame_idx, _, _ = t
                                     if t_frame_idx != -888 and t_frame_idx != -999:
                                         if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
-                                            central_input_queue.ack(msg_id)
                                             continue
                                 
-                                batch_tasks.append((msg_id, t))
+                                batch_tasks.append((None, t))
                         except queue.Empty:
                             time.sleep(0.0005)
                             
@@ -245,7 +252,6 @@ def inference_worker(
                     if frame_index == -888:
                          if feed_id in core_modules: core_modules[feed_id]._first_detection_done = False
                          # Acknowledge control messages too
-                         central_input_queue.ack(msg_id)
                          continue
                     if frame_index == -999:
                          if feed_id in core_modules:
@@ -254,7 +260,6 @@ def inference_worker(
                          pending_configs.pop(feed_id, None)
                          if feed_id in metrics_map: del metrics_map[feed_id]
                          # Acknowledge control messages too
-                         central_input_queue.ack(msg_id)
                          continue
 
                     if feed_id not in core_modules:
@@ -291,7 +296,6 @@ def inference_worker(
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if frame is None:
                             metrics_obj.errors += 1
-                            central_input_queue.ack(msg_id) # Ack even on error to avoid poison pills
                             continue
                     
                     batch_meta.append({
@@ -374,12 +378,9 @@ def inference_worker(
                         central_output_queue.put_nowait((
                             meta['feed_id'], f_idx, meta['frame_bytes'], metrics_result, serialized_v, extra
                         ))
-                        # Acknowledge message after successful put to output queue
-                        central_input_queue.ack(meta['msg_id'])
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
-                        # We still ack to avoid poison pills, but we log a drop
-                        central_input_queue.ack(meta['msg_id'])
+                        # We log a drop
                 
                 now = time.time()
                 if now - last_metrics_log > 30.0:
