@@ -14,6 +14,13 @@ export const useWebSocket = () => {
 };
 
 const getWsUrl = (path: string) => {
+    const wsEnvUrl = process.env.NEXT_PUBLIC_WS_URL;
+    if (wsEnvUrl) {
+        // Ensure the path is appended correctly
+        const baseUrl = wsEnvUrl.replace(/\/$/, '');
+        return `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
+    }
+
     let httpBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
     if (!httpBaseUrl && typeof window !== 'undefined') {

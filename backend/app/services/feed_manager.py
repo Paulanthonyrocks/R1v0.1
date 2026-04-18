@@ -1128,9 +1128,14 @@ class FeedManager:
                         
                         if now - last_broadcast >= min_interval:
                             # Only spawn if previous task for this feed finished (Backpressure)
-                                    entry["last_broadcast_time"] = now
-                                    task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
-                                    self._active_broadcast_tasks[feed_id] = task
+                            prev_task = self._active_broadcast_tasks.get(feed_id)
+                            if prev_task and not prev_task.done():
+                                # Skip this frame to avoid queueing up broadcasts
+                                continue
+                            
+                            entry["last_broadcast_time"] = now
+                            task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                            self._active_broadcast_tasks[feed_id] = task
 
                         # Analytics hook
                         if self._analytics_service:
