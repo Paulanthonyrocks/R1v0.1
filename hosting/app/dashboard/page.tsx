@@ -345,13 +345,13 @@ const DashboardPage: React.FC = () => {
                   {feeds.length > 0 && (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       <LaneAnalysisWidget
-                        title={`LANE METRICS: ${feeds[0].feed_id.split('-')[0].toUpperCase()}`}
+                        title={`LANE METRICS: ${getFeedDisplayName(feeds[0])}`}
                         occupancy={feeds[0].latest_metrics?.lane_occupancy || {}}
                         queues={feeds[0].latest_metrics?.queue_lengths || {}}
                       />
                       {feeds.length > 1 ? (
                         <LaneAnalysisWidget
-                          title={`LANE METRICS: ${feeds[1].feed_id.split('-')[0].toUpperCase()}`}
+                          title={`LANE METRICS: ${getFeedDisplayName(feeds[1])}`}
                           occupancy={feeds[1].latest_metrics?.lane_occupancy || {}}
                           queues={feeds[1].latest_metrics?.queue_lengths || {}}
                         />
@@ -503,6 +503,22 @@ const DashboardPage: React.FC = () => {
                 onJumpToFeed={handleJumpToFeed}
                 onIncidentUpdated={(id, status) => {
                   // Alerts hook handles state update, but we can trigger local sync if needed
+                }}
+              />
+            </div>
+          )}
+          
+          <AnomalyDetailsModal 
+            anomaly={selectedAnomaly} 
+            open={isAnomalyModalOpen} 
+            onOpenChange={setIsAnomalyModalOpen} 
+          />
+      </DashboardShell>
+    </AuthGuard>
+  );
+};
+
+export default DashboardPage; Alerts hook handles state update, but we can trigger local sync if needed
                 }}
               />
             </div>
