@@ -76,7 +76,7 @@ class CoreModule:
         self.detector.load_model()
         
         res = v_cfg.get("frame_resolution", [640, 480])
-        self.roi_polygon_points = self.config.get("roi_processing", {})
+        self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
         self.detector.initialize_roi(res, self.roi_polygon_points)
         
         self.tracker = TrackingManager(self.config, self.fps)
@@ -129,7 +129,7 @@ class CoreModule:
             cv2.fillPoly(mask, [points_np], 255)
             self.roi_mask = cv2.bitwise_and(self.roi_mask, mask)
         
-        exclusion = self.config.get("roi_processing", {})
+        exclusion = self.config.get("roi_processing", {}).get("exclusion_zones", [])
         if exclusion:
             for zone in exclusion:
                 zone_np = (np.array(zone, dtype=np.float32) * [w, h]).astype(np.int32)
@@ -229,7 +229,8 @@ class CoreModule:
         self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
         
         # 5. Metadata Processing
-        vis_tracks = {}\n        for tid, track in self.vehicle_data.items():
+        vis_tracks = {}
+        for tid, track in self.vehicle_data.items():
             cx, cy = (track["bbox"][0] + track["bbox"][2])/2, (track["bbox"][1] + track["bbox"][3])/2
             ground_pos = self.transformer.pixel_to_ground(cx, cy)
             if ground_pos:
