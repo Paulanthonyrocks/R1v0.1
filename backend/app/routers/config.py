@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends
 from app.dependency_injection import (
     get_config,
     get_current_admin,
-)  # Added get_current_active_user
+    get_current_viewer,
+)
+from app.models.user import User
 from app.models.common import APIResponse  # Re-use standard response model
 import logging
 
