@@ -63,7 +63,6 @@ def to_dict(obj):
         return obj.dict()
     return obj
 
-cfg_dict = to_dict(loaded_config) if loaded_config else None
 
 # --- Configuration Loading ---
 
