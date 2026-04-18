@@ -9,6 +9,7 @@ from app.dependency_injection import (
     get_db_manager,
     get_current_admin,
     get_current_active_user,
+    get_current_viewer,
     get_connection_manager,
 )
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
