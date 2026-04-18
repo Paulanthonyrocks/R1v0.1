@@ -154,10 +154,10 @@ def initialize_config(config_path: Optional[str] = None) -> AppConfig:
         raise RuntimeError(f"Config Init Failed: {e}")
 
 def set_config_instance(config_dict: Dict[str, Any]) -> AppConfig:
-    \"\"\"
+    """
     Sets the global configuration instance from a dictionary.
     Useful for workers that already have the config passed in.
-    \"\"\"
+    """
     global _config_instance
     _config_instance = AppConfig(**config_dict)
     return _config_instance
