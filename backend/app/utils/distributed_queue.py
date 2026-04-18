@@ -44,6 +44,10 @@ class RedisQueue:
         
         self.redis.rpush(self.key, data)
 
+    def put_nowait(self, item: Any):
+        """Pushes an item to the back of the queue without blocking."""
+        self.put(item, block=False)
+
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
         """Pops an item from the front of the queue."""
         if block:
@@ -60,6 +64,10 @@ class RedisQueue:
                 return pickle.loads(res)
             else:
                 raise queue.Empty
+
+    def get_nowait(self) -> Any:
+        """Pops an item from the front of the queue without blocking."""
+        return self.get(block=False)
 
     def qsize(self) -> int:
         """Returns the approximate size of the queue."""
