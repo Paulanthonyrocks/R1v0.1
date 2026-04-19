@@ -5,7 +5,7 @@ from multiprocessing import shared_memory
 from typing import Optional, Union, Tuple
 import queue
 import os
-from app.utils.redis_queue import RedisQueue
+from app.utils.distributed_queue import RedisQueue
 
 logger = logging.getLogger('app.utils.shared_frame_buffer')
 
