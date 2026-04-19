@@ -15,12 +15,16 @@ class SharedFrameBuffer:
     """
     HEADER_SIZE = 16 # size (4), width (4), height (4), channels (4)
 
-    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024):
+    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False):
         self.pool_size = pool_size
         self.max_frame_size = max_frame_size
-        self.manager = Manager()
         
-        self._free_pool = self.manager.Queue(maxsize=pool_size)
+        self.manager = None
+        self._free_pool = None
+        
+        if not read_only:
+            self.manager = Manager()
+            self._free_pool = self.manager.Queue(maxsize=pool_size)
         self._segments: dict[str, shared_memory.SharedMemory] = {}
         
         # 1. Prune orphans from previous crashes

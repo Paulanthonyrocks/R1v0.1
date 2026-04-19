@@ -146,7 +146,7 @@ class FeedManager:
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
-        self._inference_stop_event = None # Handled via Redis key 'pipeline:stop'
+        self._inference_stop_event = Event()
         
         # Initial Scaling
         initial_size = self.config.get("performance", {}).get("inference_pool_size", 2)
@@ -154,7 +154,7 @@ class FeedManager:
             
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[RedisQueue] = []
-        self._inference_stop_event = None
+
 
 
         # Initialize shared values
@@ -187,15 +187,15 @@ class FeedManager:
                 self._inference_input_queues, 
                 self._central_output_queue,
                 cmd_q,
-                None, # Replace _inference_stop_event (Event) with None; worker will check Redis
+                self._inference_stop_event,
                 dict(self.config) if hasattr(self.config, 'model_dump') else self.config,
                 self._db_queue,
                 None, # frame_buffer handled inside worker
                 None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
                 slots
             ),
-            daemon=True,
-            name=f"InferenceWorker-{worker_id}"
+            daemon=False,
+            name=f"InferenceWorker-{worker_id}" 
         )
         p.start()
         self._inference_pool[worker_id] = p

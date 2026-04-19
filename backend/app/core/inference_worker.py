@@ -113,7 +113,7 @@ def inference_worker(
     if frame_buffer is None:
         # Create a handle to the existing shared memory pool
         # The SharedFrameBuffer constructor handles attaching to existing segments
-        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200))
+        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200), read_only=True)
     
     # ... (inside inference_worker)
     
