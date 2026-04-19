@@ -4,6 +4,8 @@ import React, { useEffect, useState, ChangeEvent } from 'react';
 import { Save, Shield, Map as MapIcon, Bell, Clock, CloudSun, Calendar } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth/AuthProvider';
+import { UserRole } from '@/lib/auth/roles';
 
 interface UserPreferences {
   routePreferences: {
@@ -195,7 +197,7 @@ const UserPreferencesPanel: React.FC = () => {
                         name="includeEvents" 
                         icon={<Calendar size={14} />}
                         checked={prefs.trafficAlerts.includeEvents} 
-                        onChange={(e) => setPrefs({ ...prefs, trafficAlerts: { ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: (e.target as HTMLInputElement).checked } })} 
+                        onChange={(e) => setPrefs({ ...prefs, trafficAlerts: { ...prefs.trafficAlerts, includeEvents: (e.target as HTMLInputElement).checked } })} 
                         disabled={!isAdmin}
                       />
                   </div>

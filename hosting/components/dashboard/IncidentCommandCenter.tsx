@@ -25,6 +25,7 @@ import { incidentService } from '@/lib/services/incidentService';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useAuth } from '@/lib/auth/AuthProvider';
 
 interface IncidentCommandCenterProps {
   alerts: AlertData[];
@@ -33,6 +34,8 @@ interface IncidentCommandCenterProps {
 }
 
 const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, onIncidentUpdated, onJumpToFeed }) => {
+  const { userRole } = useAuth();
+  const isAdmin = userRole === 'admin';
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [notes, setNotes] = useState('');

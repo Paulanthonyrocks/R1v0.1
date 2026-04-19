@@ -135,11 +135,11 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
 };
 
 const AddFeedDialog = React.memo(function AddFeedDialog() {
-    const { token, user } = useAuth();
+    const { token, user, userRole } = useAuth();
     const [open, setOpen] = useState(false);
 
     // Only Admins should be able to add feeds
-    if (!user || user.role !== 'admin') {
+    if (!user || userRole !== 'admin') {
         return null;
     }
 
