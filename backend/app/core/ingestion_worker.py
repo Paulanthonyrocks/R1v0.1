@@ -242,15 +242,15 @@ def ingestion_worker(
                         else:
                             central_input_queue.put((feed_id, frame_index, resized.tobytes(), time.time()), timeout=0.1)
                             metrics.frames_processed += 1
-                        except queue.Full:
-                            metrics.frames_dropped += 1
-                            if metrics.frames_dropped % 50 == 0:
-                                total = metrics.frames_processed + metrics.frames_dropped
-                                drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
-                                logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
-                        except Exception as e:
-                            metrics.errors += 1
-                            logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
+                    except queue.Full:
+                        metrics.frames_dropped += 1
+                        if metrics.frames_dropped % 50 == 0:
+                            total = metrics.frames_processed + metrics.frames_dropped
+                            drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
+                            logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
+                    except Exception as e:
+                        metrics.errors += 1
+                        logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
                     else:
                         logger.warning(f"[{feed_id}] Failed to encode frame {frame_index}")
                         metrics.errors += 1
