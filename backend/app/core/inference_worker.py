@@ -108,6 +108,13 @@ def inference_worker(
     from app.services.reid_manager import GlobalReIDManager
     local_reid_manager = GlobalReIDManager(config)
     
+    # Initialize shared frame buffer handle if not provided
+    from app.utils.shared_frame_buffer import SharedFrameBuffer
+    if frame_buffer is None:
+        # Create a handle to the existing shared memory pool
+        # The SharedFrameBuffer constructor handles attaching to existing segments
+        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200))
+    
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)

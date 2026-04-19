@@ -190,7 +190,7 @@ class FeedManager:
                 self._inference_stop_event,
                 dict(self.config) if hasattr(self.config, 'model_dump') else self.config,
                 self._db_queue,
-                self.frame_buffer,
+                None, # Pass None for frame_buffer; worker will initialize its own handle
                 self.pipeline_pressure,
                 slots
             ),
