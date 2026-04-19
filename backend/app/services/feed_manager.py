@@ -187,11 +187,11 @@ class FeedManager:
                 self._inference_input_queues, 
                 self._central_output_queue,
                 cmd_q,
-                self._inference_stop_event,
+                None, # Replace _inference_stop_event (Event) with None; worker will check Redis
                 dict(self.config) if hasattr(self.config, 'model_dump') else self.config,
                 self._db_queue,
-                None, # Pass None for frame_buffer; worker will initialize its own handle
-                self.pipeline_pressure,
+                None, # frame_buffer handled inside worker
+                None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
                 slots
             ),
             daemon=True,

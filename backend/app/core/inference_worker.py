@@ -115,11 +115,36 @@ def inference_worker(
         # The SharedFrameBuffer constructor handles attaching to existing segments
         frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200))
     
+    # ... (inside inference_worker)
+    
+    # Initialize Redis client for signals and pressure
+    from app.utils.redis_client import get_redis_client
+    redis_client = get_redis_client()
+    
+    # Replace stop_event check with Redis signal
+    # We'll check this periodically in the main loop
+    
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+    
+    # ... (rest of initialization)
+    
+    # Main loop
+    while True:
+        # Check for stop signal in Redis
+        if redis_client.get("pipeline:stop"):
+            logger.info(f"Worker {worker_id} received stop signal via Redis. Terminating...")
+            break
+            
+        # Read current pipeline pressure from Redis
+        pressure_val = redis_client.get("pipeline:pressure")
+        current_pressure = float(pressure_val) if pressure_val else 0.0
+        
+        # ... (rest of the loop)
+
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
     
     model_path = vehicle_det_cfg.get("model_path")
@@ -184,7 +209,7 @@ def inference_worker(
     last_metrics_log = time.time()
     
     try:
-        while not stop_event.is_set():
+        while True:
             # Handle command queue
             try:
                 while True:
