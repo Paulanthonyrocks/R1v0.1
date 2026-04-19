@@ -97,10 +97,10 @@ class FeedManager:
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
-            self._reid_manager = GlobalReIDManager(config)
-            self.frame_buffer = SharedFrameBuffer(pool_size=200)
-            self.pipeline_pressure = Value('f', 0.0)
-            self._is_processing_active: bool = False
+        self._reid_manager = GlobalReIDManager(config)
+        self.frame_buffer = SharedFrameBuffer(pool_size=200)
+        self.pipeline_pressure = Value('f', 0.0)
+        self._is_processing_active: bool = False
         
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = self.config.get("kpi_broadcast_interval", 1.0)
