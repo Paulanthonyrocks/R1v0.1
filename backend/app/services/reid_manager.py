@@ -405,8 +405,3 @@ class GlobalReIDManager:
             self.metadata_store = {gid: meta for gid, meta in self.metadata_store.items() if gid in current_gids}
             
             logger.info(f"ReID Registry Sizes - Gallery: {len(self.gallery_ids)}, Metadata: {len(self.metadata_store)}, Mappings: {len(self.local_to_global)}")
-s)
-            current_gids = set(self.gallery_ids)
-            self.metadata_store = {gid: meta for gid, meta in self.metadata_store.items() if gid in current_gids}
-            
-            logger.info(f"ReID Registry Sizes - Gallery: {len(self.gallery_ids)}, Metadata: {len(self.metadata_store)}, Mappings: {len(self.local_to_global)}")
