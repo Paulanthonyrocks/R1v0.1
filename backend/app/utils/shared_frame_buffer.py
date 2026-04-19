@@ -18,6 +18,7 @@ class SharedFrameBuffer:
         self.pool_size = pool_size
         self.max_frame_size = max_frame_size
         self.read_only = read_only
+        self._segments: dict[str, shared_memory.SharedMemory] = {}
         
         self.manager = None
         self._free_pool = None
@@ -42,8 +43,6 @@ class SharedFrameBuffer:
                     self._free_pool.put(name)
                 except Exception as e:
                     logger.error(f'Failed to allocate SHM segment {name}: {e}')
-        
-        self._segments: dict[str, shared_memory.SharedMemory] = {}
 
         logger.info(f'SharedFrameBuffer initialized with {len(self._segments)} segments. Header size: {self.HEADER_SIZE} bytes.')
 
