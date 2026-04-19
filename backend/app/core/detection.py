@@ -63,9 +63,12 @@ class DetectionEngine:
                 cls = int(box.cls[0])
                 conf = float(box.conf[0])
                 
-                # Center point check for ROI
-                cx = (b[0] + b[2]) / 2
-                cy = (b[1] + b[3]) / 2
+                # Scale coordinates to match ROI mask resolution
+                scale_x = self.roi_mask.shape[1] / frame.shape[1] if frame is not None else 1.0
+                scale_y = self.roi_mask.shape[0] / frame.shape[0] if frame is not None else 1.0
+                
+                cx = ((b[0] + b[2]) / 2) * scale_x
+                cy = ((b[1] + b[3]) / 2) * scale_y
                 
                 if self.is_in_roi(cx, cy):
                     detections.append((b, cls, conf))

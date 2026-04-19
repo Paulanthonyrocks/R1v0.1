@@ -61,7 +61,11 @@ def inference_worker(
     command_queue: MPQueue,
     stop_event: Event,
     config: Dict[str, Any],
-    db_queue: Optional[MPQueue] = None
+    db_queue: Optional[MPQueue] = None,
+    frame_buffer: Any = None,
+    pipeline_pressure: Any = None,
+    slots: List[int] = None
+):
 ):
     # Initialize global config for this process
     initialize_config()
@@ -199,39 +203,45 @@ def inference_worker(
                 inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
 
                 try:
-                    # RedisStreamQueue.get() returns (message_id, item)
-                    res = central_input_queue.get(timeout=0.1)
-                    if res:
+                    # Poll assigned slot queues
+                    for slot_id in slots:
                         try:
-                            msg_id, first_task = (res if len(res) == 2 and isinstance(res[1], tuple) else (None, res))
-                        except ValueError:
-                            logger.error(f'[Worker {worker_id}] Unpacking error! res type: {type(res)}, value: {res}')
-                            raise
-                        batch_tasks.append((msg_id, first_task))
+                            slot_q = central_input_queue[slot_id]
+                            res = slot_q.get_nowait()
+                            if res:
+                                msg_id, first_task = (res if len(res) == 2 and isinstance(res[1], tuple) else (None, res))
+                                batch_tasks.append((msg_id, first_task))
+                        except (queue.Empty, IndexError):
+                            continue
+                    
+                    if not batch_tasks:
+                        # If nothing was found in slots, sleep briefly to prevent CPU spin
+                        time.sleep(0.01)
+                except Exception as e:
+                    logger.error(f'[Worker {worker_id}] Error polling slots: {e}')
                 except queue.Empty:
                     pass
 
                 if batch_tasks:
                     start_wait = time.time()
                     while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
-                        try:
-                            res = central_input_queue.get_nowait()
-                            if res:
-                                try:
+                        for slot_id in slots:
+                            try:
+                                slot_q = central_input_queue[slot_id]
+                                res = slot_q.get_nowait()
+                                if res:
                                     msg_id, t = (res if len(res) == 2 and isinstance(res[1], tuple) else (None, res))
-                                except ValueError:
-                                    logger.error(f'[Worker {worker_id}] Unpacking error (nowait)! res type: {type(res)}, value: {res}')
-                                    raise
-                                
-                                # 2. Smart Skip: If queue is critical, drop frames that aren't 'first detections'
-                                if q_depth > 200:
-                                    t_feed_id, t_frame_idx, _, _ = t
-                                    if t_frame_idx != -888 and t_frame_idx != -999:
-                                        if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
-                                            continue
-                                
-                                batch_tasks.append((None, t))
-                        except queue.Empty:
+                                    
+                                    # 2. Smart Skip
+                                    if q_depth > 200:
+                                        t_feed_id, t_frame_idx, _, _ = t
+                                        if t_frame_idx != -888 and t_frame_idx != -999:
+                                            if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
+                                                continue
+                                    
+                                    batch_tasks.append((None, t))
+                            except (queue.Empty, IndexError):
+                                continue
                             time.sleep(0.0005)
                             
                 if not batch_tasks:
@@ -244,7 +254,9 @@ def inference_worker(
 
                 for task_tuple in batch_tasks:
                     msg_id, task = task_tuple
-                    feed_id, frame_index, frame_bytes, extra_payload = task
+                    feed_id, frame_index, shm_ref, extra_payload = task
+                    res = frame_buffer.read(shm_ref) if frame_buffer and shm_ref else (shm_ref, (0,0,0))
+                    frame_bytes, dims = res
                     timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
                     
                     if feed_id not in metrics_map:
@@ -278,6 +290,7 @@ def inference_worker(
                             core_modules[feed_id].update_config(pending_configs.pop(feed_id))
 
                     core = core_modules[feed_id]
+                    core.last_activity = time.time() # Track activity for pruning
                     monitor = traffic_monitors[feed_id]
                     metrics_obj = metrics_map[feed_id]
 
@@ -293,11 +306,18 @@ def inference_worker(
                     
                     frame = None
                     if needs_frame:
-                        nparr = np.frombuffer(frame_bytes, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is None:
-                            metrics_obj.errors += 1
-                            continue
+                        # data is already raw BGR frame from SHM
+                        if isinstance(frame_bytes, memoryview):
+                            w, h, c = dims
+                            frame = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(h, w, c)
+                        elif isinstance(frame_bytes, np.ndarray):
+                            frame = frame_bytes
+                        else:
+                            # Fallback for bytes/fallback case
+                            frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+                            if frame is None:
+                                metrics_obj.errors += 1
+                                continue
                     
                     batch_meta.append({
                         "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
@@ -350,14 +370,18 @@ def inference_worker(
                     for vid, track in vis_tracks.items():
                         emb = track.get("embedding")
                         if emb:
-                            global_id = local_reid_manager.match_only(np.array(emb))
-                            if global_id:
-                                track["global_vehicle_id"] = global_id
-                                if meta['feed_id'] not in local_reid_manager.local_to_global:
-                                    local_reid_manager.local_to_global[meta['feed_id']] = {}
-                                local_reid_manager.local_to_global[meta['feed_id']][vid] = global_id
-                        if not track.get("global_vehicle_id"):
-                            mapped_id = local_reid_manager.get_global_id(meta['feed_id'], vid)
+                            # Use match_or_register to ensure new identities are created and synced
+                            global_id = local_reid_manager.match_or_register(
+                                feed_id=meta['feed_id'],
+                                local_id=str(vid),
+                                embedding=np.array(emb),
+                                metadata={"class_name": CoreModule.vehicle_type_map.get(track["class_id"], "unknown")},
+                                confidence=track.get("confidence", 1.0)
+                            )
+                            track["global_vehicle_id"] = global_id
+                        elif not track.get("global_vehicle_id"):
+                            # Fallback to check existing mapping for tracks without embeddings this frame
+                            mapped_id = local_reid_manager.get_global_id(meta['feed_id'], str(vid))
                             if mapped_id: track["global_vehicle_id"] = mapped_id
                         
                     monitor.update_vehicles(vis_tracks)
@@ -386,6 +410,17 @@ def inference_worker(
                 now = time.time()
                 if now - last_metrics_log > 30.0:
                       for fid, m in metrics_map.items():
+                          logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
+                      last_metrics_log = now
+
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"[Worker {worker_id}] Fatal error: {e}", exc_info=True)
+    finally:
+        for feed_id, cm in core_modules.items(): cm.cleanup()
+        logger.info(f"Inference process {os.getpid()} terminated.") for fid, m in metrics_map.items():
                           logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
                       last_metrics_log = now
 

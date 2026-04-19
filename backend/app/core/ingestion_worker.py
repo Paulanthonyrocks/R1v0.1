@@ -24,7 +24,9 @@ def ingestion_worker(
     stop_event: Event,
     config: Dict[str, Any],
     is_looped: bool = False,
-    command_queue: Optional[MPQueue] = None
+    command_queue: Optional[MPQueue] = None,
+    frame_buffer: Any = None,
+    pipeline_pressure: Any = None
 ):
     """
     Lightweight process that only captures frames and pushes them to a central queue.
@@ -210,25 +212,41 @@ def ingestion_worker(
 
                 # --- Backpressure-Aware Capture ---
                 try:
-                    q_size = central_input_queue.qsize()
-                    if q_size > 300: # Congestion threshold
+                    # Coordinated Backpressure: Check global pipeline pressure first
+                    pressure = pipeline_pressure.value if pipeline_pressure else 0.0
+                    if pressure > 0.7: # Critical downstream congestion
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:
-                            logger.warning(f"[{feed_id}] High congestion ({q_size} in queue). Dropping frame {frame_index} EARLY.")
+                            logger.warning(f"[{feed_id}] Global Pressure High ({pressure:.2f}). Dropping frame {frame_index} EARLY.")
+                        continue
+                    
+                    # Local Queue Backpressure
+                    q_size = central_input_queue.qsize()
+                    if q_size > 300:
+                        metrics.frames_dropped += 1
                         continue
                 except (AttributeError, NotImplementedError):
                     pass
 
                 try:
-                    # Resize and encode to bytes
+                    # Resize for transmission (keep as raw BGR for zero-copy pipeline)
                     resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
-                    success, buffer = cv2.imencode(".jpg", resized, encode_params)
-
+                    
+                    # Keep a JPEG version ONLY for snapshot commands
+                    success, snap_buf = cv2.imencode(".jpg", resized, encode_params)
                     if success:
-                        frame_bytes = buffer.tobytes()
-                        last_frame_bytes = frame_bytes
-                        try:
-                            central_input_queue.put((feed_id, frame_index, frame_bytes, time.time()), timeout=0.1)
+                        last_frame_bytes = snap_buf.tobytes()
+
+                    try:
+                        shm_ref = frame_buffer.acquire() if frame_buffer else None
+                        if shm_ref:
+                            # Push RAW resized frame (NumPy array) to SHM
+                            frame_buffer.write(shm_ref, resized)
+                            central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
+                            metrics.frames_processed += 1
+                        else:
+                            # Fallback to raw bytes if SHM unavailable
+                            central_input_queue.put((feed_id, frame_index, resized.tobytes(), time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         except queue.Full:
                             metrics.frames_dropped += 1

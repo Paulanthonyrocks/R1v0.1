@@ -30,14 +30,17 @@ class CoordinateTransformer:
         except Exception as e:
             logger.error(f"Failed to calculate homography: {e}")
 
-    def pixel_to_ground(self, x: float, y: float) -> Optional[Tuple[float, float]]:
-        """Transforms image pixel coordinates to real-world ground coordinates (meters)."""
+    def pixel_to_ground(self, points: np.ndarray) -> Optional[np.ndarray]:
+        """Transforms array of image pixel coordinates to real-world ground coordinates (meters).
+        Input 'points' should be a NumPy array of shape (N, 2).
+        """
         if self.homography_matrix is None:
             return None
         
-        point = np.array([[[x, y]]], dtype=np.float32)
-        transformed = cv2.perspectiveTransform(point, self.homography_matrix)
-        return float(transformed[0][0][0]), float(transformed[0][0][1])
+        # Reshape to (N, 1, 2) as required by perspectiveTransform
+        pts = points.reshape(-1, 1, 2).astype(np.float32)
+        transformed = cv2.perspectiveTransform(pts, self.homography_matrix)
+        return transformed.reshape(-1, 2)
 
     def ground_to_pixel(self, gx: float, gy: float) -> Optional[Tuple[float, float]]:
         """Transforms real-world ground coordinates back to image pixel coordinates."""

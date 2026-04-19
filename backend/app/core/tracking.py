@@ -192,7 +192,7 @@ class TrackingManager:
         bbox, cls, conf, emb = det
         self.global_id_counter += 1
         return {
-            "vehicle_id": f"TRK_{self.global_id_counter}",
+            "vehicle_id": self.global_id_counter,
             "bbox": bbox,
             "centroid": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
             "class_id": cls,

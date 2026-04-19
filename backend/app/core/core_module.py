@@ -240,50 +240,63 @@ class CoreModule:
                         self.vehicle_data[tid]["embedding"] = emb
                         self.vehicle_data[tid]["last_reid_update"] = frame_index
 
-        # 5. Metadata Processing
+        # 5. Metadata Processing (Vectorized)
         vis_tracks = {}
-        for tid, track in self.vehicle_data.items():
-            cx, cy = (track["bbox"][0] + track["bbox"][2])/2, (track["bbox"][1] + track["bbox"][3])/2
-            ground_pos = self.transformer.pixel_to_ground(cx, cy)
-            if ground_pos:
-                track["ground_coordinates"] = ground_pos
+        if self.vehicle_data:
+            # Collect all centroids for batch transformation
+            tids = list(self.vehicle_data.keys())
+            centroids = np.array([
+                [(track["bbox"][0] + track["bbox"][2])/2, (track["bbox"][1] + track["bbox"][3])/2]
+                for track in self.vehicle_data.values()
+            ], dtype=np.float32)
             
-            # --- Calculate Speed (km/h) ---
-            if ground_pos:
-                curr_gx, curr_gy = ground_pos
-                prev_ground_pos = track.get("prev_ground_pos")
-                prev_t = track.get("prev_t")
+            ground_positions = self.transformer.pixel_to_ground(centroids)
+            
+            for idx, tid in enumerate(tids):
+                track = self.vehicle_data[tid]
+                if ground_positions is not None:
+                    track["ground_coordinates"] = ground_positions[idx]
                 
-                if prev_ground_pos and prev_t:
-                    prev_gx, prev_gy = prev_ground_pos
-                    dt = current_time - prev_t
-                    if dt > 0:
-                        dist = math.sqrt((curr_gx - prev_gx)**2 + (curr_gy - prev_gy)**2)
-                        track["speed"] = (dist / dt) * 3.6
+                # --- Calculate Speed (km/h) ---
+                if "ground_coordinates" in track:
+                    curr_gx, curr_gy = track["ground_coordinates"]
+                    prev_ground_pos = track.get("prev_ground_pos")
+                    prev_t = track.get("prev_t")
+                    
+                    if prev_ground_pos and prev_t:
+                        prev_gx, prev_gy = prev_ground_pos
+                        dt = current_time - prev_t
+                        if dt > 0:
+                            dist = math.sqrt((curr_gx - prev_gx)**2 + (curr_gy - prev_gy)**2)
+                            raw_speed = (dist / dt) * 3.6
+                            
+                            # Apply EWMA smoothing
+                            prev_speed = track.get("speed", raw_speed)
+                            track["speed"] = (self.ewma_alpha * raw_speed) + ((1 - self.ewma_alpha) * prev_speed)
+                        else:
+                            track["speed"] = track.get("speed", 0.0)
                     else:
-                        track["speed"] = track.get("speed", 0.0)
+                        # Fallback to pixel-based for first frame
+                        vx = track.get("vx", 0.0)
+                        vy = track.get("vy", 0.0)
+                        pixel_speed = math.sqrt(vx**2 + vy**2)
+                        track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
+                    
+                    track["prev_ground_pos"] = (curr_gx, curr_gy)
+                    track["prev_t"] = current_time
                 else:
-                    # Fallback to pixel-based for first frame
+                    # Fallback if transformer fails
                     vx = track.get("vx", 0.0)
                     vy = track.get("vy", 0.0)
                     pixel_speed = math.sqrt(vx**2 + vy**2)
                     track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
                 
-                track["prev_ground_pos"] = ground_pos
-                track["prev_t"] = current_time
-            else:
-                # Fallback if transformer fails
-                vx = track.get("vx", 0.0)
-                vy = track.get("vy", 0.0)
-                pixel_speed = math.sqrt(vx**2 + vy**2)
-                track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
-            
-            # Simple Filtering for Visualization
-            if track["status"] == "active":
-                vis_tracks[tid] = track
-            elif track["status"] == "predicting":
-                if (current_time - track["last_seen"]) < self.predict_timeout:
+                # Simple Filtering for Visualization
+                if track["status"] == "active":
                     vis_tracks[tid] = track
+                elif track["status"] == "predicting":
+                    if (current_time - track["last_seen"]) < self.predict_timeout:
+                        vis_tracks[tid] = track
 
         self._save_vehicle_data(vis_tracks)
         self._process_ocr_results()
@@ -299,6 +312,7 @@ class CoreModule:
                         "type": "vehicle_data",
                         "feed_id": self.feed_id,
                         "vehicle_id": str(vehicle_id),
+                        "global_vehicle_id": str(data.get("global_vehicle_id", "")),
                         "timestamp": float(now),
                         "bbox": [float(x) for x in data["bbox"]],
                         "centroid": [float(x) for x in data["centroid"]],

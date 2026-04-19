@@ -56,6 +56,7 @@ class ConnectionManager:
         self.client_id_to_feeds: Dict[str, Set[str]] = {}
         self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
         self.client_latencies: Dict[str, float] = {}  # Track RTT for adaptive behavior
+        self._client_locks: Dict[str, asyncio.Lock] = {}
         
         # Output queues for backpressure management
         self.client_queues: Dict[str, asyncio.Queue] = {}
@@ -97,112 +98,123 @@ class ConnectionManager:
              cls._instance = ConnectionManager()
         return cls._instance
 
+    async def _get_client_lock(self, client_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for a specific client_id to ensure atomic operations."""
+        if client_id not in self._client_locks:
+            self._client_locks[client_id] = asyncio.Lock()
+        return self._client_locks[client_id]
+
     async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user"):
-        if len(self.active_connections) >= self.max_connections:
-            logger.warning(
-                f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
-            )
-            await websocket.close(code=4000, reason="Connection limit exceeded")
-            return
-
-        # ... (Collision logic) ...
-        # Handle reconnection: Close existing connection if present
-        if client_id in self.active_connections:
-            logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
-            old_ws = self.active_connections[client_id]
-            # Force disconnect the old socket structure
-            await self.disconnect(client_id, old_ws)
-            try:
-                # Ensure the old socket is actually closed
-                await old_ws.close(code=1000, reason="Reconnected")
-            except Exception:
-                pass
-
-        # websocket.accept() is now handled by the endpoint router before calling connect
-        self.active_connections[client_id] = websocket
-        self.client_id_to_user_id[client_id] = user_id
-        self.client_id_to_user_role[client_id] = user_role # Store role
-
-        if user_id not in self.user_id_to_client_ids:
-            self.user_id_to_client_ids[user_id] = []
-        
-        if client_id not in self.user_id_to_client_ids[user_id]:
-            self.user_id_to_client_ids[user_id].append(client_id)
-            
-        self.client_id_to_topics.setdefault(client_id, set())
-        self.client_id_to_feeds.setdefault(client_id, set())
-        self.last_pong_received_time[client_id] = time.time() # Initialize on connect
-
-        # Initialize sender queue and task with adaptive sizing and priority
-        queue_size = self._calculate_queue_size(client_id)
-        # Use PriorityQueue to allow alerts to bypass video frames
-        self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=queue_size + 10) # Buffering for priority shifts
-        self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
-
-        logger.info(
-            f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
-            f"Total connections: {len(self.active_connections)}"
-        )
-
-    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None):
-        if client_id in self.active_connections:
-            # Prevent removing a NEW connection if the OLD one is disconnecting
-            if websocket and self.active_connections[client_id] != websocket:
-                logger.info(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
+        async with await self._get_client_lock(client_id):
+            if len(self.active_connections) >= self.max_connections:
+                logger.warning(
+                    f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
+                )
+                await websocket.close(code=4000, reason="Connection limit exceeded")
                 return
 
-            # 1. Handle Task Cancellation (Safely)
-            task = self.client_tasks.pop(client_id, None)
-            if task:
-                if task != asyncio.current_task():
-                    task.cancel()
-                    try:
-                        # Awaiting task might yield control
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                else:
-                    logger.debug(f"Task {client_id} disconnecting itself. Skipping cancel/await.")
-            
-            # 2. Remove queue (Idempotent)
-            self.client_queues.pop(client_id, None)
+            # ... (Collision logic) ...
+            # Handle reconnection: Close existing connection if present
+            if client_id in self.active_connections:
+                logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
+                old_ws = self.active_connections[client_id]
+                # Force disconnect the old socket structure
+                await self.disconnect(client_id, old_ws)
+                try:
+                    # Ensure the old socket is actually closed
+                    await old_ws.close(code=1000, reason="Reconnected")
+                except Exception:
+                    pass
 
-            # 3. Remove from active connections (Idempotent)
-            # Check again because control might have been yielded during task await
-            if client_id not in self.active_connections:
-                return
+            # websocket.accept() is now handled by the endpoint router before calling connect
+            self.active_connections[client_id] = websocket
+            self.client_id_to_user_id[client_id] = user_id
+            self.client_id_to_user_role[client_id] = user_role # Store role
+
+            if user_id not in self.user_id_to_client_ids:
+                self.user_id_to_client_ids[user_id] = []
+            
+            if client_id not in self.user_id_to_client_ids[user_id]:
+                self.user_id_to_client_ids[user_id].append(client_id)
                 
-            if websocket and self.active_connections[client_id] != websocket:
-                return
+            self.client_id_to_topics.setdefault(client_id, set())
+            self.client_id_to_feeds.setdefault(client_id, set())
+            self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
-            del self.active_connections[client_id]
-            self.client_id_to_user_role.pop(client_id, None) # Remove role
-            self.last_pong_received_time.pop(client_id, None)
-            self.client_latencies.pop(client_id, None)  # Clean up latency tracking
-            
-            user_id = self.client_id_to_user_id.pop(client_id, None)
-
-            if user_id and user_id in self.user_id_to_client_ids:
-                if client_id in self.user_id_to_client_ids[user_id]:
-                    self.user_id_to_client_ids[user_id].remove(client_id)
-                if not self.user_id_to_client_ids[user_id]:
-                    del self.user_id_to_client_ids[user_id]
-            
-            # 4. Clean up subscriptions (Check presence before iterating)
-            topics_set = self.client_id_to_topics.pop(client_id, None)
-            if topics_set:
-                for topic in list(topics_set):
-                    await self.unsubscribe_from_topic(client_id, topic)
-
-            feeds_set = self.client_id_to_feeds.pop(client_id, None)
-            if feeds_set:
-                for feed_id in list(feeds_set):
-                    await self.unsubscribe_from_feed(client_id, feed_id)
+            # Initialize sender queue and task with adaptive sizing and priority
+            queue_size = self._calculate_queue_size(client_id)
+            # Use PriorityQueue to allow alerts to bypass video frames
+            self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=queue_size + 10) # Buffering for priority shifts
+            self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
 
             logger.info(
-                f"WebSocket connection closed: client_id={client_id}. "
+                f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
                 f"Total connections: {len(self.active_connections)}"
             )
+
+    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None):
+        async with await self._get_client_lock(client_id):
+            if client_id in self.active_connections:
+                # Prevent removing a NEW connection if the OLD one is disconnecting
+                if websocket and self.active_connections[client_id] != websocket:
+                    logger.info(f"Disconnect called for {client_id} but connection mismatch (race condition). Ignoring.")
+                    return
+
+                # 1. Handle Task Cancellation (Safely)
+                task = self.client_tasks.pop(client_id, None)
+                if task:
+                    if task != asyncio.current_task():
+                        task.cancel()
+                        try:
+                            # Awaiting task might yield control
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    else:
+                        logger.debug(f"Task {client_id} disconnecting itself. Skipping cancel/await.")
+                
+                # 2. Remove queue (Idempotent)
+                self.client_queues.pop(client_id, None)
+
+                # 3. Remove from active connections (Idempotent)
+                # Check again because control might have been yielded during task await
+                if client_id not in self.active_connections:
+                    return
+                    
+                if websocket and self.active_connections[client_id] != websocket:
+                    return
+
+                del self.active_connections[client_id]
+                self.client_id_to_user_role.pop(client_id, None) # Remove role
+                self.last_pong_received_time.pop(client_id, None)
+                self.client_latencies.pop(client_id, None)  # Clean up latency tracking
+                
+                user_id = self.client_id_to_user_id.pop(client_id, None)
+
+                if user_id and user_id in self.user_id_to_client_ids:
+                    if client_id in self.user_id_to_client_ids[user_id]:
+                        self.user_id_to_client_ids[user_id].remove(client_id)
+                    if not self.user_id_to_client_ids[user_id]:
+                        del self.user_id_to_client_ids[user_id]
+                
+                # 4. Clean up subscriptions (Check presence before iterating)
+                topics_set = self.client_id_to_topics.pop(client_id, None)
+                if topics_set:
+                    for topic in list(topics_set):
+                        await self.unsubscribe_from_topic(client_id, topic)
+
+                feeds_set = self.client_id_to_feeds.pop(client_id, None)
+                if feeds_set:
+                    for feed_id in list(feeds_set):
+                        await self.unsubscribe_from_feed(client_id, feed_id)
+
+                logger.info(
+                    f"WebSocket connection closed: client_id={client_id}. "
+                    f"Total connections: {len(self.active_connections)}"
+                )
+            
+            # Cleanup the lock itself to prevent memory leak
+            self._client_locks.pop(client_id, None)
 
     async def _client_sender(self, client_id: str, websocket: WebSocket):
         """Background task to send prioritized messages from queue to websocket."""
@@ -289,10 +301,17 @@ class ConnectionManager:
                         logger.debug(f"Client {client_id} queue heavily loaded ({queue.qsize()}/{queue.maxsize}). Dropping NORMAL message to maintain latency.")
                         return
 
+                # Determine timeout based on priority
+                # CRITICAL and HIGH priority messages get more time to be enqueued to ensure reliability
+                if priority in (MessagePriority.CRITICAL, MessagePriority.HIGH):
+                    timeout = 5.0
+                else:
+                    timeout = 0.5
+
                 # Wait for slot in queue with timeout to avoid blocking forever
-                await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=0.5)
+                await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=timeout)
             except asyncio.TimeoutError:
-                logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) to avoid blocking.")
+                logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout to avoid blocking.")
             except Exception as e:
                  logger.error(f"Failed to enqueue message for {client_id}: {e}")
 

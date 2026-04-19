@@ -14,6 +14,7 @@ from multiprocessing import (
     Process,
     Queue as MPQueue,
     Event,
+    Value
 )
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -42,6 +43,7 @@ from app.core.inference_worker import inference_worker
 # from app.core.processing_worker import result_reader_worker
 from app.utils.monitoring import FrameTimer, check_system_resources
 from app.utils.distributed_queue import RedisQueue, RedisStreamQueue
+from app.utils.shared_frame_buffer import SharedFrameBuffer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
 from app.services.reid_manager import GlobalReIDManager
@@ -56,7 +58,14 @@ logger = logging.getLogger("app.services.feed_manager")
 PROCESS_JOIN_TIMEOUT = 3.0
 QUEUE_MAX_SIZE = 500
 QUEUE_DRAIN_LIMIT = 100
-MAX_METRICS_HISTORY_LENGTH = 1000  # Safety cap for deque
+MAX_METRICS_HISTORY_LENGTH = 1000
+# Scaling Constants
+SLOT_COUNT = 64
+MIN_WORKERS = 1
+MAX_WORKERS = 8
+SCALE_UP_THRESHOLD = 150
+SCALE_DOWN_THRESHOLD = 20
+SCALE_COOLDOWN = 30
 
 
 class FeedManager:
@@ -88,8 +97,10 @@ class FeedManager:
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
-        self._reid_manager = GlobalReIDManager(config)
-        self._is_processing_active: bool = False
+self._reid_manager = GlobalReIDManager(config)
+            self.frame_buffer = SharedFrameBuffer(pool_size=200)
+            self.pipeline_pressure = Value('f', 0.0)
+            self._is_processing_active: bool = False
         
         self._last_kpi_broadcast_time = 0.0
         self._kpi_broadcast_interval = self.config.get("kpi_broadcast_interval", 1.0)
@@ -117,40 +128,34 @@ class FeedManager:
         self._watchdog_task: Optional[asyncio.Task] = None
 
         # Decoupled Processing Pool (Partitioned by Feed ID for State consistency)
-        self._inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
-        redis_cfg = self.config.get("redis", {})
+        # Virtual Slot Architecture for Dynamic Scaling
+        self.slot_count = SLOT_COUNT
+        self.use_redis = self.config.get("redis", {}).get("enabled", False)
         
-        # We divide the QUEUE_MAX_SIZE among workers
-        per_worker_q_size = max(50, QUEUE_MAX_SIZE // self._inference_pool_size)
-        
-        use_redis = redis_cfg.get("enabled", False)
-        
-        if use_redis:
-            try:
-                # Test connection specifically before creating queues
-                from app.utils.redis_client import get_redis_client
-                # This will raise ConnectionError if Redis is down
-                get_redis_client().ping()
-                
-                self._inference_input_queues = [
-                    RedisStreamQueue(f"inference_input", group_name="inference-workers") 
-                    for i in range(self._inference_pool_size)
-                ]
-                self._central_output_queue = RedisStreamQueue("central_output", group_name="output-readers")
-                logger.info("Using Redis Streams for inference queues.")
-            except Exception as e:
-                logger.warning(f"Redis enabled but connection failed: {e}. Falling back to multiprocessing queues.")
-                use_redis = False
-        
-        if not use_redis:
-            self._inference_input_queues = [MPQueue(maxsize=per_worker_q_size) for _ in range(self._inference_pool_size)]
+        if self.use_redis:
+            # Redis handles slots via stream keys or consumer groups
+            # For simplicity in this refactor, we'll use a single stream that workers compete for,
+            # but we'll implement the 'Slot' logic in the worker via filter
+            self._inference_input_queues = [RedisStreamQueue('inference_input', group_name=f'worker_{i}') for i in range(MAX_WORKERS)]
+            self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
+        else:
+            # Fixed pool of slot queues to ensure feed affinity during scaling
+            self._inference_input_queues = [MPQueue(maxsize=100) for _ in range(self.slot_count)]
             self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
-            logger.info("Using Multiprocessing Queues for inference.")
+        
+        self._inference_pool: Dict[int, Process] = {}
+        self._inference_command_queues: Dict[int, MPQueue] = {}
+        self._slot_to_worker: Dict[int, int] = {}
+        self._inference_stop_event = Event()
+        
+        # Initial Scaling
+        initial_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        self.scale_pool(initial_size)
             
         self._inference_pool: List[Process] = []
         self._inference_command_queues: List[MPQueue] = []
         self._inference_stop_event = Event()
-        self._start_inference_pool()
+
 
         # Initialize shared values
         self.initialize_shared_values()
@@ -162,10 +167,70 @@ class FeedManager:
 
         # Start background reader and watchdog
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
+        self._pressure_task = asyncio.create_task(self._update_pipeline_pressure())
+        self._scaling_task = asyncio.create_task(self._scaling_monitor())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
-        self.logger.info("FeedManager initialized. Reader and Watchdog tasks started.")
+        self.logger.info("FeedManager initialized. Reader, Watchdog, Pressure and Scaling tasks started.")
 
 
+
+    def _spawn_worker(self, worker_id: int):
+        """Spawns a single inference worker assigned to specific slots."""
+        slots = [s for s, w in self._slot_to_worker.items() if w == worker_id]
+        cmd_q = MPQueue(maxsize=100)
+        self._inference_command_queues[worker_id] = cmd_q
+        
+        p = Process(
+            target=inference_worker,
+            args=(
+                worker_id,
+                self._inference_input_queues, # Pass all slot queues
+                self._central_output_queue,
+                cmd_q,
+                self._inference_stop_event,
+                self.config,
+                self._db_queue,
+                self.frame_buffer,
+                self.pipeline_pressure,
+                slots # Pass the assigned slots
+            ),
+            daemon=True,
+            name=f"InferenceWorker-{worker_id}"
+        )
+        p.start()
+        self._inference_pool[worker_id] = p
+        logger.info(f"Launched InferenceWorker-{worker_id} handling slots {slots}")
+
+    def scale_pool(self, target_size: int):
+        """Dynamically adjusts the number of active workers and rebalances slots."""
+        target_size = max(MIN_WORKERS, min(target_size, MAX_WORKERS))
+        current_size = len(self._inference_pool)
+        
+        if target_size == current_size:
+            return
+
+        logger.info(f"Scaling inference pool: {current_size} -> {target_size}")
+        
+        # 1. Rebalance Slots
+        # Simple round-robin assignment of the 64 slots
+        self._slot_to_worker = {slot: (slot % target_size) for slot in range(self.slot_count)}
+        
+        # 2. Adjust Processes
+        if target_size < current_size:
+            # Terminate excess workers
+            for wid in sorted(self._inference_pool.keys(), reverse=True):
+                if wid >= target_size:
+                    p = self._inference_pool.pop(wid)
+                    p.terminate()
+                    self._inference_command_queues.pop(wid, None)
+        
+        # 3. Start/Restart all workers to apply new slot mappings
+        # (For a truly seamless transition, we would send a 'rebalance' command, 
+        # but restarting is safer for this implementation)
+        for wid in range(target_size):
+            if wid in self._inference_pool:
+                self._inference_pool[wid].terminate()
+            self._spawn_worker(wid)
 
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
@@ -249,6 +314,44 @@ class FeedManager:
     def set_connection_manager(self, manager: ConnectionManager):
         self._connection_manager = manager
         logger.info("WebSocket ConnectionManager set in FeedManager.")
+
+    async def _scaling_monitor(self):
+        """Monitors queue depth and scales the worker pool dynamically."""
+        while not self._stop_reader_flag:
+            try:
+                # Calculate average queue depth across all slots
+                total_depth = sum(q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize'))
+                avg_depth = total_depth / self.slot_count
+                
+                current_size = len(self._inference_pool)
+                if avg_depth > SCALE_UP_THRESHOLD and current_size < MAX_WORKERS:
+                    logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
+                    self.scale_pool(current_size + 1)
+                elif avg_depth < SCALE_DOWN_THRESHOLD and current_size > MIN_WORKERS:
+                    logger.info(f"Low load detected (avg depth {avg_depth:.1f}). Scaling down...")
+                    self.scale_pool(current_size - 1)
+                
+                await asyncio.sleep(SCALE_COOLDOWN)
+            except Exception as e:
+                logger.error(f"Error in scaling monitor: {e}")
+                await asyncio.sleep(5.0)
+
+    async def _update_pipeline_pressure(self):
+        """Updates the global pressure signal based on ConnectionManager queue depths."""
+        while not self._stop_reader_flag:
+            try:
+                if self._connection_manager:
+                    queues = self._connection_manager.client_queues.values()
+                    if queues:
+                        total_fill = sum(q.qsize() / q.maxsize for q in queues)
+                        avg_fill = total_fill / len(queues)
+                        self.pipeline_pressure.value = avg_fill
+                    else:
+                        self.pipeline_pressure.value = 0.0
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Error updating pipeline pressure: {e}")
+                await asyncio.sleep(1.0)
 
     async def _read_db_queue(self):
         """Task to process database write requests from all workers."""
@@ -390,7 +493,9 @@ class FeedManager:
                     self._inference_command_queues[i],
                     self._inference_stop_event,
                     self.config,
-                    self._db_queue
+                    self._db_queue,
+                    self.frame_buffer,
+                    self.pipeline_pressure
                 ),
                 daemon=True,
                 name=f"InferenceWorker-{i}"
@@ -930,13 +1035,15 @@ class FeedManager:
         if not entry:
             return
 
-        # Partitioning logic: Route feed to a specific worker based on hash
+        # Slot-based routing: Route feed to a virtual slot, which maps to a worker
         import hashlib
-        worker_idx = int(hashlib.md5(feed_id.encode()).hexdigest(), 16) % self._inference_pool_size
-        target_queue = self._inference_input_queues[worker_idx]
+        slot_id = int(hashlib.md5(feed_id.encode()).hexdigest(), 16) % self.slot_count
+        target_queue = self._inference_input_queues[slot_id]
         
         logger.info(f"Routing feed {feed_id} to InferenceWorker-{worker_idx}")
 
+            # The ingestion worker just needs to know which slot queue to push to
+        # We'll keep target_queue as the specific slot queue for this feed
         worker_args = (
             source,
             feed_id,
@@ -944,7 +1051,9 @@ class FeedManager:
             entry["stop_event"],
             self.config,
             entry.get("is_looped_feed", False),
-            entry.get("command_queue"),
+            entry.get("command_queue", None),
+            self.frame_buffer,
+            self.pipeline_pressure,
         )
 
         process = Process(
@@ -1062,7 +1171,18 @@ class FeedManager:
                 
                 # Process the items without holding the global lock for the entire loop
                 for item in items_buffer:
-                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = item
+                    feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
+                    raw_frame_view, dims = self.frame_buffer.read(shm_ref)
+                    
+                    # Encode to JPEG only at the final broadcast stage
+                    import cv2
+                    w, h, c = dims
+                    frame_np = np.frombuffer(raw_frame_view, dtype=np.uint8).reshape(h, w, c)
+                    
+                    success, buffer = cv2.imencode(".jpg", frame_np, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                    frame_bytes = buffer.tobytes() if success else b''
+                    
+                    self.frame_buffer.release(shm_ref)
                     
                     # Use a local copy of the entry to avoid holding the lock during the broadcast
                     entry = self.process_registry.get(feed_id)

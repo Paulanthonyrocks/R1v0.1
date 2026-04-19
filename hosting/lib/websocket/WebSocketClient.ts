@@ -67,12 +67,26 @@ export enum WebSocketMessageType {
     USER_ROLE = 'user_role'
 }
 
+export enum MessagePriority {
+    CRITICAL = 0,
+    HIGH = 1,
+    NORMAL = 2,
+    LOW = 3
+}
+
 export interface WebSocketMessage<T = unknown> {
     type: WebSocketMessageType;
     data?: T | null;
     client_id?: string;
     correlation_id?: string;
     timestamp?: number;
+    priority?: MessagePriority;
+}
+
+interface PrioritizedMessage {
+    priority: MessagePriority;
+    message: WebSocketMessage;
+    timestamp: number;
 }
 
 export interface ConnectionQuality {
@@ -91,6 +105,7 @@ export interface IWebSocketClient {
     unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
     reconnectWithNewToken(token: string): Promise<void>;
     getConnectionQuality(): ConnectionQuality;
+    cleanupWorkerResources(feed_id: string): void;
 }
 
 enum ConnectionState {
@@ -741,6 +756,16 @@ export class WebSocketClient implements IWebSocketClient {
                 console.warn(`[WebSocketClient ${this.instanceId}] WebSocket message queue full. Dropping oldest message.`);
             }
             this.messageQueue.push(messageToSend);
+            
+            // Sort queue by priority (lower value = higher priority) and then by timestamp (FIFO for same priority)
+            this.messageQueue.sort((a, b) => {
+                const priorityA = a.priority ?? MessagePriority.NORMAL;
+                const priorityB = b.priority ?? MessagePriority.NORMAL;
+                if (priorityA !== priorityB) {
+                    return priorityA - priorityB;
+                }
+                return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+            });
         }
     }
 
@@ -783,8 +808,14 @@ export class WebSocketClient implements IWebSocketClient {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.connectionState === ConnectionState.CONNECTED;
     }
 
-    public getConnectionState(): ConnectionState {
-        return this.connectionState;
+    public cleanupWorkerResources(feed_id: string): void {
+        if (this.videoWorker) {
+            this.videoWorker.postMessage({
+                command: 'CLEANUP_FEED',
+                feed_id: feed_id
+            });
+            console.log(`[WebSocketClient ${this.instanceId}] Cleanup command sent for feed ${feed_id}`);
+        }
     }
 
     public onError(listener: (type: string, message: string) => void): () => void {

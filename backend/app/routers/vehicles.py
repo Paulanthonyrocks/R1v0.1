@@ -20,19 +20,7 @@ class IdentifiedVehicleResponse(BaseModel):
 
 class VehicleTrackResponse(BaseModel):
     feed_id: str
-    track_id: str  # Note: In DB it's defined as integer in schema but often treated as str in code. Schema says INTEGER.
-                   # Let's check schema: "track_id INTEGER NOT NULL".
-                   # However, core_module generates "vehicle_X" which is a string.
-                   # Wait, core_module generates "vehicle_{counter}".
-                   # The DB schema says `track_id INTEGER`.
-                   # Core module uses `vehicle_id = f"vehicle_{self.vehicle_id_counter}"`.
-                   # This is a schema mismatch if track_id is strictly integer.
-                   # Let's look at `save_vehicle_data` in database.py.
-                   # `vd.get("track_id") or vd.get("vehicle_id")`
-                   # If it's "vehicle_1", inserting into INTEGER column might fail or default to 0 in strict mode, 
-                   # or works if SQLite is lenient (it is).
-                   # But for safety, response model should probably be Union[str, int] or just str (as SQLite allows).
-                   # I'll stick to str for robustness.
+    track_id: int
     timestamp: float
     class_id: Optional[int] = None
     confidence: Optional[float] = None

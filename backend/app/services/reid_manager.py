@@ -183,16 +183,17 @@ class GlobalReIDManager:
                 if best_score > self.similarity_threshold:
                     best_match_id = self.gallery_ids[best_idx]
                     
-                    # --- Centroid Update (Exponential Smoothing) ---
+                    # --- Confidence-Weighted Centroid Update ---
                     old_emb = self.gallery_matrix[best_idx]
-                    new_emb = (1.0 - self.alpha) * old_emb + self.alpha * embedding
+                    weighted_alpha = self.alpha * confidence
+                    new_emb = (1.0 - weighted_alpha) * old_emb + weighted_alpha * embedding
                     updated_emb = self._normalize(new_emb)
                     self.gallery_matrix[best_idx] = updated_emb
                     
                     # Sync updated embedding to Redis and DB
                     if self.redis:
                         try:
-                            self.redis.set(f"reid:emb:{best_match_id}", updated_emb.tobytes())
+                            self.redis.set(f"reid:emb:{best_match_id}", updated_emb.tobytes(), ex=self.ttl_seconds)
                             # Broadcast update to cluster
                             self.redis.publish("reid:update_identity", f"{best_match_id}|{updated_emb.tobytes().hex()}")
                         except Exception as e:
@@ -400,6 +401,11 @@ class GlobalReIDManager:
                     del self.local_to_global[feed_id]
 
             # Prune metadata_store (double check in case of missed deletions)
+            current_gids = set(self.gallery_ids)
+            self.metadata_store = {gid: meta for gid, meta in self.metadata_store.items() if gid in current_gids}
+            
+            logger.info(f"ReID Registry Sizes - Gallery: {len(self.gallery_ids)}, Metadata: {len(self.metadata_store)}, Mappings: {len(self.local_to_global)}")
+s)
             current_gids = set(self.gallery_ids)
             self.metadata_store = {gid: meta for gid, meta in self.metadata_store.items() if gid in current_gids}
             

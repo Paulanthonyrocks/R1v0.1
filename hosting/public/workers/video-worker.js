@@ -1,17 +1,28 @@
 
 const canvases = new Map();
 const contexts = new Map();
-
 self.onmessage = async function (e) {
+    const { command, feed_id: command_feed_id } = e.data;
+
+    // Handle Commands
+    if (command === 'CLEANUP_FEED') {
+        const feed_id = command_feed_id;
+        const canvas = canvases.get(feed_id);
+        if (canvas) {
+            // Note: OffscreenCanvas doesn't have a close() method, but we can let it be GC'd
+            // by removing all references to it.
+            canvases.delete(feed_id);
+            console.log(`[Worker] Cleaned up resources for feed: ${feed_id}`);
+        }
+        const ctx = contexts.get(feed_id);
+        if (ctx) {
+            contexts.delete(feed_id);
+        }
+        return;
+    }
+
     const { binaryFrame, frameData, feed_id, originalData } = e.data;
-
-    try {
-        let frameToSend;
-        let transferables = [];
-        let metadata = originalData || {};
-
-        // 1. Handle Binary Data (New Protocol)
-        if (binaryFrame) {
+...
             const { background, rois, frame, frame_index, metrics, vehicles, timestamp } = binaryFrame;
 
             metadata = { frame_index, metrics, vehicles, timestamp };
