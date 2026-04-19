@@ -9,6 +9,7 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { formatFeedName } from '@/lib/formatters';
 
 import AnomalyItem from '@/components/dashboard/AnomalyItem';
 import StatCard from '@/components/dashboard/StatCard';
@@ -345,13 +346,13 @@ const DashboardPage: React.FC = () => {
                   {feeds.length > 0 && (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       <LaneAnalysisWidget
-                        title={`LANE METRICS: ${getFeedDisplayName(feeds[0])}`}
+                        title={`LANE METRICS: ${formatFeedName(feeds[0].name, feeds[0].feed_id)}`}
                         occupancy={feeds[0].latest_metrics?.lane_occupancy || {}}
                         queues={feeds[0].latest_metrics?.queue_lengths || {}}
                       />
                       {feeds.length > 1 ? (
                         <LaneAnalysisWidget
-                          title={`LANE METRICS: ${getFeedDisplayName(feeds[1])}`}
+                          title={`LANE METRICS: ${formatFeedName(feeds[1].name, feeds[1].feed_id)}`}
                           occupancy={feeds[1].latest_metrics?.lane_occupancy || {}}
                           queues={feeds[1].latest_metrics?.queue_lengths || {}}
                         />

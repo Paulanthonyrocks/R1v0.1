@@ -215,20 +215,31 @@ class CoreModule:
         else:
             detections = self.detector.detect(frame, 0.1)
         
-        # 3. Enrichment (ReID Embeddings)
-        enriched_detections = []
-        for bbox, cls, dconf in detections:
-            emb = None
-            if self.reid_embedder:
-                x1, y1, x2, y2 = map(int, bbox)
-                roi = frame[y1:y2, x1:x2]
-                if roi.size > 0:
-                    emb = self.reid_embedder.extract(roi)
-            enriched_detections.append((bbox, cls, dconf, emb))
+        # 3. Tracking (Optimized: Pass detections without embeddings first)
+        dets_for_tracker = [(d[0], d[2], d[1], None) for d in detections]
+        self.vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape)
 
-        # 4. Tracking
-        self.vehicle_data = self.tracker.update(enriched_detections, current_time, frame.shape)
-        
+        # 4. Selective ReID Enrichment (Batch)
+        if self.reid_embedder:
+            needs_emb = []
+            for tid, track in self.vehicle_data.items():
+                # Extract if: new track OR periodic update (every 30 frames)
+                if tid not in self.vehicle_data or track.get("last_reid_update", -1) == -1 or (frame_index - track.get("last_reid_update", -1)) >= 30:
+                    bbox = track.get("bbox")
+                    if bbox:
+                        x1, y1, x2, y2 = map(int, bbox)
+                        roi = frame[y1:y2, x1:x2]
+                        if roi.size > 0:
+                            needs_emb.append((tid, roi))
+            
+            if needs_emb:
+                tids, rois = zip(*needs_emb)
+                embeddings = self.reid_embedder.get_batch_embeddings(list(rois))
+                for tid, emb in zip(tids, embeddings):
+                    if emb is not None:
+                        self.vehicle_data[tid]["embedding"] = emb
+                        self.vehicle_data[tid]["last_reid_update"] = frame_index
+
         # 5. Metadata Processing
         vis_tracks = {}
         for tid, track in self.vehicle_data.items():

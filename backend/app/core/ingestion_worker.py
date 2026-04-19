@@ -8,6 +8,7 @@ import signal
 import json
 from typing import Dict, Any, Optional
 from multiprocessing import Queue as MPQueue, Event
+from pathlib import Path
 
 from app.utils.video import FrameReader
 from app.utils.process import start_parent_monitor
@@ -22,7 +23,8 @@ def ingestion_worker(
     central_input_queue: MPQueue,
     stop_event: Event,
     config: Dict[str, Any],
-    is_looped: bool = False
+    is_looped: bool = False,
+    command_queue: Optional[MPQueue] = None
 ):
     """
     Lightweight process that only captures frames and pushes them to a central queue.
@@ -137,31 +139,76 @@ def ingestion_worker(
 
     consecutive_errors = 0
     max_consecutive_errors = 300  # ~3 seconds at 100Hz polling (was 30)
+    last_frame_bytes = None
+
+    def handle_command(cmd: Dict[str, Any]):
+        nonlocal last_frame_bytes
+        cmd_type = cmd.get("type")
+        if cmd_type == "save_snapshot":
+            incident_id = cmd.get("incident_id")
+            if not incident_id:
+                logger.error(f"[{feed_id}] save_snapshot command missing incident_id")
+                return
+
+            if not last_frame_bytes:
+                logger.warning(f"[{feed_id}] save_snapshot requested but no frame available")
+                return
+
+            try:
+                from app.config import get_current_config
+                cfg = get_current_config()
+                snap_dir = Path(cfg.snapshots_dir)
+                snap_dir.mkdir(parents=True, exist_ok=True)
+
+                snap_path = snap_dir / f"{feed_id}_{incident_id}.jpg"
+
+                with open(snap_path, "wb") as f:
+                    f.write(last_frame_bytes)
+
+                logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
+
+                # Notify system via central queue
+                central_input_queue.put((feed_id, -999, b'', {
+                    "type": "snapshot_saved",
+                    "incident_id": incident_id,
+                    "snapshot_path": str(snap_path)
+                }), timeout=1.0)
+            except Exception as e:
+                logger.error(f"[{feed_id}] Error saving snapshot: {e}")
 
     try:
         while not stop_event.is_set():
+            # Handle incoming commands
+            if command_queue:
+                try:
+                    while True:
+                        cmd = command_queue.get_nowait()
+                        handle_command(cmd)
+                except queue.Empty:
+                    pass
+                except Exception as e:
+                    logger.error(f"[{feed_id}] Command execution error: {e}")
+
             try:
                 result = reader.read()
                 if result is None:
                     if reader.end_of_video:
                         logger.info(f"[{feed_id}] End of stream.")
                         break
-                    
+
                     consecutive_errors += 1
                     if consecutive_errors > max_consecutive_errors:
                         logger.error(f"[{feed_id}] Too many consecutive read failures, stopping")
                         break
-                    
+
                     time.sleep(0.01)
                     continue
-                
+
                 # Reset error counter on successful read
                 consecutive_errors = 0
                 frame_index, frame = result
 
                 # --- Backpressure-Aware Capture ---
-                # If the AI queue is filling up, drop frames BEFORE expensive resize/encode
-                # We target a threshold of 50-70% of QUEUE_MAX_SIZE (500)
                 try:
                     q_size = central_input_queue.qsize()
                     if q_size > 300: # Congestion threshold
@@ -170,22 +217,18 @@ def ingestion_worker(
                             logger.warning(f"[{feed_id}] High congestion ({q_size} in queue). Dropping frame {frame_index} EARLY.")
                         continue
                 except (AttributeError, NotImplementedError):
-                    # qsize() not available on some platforms/types
                     pass
 
                 try:
-                    # total_frames_attempted tracked implicitly via metrics
-                    
-                    # Resize and encode to bytes for efficient queue transport
+                    # Resize and encode to bytes
                     resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
                     success, buffer = cv2.imencode(".jpg", resized, encode_params)
-                    
+
                     if success:
+                        frame_bytes = buffer.tobytes()
+                        last_frame_bytes = frame_bytes
                         try:
-                            # Put data in the central queue
-                            # Format: (feed_id, frame_index, frame_bytes, metadata)
-                            # Reduced timeout to 0.1s to avoid blocking ingestion pulse
-                            central_input_queue.put((feed_id, frame_index, buffer.tobytes(), time.time()), timeout=0.1)
+                            central_input_queue.put((feed_id, frame_index, frame_bytes, time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         except queue.Full:
                             metrics.frames_dropped += 1
@@ -210,28 +253,26 @@ def ingestion_worker(
                     if current_time - last_metrics_log > 10.0:
                         logger.info(f"[{feed_id}] METRICS: {json.dumps(metrics.to_dict())}")
                         last_metrics_log = current_time
-                        
+
                 except Exception as e:
                     logger.error(f"[{feed_id}] Error processing frame {frame_index}: {e}")
                     metrics.errors += 1
                 finally:
-                    # Resource Cleanup: Explicitly delete frames to free memory
                     if 'frame' in locals(): del frame
                     if 'resized' in locals(): del resized
-                    
+
             except Exception as e:
                 consecutive_errors += 1
                 logger.error(f"[{feed_id}] Read error ({consecutive_errors}/{max_consecutive_errors}): {e}")
                 if consecutive_errors > max_consecutive_errors:
                     break
                 time.sleep(0.1)
-
     except Exception as e:
         logger.error(f"[{feed_id}] FATAL Ingestion error: {e}", exc_info=True)
     finally:
         if reader:
             reader.stop()
-        
+
         # 5. Signal end of stream to AI workers (frame_index = -999)
         try:
             central_input_queue.put((feed_id, -999, b'', time.time()), timeout=2.0)
@@ -240,3 +281,4 @@ def ingestion_worker(
             logger.error(f"[{feed_id}] Error sending EOS signal: {e}")
 
         logger.info(f"[{feed_id}] Ingestion process {pid} terminated.")
+

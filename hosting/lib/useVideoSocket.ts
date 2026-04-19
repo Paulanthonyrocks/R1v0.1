@@ -96,21 +96,15 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
         // --- Vehicle State Merging (Hydration) ---
         let now = performance.now();
-        const mergedVehicles: VehicleFrontendData[] = [];
-        const currentBatchIds = new Set<string>();
 
         if (data.vehicles && data.vehicles.length > 0) {
             data.vehicles.forEach((v: any) => {
                 const vid = v.vehicle_id;
-                currentBatchIds.add(vid);
                 lastSeenVehicleTimeRef.current.set(vid, now);
 
                 const existing = vehicleRegistryRef.current.get(vid);
                 if (existing) {
-                    // LERP PREP: Store current bbox as previous before updating
-                    // Only update if the bbox actually changed to avoid resetting prev_bbox
                     const bboxChanged = JSON.stringify(existing.bbox) !== JSON.stringify(v.bbox);
-                    
                     const updated = { 
                         ...existing, 
                         ...v, 
@@ -118,16 +112,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                         last_update_time: bboxChanged ? now : existing.last_update_time
                     };
                     vehicleRegistryRef.current.set(vid, updated);
-                    mergedVehicles.push(updated);
                 } else {
-                    // New vehicle: Initialize with current bbox as both prev and current
                     const newVehicle = { 
                         ...v, 
                         prev_bbox: v.bbox, 
                         last_update_time: now 
                     } as VehicleFrontendData;
                     vehicleRegistryRef.current.set(vid, newVehicle);
-                    mergedVehicles.push(newVehicle);
                 }
             });
         }
@@ -140,31 +131,19 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
         }
 
-        // Update metrics and vehicles state for side-panels (Throttled)
-        
-        // --- Annotation Persistence Logic ---
-        // If we have new vehicle data, update the ref and timestamp
-        if (mergedVehicles.length > 0) {
-            lastVehiclesUpdateTimeRef.current = now;
-        }
+        // Prepare the list of all active vehicles for both UI and canvas
+        const allActiveVehicles = Array.from(vehicleRegistryRef.current.values());
 
+        // Update metrics and vehicles state for side-panels (Throttled)
         if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
             if (data.metrics) {
-                // Only update metrics if they actually changed to avoid unnecessary re-renders
                 setMetrics(prev => {
                     if (JSON.stringify(prev) === JSON.stringify(data.metrics)) return prev;
                     return data.metrics || null;
                 });
             }
             
-            // For vehicles, we use the merged batch. 
-            // Only update the React state every 200ms.
-            if (mergedVehicles.length > 0) {
-                setVehicles(mergedVehicles);
-            } else if (now - lastVehiclesUpdateTimeRef.current > ANNOTATION_PERSISTENCE_MS) {
-                setVehicles(null);
-            }
-            
+            setVehicles(allActiveVehicles);
             lastStateUpdateRef.current = now;
         }
 
@@ -218,7 +197,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             }
 
             // Persistence for canvas drawing
-            let vehiclesToStore = mergedVehicles.length > 0 ? mergedVehicles : null;
+            let vehiclesToStore = allActiveVehicles.length > 0 ? allActiveVehicles : null;
             if (!vehiclesToStore || vehiclesToStore.length === 0) {
                 if (now - lastVehiclesUpdateTimeRef.current < ANNOTATION_PERSISTENCE_MS) {
                     vehiclesToStore = frameRef.current?.vehicles || null;
@@ -406,10 +385,13 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     return;
                 }
 
-                const sx1 = x1 * canvasWidth;
-                const sy1 = y1 * canvasHeight;
-                const sx2 = x2 * canvasWidth;
-                const sy2 = y2 * canvasHeight;
+                // If coordinates are normalized (0-1), scale them to canvas size.
+                // Otherwise, assume they are already in pixel coordinates.
+                const isNormalized = x2 <= 1.0 && y2 <= 1.0 && x1 >= 0 && y1 >= 0;
+                const sx1 = isNormalized ? x1 * canvasWidth : x1;
+                const sy1 = isNormalized ? y1 * canvasHeight : y1;
+                const sx2 = isNormalized ? x2 * canvasWidth : x2;
+                const sy2 = isNormalized ? y2 * canvasHeight : y2;
                 const sw = sx2 - sx1;
                 const sh = sy2 - sy1;
 
@@ -452,10 +434,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
                     if (showTrajectories && (Math.abs(v.vx ?? 0) > 0.0001 || Math.abs(v.vy ?? 0) > 0.0001)) {
                         const cx = sx1 + sw / 2;
                         const cy = sy1 + sh / 2;
-                        const currentFps = frameRate > 0 ? frameRate : 15;
-                        const projectionFrames = currentFps * 0.2;
-                        const projX = cx + (v.vx ?? 0) * projectionFrames * canvasWidth;
-                        const projY = cy + (v.vy ?? 0) * projectionFrames * canvasHeight;
+                        const projectionSeconds = 0.2;
+                        const projX = cx + (v.vx ?? 0) * projectionSeconds;
+                        const projY = cy + (v.vy ?? 0) * projectionSeconds;
 
                         ctx.beginPath();
                         ctx.moveTo(cx, cy);
@@ -487,27 +468,34 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
                 // Show labels for ACTIVE and TENTATIVE detections
                 if (showVehicleDetails && (v.status === 'active' || v.status === 'tentative')) {
-                    const speed = v.speed !== undefined && v.speed !== null ? v.speed.toFixed(0) : "0";
+                    const speedStr = v.speed !== undefined && v.speed !== null ? v.speed.toFixed(0) : "0";
                     const vid = v.vehicle_id.split('_').pop();
                     const lines = [
                         `${vid}: ${v.class_name}`,
-                        `${speed} km/h`
+                        `${speedStr} km/h`
                     ];
                     if (v.license_plate && v.license_plate !== "Unknown") {
                         lines.push(v.license_plate);
                     }
 
-                    const lineHeight = 12;
-                    let textY = sy1 - (lines.length * lineHeight) - 4;
-                    if (textY < 0) textY = sy2 + 4;
+                    const lineHeight = 14;
+                    const textHeight = 12;
+                    const padding = 4;
+                    let textY = sy1 - (lines.length * lineHeight) - padding;
+                    if (textY < 0) textY = sy2 + padding;
 
                     lines.forEach((line, i) => {
                         const textWidth = ctx.measureText(line).width;
                         const textX = sx1 + (sw - textWidth) / 2;
-                        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                        ctx.fillRect(textX - 4, textY + (i * lineHeight), textWidth + 8, lineHeight);
-                        ctx.fillStyle = (v.status === 'tentative') ? 'rgba(255,255,255,0.8)' : color;
-                        ctx.fillText(line, textX, textY + (i * lineHeight) + 10);
+                        const currentLineY = textY + (i * lineHeight);
+                        
+                        // Draw background box for readability
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                        ctx.fillRect(textX - padding, currentLineY - textHeight, textWidth + (padding * 2), lineHeight);
+                        
+                        // Draw text
+                        ctx.fillStyle = (v.status === 'tentative') ? '#FFFFFF' : color;
+                        ctx.fillText(line, textX, currentLineY);
                     });
                 }
                 ctx.globalAlpha = 1.0;

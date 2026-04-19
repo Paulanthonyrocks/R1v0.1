@@ -944,6 +944,7 @@ class FeedManager:
             entry["stop_event"],
             self.config,
             entry.get("is_looped_feed", False),
+            entry.get("command_queue"),
         )
 
         process = Process(

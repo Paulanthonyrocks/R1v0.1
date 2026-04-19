@@ -113,7 +113,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const isAdmin = userRole === UserRole.ADMIN;
 
     const component_name = formatFeedName(feedName, feed_id);
-    const component_node = `Source: ${formatFeedSource(source)}`;
 
     // Load existing ROI and filter settings if available
     useEffect(() => {
@@ -731,9 +730,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     <h4 className="font-bold text-xs truncate text-lcd-bg group-hover:text-lcd-text transition-colors tracking-normal font-lcd matrix-glow">
                         {component_name}
                     </h4>
-                    <p className="text-xs text-lcd-bg/60 group-hover:text-lcd-text/80 transition-colors truncate tracking-normal font-lcd matrix-glow">
-                        {component_node}
-                    </p>
                 </div>
             </CardContent>
         </Card>
