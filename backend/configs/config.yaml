@@ -563,10 +563,10 @@ vehicle_detection:
     - 256
     min_track_age_for_appearance: 5
     model_path: ''
-    similarity_threshold: 0.65
+    similarity_threshold: 0.80
     use_appearance_in_tracking: true
     use_openvino: false
-  reid_enabled: false
+  reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
   skip_frames: 2
