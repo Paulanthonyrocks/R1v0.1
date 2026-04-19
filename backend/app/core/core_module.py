@@ -238,15 +238,34 @@ class CoreModule:
                 track["ground_coordinates"] = ground_pos
             
             # --- Calculate Speed (km/h) ---
-            vx = track.get("vx", 0.0)
-            vy = track.get("vy", 0.0)
-            pixel_speed = math.sqrt(vx**2 + vy**2)
-            # Speed (m/s) = pixel_speed / pixels_per_meter
-            # Speed (km/h) = (pixel_speed / pixels_per_meter) * 3.6
-            if self.pixels_per_meter > 0:
-                track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6
+            if ground_pos:
+                curr_gx, curr_gy = ground_pos
+                prev_ground_pos = track.get("prev_ground_pos")
+                prev_t = track.get("prev_t")
+                
+                if prev_ground_pos and prev_t:
+                    prev_gx, prev_gy = prev_ground_pos
+                    dt = current_time - prev_t
+                    if dt > 0:
+                        dist = math.sqrt((curr_gx - prev_gx)**2 + (curr_gy - prev_gy)**2)
+                        track["speed"] = (dist / dt) * 3.6
+                    else:
+                        track["speed"] = track.get("speed", 0.0)
+                else:
+                    # Fallback to pixel-based for first frame
+                    vx = track.get("vx", 0.0)
+                    vy = track.get("vy", 0.0)
+                    pixel_speed = math.sqrt(vx**2 + vy**2)
+                    track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
+                
+                track["prev_ground_pos"] = ground_pos
+                track["prev_t"] = current_time
             else:
-                track["speed"] = 0.0
+                # Fallback if transformer fails
+                vx = track.get("vx", 0.0)
+                vy = track.get("vy", 0.0)
+                pixel_speed = math.sqrt(vx**2 + vy**2)
+                track["speed"] = (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
             
             # Simple Filtering for Visualization
             if track["status"] == "active":
