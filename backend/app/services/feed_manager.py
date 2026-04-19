@@ -491,11 +491,11 @@ class FeedManager:
                     self._inference_input_queues[i], # Pass the partitioned queue
                     self._central_output_queue,
                     self._inference_command_queues[i],
-                    self._inference_stop_event,
+                    None, # Replace _inference_stop_event (Event) with None; worker will check Redis
                     self.config,
                     self._db_queue,
-                    self.frame_buffer,
-                    self.pipeline_pressure
+                    None, # frame_buffer handled inside worker
+                    None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
                 ),
                 daemon=True,
                 name=f"InferenceWorker-{i}"
