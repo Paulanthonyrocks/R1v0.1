@@ -9,10 +9,10 @@ import os
 logger = logging.getLogger('app.utils.shared_frame_buffer')
 
 class SharedFrameBuffer:
-    \"\"\"
+    """
     Manages a pool of shared memory segments for high-frequency frame transmission.
     Supports resolution-agnostic reads and orphan pruning.
-    \"\"\"
+    """
     HEADER_SIZE = 16 # size (4), width (4), height (4), channels (4)
 
     def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024):
@@ -43,7 +43,7 @@ class SharedFrameBuffer:
         logger.info(f'SharedFrameBuffer initialized with {len(self._segments)} segments. Header size: {self.HEADER_SIZE} bytes.')
 
     def prune_orphans(self):
-        \"\"\"Removes leaked SHM segments from /dev/shm that aren't in the current pool.\"\"\"
+        """Removes leaked SHM segments from /dev/shm that aren't in the current pool."""
         try:
             shm_dir = '/dev/shm'
             if os.path.exists(shm_dir):
@@ -66,7 +66,7 @@ class SharedFrameBuffer:
             return None
 
     def write(self, name: str, data: Union[bytes, np.ndarray]):
-        \"\"\"Write data and dimensions into the segment.\"\"\"
+        """Write data and dimensions into the segment."""
         if name not in self._segments:
             raise ValueError(f'Segment {name} not found.')
         
@@ -91,7 +91,7 @@ class SharedFrameBuffer:
         buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
     def read(self, name: str) -> Tuple[memoryview, Tuple[int, int, int]]:
-        \"\"\"Returns (data_view, (w, h, c)).\"\"\"
+        """Returns (data_view, (w, h, c))."""
         if name not in self._segments:
             try:
                 shm = shared_memory.SharedMemory(name=name)

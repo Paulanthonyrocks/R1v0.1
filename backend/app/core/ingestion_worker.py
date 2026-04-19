@@ -85,7 +85,6 @@ def ingestion_worker(
     logger.info(f"[{feed_id}] Ingestion Config: FPS={target_fps}, Resolution={stream_res}")
 
     # 2. Performance Metrics Initialization
-    # frame_count, dropped_frames, start_time are tracked in metrics object now
     last_fps_log = time.time()
     last_metrics_log = time.time()
 
@@ -140,7 +139,7 @@ def ingestion_worker(
         return
 
     consecutive_errors = 0
-    max_consecutive_errors = 300  # ~3 seconds at 100Hz polling (was 30)
+    max_consecutive_errors = 300  # ~3 seconds at 100Hz polling
     last_frame_bytes = None
 
     def handle_command(cmd: Dict[str, Any]):
@@ -169,7 +168,6 @@ def ingestion_worker(
 
                 logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
 
-                # Notify system via central queue
                 central_input_queue.put((feed_id, -999, b'', {
                     "type": "snapshot_saved",
                     "incident_id": incident_id,
@@ -180,7 +178,6 @@ def ingestion_worker(
 
     try:
         while not stop_event.is_set():
-            # Handle incoming commands
             if command_queue:
                 try:
                     while True:
@@ -206,21 +203,17 @@ def ingestion_worker(
                     time.sleep(0.01)
                     continue
 
-                # Reset error counter on successful read
                 consecutive_errors = 0
                 frame_index, frame = result
 
-                # --- Backpressure-Aware Capture ---
                 try:
-                    # Coordinated Backpressure: Check global pipeline pressure first
                     pressure = pipeline_pressure.value if pipeline_pressure else 0.0
-                    if pressure > 0.7: # Critical downstream congestion
+                    if pressure > 0.7:
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:
                             logger.warning(f"[{feed_id}] Global Pressure High ({pressure:.2f}). Dropping frame {frame_index} EARLY.")
                         continue
                     
-                    # Local Queue Backpressure
                     q_size = central_input_queue.qsize()
                     if q_size > 300:
                         metrics.frames_dropped += 1
@@ -229,23 +222,24 @@ def ingestion_worker(
                     pass
 
                 try:
-                    # Resize for transmission (keep as raw BGR for zero-copy pipeline)
                     resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
                     
-                    # Keep a JPEG version ONLY for snapshot commands
                     success, snap_buf = cv2.imencode(".jpg", resized, encode_params)
                     if success:
                         last_frame_bytes = snap_buf.tobytes()
 
                     try:
-                        shm_ref = frame_buffer.acquire() if frame_buffer else None
+                        is_distributed = 'RedisStreamQueue' in str(type(central_input_queue))
+                        shm_ref = None
+                        if not is_distributed and frame_buffer:
+                            shm_ref = frame_buffer.acquire()
+                            if shm_ref:
+                                frame_buffer.write(shm_ref, resized)
+                        
                         if shm_ref:
-                            # Push RAW resized frame (NumPy array) to SHM
-                            frame_buffer.write(shm_ref, resized)
                             central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         else:
-                            # Fallback to raw bytes if SHM unavailable
                             central_input_queue.put((feed_id, frame_index, resized.tobytes(), time.time()), timeout=0.1)
                             metrics.frames_processed += 1
                         except queue.Full:
@@ -261,7 +255,6 @@ def ingestion_worker(
                         logger.warning(f"[{feed_id}] Failed to encode frame {frame_index}")
                         metrics.errors += 1
 
-                    # 4. Periodic Performance Logging
                     current_time = time.time()
                     if current_time - last_fps_log >= 5.0:
                         fps = metrics.frames_processed / (current_time - metrics.start_time)
@@ -291,7 +284,6 @@ def ingestion_worker(
         if reader:
             reader.stop()
 
-        # 5. Signal end of stream to AI workers (frame_index = -999)
         try:
             central_input_queue.put((feed_id, -999, b'', time.time()), timeout=2.0)
             logger.info(f"[{feed_id}] Sent end-of-stream signal to AI workers")
@@ -299,4 +291,3 @@ def ingestion_worker(
             logger.error(f"[{feed_id}] Error sending EOS signal: {e}")
 
         logger.info(f"[{feed_id}] Ingestion process {pid} terminated.")
-
