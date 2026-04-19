@@ -1049,7 +1049,7 @@ class FeedManager:
             None, # Replace stop_event (Event) with None; worker will check Redis
             self.config,
             entry.get("is_looped_feed", False),
-            entry.get("command_queue", None),
+            None, # Replace command_queue (MPQueue) with None; handle via Redis or ignore
             None, # Replace frame_buffer with None; worker will initialize its own handle
             None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
         )
