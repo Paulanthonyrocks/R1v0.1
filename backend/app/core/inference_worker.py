@@ -66,7 +66,6 @@ def inference_worker(
     pipeline_pressure: Any = None,
     slots: List[int] = None
 ):
-):
     # Initialize global config for this process
     initialize_config()
     """
