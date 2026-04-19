@@ -184,15 +184,15 @@ class FeedManager:
             target=inference_worker,
             args=(
                 worker_id,
-                self._inference_input_queues, # Pass all slot queues
+                self._inference_input_queues, 
                 self._central_output_queue,
                 cmd_q,
                 self._inference_stop_event,
-                self.config,
+                dict(self.config) if hasattr(self.config, 'model_dump') else self.config,
                 self._db_queue,
                 self.frame_buffer,
                 self.pipeline_pressure,
-                slots # Pass the assigned slots
+                slots
             ),
             daemon=True,
             name=f"InferenceWorker-{worker_id}"
