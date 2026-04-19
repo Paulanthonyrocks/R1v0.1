@@ -3,6 +3,7 @@ import logging
 import time
 import queue
 import os
+import redis
 from typing import Any, Optional, Tuple
 from .redis_client import get_redis_client
 
