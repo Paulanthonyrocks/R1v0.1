@@ -1,10 +1,11 @@
 from __future__ import annotations
 import logging
 import numpy as np
-from multiprocessing import shared_memory, Manager
+from multiprocessing import shared_memory
 from typing import Optional, Union, Tuple
 import queue
 import os
+from app.utils.redis_queue import RedisQueue
 
 logger = logging.getLogger('app.utils.shared_frame_buffer')
 
@@ -20,12 +21,11 @@ class SharedFrameBuffer:
         self.read_only = read_only
         self._segments: dict[str, shared_memory.SharedMemory] = {}
         
-        self.manager = None
         self._free_pool = None
         
         if not read_only:
-            self.manager = Manager()
-            self._free_pool = self.manager.Queue(maxsize=pool_size)
+            # Use RedisQueue for the free pool to ensure distributed access without MP Manager
+            self._free_pool = RedisQueue('shm_free_pool', maxsize=pool_size)
             
             # 1. Prune orphans from previous crashes
             self.prune_orphans()

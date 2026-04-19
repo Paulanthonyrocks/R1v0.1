@@ -1,6 +1,11 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+# --- Hardware Optimization Flags ---
+# Force TensorFlow to only allocate memory as needed, preventing conflicts with PyTorch
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+# Suppress excessive TensorFlow logging
+
 from app.config import initialize_config
 import cv2
 import logging
@@ -11,7 +16,6 @@ import signal
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from multiprocessing import Queue as MPQueue, Event
 
 from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
@@ -56,12 +60,12 @@ def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], sca
 
 def inference_worker(
     worker_id: int,
-    central_input_queue: MPQueue,
-    central_output_queue: MPQueue,
-    command_queue: MPQueue,
-    stop_event: Event,
+    central_input_queue: Any,
+    central_output_queue: Any,
+    command_queue: Any,
+    stop_event: Any,
     config: Dict[str, Any],
-    db_queue: Optional[MPQueue] = None,
+    db_queue: Optional[Any] = None,
     frame_buffer: Any = None,
     pipeline_pressure: Any = None,
     slots: List[int] = None
@@ -83,7 +87,8 @@ def inference_worker(
     # --- Signal Handling ---
     def signal_handler(signum, frame):
         logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
-        stop_event.set()
+        if stop_event:
+            stop_event.set()
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -94,7 +99,11 @@ def inference_worker(
     
     # Start parent monitor to avoid zombies
     logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
-    start_parent_monitor(stop_event, f"Inference-{worker_id}")
+    
+    # Use a dummy event for the monitor since we've moved to Redis signals
+    import multiprocessing
+    dummy_event = multiprocessing.Event()
+    start_parent_monitor(dummy_event, f"Inference-{worker_id}")
     
     logger.debug(f"[Worker {worker_id}] Initializing state containers...")
     # Per-feed CoreModules and Monitors (lazy initialized)

@@ -5,7 +5,6 @@ import math
 import numpy as np
 import torch
 import queue
-from multiprocessing import Queue as MPQueue
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -44,7 +43,7 @@ class CoreModule:
         model_path: str,
         config: Dict,
         fps: int,
-        db_queue: MPQueue,
+        db_queue: Any,
         gemini_api_key: Optional[str] = None,
         model_type: str = "yolo",
         preloaded_model: Optional[Any] = None,

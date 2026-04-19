@@ -1,7 +1,6 @@
 import logging
 import queue
 import time
-from multiprocessing import Event, Queue as MPQueue
 from typing import Any, Dict
 
 from app.utils.database import DatabaseManager, DatabaseError
@@ -10,8 +9,8 @@ logger = logging.getLogger("app.core.database_writer")
 
 def database_writer_process(
     config: Dict[str, Any],
-    db_queue: MPQueue,
-    stop_event: Event,
+    db_queue: Any,
+    stop_event: Any,
     heartbeat: Any
 ):
     """Process dedicated to writing data to the database."""

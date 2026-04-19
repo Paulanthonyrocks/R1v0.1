@@ -3,16 +3,15 @@ import logging
 import queue
 import signal
 import time
-from multiprocessing import Event, Queue as MPQueue
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 def analytics_worker_process(
     config,
-    input_queue: MPQueue,
-    output_queue: MPQueue,
-    stop_event: Event,
+    input_queue: Any,
+    output_queue: Any,
+    stop_event: Any,
     heartbeat: Any = None,
 ):
     """

@@ -4,10 +4,79 @@ import time
 import queue
 import os
 import redis
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 from .redis_client import get_redis_client
 
 logger = logging.getLogger("app.utils.redis_queue")
+
+class RedisEvent:
+    """
+    A Redis-backed event primitive.
+    Matches the basic interface of multiprocessing.Event.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        self.key = f"event:{name}"
+
+    @property
+    def redis(self):
+        return get_redis_client()
+
+    def set(self):
+        """Set the event to true."""
+        self.redis.set(self.key, "1")
+
+    def clear(self):
+        """Reset the event to false."""
+        self.redis.delete(self.key)
+
+    def is_set(self) -> bool:
+        """Check if the event is set."""
+        return self.redis.exists(self.key) > 0
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        """Block until the event is set or timeout occurs."""
+        start_time = time.time()
+        while not self.is_set():
+            if timeout and (time.time() - start_time) > timeout:
+                return False
+            time.sleep(0.1)
+        return True
+
+class RedisValue:
+    """
+    A Redis-backed shared value.
+    Matches the basic interface of multiprocessing.Value.
+    """
+    def __init__(self, typecode: str, initial_value: Any, name: str):
+        self.name = name
+        self.key = f"value:{name}"
+        self.typecode = typecode
+        
+        # Initialize value in Redis if not present
+        r = get_redis_client()
+        if not r.exists(self.key):
+            self.value = initial_value
+
+    @property
+    def redis(self):
+        return get_redis_client()
+
+    @property
+    def value(self) -> Any:
+        val = self.redis.get(self.key)
+        if val is None:
+            return None
+        
+        # Basic type conversion based on typecode
+        if self.typecode == 'i': return int(val)
+        if self.typecode == 'f': return float(val)
+        if self.typecode == 'b': return bool(int(val))
+        return val.decode() if isinstance(val, bytes) else val
+
+    @value.setter
+    def value(self, new_val: Any):
+        self.redis.set(self.key, new_val)
 
 class RedisQueue:
     """

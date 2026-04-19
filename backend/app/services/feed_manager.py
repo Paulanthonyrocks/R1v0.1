@@ -10,12 +10,6 @@ import numpy as np
 import msgpack
 
 from collections import deque
-from multiprocessing import (
-    Process,
-    Queue as MPQueue,
-    Event,
-    Value
-)
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import queue  # For queue.Empty exception
@@ -42,7 +36,7 @@ from app.core.ingestion_worker import ingestion_worker
 from app.core.inference_worker import inference_worker
 # from app.core.processing_worker import result_reader_worker
 from app.utils.monitoring import FrameTimer, check_system_resources
-from app.utils.distributed_queue import RedisQueue, RedisStreamQueue
+from app.utils.distributed_queue import RedisQueue, RedisStreamQueue, RedisEvent, RedisValue
 from app.utils.shared_frame_buffer import SharedFrameBuffer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.analytics_service import AnalyticsService
@@ -51,6 +45,9 @@ from app.tasks.prediction_scheduler import PredictionScheduler
 from app.services.video_writer import VideoWriter
 
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Process
+
+logger = logging.getLogger("app.services.feed_manager")
 
 logger = logging.getLogger("app.services.feed_manager")
 
@@ -99,7 +96,7 @@ class FeedManager:
         self._analytics_service: Optional[AnalyticsService] = None
         self._reid_manager = GlobalReIDManager(config)
         self.frame_buffer = SharedFrameBuffer(pool_size=200)
-        self.pipeline_pressure = Value('f', 0.0)
+        self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
         
         self._last_kpi_broadcast_time = 0.0
@@ -146,14 +143,13 @@ class FeedManager:
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
-        self._inference_stop_event = Event()
+        self._inference_stop_event = RedisEvent('inference_stop')
         
         # Initial Scaling
         initial_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         self.scale_pool(initial_size)
             
-        self._inference_pool: List[Process] = []
-        self._inference_command_queues: List[RedisQueue] = []
+        # Removed redundant list initialization of _inference_pool and _inference_command_queues
 
 
 
@@ -238,13 +234,6 @@ class FeedManager:
         
         # 1. Cleanup Registry (Ingestion Workers)
         for feed_id, entry in list(self.process_registry.items()):
-            # Close command queue
-            if entry.get("command_queue"):
-                try:
-                    entry["command_queue"].close()
-                    entry["command_queue"].cancel_join_thread()
-                except: pass
-
             process = entry.get("process")
             if process and process.is_alive():
                 logger.info(f"Terminating ingestion process {process.pid} for {feed_id} in atexit")
@@ -254,27 +243,7 @@ class FeedManager:
                     process.kill()
 
         # 2. Cleanup Inference Pool
-        # Close input queues
-        for q in self._inference_input_queues:
-            try:
-                q.close()
-                q.cancel_join_thread()
-            except: pass
-            
-        # Close command queues
-        for q in self._inference_command_queues:
-            try:
-                q.close()
-                q.cancel_join_thread()
-            except: pass
-            
-        # Close central output queue
-        try:
-            self._central_output_queue.close()
-            self._central_output_queue.cancel_join_thread()
-        except: pass
-
-        for p in self._inference_pool:
+        for p in self._inference_pool.values():
             if p.is_alive():
                 logger.info(f"Terminating inference process {p.pid} in atexit")
                 p.terminate()
@@ -443,11 +412,9 @@ class FeedManager:
                 await asyncio.sleep(1.0)
 
     def initialize_shared_values(self):
-        import multiprocessing
         if self._global_fps is None:
-            manager = multiprocessing.Manager()
-            self._global_fps = manager.Value("i", self.config.get("fps", 30))
-            logger.info("FeedManager shared values initialized.")
+            self._global_fps = RedisValue("i", self.config.get("fps", 30), "global_fps")
+            logger.info("FeedManager shared values initialized via Redis.")
 
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
@@ -516,27 +483,11 @@ class FeedManager:
                 self._central_output_queue.get_nowait()
             except: pass
             
-            if all(not p.is_alive() for p in self._inference_pool):
+            if all(not p.is_alive() for p in self._inference_pool.values()):
                 break
             await asyncio.sleep(0.1)
 
-        # Explicitly close queues
-        for q in self._inference_input_queues:
-            try:
-                q.close()
-                q.cancel_join_thread()
-            except: pass
-        for q in self._inference_command_queues:
-            try:
-                q.close()
-                q.cancel_join_thread()
-            except: pass
-        try:
-            self._central_output_queue.close()
-            self._central_output_queue.cancel_join_thread()
-        except: pass
-
-        for p in self._inference_pool:
+        for p in self._inference_pool.values():
             if p.is_alive():
                 logger.warning(f"Forcing termination of Inference Worker {p.name}")
                 p.terminate()
@@ -544,8 +495,8 @@ class FeedManager:
                 if p.is_alive():
                     p.kill()
         
-        self._inference_pool = []
-        self._inference_command_queues = []
+        self._inference_pool = {}
+        self._inference_command_queues = {}
 
     def _initialize_available_feeds(self):
         self._load_persisted_feeds()
@@ -895,17 +846,17 @@ class FeedManager:
             logger.info(f"Starting feed: '{feed_id}'")
 
             # Initialize Queues and Events
-            entry["command_queue"] = MPQueue(maxsize=50) # Small queue for control commands
+            entry["command_queue"] = RedisQueue('feed_cmd_' + feed_id, maxsize=50) # Use RedisQueue for control commands
             
             # Only create video writer queue if enabled
             video_output_config = self.config.get("video_output", {})
             if video_output_config.get("enabled", False):
-                entry["video_writer_queue"] = MPQueue(maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
+                entry["video_writer_queue"] = RedisQueue('feed_video_' + feed_id, maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
             else:
                 entry["video_writer_queue"] = None
 
-            entry["stop_event"] = Event()
-            entry["reduce_fps_event"] = Event()
+            entry["stop_event"] = RedisEvent('feed_stop_' + feed_id)
+            entry["reduce_fps_event"] = RedisEvent('feed_fps_reduce_' + feed_id)
             entry["status"] = FeedOperationalStatusEnum.STARTING
             entry["start_time"] = time.time()
             entry["last_frame_time"] = time.time()

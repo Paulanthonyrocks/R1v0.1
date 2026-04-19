@@ -7,7 +7,6 @@ import threading
 import signal
 import json
 from typing import Dict, Any, Optional
-from multiprocessing import Queue as MPQueue, Event
 from pathlib import Path
 
 from app.utils.video import FrameReader
