@@ -20,11 +20,11 @@ logger = logging.getLogger("Ingestion")
 def ingestion_worker(
     video_path: str,
     feed_id: str,
-    central_input_queue: MPQueue,
-    stop_event: Event,
+    central_input_queue: Any,
+    stop_event: Any,
     config: Dict[str, Any],
     is_looped: bool = False,
-    command_queue: Optional[MPQueue] = None,
+    command_queue: Any = None,
     frame_buffer: Any = None,
     pipeline_pressure: Any = None
 ):
@@ -39,13 +39,23 @@ def ingestion_worker(
         # Cannot use logger here as it may not be configured
         pass  # Logging config failed, will use default
 
+    # Initialize Redis client for signals and pressure
+    from app.utils.redis_client import get_redis_client
+    import redis
+    redis_client = get_redis_client()
+
+    # Initialize shared frame buffer handle if not provided
+    from app.utils.shared_frame_buffer import SharedFrameBuffer
+    if frame_buffer is None:
+        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200))
+
     # Initialize global config instance for this process
     set_config_instance(config)
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
-        logger.info(f"[{feed_id}] Received signal {signum}, stopping gracefully")
-        stop_event.set()
+        logger.info(f"[{feed_id}] Received signal {signum}, triggering global stop via Redis")
+        redis_client.set("pipeline:stop", "1")
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -56,7 +66,10 @@ def ingestion_worker(
     
     # Start parent monitor to avoid zombies
     logger.debug(f"[{feed_id}] Starting parent monitor...")
-    start_parent_monitor(stop_event, f"Ingestion-{feed_id}")
+    # Use a dummy event for the monitor since we've moved to Redis signals
+    import multiprocessing
+    dummy_event = multiprocessing.Event()
+    start_parent_monitor(dummy_event, f"Ingestion-{feed_id}")
     
     metrics = WorkerMetrics(feed_id)
 
@@ -177,7 +190,12 @@ def ingestion_worker(
                 logger.error(f"[{feed_id}] Error saving snapshot: {e}")
 
     try:
-        while not stop_event.is_set():
+        while True:
+            # Check for stop signal in Redis
+            if redis_client.get("pipeline:stop"):
+                logger.info(f"[{feed_id}] Received stop signal via Redis. Terminating...")
+                break
+
             if command_queue:
                 try:
                     while True:
@@ -207,7 +225,8 @@ def ingestion_worker(
                 frame_index, frame = result
 
                 try:
-                    pressure = pipeline_pressure.value if pipeline_pressure else 0.0
+                    pressure_val = redis_client.get("pipeline:pressure")
+                    pressure = float(pressure_val) if pressure_val else 0.0
                     if pressure > 0.7:
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:

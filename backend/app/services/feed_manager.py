@@ -123,7 +123,7 @@ class FeedManager:
         self.persistence_path = Path(self.config.get("feeds_config_path", "backend/data/feeds_config.json"))
 
         # Database processing
-        self._db_queue: Optional[MPQueue] = MPQueue(maxsize=100000)
+        self._db_queue: Optional[RedisQueue] = RedisQueue('db_writes', maxsize=100000)
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
 
@@ -140,21 +140,21 @@ class FeedManager:
             self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
         else:
             # Fixed pool of slot queues to ensure feed affinity during scaling
-            self._inference_input_queues = [MPQueue(maxsize=100) for _ in range(self.slot_count)]
-            self._central_output_queue = MPQueue(maxsize=QUEUE_MAX_SIZE)
+            self._inference_input_queues = [RedisQueue(f'slot_{i}', maxsize=100) for i in range(self.slot_count)]
+            self._central_output_queue = RedisQueue('central_output', maxsize=QUEUE_MAX_SIZE)
         
         self._inference_pool: Dict[int, Process] = {}
-        self._inference_command_queues: Dict[int, MPQueue] = {}
+        self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
-        self._inference_stop_event = Event()
+        self._inference_stop_event = None # Handled via Redis key 'pipeline:stop'
         
         # Initial Scaling
         initial_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         self.scale_pool(initial_size)
             
         self._inference_pool: List[Process] = []
-        self._inference_command_queues: List[MPQueue] = []
-        self._inference_stop_event = Event()
+        self._inference_command_queues: List[RedisQueue] = []
+        self._inference_stop_event = None
 
 
         # Initialize shared values
@@ -1040,20 +1040,18 @@ class FeedManager:
         slot_id = int(hashlib.md5(feed_id.encode()).hexdigest(), 16) % self.slot_count
         target_queue = self._inference_input_queues[slot_id]
         
-        logger.info(f"Routing feed {feed_id} to InferenceWorker-{worker_idx}")
+        logger.info(f"Routing feed {feed_id} to slot {slot_id}")
 
-            # The ingestion worker just needs to know which slot queue to push to
-        # We'll keep target_queue as the specific slot queue for this feed
         worker_args = (
             source,
             feed_id,
             target_queue,
-            entry["stop_event"],
+            None, # Replace stop_event (Event) with None; worker will check Redis
             self.config,
             entry.get("is_looped_feed", False),
             entry.get("command_queue", None),
-            self.frame_buffer,
-            self.pipeline_pressure,
+            None, # Replace frame_buffer with None; worker will initialize its own handle
+            None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
         )
 
         process = Process(
