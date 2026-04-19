@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Any
+import asyncio
 from app.database import get_database_manager
 from app.utils import DatabaseManager
 import json
@@ -30,7 +31,7 @@ async def get_system_logs(
         params = (limit, offset)
         
         # Execute read
-        rows = await db._execute_read(sql, params)
+        rows = await asyncio.to_thread(db._execute_query, sql, params)
         
         logs = []
         for row in rows:

@@ -518,20 +518,4 @@ const DashboardPage: React.FC = () => {
   );
 };
 
-export default DashboardPage; Alerts hook handles state update, but we can trigger local sync if needed
-                }}
-              />
-            </div>
-          )}
-          
-          <AnomalyDetailsModal 
-            anomaly={selectedAnomaly} 
-            open={isAnomalyModalOpen} 
-            onOpenChange={setIsAnomalyModalOpen} 
-          />
-      </DashboardShell>
-    </AuthGuard>
-  );
-};
-
 export default DashboardPage;
