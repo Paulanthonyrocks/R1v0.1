@@ -177,7 +177,7 @@ class FeedManager:
     def _spawn_worker(self, worker_id: int):
         """Spawns a single inference worker assigned to specific slots."""
         slots = [s for s, w in self._slot_to_worker.items() if w == worker_id]
-        cmd_q = MPQueue(maxsize=100)
+        cmd_q = RedisQueue(f'worker_cmd_{worker_id}', maxsize=100)
         self._inference_command_queues[worker_id] = cmd_q
         
         p = Process(
