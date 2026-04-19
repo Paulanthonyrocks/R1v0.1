@@ -18,6 +18,7 @@ class TrackingManager:
         self.proximity_threshold = tracking_cfg.get("proximity_threshold", 150)
         self.track_timeout = tracking_cfg.get("track_timeout", 30)
         self.dynamic_matching_threshold = tracking_cfg.get("dynamic_matching_threshold", 0.7)
+        self.low_conf_association_threshold = tracking_cfg.get("low_conf_association_threshold", 0.5)
         self.appearance_weight = tracking_cfg.get("appearance_weight", 0.5)
         self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
         self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
@@ -116,7 +117,7 @@ class TrackingManager:
             if cost_matrix_2.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_2)
                 for r, c in zip(row_ind, col_ind):
-                    if cost_matrix_2[r, c] < 0.5: # Fixed low conf thresh
+                    if cost_matrix_2[r, c] < self.low_conf_association_threshold:
                         track = unmatched_tracks_1[c]
                         self._update_track(track, low_conf_dets[r], current_time)
                         matched_tracks_2.add(track["vehicle_id"])
