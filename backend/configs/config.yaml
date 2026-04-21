@@ -459,7 +459,7 @@ perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
 post_startup_processing:
-  enabled: true
+  enabled: false
   sample_feeds:
   - is_looped: true
     latitude: 34.0522
