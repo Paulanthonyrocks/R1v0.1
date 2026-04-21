@@ -139,6 +139,11 @@ class RedisQueue:
         """Returns the approximate size of the queue."""
         return self.redis.llen(self.key)
 
+    def clear(self):
+        """Removes all items from the queue."""
+        if self.redis:
+            self.redis.delete(self.key)
+
     def empty(self) -> bool:
         return self.qsize() == 0
 

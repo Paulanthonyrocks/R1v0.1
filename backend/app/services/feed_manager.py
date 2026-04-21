@@ -145,9 +145,8 @@ class FeedManager:
         self._slot_to_worker: Dict[int, int] = {}
         self._inference_stop_event = RedisEvent('inference_stop')
         
-        # Initial Scaling
-        initial_size = self.config.get("performance", {}).get("inference_pool_size", 2)
-        self.scale_pool(initial_size)
+        # Initial Scaling (will be started in start_inference_pool)
+        self._initial_inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
             
         # Removed redundant list initialization of _inference_pool and _inference_command_queues
 

@@ -26,10 +26,10 @@ class SharedFrameBuffer:
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
             self._free_pool = RedisQueue('shm_free_pool', maxsize=pool_size)
-            
+            self._free_pool.clear()
+
             # 1. Prune orphans from previous crashes
             self.prune_orphans()
-            
             # 2. Pre-allocate the pool
             for i in range(pool_size):
                 name = f'frame_buffer_{i}'

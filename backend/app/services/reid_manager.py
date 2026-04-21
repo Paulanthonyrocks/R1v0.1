@@ -11,7 +11,7 @@ try:
 except ImportError:
     redis = None
     aredis = None
-import threading
+from threading import RLock
 
 logger = logging.getLogger("app.services.reid")
 
@@ -23,18 +23,19 @@ class GlobalReIDManager:
         self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 1000)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)
         self.persistence_path = self.reid_cfg.get("persistence_path", "backend/data/reid_gallery.pkl")
-        
+
         # Embedding smoothing factor (centroid update)
         self.alpha = self.reid_cfg.get("embedding_smoothing", 0.1)
         self.counter_key = "reid:global_counter"
-        
+
         # Thread safety lock
-        self._lock = Lock()
-        
+        self._lock = RLock()
+
         # Redis Connection
         self.redis_cfg = config.get("redis", {})
         self.redis = None
         self._stop_sub = False
+
         
         if self.redis_cfg.get("enabled", False) and redis:
             try:
@@ -183,10 +184,9 @@ class GlobalReIDManager:
                 if best_score > self.similarity_threshold:
                     best_match_id = self.gallery_ids[best_idx]
                     
-                    # --- Confidence-Weighted Centroid Update ---
+                    # --- Centroid Update ---
                     old_emb = self.gallery_matrix[best_idx]
-                    weighted_alpha = self.alpha * confidence
-                    new_emb = (1.0 - weighted_alpha) * old_emb + weighted_alpha * embedding
+                    new_emb = (1.0 - self.alpha) * old_emb + self.alpha * embedding
                     updated_emb = self._normalize(new_emb)
                     self.gallery_matrix[best_idx] = updated_emb
                     
