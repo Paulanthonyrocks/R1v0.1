@@ -13,7 +13,8 @@ async def initialize_database(config: dict):
     global db_manager_instance
     if db_manager_instance is None:
         try:
-            db_manager_instance = DBManagerClass(config)
+            # Use asyncio.to_thread to prevent blocking the event loop during synchronous database setup
+            db_manager_instance = await asyncio.to_thread(DBManagerClass, config)
 
             logger.info("DatabaseManager initialized successfully via app.database.")
         except Exception as e:

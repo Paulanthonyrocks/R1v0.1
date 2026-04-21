@@ -260,7 +260,8 @@ class ServiceRegistry:
 
         try:
             predictor = TrafficPredictor(config=config)
-            predictor.load_model(str(model_file))
+            # Load the heavy TensorFlow model in a separate thread to avoid blocking the event loop
+            await asyncio.to_thread(predictor.load_model, str(model_file))
             logger.info(f"TrafficPredictor model loaded from {model_path}")
             return predictor
         except Exception as e:
