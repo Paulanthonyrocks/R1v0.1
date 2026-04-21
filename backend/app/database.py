@@ -1,4 +1,5 @@
 # app/database.py (Example)
+import asyncio
 import logging
 from app.utils import DatabaseManager as DBManagerClass
 
