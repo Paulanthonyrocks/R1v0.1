@@ -238,7 +238,8 @@ async def lifespan(app: FastAPI):
                 auto_start = loaded_config.get("auto_start_processing", True) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", True)
                 if auto_start:
                     create_background_task(fm.start_processing())
-                    logger.info("Feed Manager started processing automatically (background task).")    except Exception as e:
+                    logger.info("Feed Manager started processing automatically (background task).")
+    except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
 
