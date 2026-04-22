@@ -3,7 +3,7 @@ import { VideoFrameMessage } from '../types';
 
 interface DecoderOptions {
     onFrame: (frame: {
-        image: ImageBitmap;
+        image: ImageBitmap | HTMLImageElement;
         index: number;
         metrics: any;
         vehicles: any[];
@@ -20,7 +20,7 @@ export const useVideoDecoder = (options: DecoderOptions) => {
         isProcessingRef.current = true;
 
         try {
-            let decodedImage: ImageBitmap | null = null;
+            let decodedImage: ImageBitmap | HTMLImageElement | null = null;
 
             if (data.frame instanceof ImageBitmap) {
                 decodedImage = data.frame;
@@ -59,7 +59,7 @@ export const useVideoDecoder = (options: DecoderOptions) => {
                     index: data.frame_index || 0,
                     metrics: data.metrics || null,
                     vehicles: data.vehicles || [],
-                    timestamp: data.timestamp || Date.now()
+                    timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
                 });
             }
         } catch (error: any) {

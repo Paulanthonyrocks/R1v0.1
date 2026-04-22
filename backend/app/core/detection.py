@@ -6,11 +6,11 @@ from ultralytics import YOLO
 logger = logging.getLogger("app.ml.detection")
 
 class DetectionEngine:
-    def __init__(self, model_path: str, config: dict, device: str = "cpu"):
+    def __init__(self, model_path: str, config: dict, device: str = "cpu", preloaded_model: Optional[Any] = None):
         self.model_path = model_path
         self.config = config
         self.device = device
-        self.model = None
+        self.model = preloaded_model
         self.model_type = config.get("model_type", "yolo")
         self.imgsz = config.get("yolo_imgsz", 640)
         
@@ -19,8 +19,12 @@ class DetectionEngine:
         self.resolution = None
 
     def load_model(self):
-        """Loads the model into the specified device."""
+        """Loads the model into the specified device if not already preloaded."""
         try:
+            if self.model is not None:
+                logger.info(f"Using preloaded {self.model_type} model.")
+                return
+
             if self.model_type == "yolo":
                 self.model = YOLO(self.model_path)
                 self.model.to(self.device)

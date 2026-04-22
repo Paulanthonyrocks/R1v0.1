@@ -72,7 +72,7 @@ class CoreModule:
         
         # 3. Modular Engines Init
         self.device = self._check_gpu_availability()
-        self.detector = DetectionEngine(str(self.model_path), self.config, self.device)
+        self.detector = DetectionEngine(str(self.model_path), self.config, self.device, preloaded_model=preloaded_model)
         self.detector.load_model()
         
         res = v_cfg.get("frame_resolution", [640, 480])

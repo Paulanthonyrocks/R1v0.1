@@ -216,6 +216,27 @@ export interface RealtimeDataActions {
 
 export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { sendMessage: (action: string, payload?: object) => boolean; };
 
+export interface VehicleFrontendData {
+  vehicle_id: string;
+  global_vehicle_id?: string;
+  bbox: [number, number, number, number];
+  speed: number;
+  license_plate: string;
+  class_id: number;
+  class_name: string;
+  behavior: string;
+  confidence: number;
+  is_occluded: boolean;
+  status: 'active' | 'tentative' | 'predicting' | 'unknown';
+  lane: number;
+  vx?: number;
+  vy?: number;
+  is_wrong_way?: boolean;
+  is_stopped?: boolean;
+  prev_bbox?: [number, number, number, number];
+  last_update_time?: number;
+}
+
 export interface SurveillanceFeedMessage {
   total_vehicles?: number;
   average_speed_kmh?: number;
@@ -244,23 +265,6 @@ export interface VideoFrameMessage {
   frame_index?: number;
   timestamp?: string | number;
   metrics?: SurveillanceFeedMessage;
-  vehicles?: { // Detailed vehicle data for frontend visualization
-  vehicle_id: string;
-  global_vehicle_id?: string;
-  bbox: [number, number, number, number];
-  speed: number;
-  license_plate: string;
-  class_id: number;
-  class_name: string;
-  behavior: string;
-  confidence: number;
-  is_occluded: boolean;
-  status: 'active' | 'tentative' | 'predicting' | 'unknown';
-  lane: number;
-  vx?: number;
-  vy?: number;
-  is_wrong_way?: boolean;
-  is_stopped?: boolean;
-  }[];
+  vehicles?: VehicleFrontendData[];
 
 }

@@ -16,7 +16,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const [frameRate, setFrameRate] = useState<number>(0);
 
     // --- Refs for High-Frequency Data ---
-    const frameRef = useRef<{
+    const lastFrameRef = useRef<{
         image: ImageBitmap | HTMLImageElement | null,
         index: number,
         vehicles: VehicleFrontendData[] | null,
@@ -50,18 +50,18 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         onFrame: (decodedData) => {
             const { image, index, metrics, vehicles, timestamp } = decodedData;
 
-            if (index < frameRef.current?.index ?? -1) {
+            if (index < (lastFrameRef.current?.index ?? -1)) {
                 if (image instanceof ImageBitmap) image.close();
                 return;
             }
 
-            if (frameRef.current?.image instanceof ImageBitmap && frameRef.current.image !== image) {
-                frameRef.current.image.close();
+            if (lastFrameRef.current?.image instanceof ImageBitmap && lastFrameRef.current.image !== image) {
+                lastFrameRef.current.image.close();
             }
 
             updateVehicles(vehicles);
 
-            frameRef.current = {
+            lastFrameRef.current = {
                 image,
                 index,
                 vehicles,
@@ -117,7 +117,8 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             const now = performance.now();
             if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
                 if (data.metrics) {
-                    setMetrics(prev => (prev && prev.timestamp === data.metrics.timestamp) ? prev : data.metrics);
+                    const metricsData = data.metrics;
+                    setMetrics(prev => (prev && prev.timestamp === metricsData.timestamp) ? prev : (metricsData ?? null));
                 }
                 lastStateUpdateRef.current = now;
             }
@@ -142,10 +143,10 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             const now = performance.now();
             if (lastSuccessfulFrameTimeRef.current > 0 && 
                 now - lastSuccessfulFrameTimeRef.current > FRAME_STALENESS_THRESHOLD) {
-                if (frameRef.current?.image instanceof ImageBitmap) {
-                    frameRef.current.image.close();
+                if (lastFrameRef.current?.image instanceof ImageBitmap) {
+                    lastFrameRef.current.image.close();
                 }
-                frameRef.current = null;
+                lastFrameRef.current = null;
                 setFrameRate(0);
                 setError('Video stream timed out.');
             }
@@ -164,7 +165,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
             unsubscribeFrame();
             unsubscribeStatus();
             clearInterval(stalenessInterval);
-            if (frameRef.current?.image instanceof ImageBitmap) frameRef.current.image.close();
+            if (lastFrameRef.current?.image instanceof ImageBitmap) lastFrameRef.current.image.close();
         };
     }, [client, streamId, subscribeToFeed, handleFrame]);
 
@@ -180,7 +181,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     }, []); 
 
     return { 
-        frameRef, 
+        lastFrameRef, 
         metrics, 
         vehicles, 
         isConnected, 
@@ -189,4 +190,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         drawFrame, 
         updateFeedConfig: (config: any) => client.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
     };
-}, [client, streamId]);
+};
+
+export default useVideoSocket;

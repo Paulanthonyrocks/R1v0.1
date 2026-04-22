@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { WebSocketMessageType } from './websocket/WebSocketClient';
-import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from './types';
+import { WebSocketMessageType } from '../websocket/WebSocketClient';
+import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from '../types';
 
 export interface IVehicleRegistry {
     getVehicles(): VehicleFrontendData[];

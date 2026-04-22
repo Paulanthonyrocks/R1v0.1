@@ -105,6 +105,7 @@ export interface IWebSocketClient {
     unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
     reconnectWithNewToken(token: string): Promise<void>;
     getConnectionQuality(): ConnectionQuality;
+    getConnectionState(): string;
     cleanupWorkerResources(feed_id: string): void;
 }
 
@@ -291,6 +292,10 @@ export class WebSocketClient implements IWebSocketClient {
 
     public getConnectionQuality(): ConnectionQuality {
         return this.calculateConnectionQuality();
+    }
+
+    public getConnectionState(): string {
+        return this.connectionState;
     }
 
     public onStatusChange(listener: (status: string, message?: string) => void): () => void {
