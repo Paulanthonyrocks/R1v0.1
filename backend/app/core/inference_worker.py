@@ -229,16 +229,17 @@ def inference_worker(
 
             try:
                 batch_tasks = []
-                # 1. Adaptive Batching: Increase batch size as queue depth grows
+                # 1. Conservative Batching: Prevent OOM spikes by capping batch size
                 q_depth = central_input_queue.qsize()
                 base_batch_size = config.get("performance", {}).get("batch_size", 1)
                 
-                if q_depth > 200:
-                    batch_size = min(16, base_batch_size * 4)
-                elif q_depth > 100:
-                    batch_size = min(8, base_batch_size * 2)
-                else:
-                    batch_size = base_batch_size
+                # Limit batch size to a very small number regardless of queue depth
+                MAX_SAFE_BATCH_SIZE = 2
+                batch_size = min(base_batch_size, MAX_SAFE_BATCH_SIZE)
+                
+                # Only allow a slight increase if the queue is deep, but stay within safety limits
+                if q_depth > 100 and batch_size < MAX_SAFE_BATCH_SIZE:
+                    batch_size = MAX_SAFE_BATCH_SIZE
 
                 inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
 

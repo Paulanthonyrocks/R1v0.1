@@ -140,12 +140,14 @@ async def get_route_optimization_service():
     from app.services import get_route_optimization_service as get_ros_global
     return get_ros_global()
 
-async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> Optional[User]:
+async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> User:
     """Dependency to get the current active user from Firebase token."""
     if not token:
-        # Allow unauthenticated access if needed, or raise 401
-        # For now, returning None allows endpoints to decide or use Depends(get_current_active_user) which might fail if typed strictly
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     try:
         decoded_token = await verify_firebase_token(token)

@@ -461,18 +461,19 @@ pixels_per_meter: 30
 post_startup_processing:
   enabled: false
   sample_feeds:
-  - is_looped: true
-    latitude: 34.0522
-    longitude: -118.2437
-    path: /content/data/sample_traffic.mp4
-  - is_looped: true
-    latitude: 34.053
-    longitude: -118.244
-    path: /content/data/sample_traffic_2.mp4
-  - is_looped: true
-    latitude: 34.051
-    longitude: -118.243
-    path: /content/data/sample_traffic_3.mp4
+    - is_looped: true
+      latitude: 34.0522
+      longitude: 118.2437
+      path: /content/data/sample_traffic.mp4
+    - is_looped: true
+      latitude: 34.053
+      longitude: 118.244
+      path: /content/data/sample_traffic_2.mp4
+    - is_looped: true
+      latitude: 34.051
+      longitude: 118.243
+      path: /content/data/sample_traffic_3.mp4
+
 prediction_scheduler:
   accuracy_cache_ttl_minutes: 60
   default_low_data_weight: 0.75
