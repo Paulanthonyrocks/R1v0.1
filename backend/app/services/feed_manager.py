@@ -57,9 +57,9 @@ QUEUE_MAX_SIZE = 500
 QUEUE_DRAIN_LIMIT = 100
 MAX_METRICS_HISTORY_LENGTH = 1000
 # Scaling Constants
-SLOT_COUNT = 64
+SLOT_COUNT = 16
 MIN_WORKERS = 1
-MAX_WORKERS = 8
+MAX_WORKERS = 2
 SCALE_UP_THRESHOLD = 150
 SCALE_DOWN_THRESHOLD = 20
 SCALE_COOLDOWN = 30
@@ -95,7 +95,7 @@ class FeedManager:
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
         self._reid_manager = GlobalReIDManager(config)
-        self.frame_buffer = SharedFrameBuffer(pool_size=200)
+        self.frame_buffer = SharedFrameBuffer(pool_size=30)
         self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
         
