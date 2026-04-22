@@ -207,8 +207,8 @@ class RedisStreamQueue:
         Returns: (message_id, item)
         """
         if not block:
-            # Non-blocking read (timeout=0)
-            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=0)
+            # Non-blocking read
+            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1)
         else:
             # Blocking read
             res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=int(timeout * 1000) if timeout else 0)
