@@ -1118,17 +1118,19 @@ class FeedManager:
                 feed_ids_to_update = set()
                 
                 # Process the items without holding the global lock for the entire loop
-                for item in items_buffer:
+                for i, item in enumerate(items_buffer):
                     feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
                     raw_frame_view, dims = self.frame_buffer.read(shm_ref)
                     
-                    # Encode to JPEG only at the final broadcast stage
-                    import cv2
-                    w, h, c = dims
-                    frame_np = np.frombuffer(raw_frame_view, dtype=np.uint8).reshape(h, w, c)
-                    
-                    success, buffer = cv2.imencode(".jpg", frame_np, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                    frame_bytes = buffer.tobytes() if success else b''
+                    # Offload heavy encoding to a thread to avoid blocking the event loop
+                    def encode_frame(view, d):
+                        import cv2
+                        w, h, c = d
+                        frame_np = np.frombuffer(view, dtype=np.uint8).reshape(h, w, c)
+                        success, buffer = cv2.imencode(".jpg", frame_np, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                        return buffer.tobytes() if success else b''
+
+                    frame_bytes = await asyncio.to_thread(encode_frame, raw_frame_view, dims)
                     
                     self.frame_buffer.release(shm_ref)
                     
@@ -1136,6 +1138,10 @@ class FeedManager:
                     entry = self.process_registry.get(feed_id)
                     if not entry:
                         continue
+
+                    # Yield control to the event loop every 10 items to prevent starvation
+                    if i % 10 == 0:
+                        await asyncio.sleep(0)
 
                     # Status update requires lock as it changes state
                     if entry["status"] == FeedOperationalStatusEnum.STARTING:
