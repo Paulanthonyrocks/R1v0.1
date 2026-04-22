@@ -274,37 +274,37 @@ async def lifespan(app: FastAPI):
                 if vf.is_file() and watcher.event_handler._is_video_file(vf):
                     on_new_video(str(vf))
 
-        # 5.3 Post Startup Processing (Sample Feeds) - Preparation only
+        # 5.3 Post Startup Processing (Sample Feeds) - Registration
         psp_cfg = loaded_config.get("post_startup_processing", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "post_startup_processing", {})
-        if psp_cfg.get("enabled", False) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "enabled", False):
-            sample_feeds = psp_cfg.get("sample_feeds", []) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "sample_feeds", [])
+        psp_enabled = psp_cfg.get("enabled", False) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "enabled", False)
+        sample_feeds = psp_cfg.get("sample_feeds", []) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "sample_feeds", [])
+        
+        if sample_feeds:
+            async def _register_sample_feeds():
+                logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
+                for feed in sample_feeds:
+                    f_path = feed.get("path") if isinstance(feed, dict) else getattr(feed, "path")
+                    try:
+                        await fm.add_and_start_feed(
+                            source=f_path,
+                            is_looped=feed.get("is_looped", True) if isinstance(feed, dict) else getattr(feed, "is_looped", True),
+                            latitude=feed.get("latitude") if isinstance(feed, dict) else getattr(feed, "latitude"),
+                            longitude=feed.get("longitude") if isinstance(feed, dict) else getattr(feed, "longitude"),
+                            name_hint=feed.get("name") if isinstance(feed, dict) else getattr(feed, "name", Path(f_path).name),
+                            is_sample_feed=True,
+                            start=psp_enabled
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to register sample feed {f_path}: {e}")
+                logger.info("Sample feeds registration complete.")
+
+            create_background_task(_register_sample_feeds())
 
     except Exception as e:
         logger.error(f"Optional Services Failed: {e}")
 
     yield # --- App Running ---
     logger.info("Lifespan yield reached - server ready.")
-
-    # Start sample feeds in background to avoid blocking startup
-    if sample_feeds:
-        async def _start_sample_feeds_task():
-            logger.info(f"Starting {len(sample_feeds)} sample feeds in background...")
-            for feed in sample_feeds:
-                f_path = feed.get("path") if isinstance(feed, dict) else getattr(feed, "path")
-                try:
-                    await fm.add_and_start_feed(
-                        source=f_path,
-                        is_looped=feed.get("is_looped", True) if isinstance(feed, dict) else getattr(feed, "is_looped", True),
-                        latitude=feed.get("latitude") if isinstance(feed, dict) else getattr(feed, "latitude"),
-                        longitude=feed.get("longitude") if isinstance(feed, dict) else getattr(feed, "longitude"),
-                        name_hint=feed.get("name") if isinstance(feed, dict) else getattr(feed, "name", Path(f_path).name),
-                        is_sample_feed=True
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to start sample feed {f_path}: {e}")
-            logger.info("All sample feeds background tasks submitted.")
-
-        create_background_task(_start_sample_feeds_task())
 
     # --- SHUTDOWN ---
     logger.info("--- Stopping Route One Backend ---")

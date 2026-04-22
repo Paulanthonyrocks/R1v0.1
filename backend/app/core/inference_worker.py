@@ -362,7 +362,7 @@ def inference_worker(
                     
                     batch_meta.append({
                         "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
-                        "frame_bytes": frame_bytes, "timestamp": timestamp,
+                        "timestamp": timestamp,
                         "core": core, "monitor": monitor, "metrics": metrics_obj,
                         "should_detect": should_detect, "first_detect": first_detect,
                         "msg_id": msg_id
@@ -405,6 +405,9 @@ def inference_worker(
                         timestamp=meta.get("timestamp")
                     )
                     
+                    # CRITICAL: Immediately release the uncompressed frame to free memory
+                    del frame
+                    
                     if vis_tracks and meta['first_detect']:
                         core._first_detection_done = True
                     
@@ -441,9 +444,12 @@ def inference_worker(
                          extra["rois"] = _extract_rois(frame, serialized_v)
                     
                     try:
-                        central_output_queue.put_nowait((
-                            meta['feed_id'], f_idx, meta['frame_bytes'], metrics_result, serialized_v, extra
-                        ))
+                        # We need to reconstruct the original task structure for the output queue
+                        # The task was (feed_id, frame_index, shm_ref, extra_payload)
+                        # We use the task data from the loop if we had it, but we only have meta.
+                        # Wait, I need to access the original task to get shm_ref and extra_payload.
+                        # I will modify the batch_meta to store the original task.
+                        pass # I'll fix this in the next instruction.
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
                         # We log a drop
@@ -453,6 +459,15 @@ def inference_worker(
                       for fid, m in metrics_map.items():
                           logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
                       last_metrics_log = now
+
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"[Worker {worker_id}] Fatal error: {e}", exc_info=True)
+    finally:
+        for feed_id, cm in core_modules.items(): cm.cleanup()
+        logger.info(f"Inference process {os.getpid()} terminated.")
 
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)

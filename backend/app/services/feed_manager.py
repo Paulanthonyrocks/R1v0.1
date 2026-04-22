@@ -683,6 +683,7 @@ class FeedManager:
         name_hint: Optional[str] = None,
         is_looped: bool = True,
         is_sample_feed: bool = False,
+        start: bool = True,
     ) -> Dict[str, Any]:
         existing_feed_id = None
         
@@ -749,25 +750,33 @@ class FeedManager:
         if not existing_feed_id:
             await self._broadcast_feed_update(target_feed_id)
 
-        try:
-            await self.start_feed(target_feed_id)
+        if start:
+            try:
+                await self.start_feed(target_feed_id)
+                async with self._lock:
+                    return {
+                        "feed_id": target_feed_id,
+                        "status": self.process_registry[target_feed_id]["status"].value,
+                        "error": self.process_registry[target_feed_id]["error_message"],
+                    }
+            except Exception as e:
+                logger.error(f"Failed to start feed {target_feed_id}: {e}")
+                async with self._lock:
+                    self.process_registry[target_feed_id]["status"] = FeedOperationalStatusEnum.ERROR
+                    self.process_registry[target_feed_id]["error_message"] = str(e)
+                await self._broadcast_feed_update(target_feed_id)
+                return {
+                    "feed_id": target_feed_id,
+                    "status": FeedOperationalStatusEnum.ERROR.value,
+                    "error": str(e),
+                }
+        else:
             async with self._lock:
                 return {
                     "feed_id": target_feed_id,
                     "status": self.process_registry[target_feed_id]["status"].value,
                     "error": self.process_registry[target_feed_id]["error_message"],
                 }
-        except Exception as e:
-            logger.error(f"Failed to start feed {target_feed_id}: {e}")
-            async with self._lock:
-                self.process_registry[target_feed_id]["status"] = FeedOperationalStatusEnum.ERROR
-                self.process_registry[target_feed_id]["error_message"] = str(e)
-            await self._broadcast_feed_update(target_feed_id)
-            return {
-                "feed_id": target_feed_id,
-                "status": FeedOperationalStatusEnum.ERROR.value,
-                "error": str(e),
-            }
 
     async def start_multiple_feeds(self, feeds: List[Dict]) -> Dict[str, Any]:
         """Start multiple feeds with isolation."""
