@@ -399,6 +399,10 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
 
+    def get_user_role(self, client_id: str) -> str:
+        """Retrieve the role associated with a specific client connection."""
+        return self.client_id_to_user_role.get(client_id, "user")
+
     async def send_to_user(self, user_id: str, message: str):
         client_ids = self.user_id_to_client_ids.get(user_id, [])
         for client_id in list(client_ids): 
