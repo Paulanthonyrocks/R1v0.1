@@ -468,12 +468,3 @@ def inference_worker(
     finally:
         for feed_id, cm in core_modules.items(): cm.cleanup()
         logger.info(f"Inference process {os.getpid()} terminated.")
-
-            except Exception as e:
-                logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
-
-    except Exception as e:
-        logger.error(f"[Worker {worker_id}] Fatal error: {e}", exc_info=True)
-    finally:
-        for feed_id, cm in core_modules.items(): cm.cleanup()
-        logger.info(f"Inference process {os.getpid()} terminated.")
