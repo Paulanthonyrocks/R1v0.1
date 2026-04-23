@@ -194,12 +194,23 @@ class RedisStreamQueue:
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the stream using XADD."""
         data = pickle.dumps(item)
+
+        if self.maxlen > 0 and self.qsize() >= self.maxlen:
+            if not block:
+                raise Exception("Queue full")
+
+            start_time = time.time()
+            while self.qsize() >= self.maxlen:
+                if timeout and (time.time() - start_time) > timeout:
+                    raise Exception("Queue full timeout")
+                time.sleep(0.01)
+
         # Use maxlen to prevent the stream from growing indefinitely
         self.redis.xadd(self.key, {"data": data}, maxlen=self.maxlen, approximate=True)
 
     def put_nowait(self, item: Any):
         """Pushes an item to the stream without blocking."""
-        self.put(item)
+        self.put(item, block=False)
 
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Tuple[str, Any]:
         """
