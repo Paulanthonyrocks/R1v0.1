@@ -133,7 +133,7 @@ class FeedManager:
             # Redis handles slots via stream keys or consumer groups
             # For simplicity in this refactor, we'll use a single stream that workers compete for,
             # but we'll implement the 'Slot' logic in the worker via filter
-            self._inference_input_queues = [RedisStreamQueue('inference_input', group_name=f'worker_{i}') for i in range(MAX_WORKERS)]
+            self._inference_input_queues = [RedisStreamQueue('inference_input', group_name=f'worker_{i}') for i in range(self.slot_count)]
             self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
         else:
             # Fixed pool of slot queues to ensure feed affinity during scaling

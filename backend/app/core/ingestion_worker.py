@@ -38,18 +38,14 @@ def ingestion_worker(
         # Cannot use logger here as it may not be configured
         pass  # Logging config failed, will use default
 
+    # Initialize global config instance for this process
+    set_config_instance(config)
+
     # Initialize Redis client for signals and pressure
     from app.utils.redis_client import get_redis_client
     import redis
     redis_client = get_redis_client()
 
-    # Initialize shared frame buffer handle if not provided
-    from app.utils.shared_frame_buffer import SharedFrameBuffer
-    if frame_buffer is None:
-        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200))
-
-    # Initialize global config instance for this process
-    set_config_instance(config)
 
     # --- Signal Handling ---
     def signal_handler(signum, frame):
