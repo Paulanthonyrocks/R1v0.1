@@ -191,7 +191,7 @@ class RedisStreamQueue:
             if "BUSYGROUP" not in str(e):
                 raise e
 
-    def put(self, item: Any):
+    def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
         """Pushes an item to the stream using XADD."""
         data = pickle.dumps(item)
         # Use maxlen to prevent the stream from growing indefinitely
