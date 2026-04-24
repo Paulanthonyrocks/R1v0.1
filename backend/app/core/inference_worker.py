@@ -230,7 +230,7 @@ def inference_worker(
             try:
                 batch_tasks = []
                 # 1. Conservative Batching: Prevent OOM spikes by capping batch size
-                q_depth = central_input_queue.qsize()
+                q_depth = sum(central_input_queue[slot_id].qsize() for slot_id in slots)
                 base_batch_size = config.get("performance", {}).get("batch_size", 1)
                 
                 # Limit batch size to a very small number regardless of queue depth
