@@ -1,5 +1,6 @@
 import os
 import cv2
+import numpy as np
 import logging
 import time
 import queue
@@ -235,12 +236,29 @@ def ingestion_worker(
                 except (AttributeError, NotImplementedError):
                     pass
 
-                try:
-                    resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
-                    
-                    success, snap_buf = cv2.imencode(".jpg", resized, encode_params)
-                    if success:
-                        last_frame_bytes = snap_buf.tobytes()
+            try:
+                # Ensure frame is uint8 BGR before resize/encode
+                if frame.dtype != np.uint8:
+                    if frame.dtype in (np.float32, np.float64):
+                        frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8) if frame.max() <= 1.0 else frame.astype(np.uint8)
+                    else:
+                        frame = frame.astype(np.uint8)
+
+                resized = cv2.resize(frame, stream_res, interpolation=cv2.INTER_LINEAR)
+                
+                success, snap_buf = cv2.imencode(".jpg", resized, encode_params)
+                if not success:
+                    # Diagnostic: log frame details on first few failures
+                    if metrics.errors < 3:
+                        logger.warning(f"[{feed_id}] JPEG encode failed for frame {frame_index}: dtype={frame.dtype}, shape={frame.shape}, min={frame.min()}, max={frame.max()}, resized_shape={resized.shape}, resized_dtype={resized.dtype}")
+                    # Fallback: try PNG encoding if JPEG fails (codec issue)
+                    success, snap_buf = cv2.imencode(".png", resized)
+                    if not success:
+                        logger.warning(f"[{feed_id}] Failed to encode frame {frame_index} (both JPEG and PNG)")
+                        metrics.errors += 1
+                        continue
+
+                last_frame_bytes = snap_buf.tobytes()
 
                     try:
                         is_distributed = 'RedisStreamQueue' in str(type(central_input_queue))
@@ -265,9 +283,6 @@ def ingestion_worker(
                     except Exception as e:
                         metrics.errors += 1
                         logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
-                    else:
-                        logger.warning(f"[{feed_id}] Failed to encode frame {frame_index}")
-                        metrics.errors += 1
 
                     current_time = time.time()
                     if current_time - last_fps_log >= 5.0:
