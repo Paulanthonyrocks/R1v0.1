@@ -94,8 +94,11 @@ class SharedFrameBuffer:
         # Write Data
         buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
-    def read(self, name: str) -> Tuple[memoryview, Tuple[int, int, int]]:
+    def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
+        if isinstance(name, bytes):
+            name = name.decode('utf-8')
+
         if name not in self._segments:
             try:
                 shm = shared_memory.SharedMemory(name=name)
