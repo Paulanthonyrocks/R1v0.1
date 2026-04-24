@@ -296,8 +296,15 @@ def inference_worker(
                 for task_tuple in batch_tasks:
                     msg_id, task = task_tuple
                     feed_id, frame_index, shm_ref, extra_payload = task
-                    res = frame_buffer.read(shm_ref) if frame_buffer and shm_ref else (shm_ref, (0,0,0))
-                    frame_bytes, dims = res
+                    
+                    # Only use frame_buffer.read if shm_ref is a string (segment name).
+                    # If it's bytes, it's the raw frame data already.
+                    if frame_buffer and isinstance(shm_ref, str):
+                        res = frame_buffer.read(shm_ref)
+                        frame_bytes, dims = res
+                    else:
+                        frame_bytes, dims = (shm_ref, (0, 0, 0))
+                        
                     timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
                     
                     if feed_id not in metrics_map:

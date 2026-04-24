@@ -1144,10 +1144,16 @@ class FeedManager:
 
                 feed_ids_to_update = set()
                 
-                # Process the items without holding the global lock for the entire loop
+                # Process the items without holding the lock for the entire loop
                 for i, item in enumerate(items_buffer):
                     feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
-                    raw_frame_view, dims = self.frame_buffer.read(shm_ref)
+                    
+                    # Only read from shared buffer if shm_ref is a string (segment name).
+                    # If it's bytes, it's the raw frame data.
+                    if isinstance(shm_ref, str):
+                        raw_frame_view, dims = self.frame_buffer.read(shm_ref)
+                    else:
+                        raw_frame_view, dims = (shm_ref, (0, 0, 0))
                     
                     # Offload heavy encoding to a thread to avoid blocking the event loop
                     def encode_frame(view, d):
