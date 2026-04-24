@@ -186,9 +186,9 @@ def ingestion_worker(
 
     try:
         while True:
-            # Check for stop signal in Redis
-            if redis_client.get("pipeline:stop"):
-                logger.info(f"[{feed_id}] Received stop signal via Redis. Terminating...")
+            # Check for stop signal via feed-specific event
+            if stop_event and stop_event.is_set():
+                logger.info(f"[{feed_id}] Received stop signal via event. Terminating...")
                 break
 
             if command_queue:

@@ -80,6 +80,7 @@ class FeedManager:
         self.process_registry: Dict[str, Dict[str, Any]] = {}
         self.video_writers: Dict[str, VideoWriter] = {}
         self._lock = asyncio.Lock()
+        self._feed_locks: Dict[str, asyncio.Lock] = {}
         
         # Dedicated thread pool for CPU bound tasks (Base64 encoding)
         self._cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="FeedEncoder")
@@ -166,6 +167,12 @@ class FeedManager:
         self._scaling_task = asyncio.create_task(self._scaling_monitor())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         self.logger.info("FeedManager initialized. Reader, Watchdog, Pressure and Scaling tasks started.")
+
+    def _get_feed_lock(self, feed_id: str) -> asyncio.Lock:
+        """Returns a per-feed lock to ensure atomic operations like restart."""
+        if feed_id not in self._feed_locks:
+            self._feed_locks[feed_id] = asyncio.Lock()
+        return self._feed_locks[feed_id]
 
 
 
@@ -752,7 +759,7 @@ class FeedManager:
 
         if start:
             try:
-                await self.start_feed(target_feed_id)
+                await self._start_feed_internal(target_feed_id)
                 async with self._lock:
                     return {
                         "feed_id": target_feed_id,
@@ -831,6 +838,11 @@ class FeedManager:
         return results
 
     async def start_feed(self, feed_id: str):
+        """Public method to start a feed. Acquires per-feed lock for atomicity."""
+        async with self._get_feed_lock(feed_id):
+            await self._start_feed_internal(feed_id)
+
+    async def _start_feed_internal(self, feed_id: str):
         resources_to_cleanup = None
         failed_resources_to_cleanup = None
         is_sample = False
@@ -921,6 +933,11 @@ class FeedManager:
             await self._check_and_manage_sample_feed()
 
     async def stop_feed(self, feed_id: str):
+        """Public method to stop a feed. Acquires per-feed lock for atomicity."""
+        async with self._get_feed_lock(feed_id):
+            await self._stop_feed_internal(feed_id)
+
+    async def _stop_feed_internal(self, feed_id: str):
         resources_to_cleanup = None
         async with self._lock:
             entry = self.process_registry.get(feed_id)
@@ -939,20 +956,21 @@ class FeedManager:
 
     async def restart_feed(self, feed_id: str):
         logger.info(f"Restart requested for: '{feed_id}'")
-        try:
-            await self.stop_feed(feed_id)
-            # Give the system a moment to reclaim resources (ports, file handles, memory)
-            await asyncio.sleep(2.0)
-            await self.start_feed(feed_id)
-        except Exception as e:
-            logger.error(f"Restart failed for '{feed_id}': {e}", exc_info=True)
-            async with self._lock:
-                entry = self.process_registry.get(feed_id)
-                if entry:
-                    entry["status"] = FeedOperationalStatusEnum.ERROR
-                    entry["error_message"] = f"Restart failed: {e}"
-            await self._broadcast_feed_update(feed_id)
-            raise FeedOperationError(f"Restart failed: {e}")
+        async with self._get_feed_lock(feed_id):
+            try:
+                await self._stop_feed_internal(feed_id)
+                # Give the system a moment to reclaim resources (ports, file handles, memory)
+                await asyncio.sleep(2.0)
+                await self._start_feed_internal(feed_id)
+            except Exception as e:
+                logger.error(f"Restart failed for '{feed_id}': {e}", exc_info=True)
+                async with self._lock:
+                    entry = self.process_registry.get(feed_id)
+                    if entry:
+                        entry["status"] = FeedOperationalStatusEnum.ERROR
+                        entry["error_message"] = f"Restart failed: {e}"
+                await self._broadcast_feed_update(feed_id)
+                raise FeedOperationError(f"Restart failed: {e}")
 
     async def stop_all_feeds(self):
         logger.info("Stopping all active feeds.")
@@ -1469,12 +1487,12 @@ class FeedManager:
         # Perform actions outside lock
         for fid in to_stop:
             try:
-                await self.stop_feed(fid)
+                await self._stop_feed_internal(fid)
             except Exception: pass  # noqa: E701
 
         for fid in to_start:
             try:
-                await self.start_feed(fid)
+                await self._start_feed_internal(fid)
             except Exception: pass  # noqa: E701
 
     # --- Helper Methods ---
