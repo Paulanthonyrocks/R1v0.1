@@ -671,14 +671,14 @@ class FeedManager:
             "data": config_data
         }
         sent_count = 0
-        for i, q in enumerate(self._inference_command_queues):
+        for worker_id, q in self._inference_command_queues.items():
             try:
                 q.put_nowait(cmd)
                 sent_count += 1
             except queue.Full:
-                logger.warning(f"Inference command queue {i} full, config update might be delayed.")
+                logger.warning(f"Inference command queue {worker_id} full, config update might be delayed.")
             except Exception as e:
-                logger.error(f"Failed to send config update to worker {i}: {e}")
+                logger.error(f"Failed to send config update to worker {worker_id}: {e}")
         
         logger.info(f"Broadcasted config update for feed {feed_id} to {sent_count} inference workers.")
 
