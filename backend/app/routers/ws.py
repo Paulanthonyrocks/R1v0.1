@@ -110,16 +110,16 @@ async def message_receiver(
                         # but we should close the socket from our end to be safe.
                         # However, we'll let the client close it or the next ping fail if context is lost.
 
-        elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
-            statuses = await feed_manager.get_all_statuses()
-            response = WebSocketMessage(
-                type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
-                data=InitialFeedStatusesData(feeds=statuses).model_dump()
-            )
-            # CRITICAL: Use HIGH priority so initial statuses are never dropped
-            # when the client queue is loaded with video frames (LOW priority).
-            from app.websocket.connection_manager import MessagePriority
-            await connection_manager.send_personal_message(response.model_dump_json(), client_id, priority=MessagePriority.HIGH)
+                elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
+                    statuses = await feed_manager.get_all_statuses()
+                    response = WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
+                        data=InitialFeedStatusesData(feeds=statuses).model_dump()
+                    )
+                    # CRITICAL: Use HIGH priority so initial statuses are never dropped
+                    # when the client queue is loaded with video frames (LOW priority).
+                    from app.websocket.connection_manager import MessagePriority
+                    await connection_manager.send_personal_message(response.model_dump_json(), client_id, priority=MessagePriority.HIGH)
 
                 elif msg_type in [
                     WebSocketMessageTypeEnum.START_FEED,
@@ -127,27 +127,27 @@ async def message_receiver(
                     WebSocketMessageTypeEnum.RESTART_FEED,
                     WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG
                 ]:
-        # 3a. Rate Limiting for Control Messages
-            if not await rate_limiter.is_allowed(client_id):
-                logger.warning(f"Rate limit exceeded for control messages from {client_id}")
-                from app.websocket.connection_manager import MessagePriority
-                await connection_manager.send_personal_message(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data={"message": "Rate limit exceeded. Please slow down your requests."}
-                    ).model_dump_json(),
-                    client_id,
-                    priority=MessagePriority.HIGH
-                )
-                continue
+                    # 3a. Rate Limiting for Control Messages
+                    if not await rate_limiter.is_allowed(client_id):
+                        logger.warning(f"Rate limit exceeded for control messages from {client_id}")
+                        from app.websocket.connection_manager import MessagePriority
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": "Rate limit exceeded. Please slow down your requests."}
+                            ).model_dump_json(),
+                            client_id,
+                            priority=MessagePriority.HIGH
+                        )
+                        continue
 
-            # Check Authorization
-            user_role = connection_manager.get_user_role(client_id)
-            if user_role != "admin":
-                logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
-                from app.websocket.connection_manager import MessagePriority
-                await connection_manager.send_personal_message(
-                    WebSocketMessage(
+                    # Check Authorization
+                    user_role = connection_manager.get_user_role(client_id)
+                    if user_role != "admin":
+                        logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
+                        from app.websocket.connection_manager import MessagePriority
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
                         type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
                         data={"message": "Unauthorized: Admin privileges required for feed control."}
                     ).model_dump_json(),
