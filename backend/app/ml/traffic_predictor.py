@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler # Assuming StandardScaler is used for feature scaling
+from sklearn.preprocessing import StandardScaler
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 import logging
+import joblib
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -11,25 +13,41 @@ class TrafficPredictor:
     def __init__(self, config: Dict[str, Any], model_object=None):
         self.config = config
         self.model = model_object
-        # Initialize scaler. In a production scenario, the scaler should be fitted
-        # on the training data and saved/loaded along with the model to ensure consistency.
         self.scaler = StandardScaler() 
-        self.sequence_length = 10  # Number of time steps to use for prediction
+        self.sequence_length = 10
 
-        # Load pre-trained model if path is provided and no model object is given
+        # Path for persisted scaler
+        model_path = self.config.get("traffic_predictor_model_path", None)
+        self.scaler_path = f"{model_path}.scaler" if model_path else None
+
         if self.model is None:
-            # Use get with default None to avoid KeyError if 'model_path' is missing
-            model_path = self.config.get("traffic_predictor_model_path", None) 
             if model_path:
-                self.load_model(model_path) # Attempt to load the model from the specified path
+                self.load_model(model_path)
             else:
                 logger.warning(
                     "No 'traffic_predictor_model_path' provided in config or model_object provided. Model will not be loaded."
                 )
-                # Optionally initialize a dummy model or set self.model to None explicitly
-                # If you intend to train the model later, you should initialize it here
-                # self._initialize_model() # Initialize a model even if path is not given, allows training later
-                pass # Do nothing if no model path or object is provided, self.model remains None
+                pass
+
+    def save_scaler(self):
+        """Saves the fitted scaler to disk."""
+        if self.scaler_path:
+            try:
+                joblib.dump(self.scaler, self.scaler_path)
+                logger.info(f"Scaler saved to {self.scaler_path}")
+            except Exception as e:
+                logger.error(f"Failed to save scaler: {e}")
+
+    def load_scaler(self):
+        """Loads the fitted scaler from disk."""
+        if self.scaler_path and os.path.exists(self.scaler_path):
+            try:
+                self.scaler = joblib.load(self.scaler_path)
+                logger.info(f"Scaler loaded from {self.scaler_path}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to load scaler: {e}")
+        return False
 
     def _initialize_model(self):
         """Initialize the LSTM model for traffic prediction"""

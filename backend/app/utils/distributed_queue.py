@@ -4,7 +4,7 @@ import time
 import queue
 import os
 import redis
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union, Callable
 from .redis_client import get_redis_client
 
 logger = logging.getLogger("app.utils.redis_queue")
@@ -42,6 +42,46 @@ class RedisEvent:
                 return False
             time.sleep(0.1)
         return True
+
+class RedisPubSubSignal:
+    """
+    A Redis-backed signal using Pub/Sub for instant notification.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        self.channel = f"signal:{name}"
+        self._redis = get_redis_client()
+
+    def publish(self, message: str = "1"):
+        """Broadcast a signal to all subscribers."""
+        self._redis.publish(self.channel, message)
+
+    def subscribe_and_wait(self, timeout: Optional[float] = None) -> bool:
+        """
+        Block until a message is received on the channel.
+        Returns True if a message was received, False if timeout occurred.
+        """
+        pubsub = self._redis.pubsub()
+        try:
+            pubsub.subscribe(self.channel)
+            start_time = time.time()
+            while True:
+                # Check for timeout
+                if timeout and (time.time() - start_time) > timeout:
+                    return False
+                
+                # Check for message
+                # We use get_message(timeout=...) to avoid busy wait
+                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
+                if message:
+                    return True
+                
+                # Small sleep to prevent high CPU usage if get_message is not truly blocking
+                time.sleep(0.01)
+            return False
+        finally:
+            pubsub.unsubscribe(self.channel)
+            pubsub.close()
 
 class RedisValue:
     """

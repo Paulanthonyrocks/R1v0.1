@@ -5,6 +5,7 @@ from multiprocessing import shared_memory
 from typing import Optional, Union, Tuple
 import queue
 import os
+import time
 from app.utils.distributed_queue import RedisQueue
 
 logger = logging.getLogger('app.utils.shared_frame_buffer')
@@ -12,9 +13,12 @@ logger = logging.getLogger('app.utils.shared_frame_buffer')
 class SharedFrameBuffer:
     """
     Manages a pool of shared memory segments for high-frequency frame transmission.
-    Supports resolution-agnostic reads and orphan pruning.
+    Supports resolution-agnostic reads and orphan/stale segment pruning.
     """
-    HEADER_SIZE = 16 # size (4), width (4), height (4), channels (4)
+    # Header: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
+    # 4*4 + 8 = 24 bytes
+    HEADER_SIZE = 24 
+    
     def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False):
         self.pool_size = pool_size
         self.max_frame_size = max_frame_size
@@ -63,6 +67,51 @@ class SharedFrameBuffer:
         except Exception as e:
             logger.warning(f'Orphan pruning failed: {e}')
 
+    def prune_stale_segments(self, timeout_seconds: float):
+        """
+        Returns abandoned segments (those not in the free pool and not recently accessed) 
+        back to the free pool.
+        """
+        if self.read_only or self._free_pool is None:
+            return
+
+        now = time.time()
+        stale_count = 0
+        
+        # We'll check all segments in our registry.
+        for name, shm in self._segments.items():
+            try:
+                # Check if it's in the free pool by checking if we can acquire it? 
+                # No, RedisQueue.get() is blocking/removes it.
+                # We'll check the last_used timestamp in the header.
+                
+                buf = shm.buf
+                # Read metadata
+                # Header: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
+                header_data = np.frombuffer(buf[:self.HEADER_SIZE], dtype=[
+                    ('size', 'i4'), 
+                    ('width', 'i4'), 
+                    ('height', 'i4'), 
+                    ('channels', 'i4'),
+                    ('last_used', 'f8')
+                ])
+                last_used = header_data[0]['last_used']
+                
+                if now - last_used > timeout_seconds:
+                    # This segment hasn't been touched for a while.
+                    # It might be a leaked segment.
+                    # We try to put it back in the free pool.
+                    # If it was actually in use, this is a bug, but in a crash scenario, it's how we recover.
+                    self._free_pool.put_nowait(name)
+                    stale_count += 1
+            except Exception as e:
+                # If we can't even read the header, it's probably an orphan or corrupted
+                logger.debug(f"Could not read header for {name}, might be stale: {e}")
+                # We'll skip for now to avoid accidental unlink of active segments
+
+        if stale_count > 0:
+            logger.info(f"Recovered {stale_count} stale SHM segments.")
+
     def acquire(self, timeout: float = 1.0) -> Optional[str]:
         try:
             return self._free_pool.get(timeout=timeout)
@@ -88,9 +137,16 @@ class SharedFrameBuffer:
         shm = self._segments[name]
         buf = shm.buf
         
-        # Write Header: [size, width, height, channels]
-        header = np.array([size, w, h, c], dtype=np.int32).tobytes()
-        buf[:self.HEADER_SIZE] = header
+        # Write Header: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
+        now = time.time()
+        header = np.array([size, w, h, c, now], dtype=[
+            ('size', 'i4'), 
+            ('width', 'i4'), 
+            ('height', 'i4'), 
+            ('channels', 'i4'),
+            ('last_used', 'f8')
+        ])
+        buf[:self.HEADER_SIZE] = header.tobytes()
         # Write Data
         buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
@@ -100,8 +156,6 @@ class SharedFrameBuffer:
             try:
                 name = name.decode('utf-8')
             except UnicodeDecodeError:
-                # If we can't decode as UTF-8, treat as raw bytes data
-                # This means the caller passed raw frame data instead of a segment name
                 return name, (0, 0, 0)
 
         if name not in self._segments:
@@ -115,11 +169,30 @@ class SharedFrameBuffer:
         buf = shm.buf
         
         # Read Header
-        header = np.frombuffer(buf[:self.HEADER_SIZE], dtype=np.int32)
-        size, w, h, c = header
+        header_data = np.frombuffer(buf[:self.HEADER_SIZE], dtype=[
+            ('size', 'i4'), 
+            ('width', 'i4'), 
+            ('height', 'i4'), 
+            ('channels', 'i4'),
+            ('last_used', 'f8')
+        ])
+        
+        size = header_data[0]['size']
+        w = header_data[0]['width']
+        h = header_data[0]['height']
+        c = header_data[0]['channels']
         
         if size <= 0 or size > self.max_frame_size:
             raise ValueError(f'Invalid size {size} in segment {name}')
+            
+        # Update last_used timestamp to prevent pruning while being read
+        # Note: This is a non-atomic write to the header, but it's acceptable for heartbeat
+        try:
+            # Re-use the buffer to write just the timestamp (offset 16)
+            timestamp_buf = np.array([time.time()], dtype='f8').tobytes()
+            buf[16:24] = timestamp_buf
+        except Exception as e:
+            logger.debug(f"Failed to update heartbeat for {name}: {e}")
             
         return buf[self.HEADER_SIZE : self.HEADER_SIZE + size], (w, h, c)
 

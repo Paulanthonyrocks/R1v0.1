@@ -43,14 +43,29 @@ class DetectionEngine:
             pts = np.array(roi_points, np.int32)
             cv2.fillPoly(self.roi_mask, [pts], 255)
 
-    def is_in_roi(self, x: float, y: float) -> bool:
+    def is_in_roi(self, bbox: np.ndarray) -> bool:
         if self.roi_mask is None:
             return True
+        
+        # Extract coordinates
+        x1, y1, x2, y2 = map(int, bbox)
         h, w = self.roi_mask.shape
-        ix, iy = int(x), int(y)
-        if 0 <= ix < w and 0 <= iy < h:
-            return self.roi_mask[iy, ix] > 0
-        return False
+        
+        # Clamp coordinates to mask dimensions
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        if x2 <= x1 or y2 <= y1:
+            return False
+            
+        # Calculate intersection area
+        # We use a slice of the binary mask to find how many pixels are 'on' (255)
+        roi_crop = self.roi_mask[y1:y2, x1:x2]
+        intersection_pixels = np.count_nonzero(roi_crop)
+        box_area = (x2 - x1) * (y2 - y1)
+        
+        # Keep detection if at least 10% of the box is within the ROI
+        return (intersection_pixels / (box_area + 1e-6)) >= 0.1
 
     def detect(self, frame: np.ndarray, confidence_threshold: float) -> List[Tuple]:
         """Runs detection on the frame and returns bounding boxes and classes."""
@@ -71,10 +86,14 @@ class DetectionEngine:
                 scale_x = self.roi_mask.shape[1] / frame.shape[1] if frame is not None else 1.0
                 scale_y = self.roi_mask.shape[0] / frame.shape[0] if frame is not None else 1.0
                 
-                cx = ((b[0] + b[2]) / 2) * scale_x
-                cy = ((b[1] + b[3]) / 2) * scale_y
+                scaled_bbox = np.array([
+                    b[0] * scale_x, 
+                    b[1] * scale_y, 
+                    b[2] * scale_x, 
+                    b[3] * scale_y
+                ])
                 
-                if self.is_in_roi(cx, cy):
+                if self.is_in_roi(scaled_bbox):
                     detections.append((b, cls, conf))
         
         return detections

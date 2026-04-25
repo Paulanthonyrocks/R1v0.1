@@ -367,6 +367,12 @@ class ConnectionManager:
             logger.debug(f"No subscribers for feed {feed_id}, skipping broadcast.")
             return
 
+        # Determine priority: Boost the first 10 frames to HIGH to ensure the frontend
+        # transitions from 'starting' to 'running' immediately.
+        priority = MessagePriority.LOW
+        if frame_index < 10:
+            priority = MessagePriority.HIGH
+
         for client_id in subscribed_clients:
             if client_id not in self.client_queues:
                 continue
@@ -376,22 +382,21 @@ class ConnectionManager:
             q_size = queue.qsize()
             q_max = queue.maxsize
             
-            # Simple skip logic: if 75% full, skip 1/2. if 90% full, skip 2/3.
-            skip_threshold = 0.0
-            if q_size >= q_max * 0.9:
-                skip_threshold = 0.67 # Skip 2 out of 3
-            elif q_size >= q_max * 0.75:
-                skip_threshold = 0.5  # Skip every other
-                
-            if skip_threshold > 0:
-                # Use frame_index to ensure deterministic skipping across connections if needed,
-                # or just use random for simplicity per-client.
-                if (frame_index % int(1/(1-skip_threshold))) != 0:
-                    logger.debug(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
-                    continue
+            # Only apply skipping to LOW priority frames
+            if priority == MessagePriority.LOW:
+                skip_threshold = 0.0
+                if q_size >= q_max * 0.9:
+                    skip_threshold = 0.67
+                elif q_size >= q_max * 0.75:
+                    skip_threshold = 0.5
+                    
+                if skip_threshold > 0:
+                    if (frame_index % int(1/(1-skip_threshold))) != 0:
+                        logger.debug(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
+                        continue
 
             try:
-                wrapped_msg = PrioritizedMessage(MessagePriority.LOW, data)
+                wrapped_msg = PrioritizedMessage(priority, data)
                 self.client_queues[client_id].put_nowait(wrapped_msg)
             except asyncio.QueueFull:
                 logger.warning(f"Queue full for client {client_id}, dropping frame {frame_index}")

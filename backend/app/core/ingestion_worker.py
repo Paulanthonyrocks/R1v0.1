@@ -51,7 +51,11 @@ def ingestion_worker(
     # --- Signal Handling ---
     def signal_handler(signum, frame):
         logger.info(f"[{feed_id}] Received signal {signum}, triggering global stop via Redis")
-        redis_client.set("pipeline:stop", "1")
+        from app.utils.distributed_queue import RedisPubSubSignal
+        stop_signal = RedisPubSubSignal("pipeline_stop")
+        stop_signal.publish("1")
+        # Also set the key for workers doing existence checks
+        redis_client.set("signal:pipeline_stop", "1")
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)

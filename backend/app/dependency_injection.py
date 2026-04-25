@@ -14,11 +14,14 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
+from app.utils.rate_limiter import RateLimiterManager
+
 class DependencyContainer:
     """A lightweight dependency injection container."""
     
     def __init__(self):
         self._config: Dict[str, Any] = {}
+        self._rate_limiter_manager: Optional[RateLimiterManager] = None
 
     def set_config(self, config: Any):
         """Set the configuration for the container."""
@@ -26,6 +29,14 @@ class DependencyContainer:
             self._config = config.dict()
         else:
             self._config = config
+        
+        # Initialize rate limiter manager with config values
+        ws_cfg = self._config.get("websocket", {})
+        rl_cfg = ws_cfg.get("rate_limit", {})
+        self._rate_limiter_manager = RateLimiterManager(
+            rate=rl_cfg.get("rate", 5.0),
+            capacity=rl_cfg.get("capacity", 10.0)
+        )
 
     # Factory methods for core services
     
@@ -34,9 +45,21 @@ class DependencyContainer:
         # with ServiceRegistry which requires ConnectionManager to initialize.
         return ConnectionManager.get_instance()
 
-    async def get_feed_manager(self) -> FeedManager:
-        from app.services import get_feed_manager
-        return get_feed_manager()
+    async def get_rate_limiter_manager(self) -> RateLimiterManager:
+        """Dependency to get the rate limiter manager."""
+        if self._rate_limiter_manager is None:
+            # Fallback if container not initialized properly, though this shouldn't happen in normal flow
+            ws_cfg = self._config.get("websocket", {})
+            rl_cfg = ws_cfg.get("rate_limit", {})
+            self._rate_limiter_manager = RateLimiterManager(
+                rate=rl_cfg.get("rate", 5.0),
+                capacity=rl_cfg.get("capacity", 10.0)
+            )
+        return self._rate_limiter_manager
+
+    async def get_rate_limiter_manager() -> RateLimiterManager:
+        """Dependency to get the rate limiter manager."""
+        return await container.get_rate_limiter_manager()
 
     def get_feature_flags(self) -> FeatureFlags:
         from app.core.feature_flags import FeatureFlags

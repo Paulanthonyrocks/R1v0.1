@@ -179,6 +179,29 @@ class CoreModule:
         # Currently, we use the full frame.
         return frame, False, 0, 0
 
+    def _should_update_reid(self, tid: str, track: Dict, frame_index: int) -> bool:
+        """Determines if a vehicle's embedding should be updated based on dynamics and state."""
+        # 1. Mandatory update for new tracks
+        if track.get("last_reid_update", -1) == -1:
+            return True
+            
+        # 2. Periodic update as a safety fallback (every 60 frames instead of 30)
+        if (frame_index - track.get("last_reid_update", -1)) >= 60:
+            return True
+            
+        # 3. Update after recovering from occlusion (status changed to 'active')
+        if track.get("status") == "active" and track.get("prev_status") == "predicting":
+            return True
+            
+        # 4. Dynamic trigger: Significant velocity change
+        # If the vehicle speed changed by more than 15 km/h since last update
+        current_speed = track.get("speed", 0.0)
+        last_speed = track.get("last_reid_speed", current_speed)
+        if abs(current_speed - last_speed) > 15.0:
+            return True
+            
+        return False
+
     def detect_and_track(
         self,
         frame: Optional[np.ndarray],
@@ -222,8 +245,8 @@ class CoreModule:
         if self.reid_embedder:
             needs_emb = []
             for tid, track in self.vehicle_data.items():
-                # Extract if: new track OR periodic update (every 30 frames)
-                if tid not in self.vehicle_data or track.get("last_reid_update", -1) == -1 or (frame_index - track.get("last_reid_update", -1)) >= 30:
+                # Adaptive trigger instead of fixed interval
+                if self._should_update_reid(tid, track, frame_index):
                     bbox = track.get("bbox")
                     if bbox:
                         x1, y1, x2, y2 = map(int, bbox)
@@ -238,6 +261,7 @@ class CoreModule:
                     if emb is not None:
                         self.vehicle_data[tid]["embedding"] = emb
                         self.vehicle_data[tid]["last_reid_update"] = frame_index
+                        self.vehicle_data[tid]["last_reid_speed"] = self.vehicle_data[tid].get("speed", 0.0)
 
         # 5. Metadata Processing (Vectorized)
         vis_tracks = {}
@@ -253,6 +277,10 @@ class CoreModule:
             
             for idx, tid in enumerate(tids):
                 track = self.vehicle_data[tid]
+                
+                # Update previous status for adaptive ReID
+                track["prev_status"] = track.get("status", "unknown")
+                
                 if ground_positions is not None:
                     track["ground_coordinates"] = ground_positions[idx]
                 

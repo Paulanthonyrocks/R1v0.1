@@ -1280,6 +1280,9 @@ class FeedManager:
             self._last_queue_log_time = now
             try:
                 self._check_resources()
+                # Also prune stale SHM segments to prevent memory leaks
+                # Using a 5-minute timeout for "staleness"
+                self.frame_buffer.prune_stale_segments(timeout_seconds=300)
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 

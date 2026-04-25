@@ -143,8 +143,8 @@ def inference_worker(
     
     # Main loop
     while True:
-        # Check for stop signal in Redis
-        if redis_client.get("pipeline:stop"):
+        # Check for stop signal via Pub/Sub (checking existence of key for low-latency check)
+        if redis_client.exists("signal:pipeline_stop"):
             logger.info(f"Worker {worker_id} received stop signal via Redis. Terminating...")
             break
             

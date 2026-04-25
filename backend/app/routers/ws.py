@@ -21,6 +21,7 @@ from app.models.websocket import (
     UpdateFeedConfigData
 )
 from app.models.user import User
+from app.utils.rate_limiter import RateLimiterManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,7 +30,8 @@ async def message_receiver(
     websocket: WebSocket,
     client_id: str,
     connection_manager: ConnectionManager,
-    feed_manager: FeedManager
+    feed_manager: FeedManager,
+    rate_limiter: RateLimiterManager
 ):
     """
     Main loop for receiving and processing messages from a connected client.
@@ -122,6 +124,18 @@ async def message_receiver(
                     WebSocketMessageTypeEnum.RESTART_FEED,
                     WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG
                 ]:
+                    # 3a. Rate Limiting for Control Messages
+                    if not await rate_limiter.is_allowed(client_id):
+                        logger.warning(f"Rate limit exceeded for control messages from {client_id}")
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": "Rate limit exceeded. Please slow down your requests."}
+                            ).model_dump_json(),
+                            client_id
+                        )
+                        continue
+
                     # Check Authorization
                     user_role = connection_manager.get_user_role(client_id)
                     if user_role != "admin":
@@ -203,6 +217,7 @@ async def websocket_endpoint(
     client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
+    rate_limiter: RateLimiterManager = Depends(get_rate_limiter_manager),
     token: str | None = Query(None),
 ):
     """
@@ -245,7 +260,7 @@ async def websocket_endpoint(
         try:
             # Run the receiver loop directly.
             # The ConnectionManager handles keepalives (ping/pong) independently.
-            await message_receiver(websocket, client_id, connection_manager, feed_manager)
+            await message_receiver(websocket, client_id, connection_manager, feed_manager, rate_limiter)
 
         except Exception as e:
             logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
