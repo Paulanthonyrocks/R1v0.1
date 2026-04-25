@@ -34,6 +34,9 @@ interface RealtimeUpdates {
 // data broadcasts are shared — one request covers all consumers.
 let _initialFeedsRequestedForInstance: string | null = null;
 let _topicsSubscribedForInstance: string | null = null;
+// Track the number of active hook instances so we can detect when all
+// consumers unmount (page navigation) and reset the dedup flags.
+let _activeHookCount: number = 0;
 
 export const useRealtimeUpdates = (): RealtimeUpdates & {
   feeds: FeedStatusData[],
@@ -74,6 +77,15 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
   useEffect(() => {
     const subscriptions: (() => void)[] = [];
     const instanceId = client.getInstanceId();
+
+    // Increment ref count on mount; decrement and reset dedup on unmount
+    _activeHookCount++;
+    if (_activeHookCount === 1) {
+      // First mount on a new page — allow control messages to be sent
+      // even if the WebSocket instance ID hasn't changed.
+      _initialFeedsRequestedForInstance = null;
+      _topicsSubscribedForInstance = null;
+    }
 
     const updateConnectionState = () => {
       const connected = client.isConnected();
@@ -191,9 +203,18 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
       }
     }));
 
-    return () => {
-      subscriptions.forEach(unsubscribe => unsubscribe());
-    };
+  return () => {
+    subscriptions.forEach(unsubscribe => unsubscribe());
+    _activeHookCount--;
+    // When all consumers have unmounted (e.g., navigating away from
+    // surveillance page), clear the dedup flags so the next page mount
+    // will re-request initial statuses and re-subscribe to topics.
+    if (_activeHookCount <= 0) {
+      _activeHookCount = 0;
+      _initialFeedsRequestedForInstance = null;
+      _topicsSubscribedForInstance = null;
+    }
+  };
   }, [client]);
 
   const subscribeToFeed = useCallback((feedId: string) => {
