@@ -44,6 +44,11 @@ class DependencyContainer:
         # Return the singleton instance directly to avoid circular dependency
         # with ServiceRegistry which requires ConnectionManager to initialize.
         return ConnectionManager.get_instance()
+        
+    async def get_feed_manager(self) -> FeedManager:
+        """Dependency to get the feed manager."""
+        from app.services import get_feed_manager
+        return get_feed_manager()
 
     async def get_rate_limiter_manager(self) -> RateLimiterManager:
         """Dependency to get the rate limiter manager."""
@@ -56,6 +61,16 @@ class DependencyContainer:
                 capacity=rl_cfg.get("capacity", 10.0)
             )
         return self._rate_limiter_manager
+        
+    async def get_analytics_service(self) -> AnalyticsService:
+        """Dependency to get the analytics service."""
+        from app.services import get_analytics_service
+        return get_analytics_service()
+        
+    async def get_advanced_analytics_service(self) -> AdvancedAnalyticsService:
+        """Dependency to get the advanced analytics service."""
+        from app.services import get_advanced_analytics_service
+        return get_advanced_analytics_service()
 
     async def get_rate_limiter_manager() -> RateLimiterManager:
         """Dependency to get the rate limiter manager."""
