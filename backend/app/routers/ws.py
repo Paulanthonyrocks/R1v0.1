@@ -148,13 +148,13 @@ async def message_receiver(
                         from app.websocket.connection_manager import MessagePriority
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data={"message": "Unauthorized: Admin privileges required for feed control."}
-                    ).model_dump_json(),
-                    client_id,
-                    priority=MessagePriority.HIGH
-                )
-                continue
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": "Unauthorized: Admin privileges required for feed control."}
+                            ).model_dump_json(),
+                            client_id,
+                            priority=MessagePriority.HIGH
+                        )
+                        continue
 
                     # Process Admin Commands
                     try:
@@ -170,17 +170,17 @@ async def message_receiver(
                         elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
                             update_data = UpdateFeedConfigData(**data)
                             await feed_manager.update_feed_config(update_data.feed_id, update_data.updates)
-            except Exception as e:
-                logger.error(f"Error processing {msg_type}: {e}")
-                from app.websocket.connection_manager import MessagePriority
-                await connection_manager.send_personal_message(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                        data={"message": f"Operation failed: {str(e)}"}
-                    ).model_dump_json(),
-                    client_id,
-                    priority=MessagePriority.HIGH
-                )
+                    except Exception as e:
+                        logger.error(f"Error processing {msg_type}: {e}")
+                        from app.websocket.connection_manager import MessagePriority
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": f"Operation failed: {str(e)}"}
+                            ).model_dump_json(),
+                            client_id,
+                            priority=MessagePriority.HIGH
+                        )
 
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
