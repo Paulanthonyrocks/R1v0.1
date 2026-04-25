@@ -142,7 +142,6 @@ get_as = get_analytics_service
 get_aas = get_advanced_analytics_service
 
 def get_config() -> Dict[str, Any]:
-def get_config() -> Dict[str, Any]:
     """Dependency to get the application configuration."""
     return container._config
 
