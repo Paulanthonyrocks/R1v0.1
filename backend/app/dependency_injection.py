@@ -62,21 +62,21 @@ class DependencyContainer:
             )
         return self._rate_limiter_manager
         
+    def get_feature_flags(self) -> FeatureFlags:
+        from app.core.feature_flags import FeatureFlags
+        return FeatureFlags(self._config)
+
     async def get_analytics_service(self) -> AnalyticsService:
         """Dependency to get the analytics service."""
         from app.services import get_analytics_service
         return get_analytics_service()
-        
+
     async def get_advanced_analytics_service(self) -> AdvancedAnalyticsService:
         """Dependency to get the advanced analytics service."""
         from app.services import get_advanced_analytics_service
         return get_advanced_analytics_service()
 
-    async def get_rate_limiter_manager() -> RateLimiterManager:
-        """Dependency to get the rate limiter manager."""
-        return await container.get_rate_limiter_manager()
-
-    def get_feature_flags(self) -> FeatureFlags:
+# Global container instance
         from app.core.feature_flags import FeatureFlags
         return FeatureFlags(self._config)
 
@@ -141,10 +141,7 @@ async def get_advanced_analytics_service() -> AdvancedAnalyticsService:
 get_as = get_analytics_service
 get_aas = get_advanced_analytics_service
 
-async def get_rate_limiter_manager() -> RateLimiterManager:
-    """Dependency to get the rate limiter manager from the container."""
-    return await container.get_rate_limiter_manager()
-
+def get_config() -> Dict[str, Any]:
 def get_config() -> Dict[str, Any]:
     """Dependency to get the application configuration."""
     return container._config
