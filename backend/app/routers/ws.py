@@ -2,7 +2,7 @@ import logging
 import json
 import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
-from app.dependency_injection import get_feed_manager, get_connection_manager
+from app.dependency_injection import get_feed_manager, get_connection_manager, get_rate_limiter_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager
 from app.utils.auth_utils import verify_firebase_token

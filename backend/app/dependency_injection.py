@@ -126,6 +126,10 @@ async def get_advanced_analytics_service() -> AdvancedAnalyticsService:
 get_as = get_analytics_service
 get_aas = get_advanced_analytics_service
 
+async def get_rate_limiter_manager() -> RateLimiterManager:
+    """Dependency to get the rate limiter manager from the container."""
+    return await container.get_rate_limiter_manager()
+
 def get_config() -> Dict[str, Any]:
     """Dependency to get the application configuration."""
     return container._config

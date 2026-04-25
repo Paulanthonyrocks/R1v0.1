@@ -48,12 +48,6 @@ class WebSocketRateLimitConfig(BaseModel):
     rate: float = 5.0  # tokens per second
     capacity: float = 10.0  # max tokens
 
-class PerformanceConfig(BaseModel):
-    worker_concurrency: int = 4
-    batch_size: int = 32
-    inference_timeout: int = 30
-    max_shm_segments: int = 1000
-
 class AppConfig(BaseSettings):
     project_root_dir: str = str(Path(__file__).resolve().parent.parent.parent)
     data_dir: str = os.getenv("DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
