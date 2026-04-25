@@ -97,7 +97,12 @@ class SharedFrameBuffer:
     def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
         if isinstance(name, bytes):
-            name = name.decode('utf-8')
+            try:
+                name = name.decode('utf-8')
+            except UnicodeDecodeError:
+                # If we can't decode as UTF-8, treat as raw bytes data
+                # This means the caller passed raw frame data instead of a segment name
+                return name, (0, 0, 0)
 
         if name not in self._segments:
             try:
