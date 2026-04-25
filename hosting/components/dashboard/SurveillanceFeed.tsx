@@ -21,18 +21,20 @@ import {
 import IdentityGallery from '../feature/IdentityGallery';
 
 const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
-    const { feed_id, name: feedName, source, status } = feed;
-    const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
-    const { token, userRole } = useAuth();
-    const wsClient = useWebSocket();
-    const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
+  const { feed_id, name: feedName, source, status } = feed;
+  const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
+  const { token, userRole } = useAuth();
+  const wsClient = useWebSocket();
+  const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
-    // Only subscribe if the feed is in an active state
-    const shouldSubscribe = status === 'running' || status === 'starting';
-    const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
-        shouldSubscribe ? feed_id : "",
-        token
-    );
+  // Only subscribe if the feed is in an active state
+  // NOTE: useVideoSocket handles dedup internally via module-level tracking,
+  // so React Strict Mode remounts won't cause subscribe/unsubscribe storms.
+  const shouldSubscribe = status === 'running' || status === 'starting';
+  const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
+    shouldSubscribe ? feed_id : "",
+    token
+  );
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
