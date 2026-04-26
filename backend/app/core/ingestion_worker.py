@@ -275,6 +275,12 @@ def ingestion_worker(
 
                     last_frame_bytes = snap_buf.tobytes()
 
+                    # Skip empty frames
+                    if not last_frame_bytes:
+                        logger.warning(f"[{feed_id}] Empty frame bytes, skipping frame {frame_index}")
+                        metrics.frames_dropped += 1
+                        continue
+
                     try:
                         # 1. Always use SHM for transport to unify the pipeline
                         if not frame_buffer:

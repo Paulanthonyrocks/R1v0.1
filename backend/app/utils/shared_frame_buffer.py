@@ -188,7 +188,10 @@ class SharedFrameBuffer:
         
         # Read header using struct.unpack_from — matches write format
         import struct
-        size, w, h, c = struct.unpack_from('<iiii', buf, 0)
+        try:
+            size, w, h, c = struct.unpack_from('<iiii', buf, 0)
+        except struct.error:
+            raise ValueError(f'Invalid header in segment {name}')
         
         if size <= 0 or size > self.max_frame_size:
             raise ValueError(f'Invalid size {size} in segment {name}')
