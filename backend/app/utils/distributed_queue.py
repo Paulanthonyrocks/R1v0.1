@@ -143,11 +143,11 @@ class RedisQueue:
         if self.maxsize > 0:
             if self.qsize() >= self.maxsize:
                 if not block:
-                    raise Exception("Queue full")
+                    raise queue.Full()
                 start_time = time.time()
                 while self.qsize() >= self.maxsize:
                     if timeout and (time.time() - start_time) > timeout:
-                        raise Exception("Queue full timeout")
+                        raise queue.Full()
                     time.sleep(0.01)
         
         self.redis.rpush(self.key, data)
@@ -237,12 +237,12 @@ class RedisStreamQueue:
 
         if self.maxlen > 0 and self.qsize() >= self.maxlen:
             if not block:
-                raise Exception("Queue full")
+                raise queue.Full()
 
             start_time = time.time()
             while self.qsize() >= self.maxlen:
                 if timeout and (time.time() - start_time) > timeout:
-                    raise Exception("Queue full timeout")
+                    raise queue.Full()
                 time.sleep(0.01)
 
         # Use maxlen to prevent the stream from growing indefinitely

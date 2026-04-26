@@ -275,62 +275,56 @@ def ingestion_worker(
 
                     last_frame_bytes = snap_buf.tobytes()
 
-                    try:
-                        # 1. Always use SHM for transport to unify the pipeline
-                        if not frame_buffer:
-                            logger.error(f"[{feed_id}] SharedFrameBuffer not initialized. Cannot queue frame.")
-                            metrics.errors += 1
-                            continue
-
-                        shm_ref = frame_buffer.acquire()
-                        if not shm_ref:
-                            metrics.frames_dropped += 1
-                            continue
-
-                        # 2. Encode to JPEG once at the edge (Ingestion)
-                        # This eliminates the CPU bottleneck in FeedManager
-                        success, jpg_buf = cv2.imencode(".jpg", resized, encode_params)
-                        if not success:
-                            logger.warning(f"[{feed_id}] JPEG encode failed for frame {frame_index}")
-                            frame_buffer.release(shm_ref)
-                            metrics.errors += 1
-                            continue
-
-                        # 3. Write JPEG bytes to SHM
-                        # Since it's now binary, the write method will handle it as bytes
-                        frame_buffer.write(shm_ref, jpg_buf.tobytes())
-
-                        # 4. Queue only the SHM reference (string)
-                        central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
-                        metrics.frames_processed += 1
-                    except queue.Full:
-                        # Must release SHM if we fail to queue
-                        if 'shm_ref' in locals() and shm_ref:
-                            frame_buffer.release(shm_ref)
-                        metrics.frames_dropped += 1
-                        if metrics.frames_dropped % 50 == 0:
-                            total = metrics.frames_processed + metrics.frames_dropped
-                            drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
-                            logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
-                    except Exception as e:
-                        if 'shm_ref' in locals() and shm_ref:
-                            frame_buffer.release(shm_ref)
+                try:
+                    # 1. Always use SHM for transport to unify the pipeline
+                    if not frame_buffer:
+                        logger.error(f"[{feed_id}] SharedFrameBuffer not initialized. Cannot queue frame.")
                         metrics.errors += 1
-                        logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
+                        continue
 
-                    current_time = time.time()
-                    if current_time - last_fps_log >= 5.0:
-                        fps = metrics.frames_processed / (current_time - metrics.start_time)
-                        logger.info(f"[{feed_id}] Ingestion FPS: {fps:.2f} | Total Frames: {metrics.frames_processed}")
-                        last_fps_log = current_time
+                    shm_ref = frame_buffer.acquire()
+                    if not shm_ref:
+                        metrics.frames_dropped += 1
+                        continue
 
-                    if current_time - last_metrics_log > 10.0:
-                        logger.info(f"[{feed_id}] METRICS: {json.dumps(metrics.to_dict())}")
-                        last_metrics_log = current_time
+                    # 2. Reuse the already-encoded JPEG bytes
+                    frame_buffer.write(shm_ref, last_frame_bytes)
 
+                    # 3. Queue only the SHM reference (string)
+                    central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
+                    metrics.frames_processed += 1
+                except queue.Full:
+                    # Must release SHM if we fail to queue
+                    if 'shm_ref' in locals() and shm_ref:
+                        frame_buffer.release(shm_ref)
+                    metrics.frames_dropped += 1
+                    if metrics.frames_dropped % 50 == 0:
+                        total = metrics.frames_processed + metrics.frames_dropped
+                        drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
+                        logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
                 except Exception as e:
-                    logger.error(f"[{feed_id}] Error processing frame {frame_index}: {e}")
+                    if 'shm_ref' in locals() and shm_ref:
+                        frame_buffer.release(shm_ref)
                     metrics.errors += 1
+                    logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
+
+                current_time = time.time()
+                if current_time - last_fps_log >= 5.0:
+                    fps = metrics.frames_processed / (current_time - metrics.start_time)
+                    logger.info(f"[{feed_id}] Ingestion FPS: {fps:.2f} | Total Frames: {metrics.frames_processed}")
+                    last_fps_log = current_time
+
+                if current_time - last_metrics_log > 10.0:
+                    logger.info(f"[{feed_id}] METRICS: {json.dumps(metrics.to_dict())}")
+                    last_metrics_log = current_time
+
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"[{feed_id}] Read error ({consecutive_errors}/{max_consecutive_errors}): {e}")
+                if consecutive_errors > max_consecutive_errors:
+                    break
+                time.sleep(0.1)
+
                 finally:
                     if 'frame' in locals(): del frame
                     if 'resized' in locals(): del resized

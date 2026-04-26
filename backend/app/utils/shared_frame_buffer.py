@@ -30,23 +30,42 @@ class SharedFrameBuffer:
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
             self._free_pool = RedisQueue('shm_free_pool', maxsize=pool_size)
-            self._free_pool.clear()
-
-            # 1. Prune orphans from previous crashes
-            self.prune_orphans()
-            # 2. Pre-allocate the pool
-            for i in range(pool_size):
-                name = f'frame_buffer_{i}'
-                try:
-                    shm = shared_memory.SharedMemory(name=name, create=True, size=max_frame_size)
-                    self._segments[name] = shm
-                    self._free_pool.put(name)
-                except FileExistsError:
-                    shm = shared_memory.SharedMemory(name=name)
-                    self._segments[name] = shm
-                    self._free_pool.put(name)
-                except Exception as e:
-                    logger.error(f'Failed to allocate SHM segment {name}: {e}')
+            
+            # Check if pool already exists (e.g., from main process or prior worker)
+            existing_count = self._free_pool.qsize()
+            
+            if existing_count > 0:
+                # Pool already populated — just attach. Don't clear or re-populate.
+                # This prevents the race condition where multiple ingestion workers
+                # each clear and re-populate the same Redis queue.
+                logger.info(f'SharedFrameBuffer: Attaching to existing free pool ({existing_count} segments).')
+                # Still need to register SHM segment handles for read/write
+                for i in range(pool_size):
+                    name = f'frame_buffer_{i}'
+                    try:
+                        shm = shared_memory.SharedMemory(name=name)
+                        self._segments[name] = shm
+                    except Exception:
+                        # Segment doesn't exist yet — skip, it'll be created by the owner
+                        pass
+            else:
+                # First initializer — create the pool from scratch
+                self._free_pool.clear()
+                # 1. Prune orphans from previous crashes
+                self.prune_orphans()
+                # 2. Pre-allocate the pool
+                for i in range(pool_size):
+                    name = f'frame_buffer_{i}'
+                    try:
+                        shm = shared_memory.SharedMemory(name=name, create=True, size=max_frame_size)
+                        self._segments[name] = shm
+                        self._free_pool.put(name)
+                    except FileExistsError:
+                        shm = shared_memory.SharedMemory(name=name)
+                        self._segments[name] = shm
+                        self._free_pool.put(name)
+                    except Exception as e:
+                        logger.error(f'Failed to allocate SHM segment {name}: {e}')
 
         logger.info(f'SharedFrameBuffer initialized with {len(self._segments)} segments. Header size: {self.HEADER_SIZE} bytes.')
 
@@ -129,7 +148,7 @@ class SharedFrameBuffer:
         else:
             h, w, c = 0, 0, 0
             raw_bytes = data
-            
+        
         size = len(raw_bytes)
         if size > self.max_frame_size - self.HEADER_SIZE:
             raise ValueError(f'Data size {size} exceeds buffer limit.')
@@ -149,8 +168,15 @@ class SharedFrameBuffer:
         
         # Cast buffer to unsigned bytes to avoid memoryview structure mismatch
         buf_bytes = buf.cast('B')
-        buf_bytes[:self.HEADER_SIZE] = header.tobytes()
-        buf_bytes[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
+        # Must cast source to memoryview('B') to match lvalue format
+        # Using memoryview() on bytes/bytearray ensures format compatibility
+        header_mv = memoryview(header.tobytes())
+        buf_bytes[:self.HEADER_SIZE] = header_mv
+        
+        data_mv = memoryview(raw_bytes) if isinstance(raw_bytes, bytes) else raw_bytes
+        if data_mv.format != 'B':
+            data_mv = data_mv.cast('B')
+        buf_bytes[self.HEADER_SIZE : self.HEADER_SIZE + size] = data_mv[:size]
 
     def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
@@ -192,7 +218,8 @@ class SharedFrameBuffer:
         try:
             # Re-use the buffer to write just the timestamp (offset 16)
             timestamp_buf = np.array([time.time()], dtype='f8').tobytes()
-            buf[16:24] = timestamp_buf
+            buf_bytes = buf.cast('B')
+            buf_bytes[16:24] = memoryview(timestamp_buf)
         except Exception as e:
             logger.debug(f"Failed to update heartbeat for {name}: {e}")
             
