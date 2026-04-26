@@ -113,9 +113,9 @@ class SharedFrameBuffer:
                 # No, RedisQueue.get() is blocking/removes it.
                 # We'll check the last_used timestamp in the header.
                 
-        buf = shm.buf
-        import struct as _struct
-        last_used = _struct.unpack_from('<d', buf, 16)[0]
+                buf = shm.buf
+                import struct as _struct
+                last_used = _struct.unpack_from('<d', buf, 16)[0]
                 
                 if now - last_used > timeout_seconds:
                     # This segment hasn't been touched for a while.
