@@ -246,7 +246,9 @@ const useVideoSocket = (streamId: string, token: string | null) => {
       
       // Only actually send UNSUBSCRIBE if this is the last consumer
       unsubscribeFromFeed();
-      client.cleanupWorkerResources(streamId);
+      if (count <= 1) {
+        client.cleanupWorkerResources(streamId);
+      }
       unsubscribeFrame();
       unsubscribeStatus();
       clearInterval(stalenessInterval);
