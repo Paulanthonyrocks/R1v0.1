@@ -146,9 +146,11 @@ class SharedFrameBuffer:
             ('channels', 'i4'),
             ('last_used', 'f8')
         ])
-        buf[:self.HEADER_SIZE] = header.tobytes()
-        # Write Data - cast to bytes to avoid memoryview structure mismatch
-        buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = bytes(raw_bytes)
+        
+        # Cast buffer to unsigned bytes to avoid memoryview structure mismatch
+        buf_bytes = buf.cast('B')
+        buf_bytes[:self.HEADER_SIZE] = header.tobytes()
+        buf_bytes[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
     def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
