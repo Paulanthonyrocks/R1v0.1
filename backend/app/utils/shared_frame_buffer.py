@@ -19,7 +19,7 @@ class SharedFrameBuffer:
     # 4*4 + 8 = 24 bytes
     HEADER_SIZE = 24 
     
-    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False):
+    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False):
         self.pool_size = pool_size
         self.max_frame_size = max_frame_size
         self.read_only = read_only
@@ -31,29 +31,13 @@ class SharedFrameBuffer:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
             self._free_pool = RedisQueue('shm_free_pool', maxsize=pool_size)
             
-            # Check if pool already exists (e.g., from main process or prior worker)
-            existing_count = self._free_pool.qsize()
-            
-            if existing_count > 0:
-                # Pool already populated — just attach. Don't clear or re-populate.
-                # This prevents the race condition where multiple ingestion workers
-                # each clear and re-populate the same Redis queue.
-                logger.info(f'SharedFrameBuffer: Attaching to existing free pool ({existing_count} segments).')
-                # Still need to register SHM segment handles for read/write
-                for i in range(pool_size):
-                    name = f'frame_buffer_{i}'
-                    try:
-                        shm = shared_memory.SharedMemory(name=name)
-                        self._segments[name] = shm
-                    except Exception:
-                        # Segment doesn't exist yet — skip, it'll be created by the owner
-                        pass
-            else:
-                # First initializer — create the pool from scratch
+            if owner:
+                # Owner (main process) always creates the pool from scratch.
+                # This handles crash restarts where Redis has stale entries
+                # but /dev/shm segments are gone.
                 self._free_pool.clear()
-                # 1. Prune orphans from previous crashes
                 self.prune_orphans()
-                # 2. Pre-allocate the pool
+                
                 for i in range(pool_size):
                     name = f'frame_buffer_{i}'
                     try:
@@ -66,6 +50,31 @@ class SharedFrameBuffer:
                         self._free_pool.put(name)
                     except Exception as e:
                         logger.error(f'Failed to allocate SHM segment {name}: {e}')
+            else:
+                # Worker (ingestion/inference) attaches to existing pool.
+                # Never clears the Redis queue — avoids the race condition
+                # where multiple workers each clear and re-populate.
+                logger.info(f'SharedFrameBuffer: Attaching to existing free pool ({self._free_pool.qsize()} segments).')
+                
+                # Register SHM segment handles for read/write.
+                # If a segment name is in the pool but /dev/shm is empty (stale),
+                # create it so the free pool names are always valid.
+                for i in range(pool_size):
+                    name = f'frame_buffer_{i}'
+                    try:
+                        shm = shared_memory.SharedMemory(name=name)
+                        self._segments[name] = shm
+                    except FileNotFoundError:
+                        # Segment name is in Redis but /dev/shm was cleared.
+                        # Recreate the segment so the pool reference stays valid.
+                        try:
+                            shm = shared_memory.SharedMemory(name=name, create=True, size=max_frame_size)
+                            self._segments[name] = shm
+                            logger.debug(f'Recreated missing SHM segment: {name}')
+                        except Exception as e:
+                            logger.error(f'Failed to recreate SHM segment {name}: {e}')
+                    except Exception:
+                        pass
 
         logger.info(f'SharedFrameBuffer initialized with {len(self._segments)} segments. Header size: {self.HEADER_SIZE} bytes.')
 
@@ -131,7 +140,7 @@ class SharedFrameBuffer:
         if stale_count > 0:
             logger.info(f"Recovered {stale_count} stale SHM segments.")
 
-    def acquire(self, timeout: float = 1.0) -> Optional[str]:
+    def acquire(self, timeout: float = 0.05) -> Optional[str]:
         try:
             return self._free_pool.get(timeout=timeout)
         except queue.Empty:

@@ -93,7 +93,7 @@ class FeedManager:
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
         self._reid_manager = GlobalReIDManager(config)
-        self.frame_buffer = SharedFrameBuffer(pool_size=100)
+        self.frame_buffer = SharedFrameBuffer(pool_size=100, owner=True)
         self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
         
