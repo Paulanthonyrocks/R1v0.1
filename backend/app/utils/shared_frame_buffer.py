@@ -113,17 +113,9 @@ class SharedFrameBuffer:
                 # No, RedisQueue.get() is blocking/removes it.
                 # We'll check the last_used timestamp in the header.
                 
-                buf = shm.buf
-                # Read metadata
-                # Header: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
-                header_data = np.frombuffer(buf[:self.HEADER_SIZE], dtype=[
-                    ('size', 'i4'), 
-                    ('width', 'i4'), 
-                    ('height', 'i4'), 
-                    ('channels', 'i4'),
-                    ('last_used', 'f8')
-                ])
-                last_used = header_data[0]['last_used']
+        buf = shm.buf
+        import struct as _struct
+        last_used = _struct.unpack_from('<d', buf, 16)[0]
                 
                 if now - last_used > timeout_seconds:
                     # This segment hasn't been touched for a while.
@@ -148,6 +140,8 @@ class SharedFrameBuffer:
 
     def write(self, name: str, data: Union[bytes, np.ndarray]):
         """Write data and dimensions into the segment."""
+        import struct
+        
         if name not in self._segments:
             raise ValueError(f'Segment {name} not found.')
         
@@ -163,29 +157,16 @@ class SharedFrameBuffer:
             raise ValueError(f'Data size {size} exceeds buffer limit.')
         
         shm = self._segments[name]
-        buf = shm.buf
+        buf = shm.buf  # direct memoryview of SHM — writes go to shared memory
         
-        # Write Header: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
+        # Write header using struct.pack (returns bytes).
+        # Assigning bytes to memoryview slice works across all Python versions.
+        # Header layout: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
         now = time.time()
-        header = np.array([size, w, h, c, now], dtype=[
-            ('size', 'i4'), 
-            ('width', 'i4'), 
-            ('height', 'i4'), 
-            ('channels', 'i4'),
-            ('last_used', 'f8')
-        ])
+        buf[0:24] = struct.pack('<iiiid', size, w, h, c, now)
         
-        # Cast buffer to unsigned bytes to avoid memoryview structure mismatch
-        buf_bytes = buf.cast('B')
-        # Must cast source to memoryview('B') to match lvalue format
-        # Using memoryview() on bytes/bytearray ensures format compatibility
-        header_mv = memoryview(header.tobytes())
-        buf_bytes[:self.HEADER_SIZE] = header_mv
-        
-        data_mv = memoryview(raw_bytes) if isinstance(raw_bytes, bytes) else raw_bytes
-        if data_mv.format != 'B':
-            data_mv = data_mv.cast('B')
-        buf_bytes[self.HEADER_SIZE : self.HEADER_SIZE + size] = data_mv[:size]
+        # Write payload — bytes slice assignment to memoryview always works
+        buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
     def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
@@ -205,19 +186,9 @@ class SharedFrameBuffer:
         shm = self._segments[name]
         buf = shm.buf
         
-        # Read Header
-        header_data = np.frombuffer(buf[:self.HEADER_SIZE], dtype=[
-            ('size', 'i4'), 
-            ('width', 'i4'), 
-            ('height', 'i4'), 
-            ('channels', 'i4'),
-            ('last_used', 'f8')
-        ])
-        
-        size = header_data[0]['size']
-        w = header_data[0]['width']
-        h = header_data[0]['height']
-        c = header_data[0]['channels']
+        # Read header using struct.unpack_from — matches write format
+        import struct
+        size, w, h, c = struct.unpack_from('<iiii', buf, 0)
         
         if size <= 0 or size > self.max_frame_size:
             raise ValueError(f'Invalid size {size} in segment {name}')
@@ -225,10 +196,7 @@ class SharedFrameBuffer:
         # Update last_used timestamp to prevent pruning while being read
         # Note: This is a non-atomic write to the header, but it's acceptable for heartbeat
         try:
-            # Re-use the buffer to write just the timestamp (offset 16)
-            timestamp_buf = np.array([time.time()], dtype='f8').tobytes()
-            buf_bytes = buf.cast('B')
-            buf_bytes[16:24] = memoryview(timestamp_buf)
+            buf[16:24] = struct.pack('<d', time.time())
         except Exception as e:
             logger.debug(f"Failed to update heartbeat for {name}: {e}")
             
