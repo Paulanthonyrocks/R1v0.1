@@ -54,6 +54,7 @@ class FeedOperationalStatusEnum(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     STARTING = "starting"
+    RESTARTING = "restarting"
     ERROR = "error"
 
 

@@ -97,7 +97,11 @@ class FeedManager:
         self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
         
+        # Executor for CPU-bound result processing (SHM read -> bytes)
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="FeedMgr-Proc")
+
         self._last_kpi_broadcast_time = 0.0
+
         self._kpi_broadcast_interval = self.config.get("kpi_broadcast_interval", 1.0)
         self._sample_feed_ids: List[str] = []
         self._feed_running_events: Dict[str, asyncio.Event] = {}
@@ -955,6 +959,11 @@ class FeedManager:
         logger.info(f"Restart requested for: '{feed_id}'")
         async with self._get_feed_lock(feed_id):
             try:
+                async with self._lock:
+                    entry = self.process_registry.get(feed_id)
+                    if entry:
+                        entry["status"] = FeedOperationalStatusEnum.RESTARTING
+                
                 await self._stop_feed_internal(feed_id)
                 # Give the system a moment to reclaim resources (ports, file handles, memory)
                 await asyncio.sleep(2.0)
@@ -1119,6 +1128,18 @@ class FeedManager:
 
     # --- Background Reader ---
 
+    def _process_single_result(self, item):
+        """CPU-bound processing of a single result item (SHM read -> bytes)."""
+        try:
+            feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
+            raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
+            frame_bytes = raw_jpg_view.tobytes()
+            self.frame_buffer.release(shm_ref)
+            return feed_id, frame_bytes, metrics, vehicles, extra
+        except Exception as e:
+            logger.error(f"Error processing result for {item[0] if len(item)>0 else 'unknown'}: {e}")
+            return None
+
     async def _read_result_queues(self):
         logger.info("Result reader task started (Decoupled Mode).")
         while not self._stop_reader_flag:
@@ -1126,41 +1147,38 @@ class FeedManager:
                 items_buffer = []
                 # Drain Central Output Queue
                 try:
-                    # Increased drain limit for high-throughput
                     for _ in range(200):
                         items_buffer.append(self._central_output_queue.get(block=False))
                 except queue.Empty:
                     pass
 
                 if not items_buffer:
-                    # Adaptive sleep when idle (reduced for lower jitter)
                     await asyncio.sleep(0.001)
-                    # Still need to handle periodic tasks
                     await self._handle_periodic_tasks()
                     continue
 
+                # Parallelize CPU-bound byte operations using the executor
+                processed_items = await asyncio.gather(*[
+                    asyncio.get_running_loop().run_in_executor(
+                        self._executor, 
+                        self._process_single_result, 
+                        item
+                    ) for item in items_buffer
+                ])
+
                 feed_ids_to_update = set()
                 
-                # Process the items without holding the lock for the entire loop
-                for i, item in enumerate(items_buffer):
-                    feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
+                for i, result in enumerate(processed_items):
+                    if result is None: continue
+                    feed_id, frame_bytes, metrics, vehicles, extra = result
                     
-                    # Pure SHM pipeline: shm_ref is always the segment name
-                    raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
-                    frame_bytes = raw_jpg_view.tobytes()
-                    
-                    self.frame_buffer.release(shm_ref)
-                    
-                    # Use a local copy of the entry to avoid holding the lock during the broadcast
                     entry = self.process_registry.get(feed_id)
                     if not entry:
                         continue
 
-                    # Yield control to the event loop every 10 items to prevent starvation
                     if i % 10 == 0:
                         await asyncio.sleep(0)
 
-                    # Status update requires lock as it changes state
                     if entry["status"] == FeedOperationalStatusEnum.STARTING:
                         async with self._lock:
                             if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
@@ -1169,11 +1187,9 @@ class FeedManager:
                                 if feed_id in self._feed_running_events:
                                     self._feed_running_events[feed_id].set()
 
-                    # Update Metrics (Atomic update of dictionary value)
                     now = time.time()
                     metrics["timestamp"] = datetime.now(timezone.utc)
                     
-                    # Add location data from config
                     if entry.get("config_info"):
                         metrics["latitude"] = entry["config_info"].latitude
                         metrics["longitude"] = entry["config_info"].longitude
@@ -1184,23 +1200,19 @@ class FeedManager:
                     if entry.get("timer"):
                         entry["timer"].tick()
 
-                    # Handle Special Message Types from Worker
                     if extra and extra.get("type") == "snapshot":
                         inc_id = extra.get("incident_id")
                         path = extra.get("path")
-                        # Update the incident in DB with the snapshot path
                         if self._analytics_service and inc_id:
                             asyncio.create_task(self._analytics_service.update_incident_snapshot(inc_id, path))
                         continue
 
-                    # Route to Video Writer
                     if entry.get("video_writer_queue"):
                         try:
                             entry["video_writer_queue"].put_nowait((frame_bytes, metrics))
                         except queue.Full:
                             pass
 
-                    # Update History
                     if "metrics_history" not in entry or not isinstance(entry["metrics_history"], deque):
                         entry["metrics_history"] = deque(maxlen=MAX_METRICS_HISTORY_LENGTH)
                     entry["metrics_history"].append((now, metrics.copy()))
@@ -1208,7 +1220,6 @@ class FeedManager:
                     while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
                         entry["metrics_history"].popleft()
 
-                    # Distribute Frames to Subscribers (Internal)
                     if feed_id in self.frame_subscriber_queues:
                         for sub_q in self.frame_subscriber_queues[feed_id]:
                             try:
@@ -1216,33 +1227,25 @@ class FeedManager:
                             except asyncio.QueueFull:
                                 pass
 
-                    # Analytics and Broadcast Throttling
                     target_fps = self.config.get("video_output", {}).get("fps", 10)
                     min_interval = 1.0 / target_fps
                     last_broadcast = entry.get("last_broadcast_time", 0.0)
                     
                     if now - last_broadcast >= min_interval:
-                        # Only spawn if previous task for this feed finished (Backpressure)
                         prev_task = self._active_broadcast_tasks.get(feed_id)
                         if prev_task and not prev_task.done():
-                            # Skip this frame to avoid queueing up broadcasts
                             continue
                         
                         entry["last_broadcast_time"] = now
-                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, 0, frame_bytes, metrics, vehicles, extra))
                         self._active_broadcast_tasks[feed_id] = task
 
-                    # Analytics hook
                     if self._analytics_service:
-                        # We can also track analytics tasks or just fire-and-forget if they are fast
                         asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
 
-                # Handle broadcasts and periodic tasks
                 await self._perform_broadcasts(feed_ids_to_update, False, False)
                 await self._handle_periodic_tasks()
 
-                # If we processed a full buffer, skip sleep to maintain high throughput
-                # but yield control to other tasks
                 if len(items_buffer) < 200:
                     await asyncio.sleep(0.001)
                 else:

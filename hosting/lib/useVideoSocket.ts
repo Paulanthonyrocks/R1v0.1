@@ -155,17 +155,28 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     try {
       if (!data.feed_id || data.feed_id !== streamId) return;
 
-      if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-        if (data.frame_index < 20) {
-          clearVehicles();
-        } else if (lastProcessedIndexRef.current - data.frame_index < 100) {
-          return;
+      if (data.frame_index !== undefined) {
+        const lastIndex = lastProcessedIndexRef.current;
+        if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
+          const dropped = data.frame_index - lastIndex - 1;
+          console.warn(`[useVideoSocket] Frame drop detected for feed ${streamId}: dropped ${dropped} frames (last: ${lastIndex}, current: ${data.frame_index})`);
         }
+
+        if (data.frame_index < lastIndex) {
+          if (data.frame_index < 20) {
+            clearVehicles();
+          } else if (lastIndex - data.frame_index < 100) {
+            return;
+          }
+        }
+        lastProcessedIndexRef.current = data.frame_index;
+      } else {
+        lastProcessedIndexRef.current = lastProcessedIndexRef.current || 0;
       }
-      lastProcessedIndexRef.current = data.frame_index || 0;
       frameCountRef.current += 1;
 
       const now = performance.now();
+
       if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
         if (data.metrics) {
           const metricsData = data.metrics;
