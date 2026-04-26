@@ -297,12 +297,11 @@ def inference_worker(
                     msg_id, task = task_tuple
                     feed_id, frame_index, shm_ref, extra_payload = task
                     
-                    # Only use frame_buffer.read if shm_ref is a string (segment name).
-                    # If it's bytes, it's the raw frame data already.
-                    if frame_buffer and isinstance(shm_ref, str):
+                    if frame_buffer:
                         res = frame_buffer.read(shm_ref)
                         frame_bytes, dims = res
                     else:
+                        # This should not happen in a unified pipeline
                         frame_bytes, dims = (shm_ref, (0, 0, 0))
                         
                     timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
@@ -354,14 +353,17 @@ def inference_worker(
                     
                     frame = None
                     if needs_frame:
-                        # data is already raw BGR frame from SHM
+                        # data is now JPEG bytes from SHM
                         if isinstance(frame_bytes, memoryview):
-                            w, h, c = dims
-                            frame = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(h, w, c)
+                            # Decode JPEG from memoryview
+                            frame = cv2.imdecode(np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if frame is None:
+                                metrics_obj.errors += 1
+                                continue
                         elif isinstance(frame_bytes, np.ndarray):
                             frame = frame_bytes
                         else:
-                            # Fallback for bytes/fallback case
+                            # Fallback for rare cases
                             frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
                             if frame is None:
                                 metrics_obj.errors += 1

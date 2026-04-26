@@ -82,9 +82,6 @@ class FeedManager:
         self._lock = asyncio.Lock()
         self._feed_locks: Dict[str, asyncio.Lock] = {}
         
-        # Dedicated thread pool for CPU bound tasks (Base64 encoding)
-        self._cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="FeedEncoder")
-        
         self._global_fps = None
         self._feed_id_counter = 1
         self._stop_reader_flag = False
@@ -1148,22 +1145,9 @@ class FeedManager:
                 for i, item in enumerate(items_buffer):
                     feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
                     
-                    # Only read from shared buffer if shm_ref is a string (segment name).
-                    # If it's bytes, it's the raw frame data.
-                    if isinstance(shm_ref, str):
-                        raw_frame_view, dims = self.frame_buffer.read(shm_ref)
-                    else:
-                        raw_frame_view, dims = (shm_ref, (0, 0, 0))
-                    
-                    # Offload heavy encoding to a thread to avoid blocking the event loop
-                    def encode_frame(view, d):
-                        import cv2
-                        w, h, c = d
-                        frame_np = np.frombuffer(view, dtype=np.uint8).reshape(h, w, c)
-                        success, buffer = cv2.imencode(".jpg", frame_np, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                        return buffer.tobytes() if success else b''
-
-                    frame_bytes = await asyncio.to_thread(encode_frame, raw_frame_view, dims)
+                    # Pure SHM pipeline: shm_ref is always the segment name
+                    raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
+                    frame_bytes = raw_jpg_view.tobytes()
                     
                     self.frame_buffer.release(shm_ref)
                     
@@ -1446,11 +1430,6 @@ class FeedManager:
             except Exception as e:
                 logger.error(f"Error in watchdog loop: {e}", exc_info=True)
                 await asyncio.sleep(10.0)  # Sleep longer on error
-
-    @staticmethod
-    def _encode_frame(frame_bytes: bytes) -> str:
-        # This runs in a separate thread
-        return base64.b64encode(frame_bytes).decode('utf-8')
 
     # --- Sample Feed Management ---
 

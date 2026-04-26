@@ -266,26 +266,45 @@ def ingestion_worker(
                     last_frame_bytes = snap_buf.tobytes()
 
                     try:
-                        is_distributed = 'RedisStreamQueue' in str(type(central_input_queue))
-                        shm_ref = None
-                        if not is_distributed and frame_buffer:
-                            shm_ref = frame_buffer.acquire()
-                            if shm_ref:
-                                frame_buffer.write(shm_ref, resized)
-                        
-                        if shm_ref:
-                            central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
-                            metrics.frames_processed += 1
-                        else:
-                            central_input_queue.put((feed_id, frame_index, resized.tobytes(), time.time()), timeout=0.1)
-                            metrics.frames_processed += 1
+                        # 1. Always use SHM for transport to unify the pipeline
+                        if not frame_buffer:
+                            logger.error(f"[{feed_id}] SharedFrameBuffer not initialized. Cannot queue frame.")
+                            metrics.errors += 1
+                            continue
+
+                        shm_ref = frame_buffer.acquire()
+                        if not shm_ref:
+                            metrics.frames_dropped += 1
+                            continue
+
+                        # 2. Encode to JPEG once at the edge (Ingestion)
+                        # This eliminates the CPU bottleneck in FeedManager
+                        success, jpg_buf = cv2.imencode(".jpg", resized, encode_params)
+                        if not success:
+                            logger.warning(f"[{feed_id}] JPEG encode failed for frame {frame_index}")
+                            frame_buffer.release(shm_ref)
+                            metrics.errors += 1
+                            continue
+
+                        # 3. Write JPEG bytes to SHM
+                        # Since it's now binary, the write method will handle it as bytes
+                        frame_buffer.write(shm_ref, jpg_buf.tobytes())
+
+                        # 4. Queue only the SHM reference (string)
+                        central_input_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
+                        metrics.frames_processed += 1
                     except queue.Full:
+                        # Must release SHM if we fail to queue
+                        if 'shm_ref' in locals() and shm_ref:
+                            frame_buffer.release(shm_ref)
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 50 == 0:
                             total = metrics.frames_processed + metrics.frames_dropped
                             drop_rate = (metrics.frames_dropped / total) * 100 if total > 0 else 0
                             logger.warning(f"[{feed_id}] Dropped {metrics.frames_dropped} frames ({drop_rate:.1f}% drop rate)")
                     except Exception as e:
+                        if 'shm_ref' in locals() and shm_ref:
+                            frame_buffer.release(shm_ref)
                         metrics.errors += 1
                         logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
 
