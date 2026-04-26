@@ -71,6 +71,16 @@ def ingestion_worker(
     dummy_event = multiprocessing.Event()
     start_parent_monitor(dummy_event, f"Ingestion-{feed_id}")
     
+    # Initialize shared frame buffer handle if not provided
+    from app.utils.shared_frame_buffer import SharedFrameBuffer
+    if frame_buffer is None:
+        # Create a handle to the existing shared memory pool.
+        # Note: read_only=False is required for ingestion to write frames.
+        frame_buffer = SharedFrameBuffer(
+            pool_size=config.get("performance", {}).get("shm_pool_size", 100), 
+            read_only=False
+        )
+    
     metrics = WorkerMetrics(feed_id)
 
     # Pre-extract config
