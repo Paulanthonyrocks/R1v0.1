@@ -1,0 +1,112 @@
+# Ingestion Worker Analysis
+
+## Critical Issues Identified
+
+### 1. Exception Handler Scope Leak
+The current code has a nested exception handling structure that could lead to scope leaks:
+
+```python
+try:
+    # Main processing loop
+    while True:
+        # ...
+        try:
+            result = reader.read()
+            # ... processing ...
+        except Exception as e:
+            consecutive_errors += 1
+            logger.error(f"[{feed_id}] Read error ({consecutive_errors}/{max_consecutive_errors}): {e}")
+            # ...
+        # ... more code ...
+        try:
+            # Frame processing
+            try:
+                # Ensure frame is uint8 BGR before resize/encode
+                # ...
+            except Exception as e:
+                logger.error(f"[{feed_id}] Error processing frame {frame_index}: {e}")
+                metrics.errors += 1
+            finally:
+                if 'frame' in locals(): del frame
+                if 'resized' in locals(): del resized
+        except Exception as e:
+            logger.error(f"[{feed_id}] FATAL Ingestion error: {e}", exc_info=True)
+        finally:
+            if reader:
+                reader.stop()
+```
+
+The nested exception handling approach creates potential issues:
+1. The outer exception handler in the main loop may catch exceptions that should be handled differently
+2. The scope leak occurs when exceptions in nested blocks are not properly isolated
+3. Variables like 'frame' and 'resized' in the finally block may not always be properly cleaned up
+
+### 2. Global Stop Signal Issue
+The current implementation has improved signal handling but still has potential issues:
+
+1. The signal handler uses a local stop_event but falls back to just logging if it's not available
+2. There's no centralized global stop signal handling for the entire system
+3. The Redis-based pipeline pressure checking is done periodically but not consistently
+
+### 3. Additional Issues Found
+
+#### Resource Management
+- The frame buffer management could be improved with better cleanup
+- The shared memory reference handling in error cases could leak if not properly released
+
+#### Error Handling
+- Multiple nested try/except blocks make debugging difficult
+- The exception handling pattern is inconsistent across different parts of the code
+- Some exceptions are caught but not properly logged with context
+
+## Recommended Fixes
+
+### 1. Fix Exception Handler Scope
+Refactor the nested exception handling to be more explicit:
+
+```python
+# Instead of deeply nested try/except blocks, use a flatter structure:
+try:
+    # Main loop logic
+    pass
+except SpecificException as e:
+    # Handle specific exceptions
+    pass
+except Exception as e:
+    # Handle general exceptions
+    pass
+```
+
+### 2. Improve Global Stop Signal Handling
+Implement a more robust global stop signal mechanism:
+
+```python
+# Add a global stop event that can be checked across all workers
+GLOBAL_STOP_EVENT = None
+
+def initialize_global_stop_event():
+    global GLOBAL_STOP_EVENT
+    GLOBAL_STOP_EVENT = threading.Event()
+
+def check_global_stop():
+    """Check if global stop signal is set"""
+    if GLOBAL_STOP_EVENT and GLOBAL_STOP_EVENT.is_set():
+        return True
+    return False
+```
+
+### 3. Resource Management Improvements
+Better shared memory management:
+
+```python
+# Ensure proper cleanup of shared resources
+def cleanup_resources():
+    """Clean up all allocated resources"""
+    global frame_buffer
+    if frame_buffer:
+        try:
+            frame_buffer.cleanup()
+        except:
+            pass
+        frame_buffer = None
+```

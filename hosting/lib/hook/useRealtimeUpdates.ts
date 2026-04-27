@@ -43,11 +43,11 @@ let _topicsSubscribedForInstance: string | null = null;
 let _activeHookCount: number = 0;
 
 export const useRealtimeUpdates = (): RealtimeUpdates & {
-  feeds: FeedStatusData[],
-  startFeed: (feedId: string) => void,
-  stopFeed: (feedId: string) => void,
-  restartFeed: (feedId: string) => void,
-  startWebSocket: () => void
+  feeds: FeedStatusData[];
+  startFeed: (feedId: string) => void;
+  stopFeed: (feedId: string) => void;
+  restartFeed: (feedId: string) => void;
+  startWebSocket: () => void;
 } => {
   const client = useWebSocket();
   const [kpis, setKpis] = useState<KPIData | null>(null);
@@ -131,11 +131,10 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
           client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'kpi' } });
           client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'node_congestion' } });
         }
- } else if (status === 'disconnected') {
- _initialFeedsRequestedForInstance = null;
- _topicsSubscribedForInstance = null;
- resetFeedSubscriptionState();
- }
+      } else if (status === 'disconnected') {
+        _initialFeedsRequestedForInstance = null;
+        _topicsSubscribedForInstance = null;
+      }
     }));
 
     subscriptions.push(client.onError((_type, message) => {
@@ -223,6 +222,8 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
   }, [client]);
 
  const subscribeToFeed = useCallback((feedId: string) => {
+ // Check if this feed is already subscribed by useVideoSocket
+ // If so, don't send another subscribe message
  if (!_subscribedFeeds.has(feedId)) {
  _subscribedFeeds.add(feedId);
  sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feed_id: feedId });
@@ -230,6 +231,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
  }, [sendMessage]);
 
  const unsubscribeFromFeed = useCallback((feedId: string) => {
+ // Only unsubscribe if this feed is not being managed by useVideoSocket
  if (_subscribedFeeds.has(feedId)) {
  _subscribedFeeds.delete(feedId);
  sendMessage(WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, { feed_id: feedId });

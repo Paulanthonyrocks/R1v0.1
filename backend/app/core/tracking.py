@@ -8,9 +8,10 @@ from scipy.optimize import linear_sum_assignment
 logger = logging.getLogger("app.ml.tracking")
 
 class TrackingManager:
-    def __init__(self, config: dict, fps: int):
+    def __init__(self, config: dict, fps: int, feed_id: str = "default"):
         self.config = config
         self.fps = fps
+        self.feed_id = feed_id
         self.vehicle_data: Dict[str, Dict] = {}
         
         # Configuration parameters
@@ -64,7 +65,8 @@ class TrackingManager:
         # 1. Separate detections
         high_conf_dets = []
         low_conf_dets = []
-        CONF_THRESH = self.config.get("confidence_threshold", 0.3)
+        # FIX: Read threshold from the correct config section
+        CONF_THRESH = self.config.get("vehicle_detection", {}).get("confidence_threshold", 0.3)
         LOW_CONF_THRESH = 0.1
         
         for det in detections:
@@ -83,6 +85,8 @@ class TrackingManager:
                 
                 kf.F[0, 4] = dt
                 kf.F[1, 5] = dt
+                kf.F[2, 6] = dt
+                kf.F[3, 7] = dt
                 kf.predict()
                 
                 tx, ty, tw, th = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
@@ -108,6 +112,7 @@ class TrackingManager:
                         new_or_updated_tracks[track["vehicle_id"]] = track
 
         unmatched_dets_1 = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
+        # FIX: Ensure we match IDs correctly (tid is the key in self.vehicle_data)
         unmatched_tracks_1 = [t for tid, t in self.vehicle_data.items() if tid not in matched_tracks_1]
 
         # 4. Second Association: Low Confidence (IoU Only)
@@ -127,7 +132,9 @@ class TrackingManager:
         final_matched = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
             if tid not in final_matched:
-                if (current_time - track["last_seen"]) < self.track_timeout:
+                # FIX: track_timeout is usually configured in frames. Convert to seconds.
+                timeout_sec = self.track_timeout / self.fps if self.track_timeout > 10 else self.track_timeout
+                if (current_time - track["last_seen"]) < timeout_sec:
                     track["status"] = "predicting"
                     if "predicted_bbox" in track:
                         track["bbox"] = track["predicted_bbox"]
@@ -141,7 +148,8 @@ class TrackingManager:
             new_track = self._create_new_track(det, current_time)
             new_or_updated_tracks[new_track["vehicle_id"]] = new_track
             
-        self.vehicle_data = new_or_updated_tracks
+        self.vehicle_data.clear()
+        self.vehicle_data.update(new_or_updated_tracks)
         return self.vehicle_data
 
     def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
@@ -153,6 +161,9 @@ class TrackingManager:
             det_cx = (det_bbox[0] + det_bbox[2]) / 2
             det_cy = (det_bbox[1] + det_bbox[3]) / 2
             
+            # Normalize embedding for cosine similarity
+            norm_det_emb = det_emb / (np.linalg.norm(det_emb) + 1e-6) if det_emb is not None else None
+            
             for t, track in enumerate(tracks):
                 if "predicted_bbox" in track:
                     giou = self._bbox_giou(det_bbox, track["predicted_bbox"])
@@ -160,22 +171,29 @@ class TrackingManager:
                     tr_cy = (track["predicted_bbox"][1] + track["predicted_bbox"][3]) / 2
                     dist = math.sqrt((det_cx - tr_cx)**2 + (det_cy - tr_cy)**2)
                     
-                    if giou > -0.5 or dist < 150: # Gate
+                    # FIX: Use AND for gating - must be geometrically plausible AND close
+                    if giou > -0.5 and dist < 150: 
                         motion_cost = 1.0 - giou
                         reid_cost = 0.0
-                        if use_reid and det_emb is not None and "embedding" in track:
-                            reid_cost = (1.0 - np.dot(det_emb, track["embedding"])) * self.appearance_weight
+                        if use_reid and norm_det_emb is not None and "embedding" in track:
+                            track_emb = track["embedding"]
+                            norm_track_emb = track_emb / (np.linalg.norm(track_emb) + 1e-6)
+                            reid_cost = (1.0 - np.dot(norm_det_emb, norm_track_emb)) * self.appearance_weight
                         
                         costs[d, t] = motion_cost + reid_cost
         return costs
 
     def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
+        # FIX: Update prev_status for occlusion-recovery triggers
+        track["prev_status"] = track.get("status", "unknown")
         track["bbox"] = bbox
         track["last_seen"] = current_time
         track["status"] = "active"
         track["confidence"] = conf
         track["class_id"] = cls
+        # FIX: Update centroid
+        track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
         
         # Update Kalman
         kf = track.get("kalman_filter")
@@ -191,8 +209,10 @@ class TrackingManager:
     def _create_new_track(self, det, current_time):
         bbox, cls, conf, emb = det
         self.global_id_counter += 1
+        # FIX: Use feed_id prefix for globally unique IDs
+        vid = f"{self.feed_id}_{self.global_id_counter}"
         return {
-            "vehicle_id": self.global_id_counter,
+            "vehicle_id": vid,
             "bbox": bbox,
             "centroid": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
             "class_id": cls,
@@ -201,7 +221,6 @@ class TrackingManager:
             "status": "active",
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
-            "class_history": [cls]
         }
 
     def _bbox_giou(self, boxA, boxB):

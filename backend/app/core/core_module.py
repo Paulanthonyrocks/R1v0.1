@@ -21,8 +21,7 @@ try:
     from ..utils.local_ocr import LocalOCR
     from ..ml.reid_model import ReIDEmbedder
 except ImportError:
-    logger = logging.getLogger("app.ml")
-    logger.error("Error importing utils for CoreModule. System functionality may be limited.")
+    logging.getLogger("app.ml").error("Error importing utils for CoreModule. System functionality may be limited.")
     LicensePlatePreprocessor = None
     process_frame_for_lanes = None
     get_lane_boundaries_from_lines = None
@@ -49,8 +48,12 @@ class CoreModule:
         preloaded_model: Optional[Any] = None,
         preloaded_reid: Optional[Any] = None,
     ):
-        self.feed_id = feed_id
+        """
+        Core processing module for a single video feed. 
+        Handles detection, tracking, ReID, and metadata extraction.
+        """
         import copy
+        self.feed_id = feed_id
         self.config = copy.deepcopy(config)
         self.fps = fps
         self.db_queue = db_queue
@@ -78,9 +81,9 @@ class CoreModule:
         res = v_cfg.get("frame_resolution", [640, 480])
         self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
         self.detector.initialize_roi(res, self.roi_polygon_points)
+        self._initialize_roi_mask(res)
         
-        self.tracker = TrackingManager(self.config, self.fps)
-        self.vehicle_data = self.tracker.vehicle_data
+        self.tracker = TrackingManager(self.config, self.fps, feed_id=self.feed_id)
         
         calib_cfg = v_cfg.get("calibration", {})
         self.transformer = CoordinateTransformer(calib_cfg)
@@ -115,7 +118,7 @@ class CoreModule:
         """Checks for GPU availability for YOLO and engines."""
         if torch.cuda.is_available():
             logger.info(f"[{self.feed_id}] GPU detected. Using CUDA.")
-            return "0" 
+            return "cuda:0" 
         return "cpu"
 
     def _initialize_roi_mask(self, resolution: List[int]):
@@ -148,7 +151,10 @@ class CoreModule:
             
         res = self.config.get("vehicle_detection", {})
         if np.max(img_pts) <= 1.0:
-            img_pts *= [res[0], res[1]]
+            # Fix: res is a dict, not a list. Use config resolution.
+            width = res.get("frame_resolution", [640, 480])[0]
+            height = res.get("frame_resolution", [640, 480])[1]
+            img_pts *= [width, height]
             
         self.homography_matrix, _ = cv2.findHomography(img_pts, world_pts)
         logger.info(f"[{self.feed_id}] Homography matrix recalibrated.")
@@ -235,53 +241,77 @@ class CoreModule:
         if external_detections is not None:
             detections = external_detections
         else:
-            detections = self.detector.detect(frame, 0.1)
+            # FIX: Use provided or instance threshold instead of hardcoded 0.1
+            thresh = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
+            detections = self.detector.detect(frame, thresh)
         
         # 3. Tracking (Optimized: Pass detections without embeddings first)
         dets_for_tracker = [(d[0], d[2], d[1], None) for d in detections]
-        self.vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape)
+        vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape)
 
         # 4. Selective ReID Enrichment (Batch)
         if self.reid_embedder:
             needs_emb = []
-            for tid, track in self.vehicle_data.items():
-                # Adaptive trigger instead of fixed interval
+            h, w = frame.shape[:2]
+            # Reset per-frame budget
+            self._reid_updates_this_frame = 0
+            budget_cap = self.config.get("performance", {}).get("reid_budget_per_frame", 10)
+            
+            for tid, track in vehicle_data.items():
+                if self._reid_updates_this_frame >= budget_cap:
+                    break
+                
                 if self._should_update_reid(tid, track, frame_index):
                     bbox = track.get("bbox")
                     if bbox:
+                        # FIX: Clamp ROI crop to frame boundaries
                         x1, y1, x2, y2 = map(int, bbox)
-                        roi = frame[y1:y2, x1:x2]
-                        if roi.size > 0:
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            roi = frame[y1:y2, x1:x2]
                             needs_emb.append((tid, roi))
+                            self._reid_updates_this_frame += 1
             
             if needs_emb:
                 tids, rois = zip(*needs_emb)
                 embeddings = self.reid_embedder.get_batch_embeddings(list(rois))
                 for tid, emb in zip(tids, embeddings):
                     if emb is not None:
-                        self.vehicle_data[tid]["embedding"] = emb
-                        self.vehicle_data[tid]["last_reid_update"] = frame_index
-                        self.vehicle_data[tid]["last_reid_speed"] = self.vehicle_data[tid].get("speed", 0.0)
+                        vehicle_data[tid]["embedding"] = emb
+                        vehicle_data[tid]["last_reid_update"] = frame_index
+                        vehicle_data[tid]["last_reid_speed"] = vehicle_data[tid].get("speed", 0.0)
 
         # 5. Metadata Processing (Vectorized)
         vis_tracks = {}
-        if self.vehicle_data:
+        if vehicle_data:
             # Collect all centroids for batch transformation
-            tids = list(self.vehicle_data.keys())
-            centroids = np.array([
-                [(track["bbox"][0] + track["bbox"][2])/2, (track["bbox"][1] + track["bbox"][3])/2]
-                for track in self.vehicle_data.values()
-            ], dtype=np.float32)
+            tids = list(vehicle_data.keys())
             
+            # FIX: Guard against malformed bboxes in centroid calculation
+            valid_tids = []
+            centroids_list = []
+            for tid in tids:
+                track = vehicle_data[tid]
+                bbox = track.get("bbox")
+                if bbox and len(bbox) == 4:
+                    valid_tids.append(tid)
+                    centroids_list.append([(bbox[0] + bbox[2])/2, (bbox[1] + bbox[3])/2])
+            
+            if not centroids_list:
+                return {}, self.cached_lane_boundaries, self.last_detected_lane_lines
+                
+            centroids = np.array(centroids_list, dtype=np.float32)
             ground_positions = self.transformer.pixel_to_ground(centroids)
             
-            for idx, tid in enumerate(tids):
-                track = self.vehicle_data[tid]
+            for idx, tid in enumerate(valid_tids):
+                track = vehicle_data[tid]
                 
                 # Update previous status for adaptive ReID
                 track["prev_status"] = track.get("status", "unknown")
                 
-                if ground_positions is not None:
+                # FIX: Validate ground_positions length before indexing
+                if ground_positions is not None and idx < len(ground_positions):
                     track["ground_coordinates"] = ground_positions[idx]
                 
                 # --- Calculate Speed (km/h) ---
@@ -297,9 +327,12 @@ class CoreModule:
                             dist = math.sqrt((curr_gx - prev_gx)**2 + (curr_gy - prev_gy)**2)
                             raw_speed = (dist / dt) * 3.6
                             
-                            # Apply EWMA smoothing
-                            prev_speed = track.get("speed", raw_speed)
-                            track["speed"] = (self.ewma_alpha * raw_speed) + ((1 - self.ewma_alpha) * prev_speed)
+                            # FIX: Sanity cap speed spikes after occlusion
+                            if dt > 2.0:
+                                track["speed"] = raw_speed
+                            else:
+                                prev_speed = track.get("speed", raw_speed)
+                                track["speed"] = (self.ewma_alpha * raw_speed) + ((1 - self.ewma_alpha) * prev_speed)
                         else:
                             track["speed"] = track.get("speed", 0.0)
                     else:
@@ -321,20 +354,42 @@ class CoreModule:
                 # Simple Filtering for Visualization
                 if track["status"] == "active":
                     vis_tracks[tid] = track
+                    # Submit to OCR if enabled and active
+                    if self.local_ocr and track.get("confidence", 0) > 0.7:
+                        bbox = track.get("bbox")
+                        if bbox:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            roi = frame[max(0, y1):min(frame.shape[0], y2), max(0, x1):min(frame.shape[1], x2)]
+                            if roi.size > 0:
+                                self.ocr_executor.submit(self._run_ocr, tid, roi)
                 elif track["status"] == "predicting":
                     if (current_time - track["last_seen"]) < self.predict_timeout:
                         vis_tracks[tid] = track
 
         self._save_vehicle_data(vis_tracks)
-        self._process_ocr_results()
+        self._process_ocr_results(vehicle_data)
 
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
+
+    def _run_ocr(self, tid: str, roi: np.ndarray):
+        """Worker function for OCR executor."""
+        try:
+            text = self.local_ocr.process(roi) if self.local_ocr else None
+            if text:
+                self.ocr_results_queue.put({"track_id": tid, "plate_text": text})
+        except Exception as e:
+            logger.error(f"OCR processing failed for {tid}: {e}")
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
         for vehicle_id, data in tracked_vehicles.items():
             if self.db_queue:
                 try:
                     now = time.time()
+                    # Throttle DB writes to 1Hz per vehicle
+                    last_saved = data.get("_last_db_save", 0)
+                    if now - last_saved < 1.0:
+                        continue
+                    
                     self.db_queue.put_nowait({
                         "type": "vehicle_data",
                         "feed_id": self.feed_id,
@@ -351,24 +406,30 @@ class CoreModule:
                         "status": str(data["status"]),
                         "lane": int(data.get("lane", -1)),
                     })
+                    data["_last_db_save"] = now
                 except queue.Full:
                     pass
 
-    def _process_ocr_results(self):
+    def _process_ocr_results(self, vehicle_data: Dict[str, Dict]):
         """Drains the OCR results queue and updates vehicle data."""
         try:
             while True:
                 result = self.ocr_results_queue.get_nowait()
                 tid = result["track_id"]
-                if tid in self.vehicle_data:
-                    self.vehicle_data[tid]["license_plate"] = result["plate_text"]
+                if tid in vehicle_data:
+                    vehicle_data[tid]["license_plate"] = result["plate_text"]
         except queue.Empty:
             pass
 
     def cleanup(self):
-        """Shutdown thread pools."""
+        """Shutdown thread pools and release resources."""
         if self.ocr_executor:
             self.ocr_executor.shutdown(wait=True)
+        # FIX: Explicitly clear heavy models/managers to free memory
+        self.reid_embedder = None
+        self.preprocessor = None
+        self.local_ocr = None
+        logger.info(f"[{self.feed_id}] CoreModule resources cleaned up.")
 
     def update_config(self, updates: Dict[str, Any]):
         """Dynamically updates configuration."""
@@ -380,5 +441,10 @@ class CoreModule:
                 self.transformer.update_calibration(v_cfg["calibration"])
         
         if "roi" in updates:
-            # Handle ROI updates
-            pass
+            # FIX: Implement ROI updates
+            roi_points = updates["roi"]
+            if isinstance(roi_points, list):
+                self.roi_polygon_points = roi_points
+                res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
+                self._initialize_roi_mask(res)
+                self.detector.initialize_roi(res, self.roi_polygon_points)

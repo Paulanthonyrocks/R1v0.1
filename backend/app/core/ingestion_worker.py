@@ -48,14 +48,12 @@ def ingestion_worker(
     redis_client = get_redis_client()
 
 
-    # --- Signal Handling ---
+# --- Signal Handling ---
     def signal_handler(signum, frame):
-        logger.info(f"[{feed_id}] Received signal {signum}, triggering global stop via Redis")
-        from app.utils.distributed_queue import RedisPubSubSignal
-        stop_signal = RedisPubSubSignal("pipeline_stop")
-        stop_signal.publish("1")
-        # Also set the key for workers doing existence checks
-        redis_client.set("signal:pipeline_stop", "1")
+        logger.info(f"[{feed_id}] Received signal {signum}, setting local stop event")
+        # Only set the local stop event instead of publishing global Redis signals
+        if stop_event:
+            stop_event.set()
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -82,6 +80,10 @@ def ingestion_worker(
         )
     
     metrics = WorkerMetrics(feed_id)
+    
+    # Frame counter for pressure check throttling
+    frame_check_counter = 0
+    pressure_check_interval = 30  # Check pressure every 30 frames
 
     # Pre-extract config
     video_processing_cfg = config.get("video_processing", {})
@@ -235,13 +237,19 @@ def ingestion_worker(
                 frame_index, frame = result
 
                 try:
-                    pressure_val = redis_client.get("pipeline:pressure")
-                    pressure = float(pressure_val) if pressure_val else 0.0
-                    if pressure > 0.7:
-                        metrics.frames_dropped += 1
-                        if metrics.frames_dropped % 100 == 0:
-                            logger.warning(f"[{feed_id}] Global Pressure High ({pressure:.2f}). Dropping frame {frame_index} EARLY.")
-                        continue
+                    # Check Redis pressure only every 30 frames to reduce pressure on Redis
+                    pressure_check_due = (frame_check_counter % pressure_check_interval == 0)
+                    if pressure_check_due:
+                        pressure_val = redis_client.get("pipeline:pressure")
+                        pressure = float(pressure_val) if pressure_val else 0.0
+                        if pressure > 0.7:
+                            metrics.frames_dropped += 1
+                            if metrics.frames_dropped % 100 == 0:
+                                logger.warning(f"[{feed_id}] Global Pressure High ({pressure:.2f}). Dropping frame {frame_index} EARLY.")
+                            continue
+                    
+                    # Increment frame counter for next pressure check
+                    frame_check_counter += 1
                     
                     q_size = central_input_queue.qsize()
                     if q_size > 300:
@@ -313,7 +321,6 @@ def ingestion_worker(
                             frame_buffer.release(shm_ref)
                         metrics.errors += 1
                         logger.error(f"[{feed_id}] Error queueing frame {frame_index}: {e}")
-
                     current_time = time.time()
                     if current_time - last_fps_log >= 5.0:
                         fps = metrics.frames_processed / (current_time - metrics.start_time)
