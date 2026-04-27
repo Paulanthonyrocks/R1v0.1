@@ -17,6 +17,10 @@ const _feedHookCounts: Map<string, number> = new Map();
 // don't cause a rapid unsubscribe→subscribe flicker that removes the client
 // from the server's feed_subscriptions set (which would drop video frames).
 const _pendingUnsubscribes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+// Pending worker cleanup timers — must be debounced alongside unsubscribe
+// so StrictMode remounts don't destroy worker resources (buffered frames,
+// decoding state) before the component re-subscribes.
+const _pendingCleanups: Map<string, ReturnType<typeof setTimeout>> = new Map();
 const UNSUBSCRIBE_DEBOUNCE_MS = 100;
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -101,26 +105,32 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   // --- Core Logic ---
 
-  const subscribeToFeed = useCallback(() => {
-    if (client.isConnected() && streamId) {
-      // Cancel any pending unsubscribe for this feed (e.g., from Strict Mode remount)
-      const pending = _pendingUnsubscribes.get(streamId);
-      if (pending) {
-        clearTimeout(pending);
-        _pendingUnsubscribes.delete(streamId);
-        // The feed is still in _subscribedFeeds (unsubscribe was pending, not executed),
-        // so no need to send another SUBSCRIBE. Just keep the existing subscription.
-        return;
-      }
-      if (!_subscribedFeeds.has(streamId)) {
-        _subscribedFeeds.add(streamId);
-        client.send({
-          type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
-          data: { feed_id: streamId },
-        });
-      }
-    }
-  }, [client, streamId]);
+ const subscribeToFeed = useCallback(() => {
+ if (client.isConnected() && streamId) {
+ // Cancel any pending unsubscribe for this feed (e.g., from Strict Mode remount)
+ const pending = _pendingUnsubscribes.get(streamId);
+ if (pending) {
+ clearTimeout(pending);
+ _pendingUnsubscribes.delete(streamId);
+ // The feed is still in _subscribedFeeds (unsubscribe was pending, not executed),
+ // so no need to send another SUBSCRIBE. Just keep the existing subscription.
+ return;
+ }
+ // Cancel any pending worker cleanup for this feed (e.g., from Strict Mode remount)
+ const pendingCleanup = _pendingCleanups.get(streamId);
+ if (pendingCleanup) {
+ clearTimeout(pendingCleanup);
+ _pendingCleanups.delete(streamId);
+ }
+ if (!_subscribedFeeds.has(streamId)) {
+ _subscribedFeeds.add(streamId);
+ client.send({
+ type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
+ data: { feed_id: streamId },
+ });
+ }
+ }
+ }, [client, streamId]);
 
   const unsubscribeFromFeed = useCallback(() => {
     // Only actually unsubscribe if this is the last hook instance for this feed.
@@ -229,31 +239,48 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         // (the server-side subscriptions are lost on disconnect)
         _subscribedFeeds.delete(streamId);
         subscribeToFeed();
-      } else if (status === 'disconnected') {
-        // Clear all tracked subscriptions on disconnect so reconnect re-subscribes
-        _subscribedFeeds.clear();
-      }
+ } else if (status === 'disconnected') {
+ // Clear all tracked subscriptions on disconnect so reconnect re-subscribes
+ _subscribedFeeds.clear();
+ // Clear all pending unsubscribes and cleanups — they're moot on disconnect
+ for (const [, timer] of _pendingUnsubscribes) clearTimeout(timer);
+ _pendingUnsubscribes.clear();
+ for (const [, timer] of _pendingCleanups) clearTimeout(timer);
+ _pendingCleanups.clear();
+ }
     });
 
-    return () => {
-      // Ref-count: decrement on unmount
-      const count = _feedHookCounts.get(streamId) ?? 1;
-      if (count <= 1) {
-        _feedHookCounts.delete(streamId);
-      } else {
-        _feedHookCounts.set(streamId, count - 1);
-      }
-      
-      // Only actually send UNSUBSCRIBE if this is the last consumer
-      unsubscribeFromFeed();
-      if (count <= 1) {
-        client.cleanupWorkerResources(streamId);
-      }
-      unsubscribeFrame();
-      unsubscribeStatus();
-      clearInterval(stalenessInterval);
-      if (lastFrameRef.current?.image instanceof ImageBitmap) lastFrameRef.current.image.close();
-    };
+ return () => {
+ // Ref-count: decrement on unmount
+ const count = _feedHookCounts.get(streamId) ?? 1;
+ if (count <= 1) {
+ _feedHookCounts.delete(streamId);
+ } else {
+ _feedHookCounts.set(streamId, count - 1);
+ }
+ 
+ // Only actually send UNSUBSCRIBE and cleanup worker if this is the last consumer.
+ // Both are debounced so React StrictMode remounts cancel them.
+ unsubscribeFromFeed();
+ if (count <= 1) {
+ // Debounce worker cleanup to match unsubscribe debounce.
+ // If StrictMode remounts within 100ms, the pending cleanup is cancelled
+ // and the worker keeps its buffered frames / decoding state intact.
+ const existingCleanup = _pendingCleanups.get(streamId);
+ if (existingCleanup) clearTimeout(existingCleanup);
+
+ const cleanupTimer = setTimeout(() => {
+ _pendingCleanups.delete(streamId);
+ client.cleanupWorkerResources(streamId);
+ }, UNSUBSCRIBE_DEBOUNCE_MS);
+
+ _pendingCleanups.set(streamId, cleanupTimer);
+ }
+ unsubscribeFrame();
+ unsubscribeStatus();
+ clearInterval(stalenessInterval);
+ if (lastFrameRef.current?.image instanceof ImageBitmap) lastFrameRef.current.image.close();
+ };
   }, [client, streamId, subscribeToFeed, unsubscribeFromFeed, handleFrame]);
 
   // --- Public API ---
