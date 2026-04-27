@@ -430,6 +430,11 @@ class FeedManager:
 
         self.logger.info("Starting overall video processing.")
         self._is_processing_active = True
+        
+        # Initialize the inference worker pool
+        pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        self.scale_pool(pool_size)
+        
         await self._check_and_manage_sample_feed()
 
         if self._prediction_scheduler:
@@ -451,33 +456,6 @@ class FeedManager:
         if self._prediction_scheduler:
             await self._prediction_scheduler.stop()
             self.logger.info("Prediction scheduler stopped.")
-
-    def _start_inference_pool(self):
-        pool_size = self._inference_pool_size
-        logger.info(f"Starting Inference Pool with {pool_size} partitioned workers.")
-        self._inference_command_queues = [MPQueue(maxsize=100) for _ in range(pool_size)]
-        for i in range(pool_size):
-            print(f"DEBUG: Starting InferenceWorker-{i}")
-            p = Process(
-                target=inference_worker,
-                args=(
-                    i,
-                    self._inference_input_queues[i], # Pass the partitioned queue
-                    self._central_output_queue,
-                    self._inference_command_queues[i],
-                    None, # Replace _inference_stop_event (Event) with None; worker will check Redis
-                    self.config,
-                    self._db_queue,
-                    None, # frame_buffer handled inside worker
-                    None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
-                ),
-                daemon=True,
-                name=f"InferenceWorker-{i}"
-            )
-            p.start()
-            self._inference_pool.append(p)
-            # Add small delay to avoid excessive RAM spike during spawn imports
-            time.sleep(0.1)
 
     async def _stop_inference_pool(self):
         logger.info("Stopping Inference Pool...")
