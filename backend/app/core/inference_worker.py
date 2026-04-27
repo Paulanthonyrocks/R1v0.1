@@ -84,6 +84,18 @@ def inference_worker(
         # Cannot use logger here as it may not be configured
         pass  # Logging config failed, will use default
 
+    # Initialize Redis client for signals and pressure
+    from app.utils.redis_client import get_redis_client
+    redis_client = get_redis_client()
+
+    def should_stop():
+        """Check if a stop signal has been received via event or Redis."""
+        if stop_event and getattr(stop_event, 'is_set', lambda: False)():
+            return True
+        if redis_client and redis_client.exists("signal:pipeline_stop"):
+            return True
+        return False
+
     # --- Signal Handling ---
     def signal_handler(signum, frame):
         logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
@@ -141,19 +153,6 @@ def inference_worker(
     
     # ... (rest of initialization)
     
-    # Main loop
-    while True:
-        # Check for stop signal via Pub/Sub (checking existence of key for low-latency check)
-        if redis_client.exists("signal:pipeline_stop"):
-            logger.info(f"Worker {worker_id} received stop signal via Redis. Terminating...")
-            break
-            
-        # Read current pipeline pressure from Redis
-        pressure_val = redis_client.get("pipeline:pressure")
-        current_pressure = float(pressure_val) if pressure_val else 0.0
-        
-        # ... (rest of the loop)
-
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
     
     model_path = vehicle_det_cfg.get("model_path")
@@ -162,6 +161,10 @@ def inference_worker(
     model_load_failed = False
     shared_reid_embedder = None
     if model_path:
+        if should_stop():
+            logger.info(f"[Worker {worker_id}] Stop signal received before model loading. Skipping.")
+            return
+
         try:
             logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
@@ -185,6 +188,10 @@ def inference_worker(
                 shared_model = YOLO(full_model_path)
                 shared_model.to(device)
                 logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
+
+            if should_stop():
+                logger.info(f"[Worker {worker_id}] Stop signal received after YOLO load. Skipping ReID.")
+                return
 
             # Load ReID
             if vehicle_det_cfg.get("reid_enabled", True):
