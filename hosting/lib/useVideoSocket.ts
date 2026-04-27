@@ -4,24 +4,14 @@ import { useWebSocket } from './websocket/WebSocketProvider';
 import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from './types';
 import { useVehicleRegistry } from './hooks/useVehicleRegistry';
 import { useVideoDecoder } from './hooks/useVideoDecoder';
-
-// ── Module-level dedup for FEED SUBSCRIPTIONS ─────────────────────────
-// Prevents N SurveillanceFeed components from each sending SUBSCRIBE_TO_FEED
-// and UNSUBSCRIBE_FROM_FEED on every React mount/unmount cycle. The server-side
-// subscription is per-client (not per-component), so one subscribe covers all.
-// Track which feeds are currently subscribed at the module level.
-const _subscribedFeeds: Set<string> = new Set();
-// Track active hook instances per feed for ref-counting
-const _feedHookCounts: Map<string, number> = new Map();
-// Pending unsubscribe timers — debounced so React Strict Mode remounts
-// don't cause a rapid unsubscribe→subscribe flicker that removes the client
-// from the server's feed_subscriptions set (which would drop video frames).
-const _pendingUnsubscribes: Map<string, ReturnType<typeof setTimeout>> = new Map();
-// Pending worker cleanup timers — must be debounced alongside unsubscribe
-// so StrictMode remounts don't destroy worker resources (buffered frames,
-// decoding state) before the component re-subscribes.
-const _pendingCleanups: Map<string, ReturnType<typeof setTimeout>> = new Map();
-const UNSUBSCRIBE_DEBOUNCE_MS = 100;
+import {
+ _subscribedFeeds,
+ _feedHookCounts,
+ _pendingUnsubscribes,
+ _pendingCleanups,
+ UNSUBSCRIBE_DEBOUNCE_MS,
+ resetFeedSubscriptionState
+} from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string, token: string | null) => {
   const client = useWebSocket();
@@ -241,12 +231,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
         subscribeToFeed();
  } else if (status === 'disconnected') {
  // Clear all tracked subscriptions on disconnect so reconnect re-subscribes
- _subscribedFeeds.clear();
- // Clear all pending unsubscribes and cleanups — they're moot on disconnect
- for (const [, timer] of _pendingUnsubscribes) clearTimeout(timer);
- _pendingUnsubscribes.clear();
- for (const [, timer] of _pendingCleanups) clearTimeout(timer);
- _pendingCleanups.clear();
+ resetFeedSubscriptionState();
  }
     });
 

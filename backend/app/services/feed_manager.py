@@ -431,6 +431,15 @@ class FeedManager:
         self.logger.info("Starting overall video processing.")
         self._is_processing_active = True
         
+        # CLEAR STALE STOP SIGNAL: Ensure workers don't exit immediately on startup
+        try:
+            from app.utils.redis_client import get_redis_client
+            rc = get_redis_client()
+            rc.delete("signal:pipeline_stop")
+            self.logger.info("Cleared stale pipeline stop signal from Redis.")
+        except Exception as e:
+            self.logger.warning(f"Could not clear stop signal: {e}")
+
         # Initialize the inference worker pool
         pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         self.scale_pool(pool_size)

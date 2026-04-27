@@ -2,6 +2,10 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { AlertData, FeedStatusData, BackendCongestionNodeData } from '@/lib/types';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
+import {
+ _subscribedFeeds,
+ resetFeedSubscriptionState
+} from '@/lib/websocket/feedSubscriptionState';
 
 interface KPIData {
   timestamp?: string | Date;
@@ -127,10 +131,11 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
           client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'kpi' } });
           client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic: 'node_congestion' } });
         }
-      } else if (status === 'disconnected') {
-        _initialFeedsRequestedForInstance = null;
-        _topicsSubscribedForInstance = null;
-      }
+ } else if (status === 'disconnected') {
+ _initialFeedsRequestedForInstance = null;
+ _topicsSubscribedForInstance = null;
+ resetFeedSubscriptionState();
+ }
     }));
 
     subscriptions.push(client.onError((_type, message) => {
@@ -217,13 +222,19 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
   };
   }, [client]);
 
-  const subscribeToFeed = useCallback((feedId: string) => {
-    sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feed_id: feedId });
-  }, [sendMessage]);
+ const subscribeToFeed = useCallback((feedId: string) => {
+ if (!_subscribedFeeds.has(feedId)) {
+ _subscribedFeeds.add(feedId);
+ sendMessage(WebSocketMessageType.SUBSCRIBE_TO_FEED, { feed_id: feedId });
+ }
+ }, [sendMessage]);
 
-  const unsubscribeFromFeed = useCallback((feedId: string) => {
-    sendMessage(WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, { feed_id: feedId });
-  }, [sendMessage]);
+ const unsubscribeFromFeed = useCallback((feedId: string) => {
+ if (_subscribedFeeds.has(feedId)) {
+ _subscribedFeeds.delete(feedId);
+ sendMessage(WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, { feed_id: feedId });
+ }
+ }, [sendMessage]);
 
   const startFeed = useCallback((feedId: string) => {
     sendMessage(WebSocketMessageType.START_FEED, { feed_id: feedId });
