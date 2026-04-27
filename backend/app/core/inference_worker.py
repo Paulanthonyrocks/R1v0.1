@@ -122,7 +122,7 @@ def inference_worker(
     if frame_buffer is None:
         # Create a handle to the existing shared memory pool
         # The SharedFrameBuffer constructor handles attaching to existing segments
-        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 200), read_only=True)
+        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 100), read_only=False)
     
     # ... (inside inference_worker)
     
@@ -293,34 +293,40 @@ def inference_worker(
                 inference_indices = []
                 batch_meta = []
 
-                for task_tuple in batch_tasks:
-                    msg_id, task = task_tuple
-                    feed_id, frame_index, shm_ref, extra_payload = task
-                    
-                    if frame_buffer:
-                        res = frame_buffer.read(shm_ref)
-                        frame_bytes, dims = res
-                    else:
-                        # This should not happen in a unified pipeline
-                        frame_bytes, dims = (shm_ref, (0, 0, 0))
-                        
-                    timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
-                    
-                    if feed_id not in metrics_map:
-                        metrics_map[feed_id] = WorkerMetrics(feed_id)
-                    
-                    if frame_index == -888:
-                         if feed_id in core_modules: core_modules[feed_id]._first_detection_done = False
-                         # Acknowledge control messages too
-                         continue
-                    if frame_index == -999:
-                         if feed_id in core_modules:
-                             core_modules[feed_id].cleanup(); del core_modules[feed_id]
-                         if feed_id in traffic_monitors: del traffic_monitors[feed_id]
-                         pending_configs.pop(feed_id, None)
-                         if feed_id in metrics_map: del metrics_map[feed_id]
-                         # Acknowledge control messages too
-                         continue
+        for task_tuple in batch_tasks:
+            msg_id, task = task_tuple
+            feed_id, frame_index, shm_ref, extra_payload = task
+            
+            # Handle control messages BEFORE attempting SHM read.
+            # Control messages use shm_ref=b"" which decodes to "" and
+            # causes SharedMemory(name="") -> OSError "/" Invalid argument.
+            if frame_index == -888:
+                if feed_id not in metrics_map:
+                    metrics_map[feed_id] = WorkerMetrics(feed_id)
+                if feed_id in core_modules:
+                    core_modules[feed_id]._first_detection_done = False
+                continue
+            if frame_index == -999:
+                if feed_id in core_modules:
+                    core_modules[feed_id].cleanup(); del core_modules[feed_id]
+                if feed_id in traffic_monitors:
+                    del traffic_monitors[feed_id]
+                pending_configs.pop(feed_id, None)
+                if feed_id in metrics_map:
+                    del metrics_map[feed_id]
+                continue
+            
+            if frame_buffer:
+                res = frame_buffer.read(shm_ref)
+                frame_bytes, dims = res
+            else:
+                # This should not happen in a unified pipeline
+                frame_bytes, dims = (shm_ref, (0, 0, 0))
+            
+            timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
+            
+            if feed_id not in metrics_map:
+                metrics_map[feed_id] = WorkerMetrics(feed_id)
 
                     if feed_id not in core_modules:
                         core_modules[feed_id] = CoreModule(
@@ -369,13 +375,13 @@ def inference_worker(
                                 metrics_obj.errors += 1
                                 continue
                     
-                    batch_meta.append({
-                        "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
-                        "timestamp": timestamp,
-                        "core": core, "monitor": monitor, "metrics": metrics_obj,
-                        "should_detect": should_detect, "first_detect": first_detect,
-                        "msg_id": msg_id
-                    })
+            batch_meta.append({
+                "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
+                "timestamp": timestamp,
+                "core": core, "monitor": monitor, "metrics": metrics_obj,
+                "should_detect": should_detect, "first_detect": first_detect,
+                "msg_id": msg_id, "shm_ref": shm_ref
+            })
 
                     if should_detect:
                         proc_frame, roi_enabled, x_off, y_off = core._preprocess_frame(frame)
@@ -414,8 +420,17 @@ def inference_worker(
                         timestamp=meta.get("timestamp")
                     )
                     
-                    # CRITICAL: Immediately release the uncompressed frame to free memory
-                    del frame
+        # CRITICAL: Immediately release the uncompressed frame to free memory
+        del frame
+        
+        # CRITICAL: Release SHM segment back to the free pool after reading.
+        # Without this, the pool drains to zero and ingestion drops all frames.
+        shm_ref = meta.get('shm_ref')
+        if shm_ref and frame_buffer:
+            try:
+                frame_buffer.release(shm_ref)
+            except Exception:
+                pass
                     
                     if vis_tracks and meta['first_detect']:
                         core._first_detection_done = True

@@ -174,7 +174,12 @@ class SharedFrameBuffer:
             try:
                 name = name.decode('utf-8')
             except UnicodeDecodeError:
+                # Not a valid segment name — treat as raw frame bytes fallback
                 return name, (0, 0, 0)
+
+        # Guard against empty or invalid segment names (e.g. from control signals)
+        if not name or name == '/':
+            raise ValueError(f'Invalid segment name: {repr(name)}')
 
         if name not in self._segments:
             try:
@@ -206,6 +211,8 @@ class SharedFrameBuffer:
         return buf[self.HEADER_SIZE : self.HEADER_SIZE + size], (w, h, c)
 
     def release(self, name: str):
+        if self._free_pool is None:
+            return
         try:
             self._free_pool.put(name, block=False)
         except queue.Full:
