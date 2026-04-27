@@ -293,41 +293,38 @@ def inference_worker(
                 inference_indices = []
                 batch_meta = []
 
-        for task_tuple in batch_tasks:
-            msg_id, task = task_tuple
-            feed_id, frame_index, shm_ref, extra_payload = task
-            
-            # Handle control messages BEFORE attempting SHM read.
-            # Control messages use shm_ref=b"" which decodes to "" and
-            # causes SharedMemory(name="") -> OSError "/" Invalid argument.
-            if frame_index == -888:
-                if feed_id not in metrics_map:
-                    metrics_map[feed_id] = WorkerMetrics(feed_id)
-                if feed_id in core_modules:
-                    core_modules[feed_id]._first_detection_done = False
-                continue
-            if frame_index == -999:
-                if feed_id in core_modules:
-                    core_modules[feed_id].cleanup(); del core_modules[feed_id]
-                if feed_id in traffic_monitors:
-                    del traffic_monitors[feed_id]
-                pending_configs.pop(feed_id, None)
-                if feed_id in metrics_map:
-                    del metrics_map[feed_id]
-                continue
-            
-            if frame_buffer:
-                res = frame_buffer.read(shm_ref)
-                frame_bytes, dims = res
-            else:
-                # This should not happen in a unified pipeline
-                frame_bytes, dims = (shm_ref, (0, 0, 0))
-            
-            timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
-            
-            if feed_id not in metrics_map:
-                metrics_map[feed_id] = WorkerMetrics(feed_id)
-
+                for task_tuple in batch_tasks:
+                    msg_id, task = task_tuple
+                    feed_id, frame_index, shm_ref, extra_payload = task
+                    
+                    # Handle control messages BEFORE attempting SHM read.
+                    if frame_index == -888:
+                        if feed_id not in metrics_map:
+                            metrics_map[feed_id] = WorkerMetrics(feed_id)
+                        if feed_id in core_modules:
+                            core_modules[feed_id]._first_detection_done = False
+                        continue
+                    if frame_index == -999:
+                        if feed_id in core_modules:
+                            core_modules[feed_id].cleanup(); del core_modules[feed_id]
+                        if feed_id in traffic_monitors:
+                            del traffic_monitors[feed_id]
+                        pending_configs.pop(feed_id, None)
+                        if feed_id in metrics_map:
+                            del metrics_map[feed_id]
+                        continue
+                    
+                    if frame_buffer:
+                        res = frame_buffer.read(shm_ref)
+                        frame_bytes, dims = res
+                    else:
+                        frame_bytes, dims = (shm_ref, (0, 0, 0))
+                    
+                    timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
+                    
+                    if feed_id not in metrics_map:
+                        metrics_map[feed_id] = WorkerMetrics(feed_id)
+                    
                     if feed_id not in core_modules:
                         core_modules[feed_id] = CoreModule(
                             feed_id=feed_id, model_path=vehicle_det_cfg.get("model_path"),
@@ -341,16 +338,16 @@ def inference_worker(
                         traffic_monitors[feed_id] = TrafficMonitor(config)
                         if feed_id in pending_configs:
                             core_modules[feed_id].update_config(pending_configs.pop(feed_id))
-
+                    
                     core = core_modules[feed_id]
-                    core.last_activity = time.time() # Track activity for pruning
+                    core.last_activity = time.time()
                     monitor = traffic_monitors[feed_id]
                     metrics_obj = metrics_map[feed_id]
-
+                    
                     actual_skip = skip_frames
                     first_detect = not getattr(core, '_first_detection_done', False)
                     should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
-
+                    
                     lane_cfg = config.get("lane_detection", {})
                     is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
                                      (frame_index % lane_cfg.get("lane_detection_interval", 10) == 0))
@@ -359,31 +356,26 @@ def inference_worker(
                     
                     frame = None
                     if needs_frame:
-                        # data is now JPEG bytes from SHM
                         if isinstance(frame_bytes, memoryview):
-                            # Decode JPEG from memoryview
                             frame = cv2.imdecode(np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-                            if frame is None:
-                                metrics_obj.errors += 1
-                                continue
                         elif isinstance(frame_bytes, np.ndarray):
                             frame = frame_bytes
                         else:
-                            # Fallback for rare cases
                             frame = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-                            if frame is None:
-                                metrics_obj.errors += 1
-                                continue
+                        
+                        if frame is None:
+                            metrics_obj.errors += 1
+                            continue
                     
-            batch_meta.append({
-                "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
-                "timestamp": timestamp,
-                "core": core, "monitor": monitor, "metrics": metrics_obj,
-                "should_detect": should_detect, "first_detect": first_detect,
-                "msg_id": msg_id, "shm_ref": shm_ref
-            })
-
-                    if should_detect:
+                    batch_meta.append({
+                        "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
+                        "timestamp": timestamp,
+                        "core": core, "monitor": monitor, "metrics": metrics_obj,
+                        "should_detect": should_detect, "first_detect": first_detect,
+                        "msg_id": msg_id, "shm_ref": shm_ref
+                    })
+                    
+                    if should_detect and frame is not None:
                         proc_frame, roi_enabled, x_off, y_off = core._preprocess_frame(frame)
                         frames_to_infer.append(proc_frame) 
                         inference_indices.append(len(batch_meta) - 1)
@@ -420,17 +412,13 @@ def inference_worker(
                         timestamp=meta.get("timestamp")
                     )
                     
-        # CRITICAL: Immediately release the uncompressed frame to free memory
-        del frame
-        
-        # CRITICAL: Release SHM segment back to the free pool after reading.
-        # Without this, the pool drains to zero and ingestion drops all frames.
-        shm_ref = meta.get('shm_ref')
-        if shm_ref and frame_buffer:
-            try:
-                frame_buffer.release(shm_ref)
-            except Exception:
-                pass
+                    # CRITICAL: Release SHM segment back to the free pool immediately after processing
+                    shm_ref = meta.get('shm_ref')
+                    if shm_ref and frame_buffer:
+                        try:
+                            frame_buffer.release(shm_ref)
+                        except Exception:
+                            pass
                     
                     if vis_tracks and meta['first_detect']:
                         core._first_detection_done = True
@@ -438,7 +426,6 @@ def inference_worker(
                     for vid, track in vis_tracks.items():
                         emb = track.get("embedding")
                         if emb:
-                            # Use match_or_register to ensure new identities are created and synced
                             global_id = local_reid_manager.match_or_register(
                                 feed_id=meta['feed_id'],
                                 local_id=str(vid),
@@ -448,12 +435,10 @@ def inference_worker(
                             )
                             track["global_vehicle_id"] = global_id
                         elif not track.get("global_vehicle_id"):
-                            # Fallback to check existing mapping for tracks without embeddings this frame
                             mapped_id = local_reid_manager.get_global_id(meta['feed_id'], str(vid))
                             if mapped_id: track["global_vehicle_id"] = mapped_id
                         
                     monitor.update_vehicles(vis_tracks)
-                    metrics_result = monitor.get_metrics()
                     metrics_obj.frames_processed += 1
                     
                     serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks)
@@ -462,21 +447,17 @@ def inference_worker(
                     v_proc_cfg = config.get("video_processing", {})
                     if v_proc_cfg.get("adaptive_streaming", False) and meta['should_detect']:
                          bg_scale = v_proc_cfg.get("roi_scale", 0.5)
-                         bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
-                         _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-                         extra["bg"] = bg_bytes.tobytes()
-                         extra["rois"] = _extract_rois(frame, serialized_v)
+                         if frame is not None:
+                             bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
+                             _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                             extra["bg"] = bg_bytes.tobytes()
+                             extra["rois"] = _extract_rois(frame, serialized_v)
                     
                     try:
-                        # We need to reconstruct the original task structure for the output queue
-                        # The task was (feed_id, frame_index, shm_ref, extra_payload)
-                        # We use the task data from the loop if we had it, but we only have meta.
-                        # Wait, I need to access the original task to get shm_ref and extra_payload.
-                        # I will modify the batch_meta to store the original task.
-                        pass # I'll fix this in the next instruction.
+                        if central_output_queue:
+                            central_output_queue.put_nowait((meta['feed_id'], f_idx, serialized_v, extra))
                     except queue.Full:
                         metrics_obj.frames_dropped += 1
-                        # We log a drop
                 
                 now = time.time()
                 if now - last_metrics_log > 30.0:
