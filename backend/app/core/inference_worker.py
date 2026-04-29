@@ -502,13 +502,12 @@ if model_path:
                                  extra["bg"] = bg_bytes.tobytes()
                                  # Pass stream_res for proper ROI scaling
                                  extra["rois"] = _extract_rois(frame, serialized_v, scale=stream_res[0]/640.0 if stream_res[0] != 0 else 1.0)
-                        
-try:
-if central_output_queue:
-central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
-sent_shm_refs.add(shm_ref)
-logger.info(f"[Worker {worker_id}] Pushed result for {meta['feed_id']} frame {f_idx} to central_output queue")
-except queue.Full:
+                        try:
+                            if central_output_queue:
+                                central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
+                                sent_shm_refs.add(shm_ref)
+                                logger.info(f"[Worker {worker_id}] Pushed result for {meta['feed_id']} frame {f_idx} to central_output queue")
+                        except queue.Full:
                             metrics_obj.frames_dropped += 1
 
                         now = time.time()
