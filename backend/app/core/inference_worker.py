@@ -313,9 +313,9 @@ def inference_worker(
 
                                     # Include slot_q reference for ACK
                                     batch_tasks.append((msg_id, t, slot_q))
-                        except (queue.Empty, IndexError):
-                            continue
-                        time.sleep(0.0005)
+                            except (queue.Empty, IndexError):
+                                continue
+                            time.sleep(0.0005)
                             
                 if not batch_tasks:
                     continue
