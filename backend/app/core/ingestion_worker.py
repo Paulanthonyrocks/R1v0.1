@@ -231,8 +231,8 @@ def ingestion_worker(
             handle_command(cmd)
         except queue.Empty:
           pass
-      except Exception as e:
-        logger.error(f"[{feed_id}] Command execution error: {e}")
+        except Exception as e:
+          logger.error(f"[{feed_id}] Command execution error: {e}")
 
       try:
         result = reader.read()
