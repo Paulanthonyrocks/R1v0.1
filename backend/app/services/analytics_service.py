@@ -61,7 +61,6 @@ class AnalyticsService:
         self._data_cache = TrafficDataCache()
         self._traffic_predictor_instance = None
         self._anomaly_detector_instance = None
-        self._prediction_log_table_initialized = False
         
         # [NEW] Safety Monitor
         self._safety_monitor = SafetyMonitor(config)
@@ -79,11 +78,11 @@ class AnalyticsService:
         
         self._feed_manager = None
         self._active_incidents = {} # { "location_name": timestamp }
-        self._kafka_consumer = None
         self._metrics_buffer = []
         self._metrics_buffer_lock = asyncio.Lock()
         self._flush_interval = 60 # Flush every 60 seconds
         self._last_flush_time = time.time()
+        self._is_flushing = False
 
         logger.info("AnalyticsService initialized.")
 
@@ -134,7 +133,9 @@ class AnalyticsService:
         # 1. Use the trained TrafficPredictor if available
         if self._traffic_predictor and hasattr(self._traffic_predictor, 'model') and self._traffic_predictor.model is not None:
             try:
-                prediction_result = self._traffic_predictor.predict_incident_likelihood(
+                # Offload CPU-bound ML inference to a separate thread to avoid blocking event loop
+                prediction_result = await asyncio.to_thread(
+                    self._traffic_predictor.predict_incident_likelihood,
                     recent_traffic_data=recent_traffic_data,
                     location=location,
                     prediction_time=prediction_time,
@@ -145,7 +146,10 @@ class AnalyticsService:
 
         # 2. Secondary: Use Anomaly Detector score as a likelihood proxy
         if self._anomaly_detector and recent_traffic_data:
-            anomaly_result = self._anomaly_detector.detect_anomaly(recent_traffic_data)
+            # Offload CPU-bound anomaly detection to a separate thread
+            anomaly_result = await asyncio.to_thread(
+                self._anomaly_detector.detect_anomaly, recent_traffic_data
+            )
             # Map MAE/Z-score to a 0-1 likelihood (heuristic)
             score = min(0.9, anomaly_result.get("score", 0) / 5.0) 
             if anomaly_result.get("is_anomaly"):
@@ -155,26 +159,17 @@ class AnalyticsService:
                     "incident_likelihood": score,
                     "confidence_score": 0.6,
                     "contributing_factors": [anomaly_result.get("reason", "anomaly")],
-                    "recommendations": ["High pattern deviation detected. Monitor closely."]
+                    "recommendations": ["High pattern deviation detected. Monitor closely."],
+                    "prediction_source": "fallback-anomaly"
                 }
 
         # 3. Final Fallback: Statistical Rule-based prediction
-        return self._traffic_predictor._rule_based_prediction(
+        result = await asyncio.to_thread(
+            self._traffic_predictor._rule_based_prediction,
             location, prediction_time, pd.DataFrame(recent_traffic_data)
         )
-
-    async def initialize_prediction_log_table(self):
-        if not self._prediction_log_table_initialized:
-            try:
-                async with self._db_manager.async_engine.begin() as conn:
-                    await conn.run_sync(PredictionLogModel.metadata.create_all)
-                self._prediction_log_table_initialized = True
-                logger.info("PredictionLog table initialized/checked successfully.")
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize PredictionLog table: {e}", exc_info=True
-                )
-                raise
+        result["prediction_source"] = "fallback-rule-based"
+        return result
 
     async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]] = None):
         # Placeholder for processing feed metrics
@@ -249,7 +244,8 @@ class AnalyticsService:
                 })
                 
                 # Check for flush
-                if len(self._metrics_buffer) >= 100 or (time.time() - self._last_flush_time > self._flush_interval):
+                if not self._is_flushing and (len(self._metrics_buffer) >= 100 or (time.time() - self._last_flush_time > self._flush_interval)):
+                    self._is_flushing = True
                     asyncio.create_task(self._flush_metrics_to_db())
         else:
             logger.warning(
@@ -259,6 +255,7 @@ class AnalyticsService:
     async def _flush_metrics_to_db(self):
         """Flushes the metrics buffer to the database."""
         async with self._metrics_buffer_lock:
+            self._is_flushing = False # Reset lock here
             if not self._metrics_buffer:
                 return
             
@@ -571,7 +568,10 @@ class AnalyticsService:
         # 1. Advanced Anomaly Detection (Pattern-based)
         # Use the last N points for sequence-based detection
         if self._anomaly_detector:
-            result = self._anomaly_detector.detect_anomaly(traffic_data_points)
+            # Offload CPU-bound anomaly detection to a separate thread
+            result = await asyncio.to_thread(
+                self._anomaly_detector.detect_anomaly, traffic_data_points
+            )
             if result.get("is_anomaly"):
                 latest = traffic_data_points[-1]
                 location_name = latest.get("location_description", "Unknown Location")
@@ -765,11 +765,12 @@ class AnalyticsService:
             self._prediction_verification_task = asyncio.create_task(self._verify_predictions_loop())
             logger.info("Prediction verification task started.")
 
-        if self._kafka_consumer and (self._kafka_consumer_task is None or self._kafka_consumer_task.done()):
-            self._kafka_consumer_task = asyncio.create_task(
-                self._consume_processed_traffic_data_loop()
-            )
-            logger.info("Kafka consumer task started.")
+        if AIOKafkaConsumer is not None and self.config.get("kafka", {}).get("enabled", False):
+            if self._kafka_consumer_task is None or self._kafka_consumer_task.done():
+                self._kafka_consumer_task = asyncio.create_task(
+                    self._consume_processed_traffic_data_loop()
+                )
+                logger.info("Kafka consumer task started.")
 
     async def stop_background_tasks(self):
         if self._node_congestion_task and not self._node_congestion_task.done():

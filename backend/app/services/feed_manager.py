@@ -49,8 +49,6 @@ from multiprocessing import Process
 
 logger = logging.getLogger("app.services.feed_manager")
 
-logger = logging.getLogger("app.services.feed_manager")
-
 # Constants
 PROCESS_JOIN_TIMEOUT = 3.0
 QUEUE_MAX_SIZE = 500
@@ -67,28 +65,19 @@ SCALE_COOLDOWN = 30
 
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
-        # --- CRITICAL: Set multiprocessing start method for CUDA safety ---
-        import multiprocessing
-        try:
-            multiprocessing.set_start_method('spawn', force=True)
-            logger.info("Multiprocessing start method set to 'spawn' for CUDA safety.")
-        except RuntimeError:
-            # Already set, ignore
-            pass
-
         self.config = config
         self.process_registry: Dict[str, Dict[str, Any]] = {}
         self.video_writers: Dict[str, VideoWriter] = {}
         self._lock = asyncio.Lock()
         self._feed_locks: Dict[str, asyncio.Lock] = {}
-        
+
         self._global_fps = None
         self._feed_id_counter = 1
         self._stop_reader_flag = False
         self._result_reader_task: Optional[asyncio.Task] = None
         self.frame_subscriber_queues: Dict[str, List[asyncio.Queue]] = {}
         self._active_broadcast_tasks: Dict[str, asyncio.Task] = {} # Track per-feed broadcast tasks
-        
+
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
@@ -96,7 +85,7 @@ class FeedManager:
         self.frame_buffer = SharedFrameBuffer(pool_size=100, owner=True)
         self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
-        
+
         # Executor for CPU-bound result processing (SHM read -> bytes)
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="FeedMgr-Proc")
 
@@ -117,7 +106,7 @@ class FeedManager:
 
         # Metrics aggregation window
         self._metrics_averaging_window = self.config.get("metrics_averaging_window_seconds", 10)
-        
+
         # Persistence
         self.persistence_path = Path(self.config.get("feeds_config_path", "backend/data/feeds_config.json"))
 
@@ -130,7 +119,7 @@ class FeedManager:
         # Virtual Slot Architecture for Dynamic Scaling
         self.slot_count = SLOT_COUNT
         self.use_redis = self.config.get("redis", {}).get("enabled", False)
-        
+
         if self.use_redis:
             # Redis handles slots via stream keys or consumer groups
             # For simplicity in this refactor, we'll use a single stream that workers compete for,
@@ -141,18 +130,16 @@ class FeedManager:
             # Fixed pool of slot queues to ensure feed affinity during scaling
             self._inference_input_queues = [RedisQueue(f'slot_{i}', maxsize=100) for i in range(self.slot_count)]
             self._central_output_queue = RedisQueue('central_output', maxsize=QUEUE_MAX_SIZE)
-        
+
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
         self._inference_stop_event = RedisEvent('inference_stop')
-        
+
         # Initial Scaling (will be started in start_inference_pool)
         self._initial_inference_pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
-            
+
         # Removed redundant list initialization of _inference_pool and _inference_command_queues
-
-
 
         # Initialize shared values
         self.initialize_shared_values()
@@ -162,18 +149,26 @@ class FeedManager:
         # Register cleanup on exit
         atexit.register(self._atexit_cleanup)
 
-        # Start background reader and watchdog
+    async def initialize(self):
+        """Asynchronous initialization to start background tasks after the loop is running."""
+        import multiprocessing
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+            logger.info("Multiprocessing start method set to 'spawn' for CUDA safety.")
+        except RuntimeError:
+            # Already set, ignore
+            pass
+
         self._result_reader_task = asyncio.create_task(self._read_result_queues())
         self._pressure_task = asyncio.create_task(self._update_pipeline_pressure())
         self._scaling_task = asyncio.create_task(self._scaling_monitor())
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         self.logger.info("FeedManager initialized. Reader, Watchdog, Pressure and Scaling tasks started.")
 
+
     def _get_feed_lock(self, feed_id: str) -> asyncio.Lock:
         """Returns a per-feed lock to ensure atomic operations like restart."""
-        if feed_id not in self._feed_locks:
-            self._feed_locks[feed_id] = asyncio.Lock()
-        return self._feed_locks[feed_id]
+        return self._feed_locks.setdefault(feed_id, asyncio.Lock())
 
 
 
@@ -215,25 +210,34 @@ class FeedManager:
         logger.info(f"Scaling inference pool: {current_size} -> {target_size}")
         
         # 1. Rebalance Slots
-        # Simple round-robin assignment of the 64 slots
+        old_slot_to_worker = self._slot_to_worker.copy()
         self._slot_to_worker = {slot: (slot % target_size) for slot in range(self.slot_count)}
         
-        # 2. Adjust Processes
+        # 2. Terminate excess workers
         if target_size < current_size:
-            # Terminate excess workers
             for wid in sorted(self._inference_pool.keys(), reverse=True):
                 if wid >= target_size:
                     p = self._inference_pool.pop(wid)
                     p.terminate()
                     self._inference_command_queues.pop(wid, None)
         
-        # 3. Start/Restart all workers to apply new slot mappings
-        # (For a truly seamless transition, we would send a 'rebalance' command, 
-        # but restarting is safer for this implementation)
+        # 3. Handle Worker Transitions
+        # Only restart workers whose slot assignments have actually changed.
         for wid in range(target_size):
-            if wid in self._inference_pool:
-                self._inference_pool[wid].terminate()
-            self._spawn_worker(wid)
+            needs_restart = False
+            if wid not in self._inference_pool:
+                needs_restart = True
+            else:
+                # Check if any slot assigned to this worker has changed
+                assigned_slots = [s for s, w in self._slot_to_worker.items() if w == wid]
+                old_assigned_slots = [s for s, w in old_slot_to_worker.items() if w == wid]
+                if assigned_slots != old_assigned_slots:
+                    needs_restart = True
+            
+            if needs_restart:
+                if wid in self._inference_pool:
+                    self._inference_pool[wid].terminate()
+                self._spawn_worker(wid)
 
     def _atexit_cleanup(self):
         """Synchronous cleanup for interpreter exit."""
@@ -257,6 +261,13 @@ class FeedManager:
                 p.join(timeout=0.5)
                 if p.is_alive():
                     p.kill()
+        
+        # 3. Cleanup Shared Memory
+        try:
+            self.frame_buffer.cleanup()
+            logger.info("SharedFrameBuffer cleaned up successfully.")
+        except Exception as e:
+            logger.error(f"Error cleaning up SharedFrameBuffer: {e}")
 
 
 
@@ -402,11 +413,15 @@ class FeedManager:
                         for iv in identified_batch:
                             await asyncio.to_thread(db.upsert_identified_vehicle, iv)
                 else:
-                    # If DB manager is not ready, we must drop the items to prevent queue overflow
-                    # or re-queue them if critical. For vehicle tracking, dropping is often acceptable 
-                    # during startup/shutdown race conditions.
-                    if len(items) > 100:
-                        logger.warning(f"DB manager not available. Dropped {len(items)} items from db_queue.")
+                    # DB manager not ready. Put items back in the queue or buffer them.
+                    # Since RedisQueue.put is usually fast, we re-queue to maintain order.
+                    for item in items:
+                        try:
+                            self._db_queue.put(item)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(1.0) # Wait for initialization
+
 
                 # If we processed a full batch, yield briefly but don't sleep long
                 if len(items) >= 5000:
@@ -637,8 +652,9 @@ class FeedManager:
                 update_data = updates.copy()
                 # Validate/convert ROI if present
                 if "roi" in update_data and isinstance(update_data["roi"], list):
-                     # Ensure it matches the expected structure
-                     pass
+                     # ROI should be a list of lists/tuples: [[x1, y1, x2, y2], ...]
+                     if not all(isinstance(roi, (list, tuple)) and len(roi) == 4 for roi in update_data["roi"]):
+                         raise ValueError("ROI must be a list of [x1, y1, x2, y2] coordinates.")
                 
                 updated_config = current_config.model_copy(update=update_data)
                 entry["config_info"] = updated_config
@@ -1274,7 +1290,10 @@ class FeedManager:
         if not entry:
             return vehicles
         
+        # Ensure vehicle_states exists. 
+        # This is read-only after initialization, and created under _lock in add_and_start_feed or restart_feed
         if "vehicle_states" not in entry:
+            # This should rarely happen if the feed is RUNNING, but for safety:
             entry["vehicle_states"] = {}
             
         last_states = entry["vehicle_states"]
@@ -1643,6 +1662,15 @@ class FeedManager:
             tasks.append(self._db_reader_task)
             
         if tasks:
-            await asyncio.wait(tasks, timeout=5.0)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
+o.wait(tasks, timeout=5.0)
+
+    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
+re)
+o.wait(tasks, timeout=5.0)
 
     # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)

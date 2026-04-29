@@ -42,12 +42,8 @@ class ServiceRegistry:
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
         self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
-        self._health_check_lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
         self._initialized = False
-        
-        # Deadlock detection
-        self._initialization_stack = []
-        self._max_init_depth = 10
 
     @property
     def connection_manager(self) -> ConnectionManager:
@@ -133,48 +129,46 @@ class ServiceRegistry:
         connection_manager: ConnectionManager
     ) -> None:
         """Initialize all application services."""
-        if self._initialized:
-            logger.warning("Services already initialized. Skipping re-initialization.")
-            return
+        async with self._init_lock:
+            if self._initialized:
+                logger.warning("Services already initialized. Skipping re-initialization.")
+                return
 
-        self._connection_manager = connection_manager
+            self._connection_manager = connection_manager
 
-        try:
-            # Get database manager
-            db_manager = get_database_manager()
-            logger.info("DatabaseManager instance obtained for service initialization.")
-        except RuntimeError as e:
-            logger.error(f"Failed to get DatabaseManager: {e}")
-            raise
+            try:
+                # Get database manager once and pass it down
+                db_manager = get_database_manager()
+                logger.info("DatabaseManager instance obtained for service initialization.")
+            except RuntimeError as e:
+                logger.error(f"Failed to get DatabaseManager: {e}")
+                raise
 
-        # Initialize core services
-        await self._initialize_core_services(config, connection_manager)
-        
-        # Initialize dependent services
-        await self._initialize_dependent_services(config, db_manager)
-        
-        # Initialize optional services
-        await self._initialize_optional_services(config, db_manager)
-
-        self._initialized = True
-        logger.info("All application services initialized successfully.")
+            try:
+                # Initialize core services
+                await self._initialize_core_services(config, connection_manager, db_manager)
+                
+                # Initialize dependent services
+                await self._initialize_dependent_services(config, db_manager)
+                
+                # Initialize optional services
+                await self._initialize_optional_services(config, db_manager)
+                
+                self._initialized = True
+                logger.info("All application services initialized successfully.")
+            except Exception as e:
+                logger.error(f"Initialization failed midway: {e}. Tearing down partial states.")
+                await self.shutdown()
+                raise
 
     async def _initialize_core_services(
         self, 
         config: Dict[str, Any], 
-        connection_manager: ConnectionManager
+        connection_manager: ConnectionManager,
+        db_manager: Any
     ) -> None:
         """Initialize critical services required for basic operation."""
-        if len(self._initialization_stack) > self._max_init_depth:
-            raise RuntimeError(
-                f"Possible circular dependency detected: {self._initialization_stack}"
-            )
-        
-        self._initialization_stack.append("core_services")
         try:
-            # Get database manager for dependencies
-            db_manager = get_database_manager()
-            
             # Traffic Signal Service
             self._traffic_signal_service = TrafficSignalService(
                 config=config,
@@ -211,7 +205,7 @@ class ServiceRegistry:
             self._analytics_service = AnalyticsService(
                 config=config,
                 connection_manager=connection_manager,
-                database_manager=get_database_manager(),
+                database_manager=db_manager,
                 traffic_predictor=traffic_predictor,
                 traffic_signal_service=self._traffic_signal_service,
                 notification_service=self._notification_service,
@@ -232,8 +226,9 @@ class ServiceRegistry:
             # Link Feed Manager to Incident Manager
             self._incident_manager.set_feed_manager(self._feed_manager)
             logger.info("FeedManager initialized and linked to IncidentManager.")
-        finally:
-            self._initialization_stack.pop()
+        except Exception as e:
+            logger.error(f"Error during core service initialization: {e}")
+            raise
 
     async def _load_traffic_predictor(self, config: Dict[str, Any]) -> Optional[TrafficPredictor]:
         """Load the traffic predictor model if configured."""
@@ -414,25 +409,25 @@ class ServiceRegistry:
         self._notification_service = None
         self._advanced_analytics_service = None
         self._incident_manager = None
+        self._node_manager = None
         self._connection_manager = None
 
     async def health_check(self) -> Dict[str, Any]:
         """Perform health check on all services."""
-        async with self._health_check_lock:
-            services_health = {}
-            overall_healthy = True
+        services_health = {}
+        overall_healthy = True
 
-            # Check Feed Manager
-            if self._feed_manager:
-                fm_healthy = self._feed_manager.is_healthy()
-                services_health["feed_manager"] = {
-                    "status": "healthy" if fm_healthy else "unhealthy",
-                    "healthy": fm_healthy
-                }
-                overall_healthy = overall_healthy and fm_healthy
-            else:
-                services_health["feed_manager"] = {"status": "not initialized", "healthy": False}
-                overall_healthy = False
+        # Check Feed Manager
+        if self._feed_manager:
+            fm_healthy = self._feed_manager.is_healthy()
+            services_health["feed_manager"] = {
+                "status": "healthy" if fm_healthy else "unhealthy",
+                "healthy": fm_healthy
+            }
+            overall_healthy = overall_healthy and fm_healthy
+        else:
+            services_health["feed_manager"] = {"status": "not initialized", "healthy": False}
+            overall_healthy = False
 
         # Check other critical services
         critical_services = [
@@ -506,8 +501,10 @@ async def initialize_services(
         logger_instance.warning("Services already initialized.")
         return
     
-    _service_registry = ServiceRegistry()
-    await _service_registry.initialize(config, connection_manager)
+    # Initialize locally first to avoid "zombie state" on failure
+    registry = ServiceRegistry()
+    await registry.initialize(config, connection_manager)
+    _service_registry = registry
     
     # Update globals for backward compatibility
     try:

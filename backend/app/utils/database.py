@@ -1067,6 +1067,46 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error saving alert to database: {e}", exc_info=True)
             raise DatabaseError(f"Failed to save alert: {e}") from e
+
+    def insert_alerts_batch(self, alert_data_list: list) -> int:
+        """Synchronously inserts a batch of alert dicts into the alerts table.
+        
+        Each dict should have keys: timestamp, severity, feed_id, message, details.
+        Missing keys are filled with safe defaults.
+        """
+        if not alert_data_list:
+            return 0
+
+        sql = """INSERT INTO alerts (timestamp, severity, feed_id, message, details, acknowledged)
+                 VALUES (?, ?, ?, ?, ?, 0)"""
+
+        batch_params = []
+        for alert in alert_data_list:
+            if not isinstance(alert, dict):
+                logger.warning(f"Skipping non-dict alert data: {type(alert).__name__}")
+                continue
+            batch_params.append((
+                alert.get("timestamp", time.time()),
+                alert.get("severity", "WARNING"),
+                alert.get("feed_id"),
+                alert.get("message", "No message"),
+                alert.get("details"),
+            ))
+
+        if not batch_params:
+            return 0
+
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, batch_params)
+                    conn.commit()
+            logger.debug(f"Batch inserted {len(batch_params)} alerts.")
+            return len(batch_params)
+        except Exception as e:
+            logger.error(f"Failed to batch insert alerts: {e}", exc_info=True)
+            raise DatabaseError(f"Batch alert insert failed: {e}") from e
+
     # ... (all your other synchronous and asynchronous database methods like get_alerts_filtered,
     #      save_alert, acknowledge_alert, get_raw_traffic_data_mongo, etc., remain here unchanged)
 

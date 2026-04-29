@@ -19,7 +19,6 @@ class DetectionEngine:
         
         # ROI Cache
         self.roi_mask = None
-        self.resolution = None
         self.scale_factors = None
 
     def load_model(self):
@@ -39,24 +38,24 @@ class DetectionEngine:
                 self.model = YOLO(self.model_path)
                 self.model.to(self.device)
                 logger.info(f"YOLO model loaded on {self.device}")
-            # Placeholder for other model types (RT-DETR, etc.)
+            else:
+                raise ValueError(f"Unsupported model type: {self.model_type}. Only 'yolo' is currently supported.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
 
     def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
         """Creates an ROI mask."""
-        self.resolution = resolution
-        # Fix: Ensure consistent resolution handling
-        # Use [height, width] format for np.zeros
-        self.roi_mask = np.zeros((resolution[1], resolution[0]), dtype=np.uint8)
+        # Create mask in a local variable first to ensure atomic update
+        mask = np.zeros((resolution[1], resolution[0]), dtype=np.uint8)
         if roi_points:
             pts = np.array(roi_points, np.int32)
-            cv2.fillPoly(self.roi_mask, [pts], 255)
+            cv2.fillPoly(mask, [pts], 255)
         else:
-            # Fix: Create all-255 mask when no ROI points provided (allow everything)
-            self.roi_mask.fill(255)
+            # Create all-255 mask when no ROI points provided (allow everything)
+            mask.fill(255)
         
+        self.roi_mask = mask
         # Pre-compute scale factors once per initialization
         self.scale_factors = None
 
@@ -82,9 +81,8 @@ class DetectionEngine:
         intersection_pixels = np.sum(roi_crop == 255)
         box_area = (x2 - x1) * (y2 - y1)
         
-        # Keep detection if at least 10% of the box is within the ROI
-        # Fix: Make threshold configurable
-        roi_overlap_threshold = 0.1  # Could be made configurable
+        # Keep detection if a configurable threshold of the box is within the ROI
+        roi_overlap_threshold = self.config.get("vehicle_detection", {}).get("roi_overlap_threshold", 0.1)
         return (intersection_pixels / (box_area + 1e-6)) >= roi_overlap_threshold
 
     def detect(self, frame: np.ndarray, confidence_threshold: float) -> List[Tuple]:
@@ -130,7 +128,7 @@ class DetectionEngine:
                     )
                     
                     if self.is_in_roi(scaled_bbox):
-                        # Fix: Return scaled bbox instead of original
-                        detections.append((scaled_bbox, cls, conf))
+                        # Fix: Return scaled bbox and explicit None for embedding
+                        detections.append((scaled_bbox, cls, conf, None))
         
         return detections

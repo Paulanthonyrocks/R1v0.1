@@ -8,28 +8,12 @@ to ensure consistency and reduce code duplication.
 import time
 import logging
 import numpy as np
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
+from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Worker Architecture Documentation
-WORKER_ARCHITECTURE_DOC = """
-WORKER ARCHITECTURE:
-- ingestion_worker.py: Capture frames from source → central_input_queue
-  Use for: Multi-feed systems where AI is shared across feeds
-  
-- inference_worker.py: Process frames from central_input_queue → AI results
-  Use for: GPU-bound scenarios where one GPU serves multiple feeds
-  
-- processing_worker.py: All-in-one (capture + AI + visualization)
-  Use for: Single-feed systems or when each feed needs isolated processing
-  
-DO NOT MIX: Choose either (ingestion + inference) OR (processing) per deployment
-"""
 
+from collections import deque
 
 class WorkerMetrics:
     """Tracks performance metrics for worker processes."""
@@ -40,16 +24,37 @@ class WorkerMetrics:
         self.frames_dropped = 0
         self.errors = 0
         self.start_time = time.time()
+        # Rolling window for current FPS (last 10 seconds)
+        self._frame_timestamps = deque()
+        self._window_size = 10.0
     
+    def mark_frame(self):
+        """Call this every time a frame is successfully processed."""
+        now = time.time()
+        self.frames_processed += 1
+        self._frame_timestamps.append(now)
+        # Prune timestamps older than the window size
+        while self._frame_timestamps and self._frame_timestamps[0] < now - self._window_size:
+            self._frame_timestamps.popleft()
+
     def to_dict(self) -> Dict[str, Any]:
         uptime = time.time() - self.start_time
+        # Calculate current rolling FPS
+        now = time.time()
+        # Prune again just in case it's called without a frame recently
+        while self._frame_timestamps and self._frame_timestamps[0] < now - self._window_size:
+            self._frame_timestamps.popleft()
+        
+        rolling_fps = len(self._frame_timestamps) / self._window_size if self._window_size > 0 else 0
+        
         return {
             "feed_id": self.feed_id,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
             "errors": self.errors,
             "uptime_seconds": uptime,
-            "fps": self.frames_processed / uptime if uptime > 0 else 0
+            "fps": rolling_fps,
+            "lifetime_fps": self.frames_processed / uptime if uptime > 0 else 0
         }
     
     def reset(self):
@@ -58,24 +63,21 @@ class WorkerMetrics:
         self.frames_dropped = 0
         self.errors = 0
         self.start_time = time.time()
+        self._frame_timestamps.clear()
 
 
 def make_serializable(obj: Any) -> Any:
     """
-    Convert numpy types to Python builtin types for JSON serialization.
-    
-    Args:
-        obj: Value that may contain numpy types
-        
-    Returns:
-        Python builtin type equivalent
+    Recursively convert numpy types and nested structures to Python builtin types for JSON serialization.
     """
-    if isinstance(obj, (np.integer, np.int64, np.int32)):
-        return int(obj)
-    if isinstance(obj, (np.floating, np.float64, np.float32)):
-        return float(obj)
+    if isinstance(obj, np.generic):
+        return obj.item()
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return [make_serializable(x) for x in obj.tolist()]
+    if isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [make_serializable(x) for x in obj]
     return obj
 
 
@@ -114,10 +116,12 @@ def serialize_tracked_vehicles(
                     bbox[2] * scale_x,
                     bbox[3] * scale_y
                 ]
+            elif bbox is not None:
+                logger.warning(f"Malformed bbox for vehicle {vehicle_id}: {bbox}")
 
             serialized_list.append({
                 "vehicle_id": str(vehicle_id),
-                "bbox": [make_serializable(x) for x in scaled_bbox],
+                "bbox": [make_serializable(x) for x in scaled_bbox] if scaled_bbox else [],
                 "speed": make_serializable(data.get("speed", 0)),
                 "license_plate": str(data.get("license_plate", "Unknown")),
                 "class_id": int(c_id),
@@ -129,13 +133,14 @@ def serialize_tracked_vehicles(
                 "status": str(data.get("status", "unknown")),
                 "vx": make_serializable(data.get("vx", 0)),
                 "vy": make_serializable(data.get("vy", 0)),
-                "ground_centroid": [make_serializable(x) for x in data.get("ground_centroid")] if "ground_centroid" in data else None,
+                "ground_coordinates": [make_serializable(x) for x in data.get("ground_coordinates")] if "ground_coordinates" in data else None,
                 "car_model": data.get("car_model"),
                 "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),
                 "gallery_size": make_serializable(data.get("gallery_size", 0)),
             })
         except Exception as e:
             logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")
+            serialized_list.append({"vehicle_id": str(vehicle_id), "serialization_error": True})
             continue
     
     return serialized_list

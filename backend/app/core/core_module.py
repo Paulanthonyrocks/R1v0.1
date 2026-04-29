@@ -57,7 +57,6 @@ class CoreModule:
         self.config = copy.deepcopy(config)
         self.fps = fps
         self.db_queue = db_queue
-        self.gemini_api_key = gemini_api_key
         
         # 1. Configuration sections
         v_cfg = self.config.get("vehicle_detection", {})
@@ -97,7 +96,7 @@ class CoreModule:
         
         self.last_detected_lane_lines = None
         self.cached_lane_boundaries = []
-        self.last_lane_detection_frame = -1
+        self.last_lane_detection_time = 0.0
         self.lane_detection_interval = l_cfg.get("detection_interval", 1.0)
         
         # 5. Behavior & Speed
@@ -227,13 +226,13 @@ class CoreModule:
         # 1. Lane Detection (Periodic)
         if (self.config.get("lane_detection", {}).get("enabled", False) and 
             process_frame_for_lanes and 
-            (frame_index - self.last_lane_detection_frame) >= self.lane_detection_interval):
+            (time.time() - self.last_lane_detection_time) >= self.lane_detection_interval):
             try:
                 lines = process_frame_for_lanes(frame, self.config)
                 self.last_detected_lane_lines = lines
                 if lines and get_lane_boundaries_from_lines:
                     self.cached_lane_boundaries = get_lane_boundaries_from_lines(frame.shape[1], lines, self.config)
-                    self.last_lane_detection_frame = frame_index
+                    self.last_lane_detection_time = time.time()
             except Exception as e:
                 logger.warning(f"Lane detection failed: {e}")
 
@@ -247,7 +246,7 @@ class CoreModule:
         
         # 3. Tracking (Optimized: Pass detections without embeddings first)
         dets_for_tracker = [(d[0], d[2], d[1], None) for d in detections]
-        vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape)
+        vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
 
         # 4. Selective ReID Enrichment (Batch)
         if self.reid_embedder:
@@ -447,4 +446,6 @@ class CoreModule:
                 self.roi_polygon_points = roi_points
                 res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
                 self._initialize_roi_mask(res)
+                self.detector.initialize_roi(res, self.roi_polygon_points)
+ze_roi_mask(res)
                 self.detector.initialize_roi(res, self.roi_polygon_points)

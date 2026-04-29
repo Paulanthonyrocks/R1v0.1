@@ -20,7 +20,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
 from app.utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, make_serializable, serialize_tracked_vehicles
+from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
 
 logger = logging.getLogger("Inference")
 
@@ -117,10 +117,8 @@ def inference_worker(
     # Start parent monitor to avoid zombies
     logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
     
-    # Use a dummy event for the monitor since we've moved to Redis signals
-    import multiprocessing
-    dummy_event = multiprocessing.Event()
-    start_parent_monitor(dummy_event, f"Inference-{worker_id}")
+    # Use the actual stop_event for the monitor
+    start_parent_monitor(stop_event, f"Inference-{worker_id}")
     
     logger.debug(f"[Worker {worker_id}] Initializing state containers...")
     # Per-feed CoreModules and Monitors (lazy initialized)
@@ -141,22 +139,11 @@ def inference_worker(
         # The SharedFrameBuffer constructor handles attaching to existing segments
         frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 100), read_only=False)
     
-    # ... (inside inference_worker)
-    
-    # Initialize Redis client for signals and pressure
-    from app.utils.redis_client import get_redis_client
-    redis_client = get_redis_client()
-    
-    # Replace stop_event check with Redis signal
-    # We'll check this periodically in the main loop
-    
     # Pre-extract shared config
     vehicle_det_cfg = config.get("vehicle_detection", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
-    
-    # ... (rest of initialization)
     
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
     
@@ -258,9 +245,9 @@ def inference_worker(
                     batch_size = max(1, batch_size // 2)
                     logger.debug(f"[Worker {worker_id}] High pipeline pressure ({pipeline_pressure.get('value'):.2f}). Reducing batch size to {batch_size}")
                 
-                # Hard cap for safety
-                MAX_SAFE_BATCH_SIZE = 2
-                batch_size = min(batch_size, MAX_SAFE_BATCH_SIZE)
+                # Ensure a reasonable upper bound for safety
+                # We use a constant here, but it could be moved to config
+                batch_size = min(batch_size, 8) 
 
                 inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
 
@@ -271,7 +258,8 @@ def inference_worker(
                             slot_q = central_input_queue[slot_id]
                             res = slot_q.get_nowait()
                             if res:
-                                if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], tuple):
+                                # Robustly handle (msg_id, task) envelope or raw task
+                                if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
                                     msg_id, first_task = res
                                 else:
                                     msg_id, first_task = None, res
@@ -295,22 +283,26 @@ def inference_worker(
                                 slot_q = central_input_queue[slot_id]
                                 res = slot_q.get_nowait()
                                 if res:
-                                    if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], tuple):
+                                    if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
                                         msg_id, t = res
                                     else:
                                         msg_id, t = None, res
                                     
                                     # 2. Smart Skip
                                     if q_depth > 200:
-                                        t_feed_id, t_frame_idx, _, _ = t
-                                        if t_frame_idx != -888 and t_frame_idx != -999:
-                                            if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
-                                                continue
+                                        if isinstance(t, (tuple, list)) and len(t) >= 4:
+                                            t_feed_id, t_frame_idx, _, _ = t[:4]
+                                            if t_frame_idx != -888 and t_frame_idx != -999:
+                                                if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
+                                                    continue
+                                        else:
+                                            # Malformed task, skip it or handle it
+                                            continue
                                     
                                     batch_tasks.append((None, t))
                             except (queue.Empty, IndexError):
                                 continue
-                            time.sleep(0.0005)
+                        time.sleep(0.0005)
                             
                 if not batch_tasks:
                    continue
@@ -352,7 +344,17 @@ def inference_worker(
 
                         if frame_buffer:
                             res = frame_buffer.read(shm_ref)
-                            frame_bytes, dims = res
+                            if res is None:
+                                logger.error(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
+                                metrics_obj.errors += 1
+                                continue
+                            
+                            if isinstance(res, tuple) and len(res) == 2:
+                                frame_bytes, dims = res
+                            else:
+                                logger.error(f"[Worker {worker_id}] SHM read returned unexpected format: {type(res)}")
+                                metrics_obj.errors += 1
+                                continue
                         else:
                             frame_bytes, dims = (shm_ref, (0, 0, 0))
                         
@@ -376,7 +378,6 @@ def inference_worker(
                                 core_modules[feed_id].update_config(pending_configs.pop(feed_id))
                         
                         core = core_modules[feed_id]
-                        core.last_activity = time.time()
                         monitor = traffic_monitors[feed_id]
                         metrics_obj = metrics_map[feed_id]
                         
@@ -402,7 +403,9 @@ def inference_worker(
                             if frame is None:
                                 metrics_obj.errors += 1
                                 continue
-                        
+
+                            # Update activity ONLY after successful frame acquisition/skip
+                            core.last_activity = time.time()                        
                         # Update meta with runtime info
                         meta_entry = {
                             "feed_id": feed_id, "frame_index": frame_index, "frame": frame, 
@@ -489,25 +492,30 @@ def inference_worker(
                                  bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
                                  _, bg_bytes = cv2.imencode(".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                                  extra["bg"] = bg_bytes.tobytes()
-                                 extra["rois"] = _extract_rois(frame, serialized_v)
+                                 # Pass stream_res for proper ROI scaling
+                                 extra["rois"] = _extract_rois(frame, serialized_v, scale=stream_res[0]/640.0 if stream_res[0] != 0 else 1.0)
                         
                         try:
                             if central_output_queue:
-                                central_output_queue.put_nowait((meta['feed_id'], f_idx, serialized_v, extra))
+                                central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
+                                sent_shm_refs.add(shm_ref)
                         except queue.Full:
                             metrics_obj.frames_dropped += 1
-                    
-                    now = time.time()
-                    if now - last_metrics_log > 30.0:
+
+                        now = time.time()
+                        if now - last_metrics_log > 30.0:
                           for fid, m in metrics_map.items():
                               logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
                           last_metrics_log = now
 
-                finally:
-                    # GUARANTEED RELEASE OF ALL SHM SEGMENTS IN BATCH
-                    for meta_item in batch_meta:
+                        except Exception as e:
+                        logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
+                        finally:
+                        # SAFE RELEASE: Release all SHM segments in the batch that were NOT sent to the manager.
+                        # If they were sent, the manager is now responsible for releasing them.
+                        for meta_item in batch_meta:
                         shm_ref = meta_item.get("shm_ref")
-                        if shm_ref and frame_buffer:
+                        if shm_ref and frame_buffer and shm_ref not in sent_shm_refs:
                             try:
                                 frame_buffer.release(shm_ref)
                             except Exception:
@@ -521,7 +529,21 @@ def inference_worker(
     finally:
         if local_reid_manager:
             logger.debug(f"[Worker {worker_id}] Cleaning up local ReID manager...")
-            # We don't have an explicit cleanup method on GlobalReIDManager, but we should ensure it's not holding onto resources.
-            # If it were, we would call it here.
-        for feed_id, cm in core_modules.items(): cm.cleanup()
+            try:
+                # Assuming GlobalReIDManager might have a cleanup or close method
+                if hasattr(local_reid_manager, 'cleanup'):
+                    local_reid_manager.cleanup()
+                elif hasattr(local_reid_manager, 'close'):
+                    local_reid_manager.close()
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Error cleaning up ReID manager: {e}")
+
+        for feed_id, cm in core_modules.items():
+            try:
+                cm.cleanup()
+            except Exception as e:
+                logger.error(f"[Worker {worker_id}] Error cleaning up CoreModule for {feed_id}: {e}")
+        
+        logger.info(f"Inference process {os.getpid()} terminated.")
+        
         logger.info(f"Inference process {os.getpid()} terminated.")
