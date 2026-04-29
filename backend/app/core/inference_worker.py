@@ -110,96 +110,96 @@ def inference_worker(
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-pid = os.getpid()
-logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
-logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
-logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
-logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
+    pid = os.getpid()
+    logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
+    logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+    logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
+    logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
 
-# Start parent monitor to avoid zombies
-logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
+    # Start parent monitor to avoid zombies
+    logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
 
-# Use the actual stop_event for the monitor
-start_parent_monitor(stop_event, f"Inference-{worker_id}")
+    # Use the actual stop_event for the monitor
+    start_parent_monitor(stop_event, f"Inference-{worker_id}")
 
-logger.debug(f"[Worker {worker_id}] Initializing state containers...")
-# Per-feed CoreModules and Monitors (lazy initialized)
-core_modules: Dict[str, CoreModule] = {}
-traffic_monitors: Dict[str, TrafficMonitor] = {}
-pending_configs: Dict[str, Dict] = {}
-metrics_map: Dict[str, WorkerMetrics] = {} # Feed-specific metrics
-shared_model = None
+    logger.debug(f"[Worker {worker_id}] Initializing state containers...")
+    # Per-feed CoreModules and Monitors (lazy initialized)
+    core_modules: Dict[str, CoreModule] = {}
+    traffic_monitors: Dict[str, TrafficMonitor] = {}
+    pending_configs: Dict[str, Dict] = {}
+    metrics_map: Dict[str, WorkerMetrics] = {} # Feed-specific metrics
+    shared_model = None
 
-# Initialize a local ReID manager for visual matching across loops
-from app.services.reid_manager import GlobalReIDManager
-local_reid_manager = GlobalReIDManager(config)
+    # Initialize a local ReID manager for visual matching across loops
+    from app.services.reid_manager import GlobalReIDManager
+    local_reid_manager = GlobalReIDManager(config)
 
-# Initialize shared frame buffer handle if not provided
-from app.utils.shared_frame_buffer import SharedFrameBuffer
-if frame_buffer is None:
-    # Create a handle to the existing shared memory pool
-    # The SharedFrameBuffer constructor handles attaching to existing segments
-    frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 100), read_only=False)
+    # Initialize shared frame buffer handle if not provided
+    from app.utils.shared_frame_buffer import SharedFrameBuffer
+    if frame_buffer is None:
+        # Create a handle to the existing shared memory pool
+        # The SharedFrameBuffer constructor handles attaching to existing segments
+        frame_buffer = SharedFrameBuffer(pool_size=config.get("performance", {}).get("shm_pool_size", 100), read_only=False)
 
-# Pre-extract shared config
-vehicle_det_cfg = config.get("vehicle_detection", {})
-target_fps = config.get("video_processing", {}).get("target_fps", 15)
-ocr_cfg = config.get("ocr_engine", {})
-stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
+    # Pre-extract shared config
+    vehicle_det_cfg = config.get("vehicle_detection", {})
+    target_fps = config.get("video_processing", {}).get("target_fps", 15)
+    ocr_cfg = config.get("ocr_engine", {})
+    stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
 
-skip_frames = vehicle_det_cfg.get("skip_frames", 2)
+    skip_frames = vehicle_det_cfg.get("skip_frames", 2)
 
-model_path = vehicle_det_cfg.get("model_path")
+    model_path = vehicle_det_cfg.get("model_path")
 
-# Shared Model Loading Logic
-model_load_failed = False
-shared_reid_embedder = None
-if model_path:
-    if should_stop():
-        logger.info(f"[Worker {worker_id}] Stop signal received before model loading. Skipping.")
-        return
-
-    try:
-        logger.info(f"[Worker {worker_id}] Loading shared models...")
-        root_dir = config.get("project_root_dir", "")
-        full_model_path = str(Path(root_dir) / model_path)
-        use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
-
-        # Load YOLO
-        engine_path = Path(full_model_path).with_suffix(".engine")
-        if engine_path.exists():
-            logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
-            from ultralytics import YOLO
-            import torch
-            device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
-            shared_model = YOLO(str(engine_path))
-            shared_model.to(device) 
-            logger.info(f"[Worker {worker_id}] Shared TensorRT engine loaded on {device}.")
-        else:
-            from ultralytics import YOLO
-            import torch
-            device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
-            shared_model = YOLO(full_model_path)
-            shared_model.to(device)
-            logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
-
+    # Shared Model Loading Logic
+    model_load_failed = False
+    shared_reid_embedder = None
+    if model_path:
         if should_stop():
-            logger.info(f"[Worker {worker_id}] Stop signal received after YOLO load. Skipping ReID.")
+            logger.info(f"[Worker {worker_id}] Stop signal received before model loading. Skipping.")
             return
 
-        # Load ReID
-        if vehicle_det_cfg.get("reid_enabled", True):
-            from app.ml.reid_model import ReIDEmbedder
-            logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
-            shared_reid_embedder = ReIDEmbedder(config)
-            logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+        try:
+            logger.info(f"[Worker {worker_id}] Loading shared models...")
+            root_dir = config.get("project_root_dir", "")
+            full_model_path = str(Path(root_dir) / model_path)
+            use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
 
-    except Exception as e:
-        logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
-        shared_model = None
-        model_load_failed = True
-        logger.critical(f"[Worker {worker_id}] Shared model load failed. Exiting worker to prevent silent failure.")
-        return
+            # Load YOLO
+            engine_path = Path(full_model_path).with_suffix(".engine")
+            if engine_path.exists():
+                logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
+                from ultralytics import YOLO
+                import torch
+                device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
+                shared_model = YOLO(str(engine_path))
+                shared_model.to(device) 
+                logger.info(f"[Worker {worker_id}] Shared TensorRT engine loaded on {device}.")
+            else:
+                from ultralytics import YOLO
+                import torch
+                device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
+                shared_model = YOLO(full_model_path)
+                shared_model.to(device)
+                logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
+
+            if should_stop():
+                logger.info(f"[Worker {worker_id}] Stop signal received after YOLO load. Skipping ReID.")
+                return
+
+            # Load ReID
+            if vehicle_det_cfg.get("reid_enabled", True):
+                from app.ml.reid_model import ReIDEmbedder
+                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
+                shared_reid_embedder = ReIDEmbedder(config)
+                logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+
+        except Exception as e:
+            logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
+            shared_model = None
+            model_load_failed = True
+            logger.critical(f"[Worker {worker_id}] Shared model load failed. Exiting worker to prevent silent failure.")
+            return
 
     def handle_command(cmd):
         if not cmd: return
