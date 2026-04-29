@@ -283,85 +283,84 @@ def inference_worker(
                 except queue.Empty:
                     pass
 
- if batch_tasks:
- logger.info(f'[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue')
- start_wait = time.time()
- while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
- for slot_id in slots:
- try:
- slot_q = central_input_queue[slot_id]
- res = slot_q.get_nowait()
- if res:
- if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
- msg_id, t = res
- else:
- msg_id, t = None, res
- 
- # 2. Smart Skip
- if q_depth > 200:
- if isinstance(t, (tuple, list)) and len(t) >= 4:
- t_feed_id, t_frame_idx, _, _ = t[:4]
- if t_frame_idx != -888 and t_frame_idx != -999:
- if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
- # ACK skipped messages immediately to prevent pending buildup
- if msg_id and hasattr(slot_q, 'ack'):
- slot_q.ack(msg_id)
- continue
- else:
- # Malformed task, skip it or handle it
- continue
- 
- # Include slot_q reference for ACK
- batch_tasks.append((msg_id, t, slot_q))
- except (queue.Empty, IndexError):
- continue
- time.sleep(0.0005)
+                if batch_tasks:
+                    logger.info(f'[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue')
+                    start_wait = time.time()
+                    while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
+                        for slot_id in slots:
+                            try:
+                                slot_q = central_input_queue[slot_id]
+                                res = slot_q.get_nowait()
+                                if res:
+                                    if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
+                                        msg_id, t = res
+                                    else:
+                                        msg_id, t = None, res
+                                    
+                                    # 2. Smart Skip
+                                    if q_depth > 200:
+                                        if isinstance(t, (tuple, list)) and len(t) >= 4:
+                                            t_feed_id, t_frame_idx, _, _ = t[:4]
+                                            if t_frame_idx != -888 and t_frame_idx != -999:
+                                                if t_feed_id in core_modules and getattr(core_modules[t_feed_id], '_first_detection_done', False):
+                                                    # ACK skipped messages immediately to prevent pending buildup
+                                                    if msg_id and hasattr(slot_q, 'ack'):
+                                                        slot_q.ack(msg_id)
+                                                    continue
+                                    else:
+                                        # Malformed task, skip it or handle it
+                                        continue
+
+                                    # Include slot_q reference for ACK
+                                    batch_tasks.append((msg_id, t, slot_q))
+                        except (queue.Empty, IndexError):
+                            continue
+                        time.sleep(0.0005)
                             
                 if not batch_tasks:
-                   continue
+                    continue
 
                 # Process Batch items
                 frames_to_infer = []
                 inference_indices = []
                 batch_meta = []
 
- try:
- for task_tuple in batch_tasks:
- msg_id, task, slot_q_ref = task_tuple
- feed_id, frame_index, shm_ref, extra_payload = task
- 
- # Handle control messages BEFORE attempting SHM read.
- if frame_index == -888:
- if feed_id not in metrics_map:
- metrics_map[feed_id] = WorkerMetrics(feed_id)
- if feed_id in core_modules:
- core_modules[feed_id]._first_detection_done = False
- # ACK control messages immediately
- if msg_id and hasattr(slot_q_ref, 'ack'):
- slot_q_ref.ack(msg_id)
- continue
- if frame_index == -999:
- if feed_id in core_modules:
- core_modules[feed_id].cleanup(); del core_modules[feed_id]
- if feed_id in traffic_monitors:
- del traffic_monitors[feed_id]
- pending_configs.pop(feed_id, None)
- if feed_id in metrics_map:
- del metrics_map[feed_id]
- # ACK control messages immediately
- if msg_id and hasattr(slot_q_ref, 'ack'):
- slot_q_ref.ack(msg_id)
- continue
- 
- # TRACK SHM REF FOR RELEASE
- batch_meta.append({
- "msg_id": msg_id,
- "slot_q": slot_q_ref,
- "shm_ref": shm_ref,
+                try:
+                    for task_tuple in batch_tasks:
+                        msg_id, task, slot_q_ref = task_tuple
+                        feed_id, frame_index, shm_ref, extra_payload = task
+
+                        # Handle control messages BEFORE attempting SHM read.
+                        if frame_index == -888:
+                            if feed_id not in metrics_map:
+                                metrics_map[feed_id] = WorkerMetrics(feed_id)
+                            if feed_id in core_modules:
+                                core_modules[feed_id]._first_detection_done = False
+                            # ACK control messages immediately
+                            if msg_id and hasattr(slot_q_ref, 'ack'):
+                                slot_q_ref.ack(msg_id)
+                            continue
+                        if frame_index == -999:
+                            if feed_id in core_modules:
+                                core_modules[feed_id].cleanup(); del core_modules[feed_id]
+                            if feed_id in traffic_monitors:
+                                del traffic_monitors[feed_id]
+                            pending_configs.pop(feed_id, None)
+                            if feed_id in metrics_map:
+                                del metrics_map[feed_id]
+                            # ACK control messages immediately
+                            if msg_id and hasattr(slot_q_ref, 'ack'):
+                                slot_q_ref.ack(msg_id)
+                            continue
+
+                        # TRACK SHM REF FOR RELEASE
+                        batch_meta.append({
+                            "msg_id": msg_id,
+                            "slot_q": slot_q_ref,
+                            "shm_ref": shm_ref,
                             "feed_id": feed_id,
                             "frame_index": frame_index
                         })
-
                         if frame_buffer:
                             res = frame_buffer.read(shm_ref)
                             if res is None:
