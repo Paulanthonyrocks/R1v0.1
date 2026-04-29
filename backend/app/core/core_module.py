@@ -447,5 +447,3 @@ class CoreModule:
                 res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
                 self._initialize_roi_mask(res)
                 self.detector.initialize_roi(res, self.roi_polygon_points)
-ze_roi_mask(res)
-                self.detector.initialize_roi(res, self.roi_polygon_points)
