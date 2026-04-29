@@ -1255,20 +1255,20 @@ class FeedManager:
                     while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
                         entry["metrics_history"].popleft()
 
-        # --- Broadcast Logic ---
-        target_fps = self.config.get("video_output", {}).get("fps", 10)
-        min_interval = 1.0 / target_fps
-        last_broadcast = entry.get("last_broadcast_time", 0.0)
-        
-        logger.info(f"[BROADCAST] Frame {frame_idx}: now={now}, last_broadcast={last_broadcast}, min_interval={min_interval}")
-        
-        if now - last_broadcast >= min_interval:
-            entry["last_broadcast_time"] = now
-            logger.info(f"[BROADCAST] Scheduling broadcast for {feed_id} frame {frame_idx} (interval check passed)")
-            task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
-            self._active_broadcast_tasks[feed_id] = task
-        else:
-            logger.debug(f"[BROADCAST] Skipping frame {frame_idx} due to FPS limit (elapsed: {now - last_broadcast:.3f}s, need: {min_interval:.3f}s)")
+                    # --- Broadcast Logic ---
+                    target_fps = self.config.get("video_output", {}).get("fps", 10)
+                    min_interval = 1.0 / target_fps
+                    last_broadcast = entry.get("last_broadcast_time", 0.0)
+                    
+                    logger.info(f"[BROADCAST] Frame {frame_idx}: now={now}, last_broadcast={last_broadcast}, min_interval={min_interval}")
+                    
+                    if now - last_broadcast >= min_interval:
+                        entry["last_broadcast_time"] = now
+                        logger.info(f"[BROADCAST] Scheduling broadcast for {feed_id} frame {frame_idx} (interval check passed)")
+                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+                        self._active_broadcast_tasks[feed_id] = task
+                    else:
+                        logger.debug(f"[BROADCAST] Skipping frame {frame_idx} due to FPS limit (elapsed: {now - last_broadcast:.3f}s, need: {min_interval:.3f}s)")
 
                     if self._analytics_service:
                         asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
