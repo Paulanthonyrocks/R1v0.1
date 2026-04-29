@@ -1138,7 +1138,7 @@ class FeedManager:
             raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
             frame_bytes = raw_jpg_view.tobytes()
             self.frame_buffer.release(shm_ref)
-            return feed_id, frame_bytes, metrics, vehicles, extra
+            return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
         except Exception as e:
             logger.error(f"Error processing result for {item[0] if len(item)>0 else 'unknown'}: {e}")
             return None
@@ -1192,7 +1192,7 @@ class FeedManager:
                         if msg_id: self._central_output_queue.ack(msg_id)
                         continue
                     
-                    feed_id, frame_bytes, metrics, vehicles, extra = result
+                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = result
                     
                     # Acknowledge the message now that it's processed
                     if msg_id:
@@ -1249,24 +1249,15 @@ class FeedManager:
                     while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
                         entry["metrics_history"].popleft()
 
-                    if feed_id in self.frame_subscriber_queues:
-                        for sub_q in self.frame_subscriber_queues[feed_id]:
-                            try:
-                                sub_q.put_nowait({"frame": frame_bytes, "metrics": metrics, "vehicles": vehicles})
-                            except asyncio.QueueFull:
-                                pass
-
+                    # --- Broadcast Logic ---
                     target_fps = self.config.get("video_output", {}).get("fps", 10)
                     min_interval = 1.0 / target_fps
                     last_broadcast = entry.get("last_broadcast_time", 0.0)
                     
                     if now - last_broadcast >= min_interval:
-                        prev_task = self._active_broadcast_tasks.get(feed_id)
-                        if prev_task and not prev_task.done():
-                            continue
-                        
                         entry["last_broadcast_time"] = now
-                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, 0, frame_bytes, metrics, vehicles, extra))
+                        logger.debug(f"Scheduling broadcast for {feed_id} frame {frame_idx}")
+                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
                         self._active_broadcast_tasks[feed_id] = task
 
                     if self._analytics_service:
@@ -1375,7 +1366,12 @@ class FeedManager:
         return delta_vehicles
 
     async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
-        if not self._connection_manager or not frame_bytes:
+        if not self._connection_manager:
+            logger.warning(f"Broadcast failed for {feed_id}: ConnectionManager not initialized")
+            return
+        
+        if not frame_bytes:
+            logger.warning(f"Broadcast failed for {feed_id} frame {frame_idx}: frame_bytes is empty")
             return
         
         try:
