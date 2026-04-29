@@ -1493,59 +1493,6 @@ async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics,
 
     # --- Sample Feed Management ---
 
-    def _any_real_feeds_active_unsafe(self) -> bool:
-        for entry in self.process_registry.values():
-            if not entry.get("is_sample_feed", False) and entry["status"] in [
-                FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING
-            ]:
-                return True
-        return False
-
-    async def _check_and_manage_sample_feed(self):
-        if not self._sample_feed_ids:
-            return
-
-        to_start = []
-        to_stop = []
-
-        async with self._lock:
-            real_active = self._any_real_feeds_active_unsafe()
-            
-            # If real feeds are active, stop all running sample feeds
-            if real_active:
-                for fid in self._sample_feed_ids:
-                    status = self.process_registry.get(fid, {}).get("status")
-                    if status in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
-                        to_stop.append(fid)
-            else:
-                # If no real feeds, ensure sample feeds are running (up to limit)
-                active_count = 0
-                for entry in self.process_registry.values():
-                    if entry["status"] in [FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING]:
-                        active_count += 1
-                
-                max_feeds = self.config.get("feed_manager", {}).get("max_concurrent_feeds", 10)
-                
-                for fid in self._sample_feed_ids:
-                    status = self.process_registry.get(fid, {}).get("status")
-                    if active_count < max_feeds and status in [FeedOperationalStatusEnum.STOPPED, FeedOperationalStatusEnum.ERROR]:
-                        to_start.append(fid)
-                        active_count += 1
-
-        # Perform actions outside lock
-        for fid in to_stop:
-            try:
-                await self._stop_feed_internal(fid)
-            except Exception: pass  # noqa: E701
-
-        # ONLY start sample feeds if processing is actually active.
-        # This prevents feeds from being launched during shutdown.
-        if self._is_processing_active:
-            for fid in to_start:
-                try:
-                    await self._start_feed_internal(fid)
-                except Exception: pass  # noqa: E701
-
     # --- Helper Methods ---
     
     async def get_all_statuses(self) -> List[FeedStatusData]:
