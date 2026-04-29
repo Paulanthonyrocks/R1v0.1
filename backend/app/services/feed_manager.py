@@ -120,33 +120,33 @@ class FeedManager:
         self.slot_count = SLOT_COUNT
         self.use_redis = self.config.get("redis", {}).get("enabled", False)
 
- if self.use_redis:
- # Each slot gets its OWN Redis stream key (e.g. stream:inference_input:slot_0)
- # This prevents cross-slot consumer group pollution where orphaned groups
- # accumulate pending messages that block delivery.
- # All workers sharing a slot compete via a single "workers" consumer group.
- self._inference_input_queues = [RedisStreamQueue(f'inference_input:slot_{i}', group_name='workers') for i in range(self.slot_count)]
- self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
- 
- # Purge stale consumer groups from the old monolithic stream (pre-fix migration)
- try:
- from app.utils.redis_client import get_redis_client
- _r = get_redis_client(decode_responses=False)
- _old_key = b"stream:inference_input"
- if _r.exists(_old_key):
- for _gi in range(16):
- _old_group = f"worker_{_gi}"
- try:
- _r.xgroup_destroy(_old_key, _old_group)
- except Exception:
- pass
- logger.info("Purged stale consumer groups from old monolithic inference_input stream")
- # Delete the old stream if empty after group cleanup
- if _r.xlen(_old_key) == 0:
- _r.delete(_old_key)
- except Exception as e:
- logger.debug(f"Old stream cleanup skipped: {e}")
- else:
+        if self.use_redis:
+            # Each slot gets its OWN Redis stream key (e.g. stream:inference_input:slot_0)
+            # This prevents cross-slot consumer group pollution where orphaned groups
+            # accumulate pending messages that block delivery.
+            # All workers sharing a slot compete via a single "workers" consumer group.
+            self._inference_input_queues = [RedisStreamQueue(f'inference_input:slot_{i}', group_name='workers') for i in range(self.slot_count)]
+            self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
+            
+            # Purge stale consumer groups from the old monolithic stream (pre-fix migration)
+            try:
+                from app.utils.redis_client import get_redis_client
+                _r = get_redis_client(decode_responses=False)
+                _old_key = b"stream:inference_input"
+                if _r.exists(_old_key):
+                    for _gi in range(16):
+                        _old_group = f"worker_{_gi}"
+                        try:
+                            _r.xgroup_destroy(_old_key, _old_group)
+                        except Exception:
+                            pass
+                    logger.info("Purged stale consumer groups from old monolithic inference_input stream")
+                    # Delete the old stream if empty after group cleanup
+                    if _r.xlen(_old_key) == 0:
+                        _r.delete(_old_key)
+            except Exception as e:
+                logger.debug(f"Old stream cleanup skipped: {e}")
+        else:
             # Fixed pool of slot queues to ensure feed affinity during scaling
             self._inference_input_queues = [RedisQueue(f'slot_{i}', maxsize=100) for i in range(self.slot_count)]
             self._central_output_queue = RedisQueue('central_output', maxsize=QUEUE_MAX_SIZE)
