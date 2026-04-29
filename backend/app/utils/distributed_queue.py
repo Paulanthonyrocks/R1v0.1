@@ -307,9 +307,20 @@ class RedisStreamQueue:
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def qsize(self) -> int:
-        """Returns the approximate size of the stream."""
-        return self.redis.xlen(self.key)
+ def qsize(self) -> int:
+ """Returns the number of unread messages for this consumer group (pending + lag)."""
+ try:
+ # XPENDING returns (count, min_id, max_id, consumers) for the group
+ pending_info = self.redis.xpending(self.key, self.group_name)
+ pending_count = pending_info.get("pending", 0) if isinstance(pending_info, dict) else (pending_info[0] if pending_info else 0)
+ return pending_count
+ except Exception:
+ pass
+ # Fallback: use stream length (overcounts but safe)
+ try:
+ return self.redis.xlen(self.key)
+ except Exception:
+ return 0
 
     def empty(self) -> bool:
         return self.qsize() == 0
