@@ -220,6 +220,7 @@ def inference_worker(
     
     try:
         while True:
+            sent_shm_refs = set()
             if should_stop():
                 logger.info(f"[Worker {worker_id}] Stop signal received. Exiting main loop.")
                 break
