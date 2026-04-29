@@ -1487,10 +1487,13 @@ class FeedManager:
                 await self._stop_feed_internal(fid)
             except Exception: pass  # noqa: E701
 
-        for fid in to_start:
-            try:
-                await self._start_feed_internal(fid)
-            except Exception: pass  # noqa: E701
+        # ONLY start sample feeds if processing is actually active.
+        # This prevents feeds from being launched during shutdown.
+        if self._is_processing_active:
+            for fid in to_start:
+                try:
+                    await self._start_feed_internal(fid)
+                except Exception: pass  # noqa: E701
 
     # --- Helper Methods ---
     
