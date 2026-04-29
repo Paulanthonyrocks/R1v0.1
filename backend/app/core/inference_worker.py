@@ -254,27 +254,27 @@ def inference_worker(
 
                 inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
 
- try:
- # Poll assigned slot queues
- for slot_id in slots:
- try:
- slot_q = central_input_queue[slot_id]
- res = slot_q.get_nowait()
- if res:
- # RedisStreamQueue returns (msg_id, item)
- # RedisQueue returns just item
- if isinstance(res, tuple) and len(res) == 2 and not isinstance(res[1], (tuple, list)):
- msg_id, task = res
- elif isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
- # Handle (msg_id, (feed_id, frame_idx, ...))
- msg_id, task = res
- else:
- msg_id, task = None, res
- # Include slot_q reference so we can ACK on the correct stream
- batch_tasks.append((msg_id, task, slot_q))
- except (queue.Empty, IndexError):
- continue
-                    
+                try:
+                    # Poll assigned slot queues
+                    for slot_id in slots:
+                        try:
+                            slot_q = central_input_queue[slot_id]
+                            res = slot_q.get_nowait()
+                            if res:
+                                # RedisStreamQueue returns (msg_id, item)
+                                # RedisQueue returns just item
+                                if isinstance(res, tuple) and len(res) == 2 and not isinstance(res[1], (tuple, list)):
+                                    msg_id, task = res
+                                elif isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
+                                    # Handle (msg_id, (feed_id, frame_idx, ...))
+                                    msg_id, task = res
+                                else:
+                                    msg_id, task = None, res
+                                # Include slot_q reference so we can ACK on the correct stream
+                                batch_tasks.append((msg_id, task, slot_q))
+                        except (queue.Empty, IndexError):
+                            continue
+                            
                     if not batch_tasks:
                         # If nothing was found in slots, sleep briefly to prevent CPU spin
                         time.sleep(0.01)
