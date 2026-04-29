@@ -542,6 +542,7 @@ def inference_worker(
                                 slot_q_ref.ack(msg_id)
                             except Exception:
                                 pass
+                        
                         # Release SHM segments not sent to the output queue
                         shm_ref = meta_item.get("shm_ref")
                         if shm_ref and frame_buffer and shm_ref not in sent_shm_refs:
@@ -549,10 +550,8 @@ def inference_worker(
                                 frame_buffer.release(shm_ref)
                             except Exception:
                                 pass
- pass
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
-
 
     except Exception as e:
         logger.error(f"[Worker {worker_id}] Fatal error: {e}", exc_info=True)
