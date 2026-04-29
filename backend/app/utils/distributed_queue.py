@@ -255,17 +255,34 @@ class RedisStreamQueue:
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Tuple[str, Any]:
         """
         Reads a message from the stream using XREADGROUP.
+        First attempts to read pending messages (ID '0'), then new messages (ID '>').
         Returns: (message_id, item)
         """
+        block_ms = int(timeout * 1000) if timeout else 0
+        
+        # 1. Try to read pending messages first (ID '0')
+        # This ensures that messages delivered but not ACKed (e.g. after a crash) are processed
+        try:
+            res = self.redis.xreadgroup(
+                self.group_name, 
+                self.consumer_id, 
+                {self.key: "0"}, 
+                count=1, 
+                block=block_ms if block else 0
+            )
+            if res and res[0][1]:
+                msg_id, data_dict = res[0][1][0]
+                return msg_id, pickle.loads(data_dict[b"data"])
+        except Exception as e:
+            logger.debug(f"Error reading pending messages: {e}")
+
+        # 2. Fallback to new messages (ID '>')
         if not block:
-            # Non-blocking read
             res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1)
         else:
-            # Blocking read
-            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=int(timeout * 1000) if timeout else 0)
+            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=block_ms)
 
         if res and res[0][1]:
-            # res format: [[stream_name, [[message_id, {data}]]]]
             msg_id, data_dict = res[0][1][0]
             return msg_id, pickle.loads(data_dict[b"data"])
         else:
