@@ -1145,8 +1145,13 @@ class FeedManager:
 
     async def _read_result_queues(self):
         logger.info("Result reader task started (Decoupled Mode).")
+        last_heartbeat = time.time()
         while not self._stop_reader_flag:
             try:
+                if time.time() - last_heartbeat > 10.0:
+                    logger.debug("Result reader heartbeat: loop is active")
+                    last_heartbeat = time.time()
+
                 items_buffer = []
                 # Drain Central Output Queue
                 try:
