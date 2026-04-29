@@ -17,11 +17,6 @@ from app.config import set_config_instance
 
 logger = logging.getLogger("Ingestion")
 
-# Slot mapping for feed-to-slot assignment
-def get_slot_for_feed(feed_id: str, num_slots: int = 4) -> int:
-  """Map feed_id to a slot index for queue routing."""
-  return hash(feed_id) % num_slots
-
 def ingestion_worker(
   video_path: str,
   feed_id: str,
@@ -115,14 +110,11 @@ def ingestion_worker(
 
   logger.debug(f"[{feed_id}] Initializing FrameReader...")
   
-  # Get slot for this feed
-  slot_id = get_slot_for_feed(feed_id)
-  
   # Issue #1 fix: Signal feed start to the correct slot queue
   try:
-    slot_queue = central_input_queue[slot_id]
+    slot_queue = central_input_queue
     slot_queue.put((feed_id, -888, b'', {"type": "feed_started", "timestamp": time.time()}), timeout=2.0)
-    logger.info(f"[{feed_id}] Sent feed_started signal to slot {slot_id}")
+    logger.info(f"[{feed_id}] Sent feed_started signal")
   except Exception as e:
     logger.error(f"[{feed_id}] Failed to send feed_started signal: {e}")
 
@@ -208,7 +200,7 @@ def ingestion_worker(
         logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
 
         # Issue #1 fix: use correct slot queue
-        slot_queue = central_input_queue[slot_id]
+        slot_queue = central_input_queue
         slot_queue.put((feed_id, -999, b'', {
           "type": "snapshot_saved",
           "incident_id": incident_id,
@@ -282,7 +274,7 @@ def ingestion_worker(
           continue
          
         # Use correct slot queue
-        slot_queue = central_input_queue[slot_id]
+        slot_queue = central_input_queue
         try:
           q_size = slot_queue.qsize()
           if q_size > 300:
@@ -341,7 +333,7 @@ def ingestion_worker(
 
             frame_buffer.write(shm_ref, last_frame_bytes)
 
-            slot_queue = central_input_queue[slot_id]
+            slot_queue = central_input_queue
             slot_queue.put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1)
             metrics.frames_processed += 1
           
@@ -392,9 +384,9 @@ def ingestion_worker(
 
   try:
     # Issue #1 fix: use correct slot queue for EOS
-    slot_queue = central_input_queue[slot_id]
+    slot_queue = central_input_queue
     slot_queue.put((feed_id, -999, b'', {"type": "feed_ended", "timestamp": time.time()}), timeout=2.0)
-    logger.info(f"[{feed_id}] Sent end-of-stream signal to slot {slot_id}")
+    logger.info(f"[{feed_id}] Sent end-of-stream signal")
   except Exception as e:
     logger.error(f"[{feed_id}] Error sending EOS signal: {e}")
 
