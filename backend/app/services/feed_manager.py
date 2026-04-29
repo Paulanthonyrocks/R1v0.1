@@ -1201,26 +1201,26 @@ class FeedManager:
                         except Exception as e:
                             logger.error(f"Failed to ack message {msg_id}: {e}")
 
-        entry = self.process_registry.get(feed_id)
-        if not entry:
-            logger.error(f"[RESULT_READER] Feed {feed_id} not found in process_registry, skipping message")
-            continue
-        
-        # Log frame reception
-        logger.info(f"[RESULT_READER] Received frame {frame_idx} for feed={feed_id}, size={len(frame_bytes)} bytes, vehicles={len(vehicles)}")
-        
-        if i % 10 == 0:
-            await asyncio.sleep(0)
-        
-        # Transition from STARTING to RUNNING
-        if entry["status"] == FeedOperationalStatusEnum.STARTING:
-            async with self._lock:
-                if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
-                    self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.RUNNING
-                    feed_ids_to_update.add(feed_id)
-                    if feed_id in self._feed_running_events:
-                        self._feed_running_events[feed_id].set()
-            logger.info(f"[RESULT_READER] Feed {feed_id} transitioned to RUNNING status")
+                    entry = self.process_registry.get(feed_id)
+                    if not entry:
+                        logger.error(f"[RESULT_READER] Feed {feed_id} not found in process_registry, skipping message")
+                        continue
+                    
+                    # Log frame reception
+                    logger.info(f"[RESULT_READER] Received frame {frame_idx} for feed={feed_id}, size={len(frame_bytes)} bytes, vehicles={len(vehicles)}")
+                    
+                    if i % 10 == 0:
+                        await asyncio.sleep(0)
+                    
+                    # Transition from STARTING to RUNNING
+                    if entry["status"] == FeedOperationalStatusEnum.STARTING:
+                        async with self._lock:
+                            if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
+                                self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.RUNNING
+                                feed_ids_to_update.add(feed_id)
+                                if feed_id in self._feed_running_events:
+                                    self._feed_running_events[feed_id].set()
+                        logger.info(f"[RESULT_READER] Feed {feed_id} transitioned to RUNNING status")
 
                     now = time.time()
                     metrics["timestamp"] = datetime.now(timezone.utc)
