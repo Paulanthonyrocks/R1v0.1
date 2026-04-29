@@ -1468,77 +1468,77 @@ class FeedManager:
                 
         return delta_vehicles
 
-async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
-    # ENHANCED LOGGING: Entry point
-    logger.info(f"[BROADCAST] >>>>>> START frame={frame_idx} feed={feed_id} bytes={len(frame_bytes) if frame_bytes else 0}")
-    
-    if not self._connection_manager:
-        logger.error(f"[BROADCAST] FAIL: ConnectionManager not initialized for feed={feed_id}")
-        return
-    
-    if not frame_bytes:
-        logger.error(f"[BROADCAST] FAIL: frame_bytes is empty for feed={feed_id} frame={frame_idx}")
-        return
-    
-    # Log connection manager state
-    active_conns = len(self._connection_manager.active_connections) if self._connection_manager.active_connections else 0
-    feed_subs = list(self._connection_manager.feed_subscriptions.keys()) if self._connection_manager.feed_subscriptions else []
-    logger.info(f"[BROADCAST] ConnectionManager: active_connections={active_conns}, feed_subscriptions={feed_subs}")
-    
-    try:
-        # 1. Compute Deltas (Bandwidth Optimization)
-        logger.info(f"[BROADCAST] Computing vehicle deltas for {len(vehicles) if vehicles else 0} vehicles")
-        optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
-        logger.info(f"[BROADCAST] Optimized to {len(optimized_vehicles)} vehicles")
-
-        # 2. Prepare Payload
-        payload = {
-            "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
-            "f": feed_id,
-            "i": frame_idx,
-            "ts": time.time(),
-            "v": optimized_vehicles,
-            "m": metrics
-        }
-        logger.info(f"[BROADCAST] Payload prepared: type={WebSocketMessageTypeEnum.VIDEO_FRAME}")
-
-        # 3. Check for Adaptive Streaming (ROIs)
-        if extra_payload and "bg" in extra_payload:
-            payload["bg"] = extra_payload["bg"]
-            payload["rois"] = extra_payload.get("rois", [])
-            logger.info(f"[BROADCAST] Using adaptive streaming with ROIs")
-        else:
-            payload["frame"] = frame_bytes
-            logger.info(f"[BROADCAST] Using standard frame broadcast, frame_bytes size={len(frame_bytes)}")
-
-        # 4. Binary Serialization with msgpack
-        # Use raw bytes for performance
-        def msgpack_default(obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            if isinstance(obj, (np.integer, np.int64, np.int32)):
-                return int(obj)
-            if isinstance(obj, (np.floating, np.float64, np.float32)):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return str(obj)
-
-        logger.info(f"[BROADCAST] Serializing payload...")
-        msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-        logger.info(f"[BROADCAST] Serialized to {len(msg_bytes)} bytes")
+    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
+        # ENHANCED LOGGING: Entry point
+        logger.info(f"[BROADCAST] >>>>>> START frame={frame_idx} feed={feed_id} bytes={len(frame_bytes) if frame_bytes else 0}")
         
-        # 5. Targeted Binary Delivery (Only to subscribers of this feed)
-        # Pass frame_idx for deterministic frame skipping in ConnectionManager
-        logger.info(f"[BROADCAST] Broadcasting to feed={feed_id} frame={frame_idx} size={len(msg_bytes)} bytes")
-        await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
-        logger.info(f"[BROADCAST] <<<<<< SUCCESS frame={frame_idx} feed={feed_id}")
+        if not self._connection_manager:
+            logger.error(f"[BROADCAST] FAIL: ConnectionManager not initialized for feed={feed_id}")
+            return
         
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        logger.error(f"[BROADCAST] EXCEPTION: {e}")
-        logger.error(f"[BROADCAST] Traceback: {error_trace}")
+        if not frame_bytes:
+            logger.error(f"[BROADCAST] FAIL: frame_bytes is empty for feed={feed_id} frame={frame_idx}")
+            return
+        
+        # Log connection manager state
+        active_conns = len(self._connection_manager.active_connections) if self._connection_manager.active_connections else 0
+        feed_subs = list(self._connection_manager.feed_subscriptions.keys()) if self._connection_manager.feed_subscriptions else []
+        logger.info(f"[BROADCAST] ConnectionManager: active_connections={active_conns}, feed_subscriptions={feed_subs}")
+        
+        try:
+            # 1. Compute Deltas (Bandwidth Optimization)
+            logger.info(f"[BROADCAST] Computing vehicle deltas for {len(vehicles) if vehicles else 0} vehicles")
+            optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
+            logger.info(f"[BROADCAST] Optimized to {len(optimized_vehicles)} vehicles")
+
+            # 2. Prepare Payload
+            payload = {
+                "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
+                "f": feed_id,
+                "i": frame_idx,
+                "ts": time.time(),
+                "v": optimized_vehicles,
+                "m": metrics
+            }
+            logger.info(f"[BROADCAST] Payload prepared: type={WebSocketMessageTypeEnum.VIDEO_FRAME}")
+
+            # 3. Check for Adaptive Streaming (ROIs)
+            if extra_payload and "bg" in extra_payload:
+                payload["bg"] = extra_payload["bg"]
+                payload["rois"] = extra_payload.get("rois", [])
+                logger.info(f"[BROADCAST] Using adaptive streaming with ROIs")
+            else:
+                payload["frame"] = frame_bytes
+                logger.info(f"[BROADCAST] Using standard frame broadcast, frame_bytes size={len(frame_bytes)}")
+
+            # 4. Binary Serialization with msgpack
+            # Use raw bytes for performance
+            def msgpack_default(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, (np.integer, np.int64, np.int32)):
+                    return int(obj)
+                if isinstance(obj, (np.floating, np.float64, np.float32)):
+                    return float(obj)
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return str(obj)
+
+            logger.info(f"[BROADCAST] Serializing payload...")
+            msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
+            logger.info(f"[BROADCAST] Serialized to {len(msg_bytes)} bytes")
+            
+            # 5. Targeted Binary Delivery (Only to subscribers of this feed)
+            # Pass frame_idx for deterministic frame skipping in ConnectionManager
+            logger.info(f"[BROADCAST] Broadcasting to feed={feed_id} frame={frame_idx} size={len(msg_bytes)} bytes")
+            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
+            logger.info(f"[BROADCAST] <<<<<< SUCCESS frame={frame_idx} feed={feed_id}")
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"[BROADCAST] EXCEPTION: {e}")
+            logger.error(f"[BROADCAST] Traceback: {error_trace}")
 
     async def _watchdog_loop(self):
         """Periodically checks if processing workers are alive and responsive."""
