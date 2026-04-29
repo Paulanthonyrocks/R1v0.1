@@ -350,9 +350,5 @@ class TrackingManager:
         ex, ey, ex2, ey2 = min(boxA[0], boxB[0]), min(boxA[1], boxB[1]), max(boxA[2], boxB[2]), max(boxA[3], boxB[3])
         e_area = (ex2 - ex) * (ey2 - ey)
         # Proper GIoU: penalizes both non-overlap and spatial separation
-        giou = iou - (e_area - union) / e_area
-        return giouB[3])
-        e_area = (ex2 - ex) * (ey2 - ey)
-        # Proper GIoU: penalizes both non-overlap and spatial separation
-        giou = iou - (e_area - union) / e_area
+        giou = iou - (e_area - union) / (e_area + 1e-6)
         return giou
