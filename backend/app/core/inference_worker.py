@@ -500,6 +500,7 @@ def inference_worker(
                             if central_output_queue:
                                 central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
                                 sent_shm_refs.add(shm_ref)
+                                logger.debug(f"[Worker {worker_id}] Pushed result for {meta['feed_id']} frame {f_idx}")
                         except queue.Full:
                             metrics_obj.frames_dropped += 1
 
