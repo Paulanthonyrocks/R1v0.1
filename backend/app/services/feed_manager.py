@@ -438,6 +438,26 @@ class FeedManager:
             self._global_fps = RedisValue("i", self.config.get("fps", 30), "global_fps")
             logger.info("FeedManager shared values initialized via Redis.")
 
+    async def get_all_statuses(self) -> List[FeedStatusData]:
+        statuses = []
+        async with self._lock:
+            for fid, entry in self.process_registry.items():
+                statuses.append(self._entry_to_status_data(fid, entry))
+        return statuses
+    
+    def _entry_to_status_data(self, feed_id: str, entry: Dict) -> FeedStatusData:
+        op_status = entry["status"]
+        config = entry.get("config_info") or FeedConfigInfo(
+            name="Unknown", source_type="unknown", source_identifier=entry["source"]
+        )
+        return FeedStatusData(
+            feed_id=feed_id, config=config, source=entry["source"],
+            status=op_status,
+            current_fps=entry["timer"].get_fps("loop_total") if entry.get("timer") else None,
+            last_error=entry.get("error_message"),
+            latest_metrics=entry.get("latest_metrics")
+        )
+
     def _any_real_feeds_active_unsafe(self) -> bool:
         for entry in self.process_registry.values():
             if not entry.get("is_sample_feed", False) and entry["status"] in [
