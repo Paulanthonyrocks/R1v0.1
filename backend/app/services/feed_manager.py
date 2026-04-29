@@ -1160,6 +1160,8 @@ class FeedManager:
                     await self._handle_periodic_tasks()
                     continue
 
+                logger.info(f"Result reader: Popped {len(items_buffer)} items from central output queue")
+
                 # Parallelize CPU-bound byte operations using the executor
                 processed_items = await asyncio.gather(*[
                     asyncio.get_running_loop().run_in_executor(
@@ -1391,6 +1393,7 @@ class FeedManager:
             
             # 5. Targeted Binary Delivery (Only to subscribers of this feed)
             # Pass frame_idx for deterministic frame skipping in ConnectionManager
+            logger.info(f"Broadcasting frame {frame_idx} for {feed_id} (size: {len(msg_bytes)} bytes)")
             await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
             
         except Exception as e:
