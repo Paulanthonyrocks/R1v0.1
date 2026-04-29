@@ -260,6 +260,9 @@ class RedisStreamQueue:
         """
         block_ms = int(timeout * 1000) if timeout else 0
         
+        # Diagnostic log to trace group and consumer
+        logger.debug(f"Polling stream {self.key} | Group: {self.group_name} | Consumer: {self.consumer_id}")
+
         # 1. Try to read pending messages first (ID '0')
         # This ensures that messages delivered but not ACKed (e.g. after a crash) are processed
         try:
