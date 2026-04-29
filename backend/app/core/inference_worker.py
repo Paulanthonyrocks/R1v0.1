@@ -259,12 +259,16 @@ def inference_worker(
                             slot_q = central_input_queue[slot_id]
                             res = slot_q.get_nowait()
                             if res:
-                                # Robustly handle (msg_id, task) envelope or raw task
-                                if isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
-                                    msg_id, first_task = res
+                                # RedisStreamQueue returns (msg_id, item)
+                                # RedisQueue returns just item
+                                if isinstance(res, tuple) and len(res) == 2 and not isinstance(res[1], (tuple, list)):
+                                    msg_id, task = res
+                                elif isinstance(res, tuple) and len(res) == 2 and isinstance(res[1], (tuple, list)):
+                                    # Handle (msg_id, (feed_id, frame_idx, ...))
+                                    msg_id, task = res
                                 else:
-                                    msg_id, first_task = None, res
-                                batch_tasks.append((msg_id, first_task))
+                                    msg_id, task = None, res
+                                batch_tasks.append((msg_id, task))
                         except (queue.Empty, IndexError):
                             continue
                     
