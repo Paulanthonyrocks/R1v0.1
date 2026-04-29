@@ -1151,7 +1151,14 @@ class FeedManager:
                 # Drain Central Output Queue
                 try:
                     for _ in range(200):
-                        items_buffer.append(self._central_output_queue.get(block=False))
+                        # RedisStreamQueue.get returns (msg_id, item)
+                        res = self._central_output_queue.get(block=False)
+                        if isinstance(res, tuple) and len(res) == 2:
+                            msg_id, item = res
+                            items_buffer.append((msg_id, item))
+                        else:
+                            # Fallback for standard RedisQueue
+                            items_buffer.append((None, res))
                 except queue.Empty:
                     pass
 
@@ -1167,16 +1174,28 @@ class FeedManager:
                     asyncio.get_running_loop().run_in_executor(
                         self._executor, 
                         self._process_single_result, 
-                        item
-                    ) for item in items_buffer
+                        item # item is the second element of the tuple
+                    ) for msg_id, item in items_buffer
                 ])
 
                 feed_ids_to_update = set()
                 
                 for i, result in enumerate(processed_items):
-                    if result is None: continue
+                    msg_id, _ = items_buffer[i]
+                    if result is None:
+                        # Even if processing failed, we might want to ack to avoid poison pills
+                        if msg_id: self._central_output_queue.ack(msg_id)
+                        continue
+                    
                     feed_id, frame_bytes, metrics, vehicles, extra = result
                     
+                    # Acknowledge the message now that it's processed
+                    if msg_id:
+                        try:
+                            self._central_output_queue.ack(msg_id)
+                        except Exception as e:
+                            logger.error(f"Failed to ack message {msg_id}: {e}")
+
                     entry = self.process_registry.get(feed_id)
                     if not entry:
                         continue
