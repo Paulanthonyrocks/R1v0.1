@@ -392,7 +392,7 @@ class ConnectionManager:
                     
                 if skip_threshold > 0:
                     if (frame_index % int(1/(1-skip_threshold))) != 0:
-                        logger.debug(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
+                        logger.info(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
                         continue
 
             try:

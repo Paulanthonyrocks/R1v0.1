@@ -110,9 +110,11 @@ def inference_worker(
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    pid = os.getpid()
-    logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
-    logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+pid = os.getpid()
+logger.debug(f"Inference process {pid} (Worker {worker_id}) entering initialization...")
+logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
+logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
     
     # Start parent monitor to avoid zombies
     logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
@@ -280,9 +282,10 @@ def inference_worker(
                 except queue.Empty:
                     pass
 
-                if batch_tasks:
-                    start_wait = time.time()
-                    while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
+if batch_tasks:
+logger.info(f'[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue')
+start_wait = time.time()
+while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
                         for slot_id in slots:
                             try:
                                 slot_q = central_input_queue[slot_id]
@@ -500,12 +503,12 @@ def inference_worker(
                                  # Pass stream_res for proper ROI scaling
                                  extra["rois"] = _extract_rois(frame, serialized_v, scale=stream_res[0]/640.0 if stream_res[0] != 0 else 1.0)
                         
-                        try:
-                            if central_output_queue:
-                                central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
-                                sent_shm_refs.add(shm_ref)
-                                logger.debug(f"[Worker {worker_id}] Pushed result for {meta['feed_id']} frame {f_idx}")
-                        except queue.Full:
+try:
+if central_output_queue:
+central_output_queue.put_nowait((meta['feed_id'], f_idx, shm_ref, metrics_obj.to_dict(), serialized_v, extra))
+sent_shm_refs.add(shm_ref)
+logger.info(f"[Worker {worker_id}] Pushed result for {meta['feed_id']} frame {f_idx} to central_output queue")
+except queue.Full:
                             metrics_obj.frames_dropped += 1
 
                         now = time.time()
