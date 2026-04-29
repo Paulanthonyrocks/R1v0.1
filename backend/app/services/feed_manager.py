@@ -1665,12 +1665,3 @@ class FeedManager:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-
-    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
-o.wait(tasks, timeout=5.0)
-
-    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
-re)
-o.wait(tasks, timeout=5.0)
-
-    # ... (Add/Remove dynamic sample feeds, WebSocket handlers match your original structure)
