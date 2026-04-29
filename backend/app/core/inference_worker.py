@@ -508,12 +508,12 @@ def inference_worker(
                               logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
                           last_metrics_log = now
 
-                        except Exception as e:
-                        logger.error(f"[Worker {worker_id}] Error: {e}", exc_info=True)
-                        finally:
-                        # SAFE RELEASE: Release all SHM segments in the batch that were NOT sent to the manager.
-                        # If they were sent, the manager is now responsible for releasing them.
-                        for meta_item in batch_meta:
+                except Exception as e:
+                    logger.error(f"[Worker {worker_id}] Error processing batch: {e}", exc_info=True)
+                finally:
+                    # SAFE RELEASE: Release all SHM segments in the batch that were NOT sent to the manager.
+                    # If they were sent, the manager is now responsible for releasing them.
+                    for meta_item in batch_meta:
                         shm_ref = meta_item.get("shm_ref")
                         if shm_ref and frame_buffer and shm_ref not in sent_shm_refs:
                             try:
