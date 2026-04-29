@@ -282,10 +282,10 @@ if model_path:
                 except queue.Empty:
                     pass
 
-if batch_tasks:
-logger.info(f'[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue')
-start_wait = time.time()
-while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
+                if batch_tasks:
+                    logger.info(f'[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue')
+                    start_wait = time.time()
+                    while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
                         for slot_id in slots:
                             try:
                                 slot_q = central_input_queue[slot_id]

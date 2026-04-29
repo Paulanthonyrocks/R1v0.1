@@ -362,25 +362,33 @@ class ConnectionManager:
         Broadcast binary frame to subscribers with Graceful Degradation.
         Skips frames if client queue is heavily backlogged.
         """
+        logger.info(f"[CONN_MGR] >>>>>> broadcast_to_feed_realtime_bytes feed={feed_id} frame={frame_index} data_size={len(data)}")
+        
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
-            logger.debug(f"No subscribers for feed {feed_id}, skipping broadcast.")
+            logger.warning(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
             return
-
+        
+        logger.info(f"[CONN_MGR] Found {len(subscribed_clients)} subscribed clients: {subscribed_clients}")
+        
         # Determine priority: Boost the first 10 frames to HIGH to ensure the frontend
         # transitions from 'starting' to 'running' immediately.
         priority = MessagePriority.LOW
         if frame_index < 10:
             priority = MessagePriority.HIGH
+            logger.info(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
 
         for client_id in subscribed_clients:
             if client_id not in self.client_queues:
+                logger.warning(f"[CONN_MGR] Client {client_id} not in client_queues, skipping")
                 continue
-
+            
             # Graceful Degradation: Frame Skipping
             queue = self.client_queues[client_id]
             q_size = queue.qsize()
             q_max = queue.maxsize
+            
+            logger.info(f"[CONN_MGR] Client {client_id} queue: {q_size}/{q_max} (priority={priority})")
             
             # Only apply skipping to LOW priority frames
             if priority == MessagePriority.LOW:
@@ -389,20 +397,23 @@ class ConnectionManager:
                     skip_threshold = 0.67
                 elif q_size >= q_max * 0.75:
                     skip_threshold = 0.5
-                    
+                
                 if skip_threshold > 0:
                     if (frame_index % int(1/(1-skip_threshold))) != 0:
-                        logger.info(f"Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max})")
+                        logger.info(f"[CONN_MGR] Skipping frame {frame_index} for client {client_id} (Queue: {q_size}/{q_max}, threshold={skip_threshold})")
                         continue
 
             try:
                 wrapped_msg = PrioritizedMessage(priority, data)
                 self.client_queues[client_id].put_nowait(wrapped_msg)
+                logger.info(f"[CONN_MGR] Enqueued frame {frame_index} for client {client_id} (queue now: {q_size+1}/{q_max})")
             except asyncio.QueueFull:
-                logger.warning(f"Queue full for client {client_id}, dropping frame {frame_index}")
+                logger.warning(f"[CONN_MGR] Queue full for client {client_id}, dropping frame {frame_index}")
                 pass 
             except Exception as e:
-                logger.error(f"Failed to enqueue targeted binary message for {client_id}: {e}")
+                logger.error(f"[CONN_MGR] Failed to enqueue targeted binary message for {client_id}: {e}")
+        
+        logger.info(f"[CONN_MGR] <<<<<< broadcast_to_feed_realtime_bytes completed for feed={feed_id} frame={frame_index}")
 
     def get_user_role(self, client_id: str) -> str:
         """Retrieve the role associated with a specific client connection."""

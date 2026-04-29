@@ -1201,20 +1201,26 @@ class FeedManager:
                         except Exception as e:
                             logger.error(f"Failed to ack message {msg_id}: {e}")
 
-                    entry = self.process_registry.get(feed_id)
-                    if not entry:
-                        continue
-
-                    if i % 10 == 0:
-                        await asyncio.sleep(0)
-
-                    if entry["status"] == FeedOperationalStatusEnum.STARTING:
-                        async with self._lock:
-                            if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
-                                self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.RUNNING
-                                feed_ids_to_update.add(feed_id)
-                                if feed_id in self._feed_running_events:
-                                    self._feed_running_events[feed_id].set()
+        entry = self.process_registry.get(feed_id)
+        if not entry:
+            logger.error(f"[RESULT_READER] Feed {feed_id} not found in process_registry, skipping message")
+            continue
+        
+        # Log frame reception
+        logger.info(f"[RESULT_READER] Received frame {frame_idx} for feed={feed_id}, size={len(frame_bytes)} bytes, vehicles={len(vehicles)}")
+        
+        if i % 10 == 0:
+            await asyncio.sleep(0)
+        
+        # Transition from STARTING to RUNNING
+        if entry["status"] == FeedOperationalStatusEnum.STARTING:
+            async with self._lock:
+                if self.process_registry.get(feed_id, {}).get("status") == FeedOperationalStatusEnum.STARTING:
+                    self.process_registry[feed_id]["status"] = FeedOperationalStatusEnum.RUNNING
+                    feed_ids_to_update.add(feed_id)
+                    if feed_id in self._feed_running_events:
+                        self._feed_running_events[feed_id].set()
+            logger.info(f"[RESULT_READER] Feed {feed_id} transitioned to RUNNING status")
 
                     now = time.time()
                     metrics["timestamp"] = datetime.now(timezone.utc)
@@ -1249,16 +1255,20 @@ class FeedManager:
                     while entry["metrics_history"] and entry["metrics_history"][0][0] < now - self._metrics_averaging_window:
                         entry["metrics_history"].popleft()
 
-                    # --- Broadcast Logic ---
-                    target_fps = self.config.get("video_output", {}).get("fps", 10)
-                    min_interval = 1.0 / target_fps
-                    last_broadcast = entry.get("last_broadcast_time", 0.0)
-                    
-                    if now - last_broadcast >= min_interval:
-                        entry["last_broadcast_time"] = now
-                        logger.debug(f"Scheduling broadcast for {feed_id} frame {frame_idx}")
-                        task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
-                        self._active_broadcast_tasks[feed_id] = task
+        # --- Broadcast Logic ---
+        target_fps = self.config.get("video_output", {}).get("fps", 10)
+        min_interval = 1.0 / target_fps
+        last_broadcast = entry.get("last_broadcast_time", 0.0)
+        
+        logger.info(f"[BROADCAST] Frame {frame_idx}: now={now}, last_broadcast={last_broadcast}, min_interval={min_interval}")
+        
+        if now - last_broadcast >= min_interval:
+            entry["last_broadcast_time"] = now
+            logger.info(f"[BROADCAST] Scheduling broadcast for {feed_id} frame {frame_idx} (interval check passed)")
+            task = asyncio.create_task(self._broadcast_video_frame(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra))
+            self._active_broadcast_tasks[feed_id] = task
+        else:
+            logger.debug(f"[BROADCAST] Skipping frame {frame_idx} due to FPS limit (elapsed: {now - last_broadcast:.3f}s, need: {min_interval:.3f}s)")
 
                     if self._analytics_service:
                         asyncio.create_task(self._analytics_service.process_feed_metrics(feed_id, metrics, vehicles))
@@ -1365,59 +1375,77 @@ class FeedManager:
                 
         return delta_vehicles
 
-    async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
-        if not self._connection_manager:
-            logger.warning(f"Broadcast failed for {feed_id}: ConnectionManager not initialized")
-            return
+async def _broadcast_video_frame(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None):
+    # ENHANCED LOGGING: Entry point
+    logger.info(f"[BROADCAST] >>>>>> START frame={frame_idx} feed={feed_id} bytes={len(frame_bytes) if frame_bytes else 0}")
+    
+    if not self._connection_manager:
+        logger.error(f"[BROADCAST] FAIL: ConnectionManager not initialized for feed={feed_id}")
+        return
+    
+    if not frame_bytes:
+        logger.error(f"[BROADCAST] FAIL: frame_bytes is empty for feed={feed_id} frame={frame_idx}")
+        return
+    
+    # Log connection manager state
+    active_conns = len(self._connection_manager.active_connections) if self._connection_manager.active_connections else 0
+    feed_subs = list(self._connection_manager.feed_subscriptions.keys()) if self._connection_manager.feed_subscriptions else []
+    logger.info(f"[BROADCAST] ConnectionManager: active_connections={active_conns}, feed_subscriptions={feed_subs}")
+    
+    try:
+        # 1. Compute Deltas (Bandwidth Optimization)
+        logger.info(f"[BROADCAST] Computing vehicle deltas for {len(vehicles) if vehicles else 0} vehicles")
+        optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
+        logger.info(f"[BROADCAST] Optimized to {len(optimized_vehicles)} vehicles")
+
+        # 2. Prepare Payload
+        payload = {
+            "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
+            "f": feed_id,
+            "i": frame_idx,
+            "ts": time.time(),
+            "v": optimized_vehicles,
+            "m": metrics
+        }
+        logger.info(f"[BROADCAST] Payload prepared: type={WebSocketMessageTypeEnum.VIDEO_FRAME}")
+
+        # 3. Check for Adaptive Streaming (ROIs)
+        if extra_payload and "bg" in extra_payload:
+            payload["bg"] = extra_payload["bg"]
+            payload["rois"] = extra_payload.get("rois", [])
+            logger.info(f"[BROADCAST] Using adaptive streaming with ROIs")
+        else:
+            payload["frame"] = frame_bytes
+            logger.info(f"[BROADCAST] Using standard frame broadcast, frame_bytes size={len(frame_bytes)}")
+
+        # 4. Binary Serialization with msgpack
+        # Use raw bytes for performance
+        def msgpack_default(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, (np.integer, np.int64, np.int32)):
+                return int(obj)
+            if isinstance(obj, (np.floating, np.float64, np.float32)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return str(obj)
+
+        logger.info(f"[BROADCAST] Serializing payload...")
+        msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
+        logger.info(f"[BROADCAST] Serialized to {len(msg_bytes)} bytes")
         
-        if not frame_bytes:
-            logger.warning(f"Broadcast failed for {feed_id} frame {frame_idx}: frame_bytes is empty")
-            return
+        # 5. Targeted Binary Delivery (Only to subscribers of this feed)
+        # Pass frame_idx for deterministic frame skipping in ConnectionManager
+        logger.info(f"[BROADCAST] Broadcasting to feed={feed_id} frame={frame_idx} size={len(msg_bytes)} bytes")
+        await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
+        logger.info(f"[BROADCAST] <<<<<< SUCCESS frame={frame_idx} feed={feed_id}")
         
-        try:
-            # 1. Compute Deltas (Bandwidth Optimization)
-            optimized_vehicles = self._compute_vehicle_deltas(feed_id, vehicles, frame_idx)
-
-            # 2. Prepare Payload
-            payload = {
-                "t": WebSocketMessageTypeEnum.VIDEO_FRAME,
-                "f": feed_id,
-                "i": frame_idx,
-                "ts": time.time(),
-                "v": optimized_vehicles,
-                "m": metrics
-            }
-
-            # 3. Check for Adaptive Streaming (ROIs)
-            if extra_payload and "bg" in extra_payload:
-                payload["bg"] = extra_payload["bg"]
-                payload["rois"] = extra_payload.get("rois", [])
-                # Use smaller original frame if available (future: could drop frame_bytes here)
-            else:
-                payload["frame"] = frame_bytes
-
-            # 4. Binary Serialization with msgpack
-            # Use raw bytes for performance
-            def msgpack_default(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, (np.integer, np.int64, np.int32)):
-                    return int(obj)
-                if isinstance(obj, (np.floating, np.float64, np.float32)):
-                    return float(obj)
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                return str(obj)
-
-            msg_bytes = msgpack.packb(payload, default=msgpack_default, use_bin_type=True)
-            
-            # 5. Targeted Binary Delivery (Only to subscribers of this feed)
-            # Pass frame_idx for deterministic frame skipping in ConnectionManager
-            logger.info(f"Broadcasting frame {frame_idx} for {feed_id} (size: {len(msg_bytes)} bytes)")
-            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, msg_bytes, frame_index=frame_idx)
-            
-        except Exception as e:
-            logger.error(f"Binary broadcast error for {feed_id}: {e}")
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"[BROADCAST] EXCEPTION: {e}")
+        logger.error(f"[BROADCAST] Traceback: {error_trace}")
 
     async def _watchdog_loop(self):
         """Periodically checks if processing workers are alive and responsive."""
