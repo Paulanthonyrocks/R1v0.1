@@ -573,4 +573,4 @@ def inference_worker(
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error cleaning up CoreModule for {feed_id}: {e}")
         
- logger.info(f"Inference process {os.getpid()} terminated.")
+        logger.info(f"Inference process {os.getpid()} terminated.")
