@@ -243,7 +243,8 @@ async def lifespan(app: FastAPI):
 
             if p_enabled:
                 # Prediction scheduler is started inside fm.start_processing()
-                pass    except Exception as e:
+                pass
+    except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
 
