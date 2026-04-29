@@ -177,28 +177,29 @@ if model_path:
             logger.info(f"[Worker {worker_id}] Shared TensorRT engine loaded on {device}.")
         else:
             from ultralytics import YOLO
-            import torch                device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
-                shared_model = YOLO(full_model_path)
-                shared_model.to(device)
-                logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
+            import torch
+            device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
+            shared_model = YOLO(full_model_path)
+            shared_model.to(device)
+            logger.info(f"[Worker {worker_id}] Shared YOLO model loaded on {device}.")
 
-            if should_stop():
-                logger.info(f"[Worker {worker_id}] Stop signal received after YOLO load. Skipping ReID.")
-                return
-
-            # Load ReID
-            if vehicle_det_cfg.get("reid_enabled", True):
-                from app.ml.reid_model import ReIDEmbedder
-                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
-                shared_reid_embedder = ReIDEmbedder(config)
-                logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
-
-        except Exception as e:
-            logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
-            shared_model = None
-            model_load_failed = True
-            logger.critical(f"[Worker {worker_id}] Shared model load failed. Exiting worker to prevent silent failure.")
+        if should_stop():
+            logger.info(f"[Worker {worker_id}] Stop signal received after YOLO load. Skipping ReID.")
             return
+
+        # Load ReID
+        if vehicle_det_cfg.get("reid_enabled", True):
+            from app.ml.reid_model import ReIDEmbedder
+            logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
+            shared_reid_embedder = ReIDEmbedder(config)
+            logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+
+    except Exception as e:
+        logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
+        shared_model = None
+        model_load_failed = True
+        logger.critical(f"[Worker {worker_id}] Shared model load failed. Exiting worker to prevent silent failure.")
+        return
 
     def handle_command(cmd):
         if not cmd: return
