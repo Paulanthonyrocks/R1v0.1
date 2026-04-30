@@ -432,6 +432,7 @@ openvino:
 pavement_analysis:
   camera_calibration:
     calibration_file: calibration_params.npz
+auto_start_processing: true
 performance:
   auto_optimize: true
   batch_size: 1
