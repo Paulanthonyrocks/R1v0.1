@@ -212,12 +212,21 @@ class FeedManager:
                 None, # Replace pipeline_pressure (Value) with None; worker will read from Redis
                 slots
             ),
-            daemon=False,
-            name=f"InferenceWorker-{worker_id}" 
-        )
-        p.start()
-        self._inference_pool[worker_id] = p
-        logger.info(f"Launched InferenceWorker-{worker_id} handling slots {slots}")
+ daemon=False,
+ name=f"InferenceWorker-{worker_id}" 
+ )
+ p.start()
+ self._inference_pool[worker_id] = p
+ logger.info(f"Launched InferenceWorker-{worker_id} handling slots {slots}")
+ 
+ # Diagnostic: check if worker process survives past first few seconds
+ import time as _t
+ _t.sleep(0.5)
+ if p.is_alive():
+ logger.info(f"InferenceWorker-{worker_id} (PID {p.pid}) is alive after spawn")
+ else:
+ exitcode = p.exitcode
+ logger.error(f"InferenceWorker-{worker_id} (PID {p.pid}) DIED immediately with exitcode={exitcode}")
 
     def scale_pool(self, target_size: int):
         """Dynamically adjusts the number of active workers and rebalances slots."""

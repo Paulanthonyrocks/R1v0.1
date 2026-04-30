@@ -74,6 +74,11 @@ def inference_worker(
     Heavyweight AI process that processes frames from the central queue.
     Can handle frames from multiple feeds interleaved.
     """
+    # CRITICAL: Print to stderr BEFORE any imports/initialization
+    # so we can confirm the process actually starts with spawn method
+    import sys, os
+    print(f"[INFERENCE-BOOT] Worker {worker_id} PID={os.getpid()} slots={slots} starting...", file=sys.stderr, flush=True)
+
     # Initialize global config for this process
     initialize_config()
 
@@ -85,6 +90,11 @@ def inference_worker(
     except Exception as e:
         print(f"Logging configuration failed: {e}", file=sys.stderr)
         logging.basicConfig(level=logging.INFO)
+
+    logger.info(f"[Worker {worker_id}] Process initialized. PID={os.getpid()}")
+    logger.info(f"[Worker {worker_id}] Queue list type: {type(central_input_queue)}, length: {len(central_input_queue) if hasattr(central_input_queue, '__len__') else 'N/A'}")
+    logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
+    logger.info(f"[Worker {worker_id}] Will read from slot-specific inference_input streams, write to central_output")
 
     # Initialize Redis client for signals and pressure
     from app.utils.redis_client import get_redis_client
@@ -117,9 +127,6 @@ def inference_worker(
         redis_client.set(f"worker:{worker_id}:status", "initializing")
     except Exception:
         pass
-    logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
-    logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
-    logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
 
     # Start parent monitor to avoid zombies
     logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
