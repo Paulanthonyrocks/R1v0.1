@@ -235,8 +235,8 @@ async def lifespan(app: FastAPI):
             p_cfg = loaded_config.get("prediction_scheduler", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "prediction_scheduler", {})
             p_enabled = p_cfg.get("enabled", True) if isinstance(p_cfg, dict) else getattr(p_cfg, "enabled", True)
 
-            # Start processing regardless of scheduler status, as it launches the inference pool
-            auto_start = loaded_config.get("auto_start_processing", True) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", True)
+            # Start processing if configured, as it launches the inference pool
+            auto_start = loaded_config.get("auto_start_processing", False) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", False)
             if auto_start:
                 create_background_task(fm.start_processing())
                 logger.info("Feed Manager started processing automatically (background task).")

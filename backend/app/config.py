@@ -66,7 +66,7 @@ class AppConfig(BaseSettings):
     video_output: Dict[str, Any] = {"enabled": False, "output_directory": "recordings", "fps": 10}
     reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "reid_gallery.pkl"}
     prediction_scheduler: Dict[str, Any] = {"enabled": True}
-    auto_start_processing: bool = True
+    auto_start_processing: bool = False
     file_watcher: Dict[str, Any] = {"enabled": False}
     post_startup_processing: Dict[str, Any] = {"enabled": False}
     cors: Dict[str, Any] = {"allowed_origins": []}
