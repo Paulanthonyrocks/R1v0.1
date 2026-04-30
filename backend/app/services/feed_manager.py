@@ -969,33 +969,35 @@ class FeedManager:
             if not is_sample or self._any_real_feeds_active_unsafe():
                 self._check_resources()
 
- logger.info(f"Starting feed: '{feed_id}'")
+            logger.info(f"Starting feed: '{feed_id}'")
 
- # Auto-initialize inference pool if not running (prevents "0 inference workers" issue)
- if not self._inference_pool:
- pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
- logger.warning(f"Inference pool is empty — auto-scaling to {pool_size} worker(s) before starting feed.")
- # Clear stale stop signal so the new worker doesn't exit immediately
- try:
- from app.utils.redis_client import get_redis_client
- rc = get_redis_client()
- rc.delete("signal:pipeline_stop")
- self.logger.info("Cleared stale pipeline_stop signal before auto-scaling inference pool.")
- except Exception as e:
- self.logger.warning(f"Could not clear stop signal: {e}")
- self._inference_stop_event.clear()
- self.scale_pool(pool_size)
- if not self._is_processing_active:
- self._is_processing_active = True
+            # Auto-initialize inference pool if not running (prevents "0 inference workers" issue)
+            if not self._inference_pool:
+                pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+                logger.warning(f"Inference pool is empty — auto-scaling to {pool_size} worker(s) before starting feed.")
+                # Clear stale stop signal so the new worker doesn't exit immediately
+                try:
+                    from app.utils.redis_client import get_redis_client
+                    rc = get_redis_client()
+                    rc.delete("signal:pipeline_stop")
+                    self.logger.info("Cleared stale pipeline_stop signal before auto-scaling inference pool.")
+                except Exception as e:
+                    self.logger.warning(f"Could not clear stop signal: {e}")
 
- # Initialize Queues and Events
-            entry["command_queue"] = RedisQueue('feed_cmd_' + feed_id, maxsize=50) # Use RedisQueue for control commands
+                self._inference_stop_event.clear()
+                self.scale_pool(pool_size if 'pool_size' in locals() else self.config.get("performance", {}).get("inference_pool_size", 2))
+                if not self._is_processing_active:
+                    self._is_processing_active = True
+
+                # Initialize Queues and Events
+                entry["command_queue"] = RedisQueue('feed_cmd_' + feed_id, maxsize=50) # Use RedisQueue for control commands            
             
             # Only create video writer queue if enabled
             video_output_config = self.config.get("video_output", {})
             if video_output_config.get("enabled", False):
                 entry["video_writer_queue"] = RedisQueue('feed_video_' + feed_id, maxsize=self.config.get("video_input", {}).get("max_queue_size", 500))
             else:
+                entry["video_writer_queue"] = None
                 entry["video_writer_queue"] = None
 
             entry["stop_event"] = RedisEvent('feed_stop_' + feed_id)
