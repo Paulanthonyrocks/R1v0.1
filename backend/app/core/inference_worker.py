@@ -110,16 +110,16 @@ def inference_worker(
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
- pid = os.getpid()
- # Write worker PID and status to Redis for parent-process observability
- try:
- redis_client.set(f"worker:{worker_id}:pid", pid)
- redis_client.set(f"worker:{worker_id}:status", "initializing")
- except Exception:
- pass
- logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
- logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
- logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
+    pid = os.getpid()
+    # Write worker PID and status to Redis for parent-process observability
+    try:
+        redis_client.set(f"worker:{worker_id}:pid", pid)
+        redis_client.set(f"worker:{worker_id}:status", "initializing")
+    except Exception:
+        pass
+    logger.info(f"Inference process {pid} (Worker {worker_id}) started.")
+    logger.info(f"[Worker {worker_id}] Slots assigned: {slots}")
+    logger.info(f"[Worker {worker_id}] Will read from inference_input stream, write to central_output")
 
     # Start parent monitor to avoid zombies
     logger.debug(f"[Worker {worker_id}] Starting parent monitor...")
