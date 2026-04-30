@@ -414,7 +414,7 @@ def inference_worker(
                         
                         actual_skip = skip_frames
                         first_detect = not getattr(core, '_first_detection_done', False)
-                        should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.vehicle_data)
+                        should_detect = (frame_index % (actual_skip + 1) == 0) or (first_detect and not core.tracker.vehicle_data)
                         
                         lane_cfg = config.get("lane_detection", {})
                         is_lane_frame = (lane_cfg.get("dynamic_lane_detection_enabled", False) and 
