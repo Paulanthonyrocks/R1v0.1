@@ -171,6 +171,12 @@ class FeedManager:
 
     async def initialize(self):
         """Asynchronous initialization to start background tasks after the loop is running."""
+        # Guard: don't re-create tasks if they're already running
+        if (self._result_reader_task is not None
+            and not self._result_reader_task.done()):
+            self.logger.info("FeedManager already initialized (result reader active). Skipping.")
+            return
+
         import multiprocessing
         try:
             multiprocessing.set_start_method('spawn', force=True)
@@ -546,6 +552,11 @@ class FeedManager:
             return
 
         self.logger.info("Starting overall video processing.")
+
+        # Ensure async background tasks (result reader, watchdog, pressure, scaling) are running.
+        # This MUST happen before the inference pool starts producing results.
+        await self.initialize()
+
         self._is_processing_active = True
         
         # CLEAR STALE STOP SIGNAL: Ensure workers don't exit immediately on startup

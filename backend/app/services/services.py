@@ -218,14 +218,18 @@ class ServiceRegistry:
             await self._node_manager.start()
             logger.info("NodeManager initialized and started.")
 
-            # Feed Manager
-            self._feed_manager = FMClass(config)
-            self._feed_manager.set_connection_manager(connection_manager)
-            self._feed_manager.set_analytics_service(self._analytics_service)
-            
-            # Link Feed Manager to Incident Manager
-            self._incident_manager.set_feed_manager(self._feed_manager)
-            logger.info("FeedManager initialized and linked to IncidentManager.")
+        # Feed Manager
+        self._feed_manager = FMClass(config)
+        self._feed_manager.set_connection_manager(connection_manager)
+        self._feed_manager.set_analytics_service(self._analytics_service)
+        
+        # Initialize async background tasks (result reader, watchdog, etc.)
+        # Guard in initialize() prevents double-creation if start_processing() also calls it.
+        await self._feed_manager.initialize()
+        
+        # Link Feed Manager to Incident Manager
+        self._incident_manager.set_feed_manager(self._feed_manager)
+        logger.info("FeedManager initialized and linked to IncidentManager.")
         except Exception as e:
             logger.error(f"Error during core service initialization: {e}")
             raise
