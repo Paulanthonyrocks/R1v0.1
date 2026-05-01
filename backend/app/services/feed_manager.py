@@ -169,6 +169,42 @@ class FeedManager:
         # Register cleanup on exit
         atexit.register(self._atexit_cleanup)
 
+    def _purge_stale_streams(self):
+        """Purge stale Redis stream data from previous sessions.
+
+        Stale messages reference dead SHM segments (zeroed on restart) and
+        cause 'Invalid size 0' error spam if the result reader processes them.
+        Must be called BEFORE the result reader task starts.
+        """
+        try:
+            rc = self._central_output_queue.redis
+            # Nuke central_output stream entirely -- recreated on next XADD/XREADGROUP
+            central_key = self._central_output_queue.key
+            if rc.exists(central_key):
+                rc.delete(central_key)
+                self.logger.info(f"Deleted stale stream {central_key} for clean startup")
+            # Recreate consumer group on fresh stream
+            self._central_output_queue._ensure_group()
+
+            # Also purge stale pending from slot input streams
+            for slot_q in self._inference_input_queues:
+                if hasattr(slot_q, 'key') and hasattr(slot_q, 'redis'):
+                    try:
+                        slot_key = slot_q.key
+                        if slot_q.redis.exists(slot_key):
+                            pending = slot_q.redis.xreadgroup(
+                                slot_q.group_name, slot_q.consumer_id,
+                                {slot_key: "0"}, count=500
+                            )
+                            if pending and pending[0][1]:
+                                for msg_id, _ in pending[0][1]:
+                                    slot_q.redis.xack(slot_key, slot_q.group_name, msg_id)
+                                self.logger.info(f"Purged {len(pending[0][1])} stale pending from {slot_key}")
+                    except Exception as slot_err:
+                        self.logger.debug(f"Slot stream purge failed for {getattr(slot_q, 'key', '?')}: {slot_err}")
+        except Exception as e:
+            self.logger.warning(f"Could not purge stale stream data: {e}")
+
     async def initialize(self):
         """Asynchronous initialization to start background tasks after the loop is running."""
         # Guard: don't re-create tasks if they're already running
@@ -176,6 +212,11 @@ class FeedManager:
             and not self._result_reader_task.done()):
             self.logger.info("FeedManager already initialized (result reader active). Skipping.")
             return
+
+        # PURGE stale Redis stream data BEFORE starting the result reader.
+        # Stale messages reference dead SHM segments (zeroed on restart) and
+        # cause "Invalid size 0" error spam if the reader processes them first.
+        self._purge_stale_streams()
 
         import multiprocessing
         try:
@@ -1310,7 +1351,19 @@ class FeedManager:
             self.frame_buffer.release(shm_ref)
             return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
         except Exception as e:
-            logger.error(f"Error processing result for {item[0] if len(item)>0 else 'unknown'}: {e}")
+            # Rate-limit error logging to avoid spam from stale SHM references
+            now = time.time()
+            last_ts = getattr(self, '_stale_err_last_ts', 0)
+            count = getattr(self, '_stale_err_count', 0)
+            if now - last_ts > 5.0:
+                if count > 1:
+                    logger.warning(f"Stale SHM result errors: {count} suppressed in last 5s")
+                logger.error(f"Error processing result for {item[0] if len(item)>0 else 'unknown'}: {e}")
+                self._stale_err_count = 1
+                self._stale_err_last_ts = now
+            else:
+                self._stale_err_count = count + 1
+                self._stale_err_last_ts = now
             return None
 
     async def _read_result_queues(self):
