@@ -669,8 +669,8 @@ class FeedManager:
             if self.config.get("prediction_scheduler", {}).get("enabled", True):
                 await self._prediction_scheduler.start()
                 self.logger.info("Prediction scheduler started.")
-        else:
-            self.logger.warning("PredictionScheduler not set.")
+            else:
+                self.logger.debug("PredictionScheduler not set (disabled in config).")
 
     async def stop_processing(self):
         """Stops the overall video processing and prediction scheduling."""
