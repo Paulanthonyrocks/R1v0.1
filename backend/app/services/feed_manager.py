@@ -619,19 +619,31 @@ class FeedManager:
                 if pending_count > 0:
                     self.logger.info(f"Purging {pending_count} stale pending messages from {stale_key}")
                     # Claim all pending messages so we can ack them
+                    # XAUTOCLAIM requires Redis >= 6.2; check version first to avoid noisy warnings
                     try:
-                        claimed = self._central_output_queue.redis.xautoclaim(
-                            stale_key, self._central_output_queue.group_name,
-                            self._central_output_queue.consumer_id,
-                            min_idle_time=0, start_id="0-0", count=100
-                        )
-                        if claimed and len(claimed) > 1 and claimed[1]:
-                            for msg_id, _ in claimed[1]:
-                                self._central_output_queue.redis.xack(stale_key, self._central_output_queue.group_name, msg_id)
-                            self.logger.info(f"ACKed {len(claimed[1])} stale messages via xautoclaim")
-                    except Exception as claim_err:
-                        self.logger.warning(f"xautoclaim not available or failed: {claim_err}, trying xpending+xack loop")
-                        # Fallback: read pending and ack them
+                        redis_ver = self._central_output_queue.redis.info('server').get('redis_version', '0.0.0')
+                        ver_parts = tuple(int(x) for x in redis_ver.split('.')[:2])
+                        supports_autoclaim = ver_parts >= (6, 2)
+                    except Exception:
+                        supports_autoclaim = False
+
+                    if supports_autoclaim:
+                        try:
+                            claimed = self._central_output_queue.redis.xautoclaim(
+                                stale_key, self._central_output_queue.group_name,
+                                self._central_output_queue.consumer_id,
+                                min_idle_time=0, start_id="0-0", count=100
+                            )
+                            if claimed and len(claimed) > 1 and claimed[1]:
+                                for msg_id, _ in claimed[1]:
+                                    self._central_output_queue.redis.xack(stale_key, self._central_output_queue.group_name, msg_id)
+                                self.logger.info(f"ACKed {len(claimed[1])} stale messages via xautoclaim")
+                        except Exception as claim_err:
+                            self.logger.warning(f"xautoclaim failed despite version check: {claim_err}")
+                            supports_autoclaim = False  # Fall through to xreadgroup
+
+                    if not supports_autoclaim:
+                        # Fallback for Redis < 6.2: read pending and ack them
                         try:
                             msgs = self._central_output_queue.redis.xreadgroup(
                                 self._central_output_queue.group_name,
@@ -641,7 +653,7 @@ class FeedManager:
                             if msgs and msgs[0][1]:
                                 for msg_id, _ in msgs[0][1]:
                                     self._central_output_queue.redis.xack(stale_key, self._central_output_queue.group_name, msg_id)
-                                self.logger.info(f"ACKed {len(msgs[0][1])} stale messages via xreadgroup fallback")
+                                self.logger.info(f"ACKed {len(msgs[0][1])} stale messages via xreadgroup (Redis < 6.2)")
                         except Exception as fb_err:
                             self.logger.warning(f"Fallback purge failed: {fb_err}")
         except Exception as e:
