@@ -362,21 +362,21 @@ class ConnectionManager:
         Broadcast binary frame to subscribers with Graceful Degradation.
         Skips frames if client queue is heavily backlogged.
         """
-        logger.info(f"[CONN_MGR] >>>>>> broadcast_to_feed_realtime_bytes feed={feed_id} frame={frame_index} data_size={len(data)}")
+        logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes feed={feed_id} frame={frame_index} data_size={len(data)}")
         
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
-            logger.warning(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
+            logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
             return
         
-        logger.info(f"[CONN_MGR] Found {len(subscribed_clients)} subscribed clients: {subscribed_clients}")
+        logger.debug(f"[CONN_MGR] Found {len(subscribed_clients)} subscribed clients for feed={feed_id}")
         
         # Determine priority: Boost the first 10 frames to HIGH to ensure the frontend
         # transitions from 'starting' to 'running' immediately.
         priority = MessagePriority.LOW
         if frame_index < 10:
             priority = MessagePriority.HIGH
-            logger.info(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
+                logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
 
         for client_id in subscribed_clients:
             if client_id not in self.client_queues:
@@ -388,7 +388,7 @@ class ConnectionManager:
             q_size = queue.qsize()
             q_max = queue.maxsize
             
-            logger.info(f"[CONN_MGR] Client {client_id} queue: {q_size}/{q_max} (priority={priority})")
+                logger.debug(f"[CONN_MGR] Client {client_id} queue: {q_size}/{q_max} (priority={priority})")
             
             # Only apply skipping to LOW priority frames
             if priority == MessagePriority.LOW:
@@ -406,14 +406,14 @@ class ConnectionManager:
             try:
                 wrapped_msg = PrioritizedMessage(priority, data)
                 self.client_queues[client_id].put_nowait(wrapped_msg)
-                logger.info(f"[CONN_MGR] Enqueued frame {frame_index} for client {client_id} (queue now: {q_size+1}/{q_max})")
+                logger.debug(f"[CONN_MGR] Enqueued frame {frame_index} for client {client_id} (queue now: {q_size+1}/{q_max})")
             except asyncio.QueueFull:
                 logger.warning(f"[CONN_MGR] Queue full for client {client_id}, dropping frame {frame_index}")
                 pass 
             except Exception as e:
                 logger.error(f"[CONN_MGR] Failed to enqueue targeted binary message for {client_id}: {e}")
         
-        logger.info(f"[CONN_MGR] <<<<<< broadcast_to_feed_realtime_bytes completed for feed={feed_id} frame={frame_index}")
+        logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes completed for feed={feed_id} frame={frame_index}")
 
     def get_user_role(self, client_id: str) -> str:
         """Retrieve the role associated with a specific client connection."""
