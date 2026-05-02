@@ -1381,6 +1381,10 @@ class FeedManager:
     async def _read_result_queues(self):
         logger.info("Result reader task started (Decoupled Mode).")
         last_heartbeat = time.time()
+        # Cross-batch dedup: track last-processed timestamp per feed to suppress
+        # rapid-fire duplicate frames (e.g., frame_idx=0 on video loop) that
+        # arrive across batch boundaries within the broadcast interval window.
+        _feed_last_processed_ts = {}  # feed_id -> timestamp of last processed frame
         while not self._stop_reader_flag:
             try:
                 if time.time() - last_heartbeat > 10.0:
@@ -1419,22 +1423,60 @@ class FeedManager:
                 ])
 
                 feed_ids_to_update = set()
-                
+
+                # --- Per-feed dedup: keep only the latest frame per feed ---
+                # When a burst arrives (e.g., 3 tasks -> 10+ frames for same feed),
+                # only the latest frame matters. Skip stale frames early to save CPU
+                # on SHM reads, delta computation, and serialization.
+                # NOTE: Uses list index (arrival order) for recency, NOT frame_idx,
+                # because frame_idx resets to 0 on video loop, breaking index-based dedup.
+                latest_per_feed = {}  # feed_id -> i (list index of latest result)
+                for i, result in enumerate(processed_items):
+                    if result is None:
+                        continue
+                    feed_id = result[0]
+                    latest_per_feed[feed_id] = i  # Last occurrence wins (most recent in queue)
+
+                latest_indices = set(latest_per_feed.values())
+                skipped_count = len(processed_items) - len(latest_indices)
+
+                # ACK all messages (including skipped/dedup'd ones) to prevent pending buildup
                 for i, result in enumerate(processed_items):
                     msg_id, _ = items_buffer[i]
                     if result is None:
-                        # Even if processing failed, we might want to ack to avoid poison pills
                         if msg_id: self._central_output_queue.ack(msg_id)
                         continue
-                    
-                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = result
-                    
-                    # Acknowledge the message now that it's processed
                     if msg_id:
                         try:
                             self._central_output_queue.ack(msg_id)
                         except Exception as e:
                             logger.error(f"Failed to ack message {msg_id}: {e}")
+
+                if skipped_count > 0:
+                    logger.info(f"[RESULT_READER] Dedup: {skipped_count} stale frames skipped, {len(latest_indices)} latest kept")
+
+                for i, result in enumerate(processed_items):
+                    if result is None:
+                        continue
+
+                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = result
+
+                    # Skip dedup'd frames
+                    if i not in latest_indices:
+                        continue
+
+                    # Cross-batch dedup: if we just processed a frame for this feed
+                    # within the broadcast interval window, skip the duplicate.
+                    # This prevents the frame-0 storm on video loop where multiple
+                    # workers produce frame_idx=0 results that arrive in rapid succession.
+                    now_dedup = time.time()
+                    target_fps_dedup = self.config.get("video_output", {}).get("fps", 10)
+                    dedup_window = 1.0 / target_fps_dedup  # Same as min_broadcast_interval
+                    last_proc_ts = _feed_last_processed_ts.get(feed_id, 0.0)
+                    if now_dedup - last_proc_ts < dedup_window:
+                        logger.debug(f"[RESULT_READER] Cross-batch dedup: skipping frame {frame_idx} for feed={feed_id} (processed {now_dedup - last_proc_ts:.3f}s ago, window={dedup_window:.3f}s)")
+                        continue
+                    _feed_last_processed_ts[feed_id] = now_dedup
 
                     entry = self.process_registry.get(feed_id)
                     if not entry:
@@ -1621,11 +1663,19 @@ class FeedManager:
         if not frame_bytes:
             logger.error(f"[BROADCAST] FAIL: frame_bytes is empty for feed={feed_id} frame={frame_idx}")
             return
-        
+
+        # EARLY EXIT: Skip all CPU work if no subscribers exist for this feed.
+        # This prevents wasting CPU on delta computation, payload construction,
+        # and msgpack serialization when nobody is watching.
+        subscribers = self._connection_manager.get_clients_for_feed(feed_id)
+        if not subscribers:
+            logger.info(f"[BROADCAST] No subscribers for feed={feed_id}, skipping broadcast (saved ~{len(frame_bytes)}B serialization)")
+            return
+
         # Log connection manager state
         active_conns = len(self._connection_manager.active_connections) if self._connection_manager.active_connections else 0
         feed_subs = list(self._connection_manager.feed_subscriptions.keys()) if self._connection_manager.feed_subscriptions else []
-        logger.info(f"[BROADCAST] ConnectionManager: active_connections={active_conns}, feed_subscriptions={feed_subs}")
+        logger.info(f"[BROADCAST] ConnectionManager: active_connections={active_conns}, feed_subscriptions={feed_subs}, subscribers_for_feed={len(subscribers)}")
         
         try:
             # 1. Compute Deltas (Bandwidth Optimization)
