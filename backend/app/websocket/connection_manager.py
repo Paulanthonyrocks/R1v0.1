@@ -376,7 +376,7 @@ class ConnectionManager:
         priority = MessagePriority.LOW
         if frame_index < 10:
             priority = MessagePriority.HIGH
-                logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
+            logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
 
         for client_id in subscribed_clients:
             if client_id not in self.client_queues:
@@ -388,7 +388,7 @@ class ConnectionManager:
             q_size = queue.qsize()
             q_max = queue.maxsize
             
-                logger.debug(f"[CONN_MGR] Client {client_id} queue: {q_size}/{q_max} (priority={priority})")
+            logger.debug(f"[CONN_MGR] Client {client_id} queue: {q_size}/{q_max} (priority={priority})")
             
             # Only apply skipping to LOW priority frames
             if priority == MessagePriority.LOW:
