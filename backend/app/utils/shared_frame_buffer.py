@@ -219,10 +219,42 @@ class SharedFrameBuffer:
             pass
 
     def cleanup(self):
+        """Closes and unlinks all managed segments."""
         for name, shm in self._segments.items():
+            # 1. Try to close the handle. This may raise BufferError if memoryviews exist.
             try:
                 shm.close()
+            except Exception as e:
+                logger.debug(f"Could not close SHM segment {name}: {e}")
+            
+            # 2. Always try to unlink. This removes the segment from /dev/shm.
+            # If the process is the owner, this is critical for recovery.
+            try:
                 shm.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not unlink SHM segment {name}: {e}")
+        
         self._segments.clear()
+
+    @classmethod
+    def force_cleanup(cls):
+        """
+        Emergency recovery: Unlinks ALL segments matching the frame_buffer_ pattern.
+        Call this during startup if previous sessions crashed.
+        """
+        logger.info("Performing emergency SHM force cleanup...")
+        try:
+            shm_dir = '/dev/shm'
+            if os.path.exists(shm_dir):
+                for filename in os.listdir(shm_dir):
+                    if filename.startswith('frame_buffer_'):
+                        try:
+                            temp_shm = shared_memory.SharedMemory(name=filename)
+                            temp_shm.close()
+                            temp_shm.unlink()
+                            logger.debug(f"Force pruned leaked segment: {filename}")
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.error(f"Emergency SHM cleanup failed: {e}")
+

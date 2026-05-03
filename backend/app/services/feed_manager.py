@@ -66,10 +66,15 @@ SCALE_COOLDOWN = 30
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        
+        # Emergency SHM cleanup before initializing anything to prevent restart failures
+        SharedFrameBuffer.force_cleanup()
+        
         self.process_registry: Dict[str, Dict[str, Any]] = {}
         self.video_writers: Dict[str, VideoWriter] = {}
         self._lock = asyncio.Lock()
         self._feed_locks: Dict[str, asyncio.Lock] = {}
+
 
         self._global_fps = None
         self._feed_id_counter = 1
@@ -338,12 +343,20 @@ class FeedManager:
                 if p.is_alive():
                     p.kill()
         
-        # 3. Cleanup Shared Memory
+        # 3. Shut down executor to release active memoryviews
+        try:
+            logger.info("Shutting down result processing executor...")
+            self._executor.shutdown(wait=True)
+        except Exception as e:
+            logger.error(f"Error shutting down executor: {e}")
+
+        # 4. Cleanup Shared Memory
         try:
             self.frame_buffer.cleanup()
             logger.info("SharedFrameBuffer cleaned up successfully.")
         except Exception as e:
             logger.error(f"Error cleaning up SharedFrameBuffer: {e}")
+
 
 
 
