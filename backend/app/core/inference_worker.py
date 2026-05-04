@@ -61,7 +61,6 @@ def _extract_rois(frame: np.ndarray, tracked_vehicles: List[Dict[str, Any]], sca
 def inference_worker(
     worker_id: int,
     central_input_queue: Any,
-    central_output_queue: Any,
     command_queue: Any,
     stop_event: Any,
     config: Dict[str, Any],
@@ -98,6 +97,14 @@ def inference_worker(
 
     # Initialize Redis client for signals and pressure
     from app.utils.redis_client import get_redis_client
+    redis_client = get_redis_client()
+
+    # Initialize the output queue locally to avoid pickling Redis connections
+    from app.utils.distributed_queue import RedisStreamQueue
+    central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
+
+    # Ensure slots is a list
+    slots = slots or []
     redis_client = get_redis_client()
 
     # Ensure slots is a list

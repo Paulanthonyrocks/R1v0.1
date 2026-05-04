@@ -255,7 +255,6 @@ class FeedManager:
             args=(
                 worker_id,
                 self._inference_input_queues, 
-                self._central_output_queue,
                 cmd_q,
                 self._inference_stop_event,
                 dict(self.config) if hasattr(self.config, 'model_dump') else self.config,
