@@ -40,6 +40,7 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const frameCountRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
   const processingLockRef = useRef<boolean>(false);
+  const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
 
   // Constants
   const STATE_UPDATE_INTERVAL = 200;
@@ -95,47 +96,37 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
   // --- Core Logic ---
 
- const subscribeToFeed = useCallback(() => {
- if (client.isConnected() && streamId) {
- // Cancel any pending unsubscribe for this feed (e.g., from Strict Mode remount)
- const pending = _pendingUnsubscribes.get(streamId);
- if (pending) {
- clearTimeout(pending);
- _pendingUnsubscribes.delete(streamId);
- // The feed is still in _subscribedFeeds (unsubscribe was pending, not executed),
- // so no need to send another SUBSCRIBE. Just keep the existing subscription.
- return;
- }
- // Cancel any pending worker cleanup for this feed (e.g., from Strict Mode remount)
- const pendingCleanup = _pendingCleanups.get(streamId);
- if (pendingCleanup) {
- clearTimeout(pendingCleanup);
- _pendingCleanups.delete(streamId);
- }
- if (!_subscribedFeeds.has(streamId)) {
- _subscribedFeeds.add(streamId);
- client.send({
- type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
- data: { feed_id: streamId },
- });
- }
- }
- }, [client, streamId]);
+  const subscribeToFeed = useCallback(() => {
+    if (client.isConnected() && streamId) {
+      const pending = _pendingUnsubscribes.get(streamId);
+      if (pending) {
+        clearTimeout(pending);
+        _pendingUnsubscribes.delete(streamId);
+        return;
+      }
+      const pendingCleanup = _pendingCleanups.get(streamId);
+      if (pendingCleanup) {
+        clearTimeout(pendingCleanup);
+        _pendingCleanups.delete(streamId);
+      }
+      if (!_subscribedFeeds.has(streamId)) {
+        _subscribedFeeds.add(streamId);
+        client.send({
+          type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
+          data: { feed_id: streamId },
+        });
+      }
+    }
+  }, [client, streamId]);
 
   const unsubscribeFromFeed = useCallback(() => {
-    // Only actually unsubscribe if this is the last hook instance for this feed.
-    // Debounce the actual unsubscribe by UNSUBSCRIBE_DEBOUNCE_MS so that if
-    // another component remounts and re-subscribes (React Strict Mode), the
-    // unsubscribe is cancelled and the server-side subscription stays intact.
     const count = _feedHookCounts.get(streamId) ?? 0;
     if (count <= 1 && _subscribedFeeds.has(streamId)) {
-      // Cancel any existing pending unsubscribe for this feed
       const existing = _pendingUnsubscribes.get(streamId);
       if (existing) clearTimeout(existing);
 
       const timer = setTimeout(() => {
         _pendingUnsubscribes.delete(streamId);
-        // Re-check: if someone re-subscribed during the debounce window, skip
         if (!_subscribedFeeds.has(streamId)) return;
         _subscribedFeeds.delete(streamId);
         client.send({
@@ -193,21 +184,28 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     }
   }, [client, streamId, decode, clearVehicles]);
 
+  // Sync the latest handleFrame to the ref
+  useEffect(() => {
+    handleFrameRef.current = handleFrame;
+  }, [handleFrame]);
+
   // --- Lifecycle Management ---
 
   useEffect(() => {
     if (!streamId) return;
 
-    // Ref-count: increment on mount
     const currentCount = _feedHookCounts.get(streamId) ?? 0;
     _feedHookCounts.set(streamId, currentCount + 1);
 
-    // Subscribe (deduped: only sends if not already subscribed)
     if (client.isConnected()) {
       subscribeToFeed();
     }
 
-    const unsubscribeFrame = client.subscribe(WebSocketMessageType.VIDEO_FRAME, handleFrame, streamId);
+    const unsubscribeFrame = client.subscribe(
+      WebSocketMessageType.VIDEO_FRAME, 
+      (data) => handleFrameRef.current?.(data), 
+      streamId
+    );
 
     const stalenessInterval = setInterval(() => {
       const now = performance.now();
@@ -225,48 +223,41 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const unsubscribeStatus = client.onStatusChange((status) => {
       setIsConnected(status === 'connected');
       if (status === 'connected') {
-        // On reconnect, clear the subscribed set so we re-send SUBSCRIBE
-        // (the server-side subscriptions are lost on disconnect)
         _subscribedFeeds.delete(streamId);
         subscribeToFeed();
- } else if (status === 'disconnected') {
- // Clear all tracked subscriptions on disconnect so reconnect re-subscribes
- resetFeedSubscriptionState();
- }
+      } else if (status === 'disconnected') {
+        resetFeedSubscriptionState();
+      }
     });
 
- return () => {
- // Ref-count: decrement on unmount
- const count = _feedHookCounts.get(streamId) ?? 1;
- if (count <= 1) {
- _feedHookCounts.delete(streamId);
- } else {
- _feedHookCounts.set(streamId, count - 1);
- }
- 
- // Only actually send UNSUBSCRIBE and cleanup worker if this is the last consumer.
- // Both are debounced so React StrictMode remounts cancel them.
- unsubscribeFromFeed();
- if (count <= 1) {
- // Debounce worker cleanup to match unsubscribe debounce.
- // If StrictMode remounts within 100ms, the pending cleanup is cancelled
- // and the worker keeps its buffered frames / decoding state intact.
- const existingCleanup = _pendingCleanups.get(streamId);
- if (existingCleanup) clearTimeout(existingCleanup);
+    return () => {
+      const count = _feedHookCounts.get(streamId) ?? 1;
+      if (count <= 1) {
+        _feedHookCounts.delete(streamId);
+      } else {
+        _feedHookCounts.set(streamId, count - 1);
+      }
+      
+      unsubscribeFromFeed();
+      if (count <= 1) {
+        const existingCleanup = _pendingCleanups.get(streamId);
+        if (existingCleanup) clearTimeout(existingCleanup);
 
- const cleanupTimer = setTimeout(() => {
- _pendingCleanups.delete(streamId);
- client.cleanupWorkerResources(streamId);
- }, UNSUBSCRIBE_DEBOUNCE_MS);
+        const cleanupTimer = setTimeout(() => {
+          _pendingCleanups.delete(streamId);
+          client.cleanupWorkerResources(streamId);
+        }, UNSUBSCRIBE_DEBOUNCE_MS);
 
- _pendingCleanups.set(streamId, cleanupTimer);
- }
- unsubscribeFrame();
- unsubscribeStatus();
- clearInterval(stalenessInterval);
- if (lastFrameRef.current?.image instanceof ImageBitmap) lastFrameRef.current.image.close();
- };
-  }, [client, streamId, subscribeToFeed, unsubscribeFromFeed, handleFrame]);
+        _pendingCleanups.set(streamId, cleanupTimer);
+      }
+      unsubscribeFrame();
+      unsubscribeStatus();
+      clearInterval(stalenessInterval);
+      if (lastFrameRef.current?.image instanceof ImageBitmap) {
+        lastFrameRef.current.image.close();
+      }
+    };
+  }, [client, streamId, subscribeToFeed, unsubscribeFromFeed]);
 
   // --- Public API ---
 
