@@ -1078,6 +1078,7 @@ class FeedManager:
                 logger.warning(f"Feed '{feed_id}' is in state '{entry['status']}'. Cleaning up before start.")
                 resources_to_cleanup = self._detach_resources(feed_id)
 
+            entry["stop_requested"] = False
             # Check resources
             is_sample = entry.get("is_sample_feed", False)
             if not is_sample or self._any_real_feeds_active_unsafe():
@@ -1962,5 +1963,8 @@ class FeedManager:
             
         if tasks:
             for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+ in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
