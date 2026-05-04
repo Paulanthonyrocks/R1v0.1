@@ -1186,6 +1186,7 @@ class FeedManager:
                 raise FeedOperationError(f"Restart failed: {e}")
 
     async def stop_all_feeds(self):
+        """Stop all active feeds without triggering auto-restart of sample feeds."""
         logger.info("Stopping all active feeds.")
         async with self._lock:
             feeds_to_stop = [
@@ -1197,12 +1198,18 @@ class FeedManager:
                 ]
             ]
 
-        if feeds_to_stop:
-            await asyncio.gather(
-                *[self.stop_feed(fid) for fid in feeds_to_stop],
-                return_exceptions=True,
-            )
+            if feeds_to_stop:
+                # Stop all feeds without triggering _check_and_manage_sample_feed after each one
+                for fid in feeds_to_stop:
+                    try:
+                        await self._stop_feed_internal(fid)
+                        # Broadcast update for each feed so frontend sees the state change
+                        await self._broadcast_feed_update(fid)
+                    except Exception as e:
+                        logger.error(f"Error stopping feed {fid}: {e}")
 
+        # After all feeds are stopped, check sample feed logic once
+        await self._check_and_manage_sample_feed()
         await self._broadcast_kpi_update()
 
     async def request_snapshot(self, feed_id: str, incident_id: str):
