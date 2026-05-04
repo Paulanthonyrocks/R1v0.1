@@ -1902,15 +1902,15 @@ class FeedManager:
             }
         )
 
- # Broadcast
- message = WebSocketMessage(
- type=WebSocketMessageTypeEnum.KPI_UPDATE,
- data=kpi_data.model_dump()
- )
- # Use NORMAL priority for KPIs to ensure they bypass high-volume video frames
- # Broadcast to 'kpi' topic subscribers instead of all connections
- from app.websocket.connection_manager import MessagePriority
- await self._connection_manager.broadcast_to_topic(message.model_dump_json(), topic='kpi', priority=MessagePriority.NORMAL)
+        # Broadcast
+        message = WebSocketMessage(
+            type=WebSocketMessageTypeEnum.KPI_UPDATE,
+            data=kpi_data.model_dump()
+        )
+        # Use NORMAL priority for KPIs to ensure they bypass high-volume video frames
+        # Broadcast to 'kpi' topic subscribers instead of all connections
+        from app.websocket.connection_manager import MessagePriority
+        await self._connection_manager.broadcast_to_topic(message.model_dump_json(), topic='kpi', priority=MessagePriority.NORMAL)
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:
