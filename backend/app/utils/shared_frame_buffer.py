@@ -221,16 +221,19 @@ class SharedFrameBuffer:
     def cleanup(self):
         """Closes and unlinks all managed segments."""
         for name, shm in self._segments.items():
-            # 1. Try to close the handle. This may raise BufferError if memoryviews exist.
+            # 1. Try to close the handle.
             try:
                 shm.close()
+            except BufferError:
+                logger.warning(f"BufferError closing SHM segment {name}: active pointers exist. Segment will be closed when views are released.")
             except Exception as e:
                 logger.debug(f"Could not close SHM segment {name}: {e}")
             
             # 2. Always try to unlink. This removes the segment from /dev/shm.
-            # If the process is the owner, this is critical for recovery.
             try:
                 shm.unlink()
+            except BufferError:
+                logger.warning(f"BufferError unlinking SHM segment {name}: active pointers exist.")
             except Exception as e:
                 logger.debug(f"Could not unlink SHM segment {name}: {e}")
         
@@ -250,7 +253,10 @@ class SharedFrameBuffer:
                     if filename.startswith('frame_buffer_'):
                         try:
                             temp_shm = shared_memory.SharedMemory(name=filename)
-                            temp_shm.close()
+                            try:
+                                temp_shm.close()
+                            except BufferError:
+                                pass
                             temp_shm.unlink()
                             logger.debug(f"Force pruned leaked segment: {filename}")
                         except Exception:

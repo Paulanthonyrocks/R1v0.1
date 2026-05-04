@@ -468,7 +468,7 @@ def inference_worker(
 
                     for vid, track in vis_tracks.items():
                         emb = track.get("embedding")
-                        if emb:
+                        if emb is not None:
                             global_id = local_reid_manager.match_or_register(
                                 feed_id=meta["feed_id"],
                                 local_id=str(vid),

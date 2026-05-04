@@ -20,7 +20,7 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
         # Allow brief startup grace period
         time.sleep(2.0)
         
-        while not stop_event.is_set():
+        while stop_event is None or not stop_event.is_set():
             try:
                 curr_ppid = os.getppid()
                 parent_dead = False
@@ -47,7 +47,8 @@ def start_parent_monitor(stop_event: Any, label: str = "Global"):
                     except:
                         pass
                         
-                    stop_event.set()
+                    if stop_event:
+                        stop_event.set()
                     
                     # Give the main loop a moment to see stop_event and exit cleanly
                     time.sleep(2.0)
