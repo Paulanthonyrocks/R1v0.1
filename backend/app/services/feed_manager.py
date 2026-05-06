@@ -1751,7 +1751,7 @@ class FeedManager:
                             continue
 
                         process = entry.get("process")
-                        if not process or not process.is_alive():
+                        if process and not process.is_alive():
                             exit_code = process.exitcode if process else "N/A"
                             if exit_code is not None and exit_code != 0:
                                 logger.warning(
