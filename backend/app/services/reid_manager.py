@@ -148,7 +148,7 @@ class GlobalReIDManager:
                     return self.gallery_ids[best_idx]
         return None
 
-    def match_or_register(self, feed_id: str, local_id: str, embedding: np.ndarray, metadata: dict) -> str:
+    def match_or_register(self, feed_id: str, local_id: str, embedding: np.ndarray, metadata: dict, confidence: Optional[float] = None) -> str:
         embedding = self._normalize(embedding)
         now = time.time()
 
@@ -223,7 +223,7 @@ class GlobalReIDManager:
                     self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
                 
                 self.gallery_ids.append(global_id)
-                self.metadata_store[global_id] = {"last_seen": now, "metadata": metadata}
+                self.metadata_store[global_id] = {"last_seen": now, "metadata": metadata, "confidence": confidence}
                 sync_emb = embedding
                 new_reg = True
                 self._last_redis_status = redis_available
@@ -237,7 +237,7 @@ class GlobalReIDManager:
         if sync_needed:
             self.last_sync_time = now
             self._sync_from_redis()
-            return self.match_or_register(feed_id, local_id, embedding, metadata)
+            return self.match_or_register(feed_id, local_id, embedding, metadata, confidence=confidence)
 
         if sync_emb is not None:
             if self.redis:
