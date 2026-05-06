@@ -167,10 +167,9 @@ def inference_worker(
     shared_reid_embedder = None
 
     if model_path:
-        if should_stop():
-            logger.info(f"[Worker {worker_id}] Stop signal before model load. Exiting.")
-            return
-
+        # Worker always loads models on boot. should_stop() is checked in the
+        # main processing loop only -- not during init -- to prevent premature
+        # exits from stale Redis stop signals left by prior runs.
         try:
             logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
@@ -191,10 +190,6 @@ def inference_worker(
 
             shared_model.to(device)
             logger.info(f"[Worker {worker_id}] Shared model loaded on {device}.")
-
-            if should_stop():
-                logger.info(f"[Worker {worker_id}] Stop signal after YOLO load. Exiting.")
-                return
 
             if vehicle_det_cfg.get("reid_enabled", True):
                 from app.ml.reid_model import ReIDEmbedder

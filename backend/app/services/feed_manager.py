@@ -590,13 +590,22 @@ class FeedManager:
         await self.initialize()
         self._is_processing_active = True
 
-        # Clear stale stop signal so workers don't exit immediately on startup
-        try:
-            rc = get_redis_client()
-            rc.delete("signal:pipeline_stop")
-            self.logger.info("Cleared stale pipeline stop signal from Redis.")
-        except Exception as e:
-            self.logger.warning(f"Could not clear stop signal: {e}")
+    # Clear stale stop signals so workers don't exit immediately on startup
+    try:
+        rc = get_redis_client()
+        rc.delete("signal:pipeline_stop")
+        self.logger.info("Cleared stale pipeline stop signal from Redis.")
+    except Exception as e:
+        self.logger.warning(f"Could not clear stop signal: {e}")
+
+    # Also clear the Redis-backed inference stop event (key: event:inference_stop)
+    # Without this, workers from a prior run see the stale event as "set" and exit
+    # before loading models.
+    try:
+        self._inference_stop_event.clear()
+        self.logger.info("Cleared stale inference stop event from Redis.")
+    except Exception as e:
+        self.logger.warning(f"Could not clear inference stop event: {e}")
 
         # Purge stale pending messages from central_output stream
         try:
@@ -1034,7 +1043,7 @@ class FeedManager:
         async with self._get_feed_lock(feed_id):
             await self._start_feed_internal(feed_id)
 
-    async def _start_feed_internal(self, feed_id: str):
+    async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False):
         resources_to_cleanup = None
         failed_resources_to_cleanup = None
         is_sample = False
@@ -1144,9 +1153,12 @@ class FeedManager:
     async def stop_feed(self, feed_id: str):
         """Public method to stop a feed. Acquires per-feed lock for atomicity."""
         async with self._get_feed_lock(feed_id):
-            await self._stop_feed_internal(feed_id)
+            async with self._lock:
+                entry = self.process_registry.get(feed_id)
+                is_sample = entry.get("is_sample_feed", False) if entry else False
+            await self._stop_feed_internal(feed_id, skip_sample_mgmt=is_sample)
 
-    async def _stop_feed_internal(self, feed_id: str):
+    async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False):
         resources_to_cleanup = None
         async with self._lock:
             entry = self.process_registry.get(feed_id)
@@ -1161,7 +1173,8 @@ class FeedManager:
 
         await self._broadcast_feed_update(feed_id)
         await self._broadcast_kpi_update()
-        await self._check_and_manage_sample_feed()
+        if not skip_sample_mgmt:
+            await self._check_and_manage_sample_feed()
 
     async def restart_feed(self, feed_id: str):
         logger.info(f"Restart requested for: '{feed_id}'")
@@ -1172,7 +1185,7 @@ class FeedManager:
                     if entry:
                         entry["status"] = FeedOperationalStatusEnum.RESTARTING
 
-                await self._stop_feed_internal(feed_id)
+                await self._stop_feed_internal(feed_id, skip_sample_mgmt=True)
                 await asyncio.sleep(2.0)  # Let the OS reclaim ports, file handles, memory
                 await self._start_feed_internal(feed_id)
             except Exception as e:
@@ -1202,14 +1215,12 @@ class FeedManager:
                 # Stop all feeds without triggering _check_and_manage_sample_feed after each one
                 for fid in feeds_to_stop:
                     try:
-                        await self._stop_feed_internal(fid)
+                        await self._stop_feed_internal(fid, skip_sample_mgmt=True)
                         # Broadcast update for each feed so frontend sees the state change
                         await self._broadcast_feed_update(fid)
                     except Exception as e:
                         logger.error(f"Error stopping feed {fid}: {e}")
 
-        # After all feeds are stopped, check sample feed logic once
-        await self._check_and_manage_sample_feed()
         await self._broadcast_kpi_update()
 
     async def request_snapshot(self, feed_id: str, incident_id: str):
@@ -1772,6 +1783,30 @@ class FeedManager:
                     except Exception as e:
                         logger.error(f"Watchdog: Failed to restart video feed {feed_id}: {e}")
 
+                # Check inference pool workers
+                dead_workers = []
+                for wid, p in list(self._inference_pool.items()):
+                    if not p.is_alive():
+                        exit_code = p.exitcode
+                        logger.warning(
+                            f"Watchdog: InferenceWorker-{wid} (PID {p.pid}) is dead. "
+                            f"Exit code: {exit_code}"
+                        )
+                        dead_workers.append(wid)
+
+                if dead_workers:
+                    # Clear stop signals before respawning to prevent the same race
+                    try:
+                        self._inference_stop_event.clear()
+                        rc = get_redis_client()
+                        rc.delete("signal:pipeline_stop")
+                    except Exception:
+                        pass
+                    for wid in dead_workers:
+                        logger.info(f"Watchdog: Respawning InferenceWorker-{wid}")
+                        self._inference_pool.pop(wid, None)
+                        self._spawn_worker(wid)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -1911,6 +1946,6 @@ class FeedManager:
             if t is not None
         ]
 
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
