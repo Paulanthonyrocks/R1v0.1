@@ -1567,7 +1567,10 @@ class FeedManager:
                 await self._perform_broadcasts(feed_ids_to_update, False, False)
                 await self._handle_periodic_tasks()
 
-                await asyncio.sleep(0.001 if len(items_buffer) < 200 else 0)
+                # Yield to the event loop to prevent starving the _client_sender
+                # and other coroutines on a constrained CPU.
+                # If the buffer is large, we still yield for a meaningful amount of time.
+                await asyncio.sleep(0.01 if len(items_buffer) < 200 else 0.02)
 
             except Exception as e:
                 logger.error(f"Error in result reader loop: {e}", exc_info=True)

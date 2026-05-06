@@ -286,34 +286,33 @@ class ConnectionManager:
 
     async def send_personal_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.NORMAL):
         """
-        Send a message reliably (waits for queue space). 
+        Send a message reliably (waits for queue space).
         Use this for control messages (config updates, status changes).
         """
-        if client_id in self.client_queues:
-            try:
-                # Wrap in prioritized object
-                wrapped_msg = PrioritizedMessage(priority, message)
-                
-                # For NORMAL priority, drop immediately if queue is heavily loaded to prevent head-of-line blocking
-                if priority == MessagePriority.NORMAL:
-                    queue = self.client_queues[client_id]
-                    if queue.qsize() >= queue.maxsize * 0.8:
-                        logger.debug(f"Client {client_id} queue heavily loaded ({queue.qsize()}/{queue.maxsize}). Dropping NORMAL message to maintain latency.")
-                        return
+        if client_id not in self.client_queues:
+            return
+        try:
+            # Wrap in prioritized object
+            wrapped_msg = PrioritizedMessage(priority, message)
 
-                # Determine timeout based on priority
-                # CRITICAL and HIGH priority messages get more time to be enqueued to ensure reliability
-                if priority in (MessagePriority.CRITICAL, MessagePriority.HIGH):
-                    timeout = 5.0
-                else:
-                    timeout = 0.5
+            # Determine timeout based on priority to avoid blocking the event loop
+            # indefinitely on a saturated CPU.
+            if priority in (MessagePriority.CRITICAL, MessagePriority.HIGH):
+                timeout = 5.0
+            else:
+                timeout = 1.5  # Increased from 0.5 for better resilience
 
-                # Wait for slot in queue with timeout to avoid blocking forever
-                await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=timeout)
-            except asyncio.TimeoutError:
-                logger.warning(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout to avoid blocking.")
-            except Exception as e:
-                 logger.error(f"Failed to enqueue message for {client_id}: {e}")
+            # Wait for slot in queue with timeout to avoid blocking forever.
+            # PriorityQueue naturally places NORMAL/HIGH ahead of LOW, so KPIs
+            # will be sent before video frames if the event loop can run.
+            await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Log at INFO because this is actionable backpressure
+            logger.info(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout to avoid blocking.")
+        except asyncio.QueueFull:
+            logger.info(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) – QueueFull.")
+        except Exception as e:
+             logger.error(f"Failed to enqueue message for {client_id}: {e}")
 
     async def send_realtime_message(self, message: str, client_id: str, priority: MessagePriority = MessagePriority.LOW):
         """
