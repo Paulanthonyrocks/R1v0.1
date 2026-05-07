@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { WebSocketMessageType } from './websocket/WebSocketClient';
+import { WebSocketMessageType, WebSocketMessage } from './websocket/WebSocketClient';
 import { useWebSocket } from './websocket/WebSocketProvider';
 import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from './types';
 import { useVehicleRegistry } from './hooks/useVehicleRegistry';
@@ -203,7 +203,11 @@ const useVideoSocket = (streamId: string, token: string | null) => {
 
     const unsubscribeFrame = client.subscribe(
       WebSocketMessageType.VIDEO_FRAME, 
-      (data) => handleFrameRef.current?.(data), 
+      (message: WebSocketMessage<VideoFrameMessage>) => {
+        if (message && message.data) {
+          handleFrameRef.current?.(message.data);
+        }
+      }, 
       streamId
     );
 
@@ -262,12 +266,88 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   // --- Public API ---
 
   const drawFrame = useCallback((
-    ctx: CanvasRenderingContext2D, 
-    frameDataObj: { image: ImageBitmap | HTMLImageElement | null, index: number, vehicles: VehicleFrontendData[] | null, metrics: SurveillanceFeedMessage | null }, 
+    ctx: CanvasRenderingContext2D,
+    frameDataObj: { image: ImageBitmap | HTMLImageElement | null, index: number, vehicles: VehicleFrontendData[] | null, metrics: SurveillanceFeedMessage | null },
     options: any = {}
   ) => {
-    // For brevity in this refactor, the drawing logic is omitted but should be 
-    // kept from the original implementation.
+    const { image, vehicles, metrics } = frameDataObj;
+    const {
+      showBoundingBoxes = true,
+      showVehicleDetails = true,
+      showTrajectories = false,
+      selectedVehicleIds = new Set(),
+      showAllDetections = false
+    } = options;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Draw video frame if available
+    if (image) {
+      ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
+
+    // Draw vehicle detections if available
+    if (vehicles && showBoundingBoxes && vehicles.length > 0) {
+      // Filter vehicles based on showAllDetections setting
+      const vehiclesToShow = showAllDetections ? vehicles : vehicles.filter(v => selectedVehicleIds.has(v.global_vehicle_id || v.vehicle_id));
+
+      vehiclesToShow.forEach(vehicle => {
+        const {
+          bbox,
+          class_name,
+          speed,
+          license_plate,
+          behavior,
+          is_wrong_way,
+          is_stopped,
+          global_vehicle_id,
+          vehicle_id
+        } = vehicle;
+
+        // Draw bounding box
+        if (bbox && Array.isArray(bbox) && bbox.length === 4) {
+          const [x1, y1, x2, y2] = bbox;
+          const width = (x2 - x1) * ctx.canvas.width;
+          const height = (y2 - y1) * ctx.canvas.height;
+          const x = x1 * ctx.canvas.width;
+          const y = y1 * ctx.canvas.height;
+
+          // Only draw if we have a valid size
+          if (width > 0 && height > 0) {
+            const isSelected = selectedVehicleIds.has(global_vehicle_id || vehicle_id);
+
+            // Set style based on selection and vehicle properties
+            ctx.strokeStyle = isSelected ? '#00ff00' : '#ff0000';
+            ctx.lineWidth = isSelected ? 3 : 2;
+            ctx.strokeRect(x, y, width, height);
+
+            // Draw vehicle details if enabled
+            if (showVehicleDetails) {
+              ctx.fillStyle = isSelected ? 'rgba(0, 255, 0, 0.3)' : 'rgba(255, 0, 0, 0.3)';
+              ctx.font = '12px monospace';
+              ctx.fillText(`${class_name} ${speed.toFixed(1)} km/h`, x, y - 10);
+              if (license_plate) {
+                ctx.fillText(license_plate, x, y + height + 15);
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // Draw metrics if available
+    if (metrics && showVehicleDetails) {
+      // Draw basic metrics on canvas
+      ctx.fillStyle = '#00ff00';
+      ctx.font = '14px monospace';
+      if (metrics.total_vehicles !== undefined) {
+        ctx.fillText(`Vehicles: ${metrics.total_vehicles}`, 10, 20);
+      }
+      if (metrics.average_speed_kmh !== undefined) {
+        ctx.fillText(`Speed: ${metrics.average_speed_kmh} km/h`, 10, 40);
+      }
+    }
   }, []); 
 
   return { 
