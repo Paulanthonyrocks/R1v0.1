@@ -1044,6 +1044,25 @@ class FeedManager:
 
     async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False):
         resources_to_cleanup = None
+        async with self._lock:
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                raise FeedNotFoundError(feed_id)
+
+            logger.info(f"Stopping feed: '{feed_id}'")
+            resources_to_cleanup = self._detach_resources(feed_id)
+
+        if resources_to_cleanup:
+            await self._terminate_resources(resources_to_cleanup)
+
+        await self._broadcast_feed_update(feed_id)
+        await self._broadcast_kpi_update()
+        if not skip_sample_mgmt:
+            await self._check_and_manage_sample_feed()
+
+    async def _start_feed_internal(self, feed_id: str):
+        """Internal method to start a feed, handling resource allocation and worker launch."""
+        resources_to_cleanup = None
         failed_resources_to_cleanup = None
         is_sample = False
         started_real_feed = False
@@ -1156,8 +1175,6 @@ class FeedManager:
                 entry = self.process_registry.get(feed_id)
                 is_sample = entry.get("is_sample_feed", False) if entry else False
             await self._stop_feed_internal(feed_id, skip_sample_mgmt=is_sample)
-
-    async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False):
         resources_to_cleanup = None
         async with self._lock:
             entry = self.process_registry.get(feed_id)
