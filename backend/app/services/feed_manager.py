@@ -607,83 +607,82 @@ class FeedManager:
         except Exception as e:
             self.logger.warning(f"Could not clear inference stop event: {e}")
 
-            # Purge stale pending messages from central_output stream
-            try:
-                stale_key = self._central_output_queue.key
-                if (
-                    hasattr(self._central_output_queue, 'redis')
-                    and self._central_output_queue.redis.exists(stale_key)
-                ):
-                    pending_info = self._central_output_queue.redis.xpending(
-                        stale_key, self._central_output_queue.group_name
+        # Purge stale pending messages from central_output stream
+        try:
+            stale_key = self._central_output_queue.key
+            if (
+                hasattr(self._central_output_queue, 'redis')
+                and self._central_output_queue.redis.exists(stale_key)
+            ):
+                pending_info = self._central_output_queue.redis.xpending(
+                    stale_key, self._central_output_queue.group_name
+                )
+                pending_count = (
+                    pending_info.get("pending", 0)
+                    if isinstance(pending_info, dict)
+                    else (pending_info[0] if pending_info else 0)
+                )
+                if pending_count > 0:
+                    self.logger.info(
+                        f"Purging {pending_count} stale pending messages from {stale_key}"
                     )
-                    pending_count = (
-                        pending_info.get("pending", 0)
-                        if isinstance(pending_info, dict)
-                        else (pending_info[0] if pending_info else 0)
-                    )
-                    if pending_count > 0:
-                        self.logger.info(
-                            f"Purging {pending_count} stale pending messages from {stale_key}"
+                    try:
+                        redis_ver = (
+                            self._central_output_queue.redis
+                            .info('server')
+                            .get('redis_version', '0.0.0')
                         )
+                        ver_parts = tuple(int(x) for x in redis_ver.split('.')[:2])
+                        supports_autoclaim = ver_parts >= (6, 2)
+                    except Exception:
+                        supports_autoclaim = False
+
+                    if supports_autoclaim:
                         try:
-                            redis_ver = (
-                                self._central_output_queue.redis
-                                .info('server')
-                                .get('redis_version', '0.0.0')
+                            claimed = self._central_output_queue.redis.xautoclaim(
+                                stale_key,
+                                self._central_output_queue.group_name,
+                                self._central_output_queue.consumer_id,
+                                min_idle_time=0,
+                                start_id="0-0",
+                                count=100,
                             )
-                            ver_parts = tuple(int(x) for x in redis_ver.split('.')[:2])
-                            supports_autoclaim = ver_parts >= (6, 2)
-                        except Exception:
+                            if claimed and len(claimed) > 1 and claimed[1]:
+                                for msg_id, _ in claimed[1]:
+                                    self._central_output_queue.redis.xack(
+                                        stale_key,
+                                        self._central_output_queue.group_name,
+                                        msg_id,
+                                    )
+                                self.logger.info(
+                                    f"ACKed {len(claimed[1])} stale messages via xautoclaim"
+                                )
+                        except Exception as claim_err:
+                            self.logger.warning(f"xautoclaim failed: {claim_err}")
                             supports_autoclaim = False
 
-                        if supports_autoclaim:
-                            try:
-                                claimed = self._central_output_queue.redis.xautoclaim(
-                                    stale_key,
-                                    self._central_output_queue.group_name,
-                                    self._central_output_queue.consumer_id,
-                                    min_idle_time=0,
-                                    start_id="0-0",
-                                    count=100,
-                                )
-                                if claimed and len(claimed) > 1 and claimed[1]:
-                                    for msg_id, _ in claimed[1]:
-                                        self._central_output_queue.redis.xack(
-                                            stale_key,
-                                            self._central_output_queue.group_name,
-                                            msg_id,
-                                        )
-                                    self.logger.info(
-                                        f"ACKed {len(claimed[1])} stale messages via xautoclaim"
+                    if not supports_autoclaim:
+                        try:
+                            msgs = self._central_output_queue.redis.xreadgroup(
+                                self._central_output_queue.group_name,
+                                self._central_output_queue.consumer_id,
+                                {stale_key: "0"},
+                                count=200,
+                            )
+                            if msgs and msgs[0][1]:
+                                for msg_id, _ in msgs[0][1]:
+                                    self._central_output_queue.redis.xack(
+                                        stale_key,
+                                        self._central_output_queue.group_name,
+                                        msg_id,
                                     )
-                            except Exception as claim_err:
-                                self.logger.warning(f"xautoclaim failed: {claim_err}")
-                                supports_autoclaim = False
-
-                        if not supports_autoclaim:
-                            try:
-                                msgs = self._central_output_queue.redis.xreadgroup(
-                                    self._central_output_queue.group_name,
-                                    self._central_output_queue.consumer_id,
-                                    {stale_key: "0"},
-                                    count=200,
+                                self.logger.info(
+                                    f"ACKed {len(msgs[0][1])} stale messages via xreadgroup (Redis < 6.2)"
                                 )
-                                if msgs and msgs[0][1]:
-                                    for msg_id, _ in msgs[0][1]:
-                                        self._central_output_queue.redis.xack(
-                                            stale_key,
-                                            self._central_output_queue.group_name,
-                                            msg_id,
-                                        )
-                                    self.logger.info(
-                                        f"ACKed {len(msgs[0][1])} stale messages via xreadgroup (Redis < 6.2)"
-                                    )
-                            except Exception as fb_err:
-                                self.logger.warning(f"Fallback purge failed: {fb_err}")
-                except Exception as e:
-                    self.logger.warning(f"Could not purge stale central_output messages: {e}")
-
+                        except Exception as fb_err:
+                            self.logger.warning(f"Fallback purge failed: {fb_err}")
+        except Exception as e:
+            self.logger.warning(f"Could not purge stale central_output messages: {e}")
         pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         self.scale_pool(pool_size)
 
