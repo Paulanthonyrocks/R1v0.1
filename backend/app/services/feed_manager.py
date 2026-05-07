@@ -1945,6 +1945,6 @@ class FeedManager:
             if t is not None
         ]
 
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
