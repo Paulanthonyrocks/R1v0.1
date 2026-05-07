@@ -10,7 +10,6 @@ import {
  _pendingUnsubscribes,
  _pendingCleanups,
  UNSUBSCRIBE_DEBOUNCE_MS,
- resetFeedSubscriptionState
 } from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string, token: string | null) => {
@@ -97,45 +96,50 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   // --- Core Logic ---
 
   const subscribeToFeed = useCallback(() => {
-    if (client.isConnected() && streamId) {
-      const pending = _pendingUnsubscribes.get(streamId);
+    const streamIdLocal = streamId;
+    if (client.isConnected() && streamIdLocal) {
+      const pending = _pendingUnsubscribes.get(streamIdLocal);
       if (pending) {
         clearTimeout(pending);
-        _pendingUnsubscribes.delete(streamId);
-        return;
+        _pendingUnsubscribes.delete(streamIdLocal);
+        // Don't return here — still send the subscribe since the
+        // unsubscribe timer was cancelled before it fired, so the
+        // server may still think we're subscribed. Sending a redundant
+        // subscribe is harmless; sending a redundant unsubscribe is not.
       }
-      const pendingCleanup = _pendingCleanups.get(streamId);
+      const pendingCleanup = _pendingCleanups.get(streamIdLocal);
       if (pendingCleanup) {
         clearTimeout(pendingCleanup);
-        _pendingCleanups.delete(streamId);
+        _pendingCleanups.delete(streamIdLocal);
       }
-      if (!_subscribedFeeds.has(streamId)) {
-        _subscribedFeeds.add(streamId);
+      if (!_subscribedFeeds.has(streamIdLocal)) {
+        _subscribedFeeds.add(streamIdLocal);
         client.send({
           type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
-          data: { feed_id: streamId },
+          data: { feed_id: streamIdLocal },
         });
       }
     }
   }, [client, streamId]);
 
-  const unsubscribeFromFeed = useCallback(() => {
-    const count = _feedHookCounts.get(streamId) ?? 0;
-    if (count <= 1 && _subscribedFeeds.has(streamId)) {
-      const existing = _pendingUnsubscribes.get(streamId);
+const unsubscribeFromFeed = useCallback(() => {
+    const streamIdLocal = streamId;
+    const count = _feedHookCounts.get(streamIdLocal) ?? 0;
+    if (count <= 1 && _subscribedFeeds.has(streamIdLocal)) {
+      const existing = _pendingUnsubscribes.get(streamIdLocal);
       if (existing) clearTimeout(existing);
 
       const timer = setTimeout(() => {
-        _pendingUnsubscribes.delete(streamId);
-        if (!_subscribedFeeds.has(streamId)) return;
-        _subscribedFeeds.delete(streamId);
+        _pendingUnsubscribes.delete(streamIdLocal);
+        if (!_subscribedFeeds.has(streamIdLocal)) return;
+        _subscribedFeeds.delete(streamIdLocal);
         client.send({
           type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED,
-          data: { feed_id: streamId },
+          data: { feed_id: streamIdLocal },
         });
       }, UNSUBSCRIBE_DEBOUNCE_MS);
 
-      _pendingUnsubscribes.set(streamId, timer);
+      _pendingUnsubscribes.set(streamIdLocal, timer);
     }
   }, [client, streamId]);
 
@@ -227,10 +231,24 @@ const useVideoSocket = (streamId: string, token: string | null) => {
     const unsubscribeStatus = client.onStatusChange((status) => {
       setIsConnected(status === 'connected');
       if (status === 'connected') {
+        // When reconnecting, cancel any pending unsubscribes so they don't
+        // fire after the re-subscribe. Do NOT call resetFeedSubscriptionState()
+        // because that wipes _subscribedFeeds which the subscribe logic checks.
+        const pending = _pendingUnsubscribes.get(streamId);
+        if (pending) {
+          clearTimeout(pending);
+          _pendingUnsubscribes.delete(streamId);
+        }
         _subscribedFeeds.delete(streamId);
         subscribeToFeed();
       } else if (status === 'disconnected') {
-        resetFeedSubscriptionState();
+        // Cancel pending unsubscribes — don't clear subscription state because
+        // the server still tracks our subscription and will restore it on reconnect.
+        const pending = _pendingUnsubscribes.get(streamId);
+        if (pending) {
+          clearTimeout(pending);
+          _pendingUnsubscribes.delete(streamId);
+        }
       }
     });
 

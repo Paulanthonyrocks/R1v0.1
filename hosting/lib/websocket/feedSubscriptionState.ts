@@ -22,9 +22,9 @@ export const _pendingUnsubscribes: Map<string, ReturnType<typeof setTimeout>> = 
 // Pending worker cleanup timers — debounced alongside unsubscribe
 export const _pendingCleanups: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
-export const UNSUBSCRIBE_DEBOUNCE_MS = 100;
+export const UNSUBSCRIBE_DEBOUNCE_MS = 1000;
 
-/** Clear all subscription tracking state (call on disconnect) */
+/** Clear all subscription tracking state (call on hard disconnect only) */
 export function resetFeedSubscriptionState(): void {
   _subscribedFeeds.clear();
   for (const [, timer] of _pendingUnsubscribes) clearTimeout(timer);
