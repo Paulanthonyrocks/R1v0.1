@@ -613,7 +613,8 @@ export class WebSocketClient implements IWebSocketClient {
                             feed_id: frameData.feed_id,
                             originalData: message.data // Pass through other metrics/vehicles
                         });
-                    } else {
+                        return;
+                    } else if (!this.videoWorker) {
                         // Fallback to direct notification if no worker
                         this.notifyListeners(message.type, message.data, frameData?.feed_id);
                     }
@@ -675,7 +676,9 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     if (this.videoWorker) {
-                        // Pass binary chunks to worker for reconstruction
+                        // Pass binary chunks to worker for reconstruction.
+                        // The worker now coalesces frames and uses AbortController
+                        // to cancel stale decodes, so we can post eagerly.
                         this.videoWorker.postMessage({
                             binaryFrame: message.data,
                             feed_id: message.data.feed_id
@@ -683,6 +686,9 @@ export class WebSocketClient implements IWebSocketClient {
                     } else {
                         this.notifyListeners(message.type, message.data, message.data.feed_id);
                     }
+                    // Don't fall through to notifyListeners — the worker
+                    // will post back the decoded frame via onmessage handler
+                    return;
                 } else {
                     this.notifyListeners(message.type, message.data);
                 }

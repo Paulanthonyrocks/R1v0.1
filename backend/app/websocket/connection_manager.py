@@ -259,14 +259,14 @@ class ConnectionManager:
 
     def _calculate_queue_size(self, client_id: str) -> int:
         """Calculate adaptive queue size based on client latency."""
-        base_queue_size = 100
+        base_queue_size = 300  # Increased from 100 — 3 feeds @ ~60fps need more buffer
         latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
         
         # Higher latency = larger queue to buffer more frames
         if latency_ms > 200:
-            return 500
+            return 1000
         elif latency_ms > 100:
-            return 200
+            return 600
         else:
             return base_queue_size
     
@@ -288,11 +288,11 @@ class ConnectionManager:
         """
         Send a message reliably (waits for queue space).
         Use this for control messages (config updates, status changes).
+        When the queue is full and priority is NORMAL+, drain stale LOW frames first.
         """
         if client_id not in self.client_queues:
             return
         try:
-            # Wrap in prioritized object
             wrapped_msg = PrioritizedMessage(priority, message)
 
             # Determine timeout based on priority to avoid blocking the event loop
@@ -302,10 +302,32 @@ class ConnectionManager:
             else:
                 timeout = 1.5  # Increased from 0.5 for better resilience
 
+            # If the queue is full and we're sending a NORMAL+ message,
+            # drain stale LOW-priority frames to make room.
+            queue = self.client_queues[client_id]
+            if priority in (MessagePriority.NORMAL, MessagePriority.HIGH, MessagePriority.CRITICAL):
+                if queue.full():
+                    drained = 0
+                    # Drain up to 20% of maxsize of stale LOW frames
+                    drain_limit = max(1, queue.maxsize // 5)
+                    while drained < drain_limit and queue.full():
+                        try:
+                            item = queue.get_nowait()
+                            if item.priority == MessagePriority.LOW:
+                                drained += 1
+                            else:
+                                # Put back non-LOW items
+                                queue.put_nowait(item)
+                                break
+                        except (asyncio.QueueEmpty, asyncio.QueueFull):
+                            break
+                    if drained > 0:
+                        logger.info(f"[CONN_MGR] Drained {drained} stale LOW frames to make room for priority {priority} message for client {client_id}")
+
             # Wait for slot in queue with timeout to avoid blocking forever.
             # PriorityQueue naturally places NORMAL/HIGH ahead of LOW, so KPIs
             # will be sent before video frames if the event loop can run.
-            await asyncio.wait_for(self.client_queues[client_id].put(wrapped_msg), timeout=timeout)
+            await asyncio.wait_for(queue.put(wrapped_msg), timeout=timeout)
         except asyncio.TimeoutError:
             # Log at INFO because this is actionable backpressure
             logger.info(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout to avoid blocking.")
@@ -391,11 +413,18 @@ class ConnectionManager:
             
             # Only apply skipping to LOW priority frames
             if priority == MessagePriority.LOW:
+                # More aggressive dropping when queue is backed up
                 skip_threshold = 0.0
-                if q_size >= q_max * 0.9:
-                    skip_threshold = 0.67
-                elif q_size >= q_max * 0.75:
-                    skip_threshold = 0.5
+                if q_size >= q_max * 0.95:
+                    skip_threshold = 0.9   # Keep ~1 in 10 frames (down from ~1 in 3)
+                elif q_size >= q_max * 0.85:
+                    skip_threshold = 0.75  # Keep ~1 in 4 frames
+                elif q_size >= q_max * 0.70:
+                    skip_threshold = 0.5   # Keep ~1 in 2 frames
+                elif q_size >= q_max * 0.50:
+                    skip_threshold = 0.33  # Keep ~2 in 3 frames
+                elif q_size >= q_max * 0.30:
+                    skip_threshold = 0.1   # Keep ~9 in 10 frames
                 
                 if skip_threshold > 0:
                     if (frame_index % int(1/(1-skip_threshold))) != 0:

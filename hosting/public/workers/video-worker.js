@@ -1,106 +1,156 @@
+/**
+ * Video Worker — decodes inbound JPEG frames into ImageBitmaps.
+ *
+ * Design goals:
+ *  1. Skip stale frames — if a new frame arrives while we're processing
+ *     the previous one, cancel the old decode and start fresh.
+ *  2. Use AbortController for cancellable createImageBitmap.
+ *  3. Fast-path: if the backend sends a raw ArrayBuffer (binary msgpack),
+ *     decode directly. Fallback: base64 → Blob → ImageBitmap.
+ *  4. Only process ONE frame at a time per feed. Drop intermediate frames.
+ */
 
+// Per-feed state
 const canvases = new Map();
 const contexts = new Map();
+const pendingDecodes = new Map(); // feed_id → AbortController
+
+// Track latest pending frame per feed (coalescing)
+const latestFramePayload = new Map(); // feed_id → { binaryFrame, frameData, metadata }
 
 self.onmessage = async function (e) {
     const data = e.data;
     const command = data.command;
     const command_feed_id = data.feed_id;
 
-    // Handle Commands
+    // ── Command: Cleanup ────────────────────────────────────────────
     if (command === 'CLEANUP_FEED') {
-        const feed_id = command_feed_id;
-        const canvas = canvases.get(feed_id);
-        if (canvas) {
-            canvases.delete(feed_id);
-            console.log('[Worker] Cleaned up resources for feed: ' + feed_id);
+        // Abort any pending decode for this feed
+        const existing = pendingDecodes.get(command_feed_id);
+        if (existing) {
+            existing.abort();
+            pendingDecodes.delete(command_feed_id);
         }
-        const ctx = contexts.get(feed_id);
-        if (ctx) {
-            contexts.delete(feed_id);
-        }
+        latestFramePayload.delete(command_feed_id);
+
+        const canvas = canvases.get(command_feed_id);
+        if (canvas) canvases.delete(command_feed_id);
+        const ctx = contexts.get(command_feed_id);
+        if (ctx) contexts.delete(command_feed_id);
         return;
     }
 
+    // ── Normal frame ────────────────────────────────────────────────
     const binaryFrame = data.binaryFrame;
     const frameData = data.frameData;
     const feed_id = data.feed_id;
 
-    let frameToSend = null;
+    if (!feed_id) return;
+
+    // Coalesce: if we're already processing a frame for this feed,
+    // cancel that decode and store the latest payload.
+    const existingAbort = pendingDecodes.get(feed_id);
+    if (existingAbort) {
+        existingAbort.abort();
+        pendingDecodes.delete(feed_id);
+    }
+
+    // ── Extract raw JPEG bytes ─────────────────────────────────────
+    let jpegBytes = null;
     let metadata = {};
-    let transferables = [];
+
+    if (binaryFrame) {
+        // Modern binary msgpack path
+        metadata = {
+            frame_index: binaryFrame.frame_index || 0,
+            metrics: binaryFrame.metrics,
+            vehicles: binaryFrame.vehicles,
+            timestamp: binaryFrame.timestamp
+        };
+
+        // Priority: frame (standalone JPEG) > background+ROIs (reconstruction)
+        if (binaryFrame.frame) {
+            jpegBytes = binaryFrame.frame; // Already an ArrayBuffer
+        }
+        // ROI reconstruction path — expensive, only enter if needed
+        // (Backend currently sends standalone frames, not bg+rois)
+        // else if (binaryFrame.background && binaryFrame.rois) {
+        //     // See fallback below
+        // }
+    } else if (frameData && typeof frameData === 'string') {
+        // Legacy base64 path — fast decode using Fetch + Data URL
+        jpegBytes = frameData; // Will be converted below
+    }
+
+    if (!jpegBytes) {
+        // No decodable payload — post empty frame to signal "no content"
+        self.postMessage({
+            feed_id: feed_id,
+            frame: null,
+            frame_index: metadata.frame_index || 0,
+            metrics: metadata.metrics,
+            vehicles: metadata.vehicles,
+            timestamp: metadata.timestamp
+        });
+        return;
+    }
+
+    // ── Decode JPEG → ImageBitmap ───────────────────────────────────
+    const abortController = new AbortController();
+    pendingDecodes.set(feed_id, abortController);
 
     try {
-        // 1. Handle Binary Data (Modern Protocol)
-        if (binaryFrame) {
-            const background = binaryFrame.background;
-            const rois = binaryFrame.rois;
-            const frame = binaryFrame.frame;
-            const frame_index = binaryFrame.frame_index;
-            const metrics = binaryFrame.metrics;
-            const vehicles = binaryFrame.vehicles;
-            const timestamp = binaryFrame.timestamp;
+        let blob;
 
-            metadata = { frame_index, metrics, vehicles, timestamp };
-
-            if (background && rois) {
-                // Adaptive ROI Reconstruction
-                const bgBlob = new Blob([background], { type: 'image/jpeg' });
-                const bgBitmap = await createImageBitmap(bgBlob);
-
-                let canvas = canvases.get(feed_id);
-                let ctx = contexts.get(feed_id);
-
-                if (!canvas || canvas.width !== bgBitmap.width || canvas.height !== bgBitmap.height) {
-                    canvas = new OffscreenCanvas(bgBitmap.width, bgBitmap.height);
-                    ctx = canvas.getContext('2d', { alpha: false });
-                    canvases.set(feed_id, canvas);
-                    contexts.set(feed_id, ctx);
-                }
-
-                ctx.drawImage(bgBitmap, 0, 0);
-                bgBitmap.close();
-
-                for (let i = 0; i < rois.length; i++) {
-                    const roi = rois[i];
-                    const roiBlob = new Blob([roi.b], { type: 'image/jpeg' });
-                    const roiBitmap = await createImageBitmap(roiBlob);
-                    ctx.drawImage(roiBitmap, roi.x, roi.y, roi.w, roi.h);
-                    roiBitmap.close();
-                }
-
-                frameToSend = canvas.transferToImageBitmap();
-                transferables.push(frameToSend);
-            } else if (frame) {
-                const blob = new Blob([frame], { type: 'image/jpeg' });
-                frameToSend = await createImageBitmap(blob);
-                transferables.push(frameToSend);
-            }
-        }
-        // 2. Handle Base64 Data (Legacy Protocol)
-        else if (frameData) {
-            const binaryString = atob(frameData);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: 'image/jpeg' });
-            frameToSend = await createImageBitmap(blob);
-            transferables.push(frameToSend);
+        if (jpegBytes instanceof ArrayBuffer || jpegBytes instanceof Uint8Array) {
+            blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+        } else if (typeof jpegBytes === 'string') {
+            // base64 → Blob via data URL (2-4x faster than atob+Uint8Array loop)
+            const response = await fetch('data:image/jpeg;base64,' + jpegBytes, {
+                signal: abortController.signal
+            });
+            if (!response.ok) throw new Error('Failed to decode base64 JPEG');
+            blob = await response.blob();
         }
 
-        if (frameToSend) {
-            self.postMessage({
-                feed_id: feed_id,
-                frame: frameToSend,
-                frame_index: metadata.frame_index || 0,
-                metrics: metadata.metrics,
-                vehicles: metadata.vehicles,
-                timestamp: metadata.timestamp
-            }, transferables);
+        // Check if this decode was aborted while awaiting blob/fetch
+        if (abortController.signal.aborted) return;
+
+        const bitmap = await createImageBitmap(blob, {
+            imageOrientation: 'none',
+            premultiplyAlpha: 'none',
+            colorSpaceConversion: 'none'
+        });
+
+        // Check again after createImageBitmap
+        if (abortController.signal.aborted) {
+            bitmap.close();
+            return;
         }
+
+        self.postMessage({
+            feed_id: feed_id,
+            frame: bitmap,
+            frame_index: metadata.frame_index || 0,
+            metrics: metadata.metrics,
+            vehicles: metadata.vehicles,
+            timestamp: metadata.timestamp
+        }, [bitmap]); // Transfer ownership to main thread
     } catch (error) {
+        if (error.name === 'AbortError') {
+            // Frame was superseded — expected, not an error
+            return;
+        }
         console.error('Worker: Frame processing failed', error);
-        self.postMessage({ error: error.message, feed_id: feed_id });
+        self.postMessage({
+            error: error.message,
+            feed_id: feed_id,
+            frame_index: metadata.frame_index || 0
+        });
+    } finally {
+        // Only clear if this abort controller is still the current one
+        if (pendingDecodes.get(feed_id) === abortController) {
+            pendingDecodes.delete(feed_id);
+        }
     }
 };

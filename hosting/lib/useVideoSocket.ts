@@ -38,7 +38,6 @@ const useVideoSocket = (streamId: string, token: string | null) => {
   const lastProcessedIndexRef = useRef<number>(-1);
   const frameCountRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
-  const processingLockRef = useRef<boolean>(false);
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
 
   // Constants
@@ -144,8 +143,12 @@ const unsubscribeFromFeed = useCallback(() => {
   }, [client, streamId]);
 
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
-    if (processingLockRef.current) return;
-    processingLockRef.current = true;
+    // Don't acquire lock here — the worker already coalesces.
+    // We just need to track the latest frame index for dropping.
+    if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
+      // Stale frame — skip
+      return;
+    }
 
     try {
       if (!data.feed_id || data.feed_id !== streamId) return;
@@ -154,7 +157,9 @@ const unsubscribeFromFeed = useCallback(() => {
         const lastIndex = lastProcessedIndexRef.current;
         if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
           const dropped = data.frame_index - lastIndex - 1;
-          console.warn(`[useVideoSocket] Frame drop detected for feed ${streamId}: dropped ${dropped} frames (last: ${lastIndex}, current: ${data.frame_index})`);
+          if (dropped > 5) {
+            console.warn(`[useVideoSocket] Frame drop detected for feed ${streamId}: dropped ${dropped} frames (last: ${lastIndex}, current: ${data.frame_index})`);
+          }
         }
 
         if (data.frame_index < lastIndex) {
@@ -166,7 +171,7 @@ const unsubscribeFromFeed = useCallback(() => {
         }
         lastProcessedIndexRef.current = data.frame_index;
       } else {
-        lastProcessedIndexRef.current = lastProcessedIndexRef.current || 0;
+        lastProcessedIndexRef.current = (lastProcessedIndexRef.current || 0) + 1;
       }
       frameCountRef.current += 1;
 
@@ -183,8 +188,6 @@ const unsubscribeFromFeed = useCallback(() => {
       await decode(data);
     } catch (err) {
       console.error('[useVideoSocket] handleFrame Error:', err);
-    } finally {
-      processingLockRef.current = false;
     }
   }, [client, streamId, decode, clearVehicles]);
 
