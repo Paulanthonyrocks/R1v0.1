@@ -210,9 +210,11 @@ const unsubscribeFromFeed = useCallback(() => {
 
     const unsubscribeFrame = client.subscribe(
       WebSocketMessageType.VIDEO_FRAME, 
-      (message: WebSocketMessage<VideoFrameMessage>) => {
-        if (message && message.data) {
-          handleFrameRef.current?.(message.data);
+      (frameData: VideoFrameMessage) => {
+        // Note: the worker posts data directly, not wrapped in WebSocketMessage.
+        // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
+        if (frameData && frameData.frame) {
+          handleFrameRef.current?.(frameData);
         }
       }, 
       streamId
