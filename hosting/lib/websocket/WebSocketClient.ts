@@ -706,7 +706,12 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
                     const scopedEntry = entry as ScopedListener;
-                    if (!scope || scopedEntry.scope === scope) {
+                    // Critical fix: Only notify listeners with matching scope or no scope requirement
+                    // When scope is provided, only notify listeners that specifically match that scope
+                    if (scope && scopedEntry.scope === scope) {
+                        scopedEntry.listener(data);
+                    } else if (!scope && !scopedEntry.scope) {
+                        // No scope provided and listener has no scope requirement
                         scopedEntry.listener(data);
                     }
                 } else {

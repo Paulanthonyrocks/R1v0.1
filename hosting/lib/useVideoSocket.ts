@@ -151,7 +151,11 @@ const unsubscribeFromFeed = useCallback(() => {
     }
 
     try {
-      if (!data.feed_id || data.feed_id !== streamId) return;
+      // Critical fix: Ensure we only process frames for the correct feed
+      if (!data.feed_id || data.feed_id !== streamId) {
+        console.debug(`[useVideoSocket] Skipping frame for feed ${data.feed_id} in component for feed ${streamId}`);
+        return;
+      }
 
       if (data.frame_index !== undefined) {
         const lastIndex = lastProcessedIndexRef.current;
