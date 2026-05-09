@@ -212,17 +212,29 @@ const unsubscribeFromFeed = useCallback(() => {
       subscribeToFeed();
     }
 
-    const unsubscribeFrame = client.subscribe(
-      WebSocketMessageType.VIDEO_FRAME, 
-      (frameData: VideoFrameMessage) => {
-        // Note: the worker posts data directly, not wrapped in WebSocketMessage.
-        // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
-        if (frameData && frameData.frame) {
-          handleFrameRef.current?.(frameData);
-        }
-      }, 
-      streamId
-    );
+ // Scoped subscription: only receives frames matching our streamId.
+ // The WebSocketClient.notifyListeners routes by scope, so this
+ // callback should NEVER receive frames for other feeds. The feed_id
+ // check below is a hardening guard in case routing changes.
+ const currentStreamId = streamId;
+ const unsubscribeFrame = client.subscribe(
+ WebSocketMessageType.VIDEO_FRAME, 
+ (frameData: VideoFrameMessage) => {
+ // Note: the worker posts data directly, not wrapped in WebSocketMessage.
+ // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
+ if (frameData && frameData.frame) {
+ // Hard guard: reject frames not matching our subscribed feed.
+ // This prevents stale-closure leaks if the scoped routing
+ // ever delivers a mismatched frame (e.g. during reconnect).
+ if (frameData.feed_id && frameData.feed_id !== currentStreamId) {
+ console.warn(`[useVideoSocket] Scoped listener received wrong feed frame: expected ${currentStreamId}, got ${frameData.feed_id}. Dropping.`);
+ return;
+ }
+ handleFrameRef.current?.(frameData);
+ }
+ }, 
+ streamId
+ );
 
     const stalenessInterval = setInterval(() => {
       const now = performance.now();

@@ -146,25 +146,32 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
     // flow to the correct component. These are cheap — just function refs
     // in a Set inside WebSocketClient.
 
-    subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
-      if (data && Array.isArray(data.feeds)) {
-        setFeeds(data.feeds);
-      }
-    }));
+ subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
+ if (data && Array.isArray(data.feeds)) {
+ // Sort by feed_id for stable ordering. React uses key={feed.feed_id}
+ // for reconciliation — if the array order changes between renders,
+ // components unmount/remount, destroying and recreating WebSocket
+ // subscriptions and video decoders. Stable sort prevents this.
+ setFeeds([...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id)));
+ }
+ }));
 
-    subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
-      if (!data?.feed_status_data) return;
-      const statusData = data.feed_status_data;
-      setFeeds(prevFeeds => {
-        const index = prevFeeds.findIndex(feed => feed.feed_id === statusData.feed_id);
-        if (index !== -1) {
-          const newFeeds = [...prevFeeds];
-          newFeeds[index] = statusData;
-          return newFeeds;
-        }
-        return [...prevFeeds, statusData];
-      });
-    }));
+ subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
+ if (!data?.feed_status_data) return;
+ const statusData = data.feed_status_data;
+ setFeeds(prevFeeds => {
+ const index = prevFeeds.findIndex(feed => feed.feed_id === statusData.feed_id);
+ let newFeeds: FeedStatusData[];
+ if (index !== -1) {
+ newFeeds = [...prevFeeds];
+ newFeeds[index] = statusData;
+ } else {
+ newFeeds = [...prevFeeds, statusData];
+ }
+ // Re-sort to maintain stable key ordering after upsert
+ return newFeeds.sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+ });
+ }));
 
     subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
 

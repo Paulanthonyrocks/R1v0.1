@@ -698,30 +698,45 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
-    private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
-        const typeListeners = this.listeners.get(type);
-        if (!typeListeners) return;
+ private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
+ const typeListeners = this.listeners.get(type);
+ if (!typeListeners) return;
 
-        typeListeners.forEach((entry: unknown) => {
-            try {
-                if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
-                    const scopedEntry = entry as ScopedListener;
-                    // Critical fix: Only notify listeners with matching scope or no scope requirement
-                    // When scope is provided, only notify listeners that specifically match that scope
-                    if (scope && scopedEntry.scope === scope) {
-                        scopedEntry.listener(data);
-                    } else if (!scope && !scopedEntry.scope) {
-                        // No scope provided and listener has no scope requirement
-                        scopedEntry.listener(data);
-                    }
-                } else {
-                    (entry as MessageListener<T>)(data);
-                }
-            } catch (error) {
-                console.error(`[WebSocketClient ${this.instanceId}] Error in listener for ${type}:`, error);
-            }
-        });
-    }
+ typeListeners.forEach((entry: unknown) => {
+ try {
+ if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
+ const scopedEntry = entry as ScopedListener;
+ // Scoped routing: when a scope is provided on the event,
+ // only deliver to the listener whose scope matches.
+ // When NO scope is provided on the event (e.g. non-VIDEO_FRAME
+ // broadcasts), skip all scoped listeners — they opt in to
+ // specific scopes only.
+ if (scope) {
+ // Event has a scope — deliver only to matching scoped listener
+ if (scopedEntry.scope === scope) {
+ scopedEntry.listener(data);
+ }
+ // else: scoped listener for a different feed — skip
+ } else {
+ // Event has no scope — only deliver to unscoped listeners
+ if (!scopedEntry.scope) {
+ scopedEntry.listener(data);
+ }
+ }
+ } else {
+ // Plain (unscoped) listener: always fire, regardless of event scope.
+ // Unscoped listeners are used for broadcast topics like KPI_UPDATE,
+ // ALERT, etc. For VIDEO_FRAME, unscoped listeners should not exist
+ // (useVideoSocket always registers scoped), but if they do, they
+ // will receive ALL frames — this is intentional for any future
+ // "frame logger" or debug consumer.
+ (entry as MessageListener<T>)(data);
+ }
+ } catch (error) {
+ console.error(`[WebSocketClient ${this.instanceId}] Error in listener for ${type}:`, error);
+ }
+ });
+ }
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (!this.listeners.has(messageType)) this.listeners.set(messageType, new Set());
