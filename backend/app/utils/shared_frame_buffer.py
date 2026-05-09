@@ -199,7 +199,8 @@ class SharedFrameBuffer:
             raise ValueError(f'Invalid header in segment {name}')
         
         if size <= 0 or size > self.max_frame_size:
-            raise ValueError(f'Invalid size {size} in segment {name}')
+            logger.warning(f'Invalid size {size} detected in segment {name}. Returning None.')
+            return None, (0, 0, 0)
             
         # Update last_used timestamp to prevent pruning while being read
         # Note: This is a non-atomic write to the header, but it's acceptable for heartbeat

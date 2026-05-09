@@ -12,7 +12,7 @@ import {
  UNSUBSCRIBE_DEBOUNCE_MS,
 } from './websocket/feedSubscriptionState';
 
-const useVideoSocket = (streamId: string, token: string | null) => {
+const useVideoSocket = (streamId: string, token: string | null, instanceId?: string) => {
   const client = useWebSocket();
   
   // --- State Management ---
@@ -398,6 +398,11 @@ const unsubscribeFromFeed = useCallback(() => {
     drawFrame, 
     frameRate, 
     updateFeedConfig: (config: any) => client.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
+  };
+};
+
+export default useVideoSocket;
+s: config } })
   };
 };
 

@@ -325,7 +325,14 @@ def inference_worker(
 
                     # Read frame from shared memory
                     if frame_buffer:
-                        res = frame_buffer.read(shm_ref)
+                        try:
+                            res = frame_buffer.read(shm_ref)
+                        except Exception as e:
+                            logger.error(f"[Worker {worker_id}] SHM read failed for ref {shm_ref}: {e}")
+                            if msg_id and hasattr(slot_q_ref, "ack"):
+                                slot_q_ref.ack(msg_id)
+                            continue
+
                         if res is None:
                             logger.error(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
                             if msg_id and hasattr(slot_q_ref, "ack"):

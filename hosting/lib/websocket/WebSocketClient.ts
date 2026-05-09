@@ -702,6 +702,10 @@ export class WebSocketClient implements IWebSocketClient {
  const typeListeners = this.listeners.get(type);
  if (!typeListeners) return;
 
+ if (type === WebSocketMessageType.VIDEO_FRAME) {
+     console.debug(`[WebSocketClient] Routing frame for scope: ${scope}. Total listeners for type: ${typeListeners.size}`);
+ }
+
  typeListeners.forEach((entry: unknown) => {
  try {
  if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
