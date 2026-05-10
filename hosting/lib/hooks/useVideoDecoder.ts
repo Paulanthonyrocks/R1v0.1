@@ -14,6 +14,11 @@ interface DecoderOptions {
 
 export const useVideoDecoder = (options: DecoderOptions) => {
     const isProcessingRef = useRef<boolean>(false);
+    const optionsRef = useRef(options);
+
+    useEffect(() => {
+        optionsRef.current = options;
+    }, [options]);
 
     const decode = useCallback(async (data: VideoFrameMessage) => {
         if (isProcessingRef.current) return;
@@ -54,7 +59,7 @@ export const useVideoDecoder = (options: DecoderOptions) => {
             }
 
             if (decodedImage) {
-                options.onFrame({
+                optionsRef.current.onFrame({
                     image: decodedImage,
                     index: data.frame_index || 0,
                     metrics: data.metrics || null,
@@ -63,11 +68,11 @@ export const useVideoDecoder = (options: DecoderOptions) => {
                 });
             }
         } catch (error: any) {
-            options.onError?.(error);
+            optionsRef.current.onError?.(error);
         } finally {
             isProcessingRef.current = false;
         }
-    }, [options]);
+    }, []);
 
     return { decode };
 };

@@ -22,6 +22,7 @@ import IdentityGallery from '../feature/IdentityGallery';
 
 const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
   const instanceId = useRef(Math.random().toString(36).substring(2, 9));
+  console.debug(`[SurveillanceFeed] Render: Instance=${instanceId.current}, Feed=${feed.feed_id}`);
   const { feed_id, name: feedName, source, status } = feed;
   const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
   const { token, userRole } = useAuth();

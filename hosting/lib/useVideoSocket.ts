@@ -124,7 +124,7 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
 const unsubscribeFromFeed = useCallback(() => {
     const streamIdLocal = streamId;
     const count = _feedHookCounts.get(streamIdLocal) ?? 0;
-    if (count <= 1 && _subscribedFeeds.has(streamIdLocal)) {
+    if (count === 0 && _subscribedFeeds.has(streamIdLocal)) {
       const existing = _pendingUnsubscribes.get(streamIdLocal);
       if (existing) clearTimeout(existing);
 
@@ -398,11 +398,6 @@ const unsubscribeFromFeed = useCallback(() => {
     drawFrame, 
     frameRate, 
     updateFeedConfig: (config: any) => client.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
-  };
-};
-
-export default useVideoSocket;
-s: config } })
   };
 };
 
