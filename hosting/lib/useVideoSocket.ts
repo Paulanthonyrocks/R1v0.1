@@ -227,9 +227,10 @@ const unsubscribeFromFeed = useCallback(() => {
  // This prevents stale-closure leaks if the scoped routing
  // ever delivers a mismatched frame (e.g. during reconnect).
  if (frameData.feed_id && frameData.feed_id !== currentStreamId) {
- console.warn(`[useVideoSocket] Scoped listener received wrong feed frame: expected ${currentStreamId}, got ${frameData.feed_id}. Dropping.`);
+ console.warn(`[useVideoSocket] HARD GUARD DROP: expected ${currentStreamId}, got ${frameData.feed_id}.`);
  return;
  }
+ console.debug(`[useVideoSocket] ACCEPTED frame for ${currentStreamId}`);
  handleFrameRef.current?.(frameData);
  }
  }, 
@@ -398,6 +399,11 @@ const unsubscribeFromFeed = useCallback(() => {
     drawFrame, 
     frameRate, 
     updateFeedConfig: (config: any) => client.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
+  };
+};
+
+export default useVideoSocket;
+NFIG, data: { feed_id: streamId, updates: config } })
   };
 };
 

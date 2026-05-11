@@ -187,6 +187,7 @@ export class WebSocketClient implements IWebSocketClient {
                 if (e.data.error) {
                     console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
                 } else {
+                    console.debug(`[WebSocketClient] Worker returned frame for feed: ${e.data.feed_id}`);
                     // e.data contains feed_id, frame (ArrayBuffer), metrics, vehicles, etc.
                     this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, e.data, e.data.feed_id);
                 }
@@ -703,37 +704,42 @@ export class WebSocketClient implements IWebSocketClient {
  if (!typeListeners) return;
 
  if (type === WebSocketMessageType.VIDEO_FRAME) {
-     console.debug(`[WebSocketClient] Routing frame for scope: ${scope}. Total listeners for type: ${typeListeners.size}`);
+     console.debug(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
+     
+     typeListeners.forEach((entry: unknown) => {
+         try {
+             if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
+                 const scopedEntry = entry as ScopedListener;
+                 if (scope && scopedEntry.scope === scope) {
+                     scopedEntry.listener(data);
+                 }
+             } else {
+                 // Explicitly prevent VIDEO_FRAME from hitting unscoped listeners
+                 // to stop "bouncing" frames across components.
+                 // console.warn(`[WebSocketClient] Dropping unscoped VIDEO_FRAME delivery attempt.`);
+             }
+         } catch (error) {
+             console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type}:`, error);
+         }
+     });
+     return; // Early exit for VIDEO_FRAME to avoid double-processing
  }
 
+ // Standard routing for all other message types
  typeListeners.forEach((entry: unknown) => {
  try {
  if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
  const scopedEntry = entry as ScopedListener;
- // Scoped routing: when a scope is provided on the event,
- // only deliver to the listener whose scope matches.
- // When NO scope is provided on the event (e.g. non-VIDEO_FRAME
- // broadcasts), skip all scoped listeners — they opt in to
- // specific scopes only.
  if (scope) {
- // Event has a scope — deliver only to matching scoped listener
  if (scopedEntry.scope === scope) {
  scopedEntry.listener(data);
  }
- // else: scoped listener for a different feed — skip
  } else {
- // Event has no scope — only deliver to unscoped listeners
  if (!scopedEntry.scope) {
  scopedEntry.listener(data);
  }
  }
  } else {
- // Plain (unscoped) listener: always fire, regardless of event scope.
- // Unscoped listeners are used for broadcast topics like KPI_UPDATE,
- // ALERT, etc. For VIDEO_FRAME, unscoped listeners should not exist
- // (useVideoSocket always registers scoped), but if they do, they
- // will receive ALL frames — this is intentional for any future
- // "frame logger" or debug consumer.
  (entry as MessageListener<T>)(data);
  }
  } catch (error) {
