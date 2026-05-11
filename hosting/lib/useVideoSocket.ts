@@ -403,8 +403,3 @@ const unsubscribeFromFeed = useCallback(() => {
 };
 
 export default useVideoSocket;
-NFIG, data: { feed_id: streamId, updates: config } })
-  };
-};
-
-export default useVideoSocket;

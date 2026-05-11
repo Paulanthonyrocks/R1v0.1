@@ -26,7 +26,7 @@ export class APIClient {
         this.timeout = options.timeout || 30000;
         this.headers = {
             'Content-Type': 'application/json',
-            'Bypass-Tunnel-Reminder': 'true'
+            'ngrok-skip-browser-warning': '69420'
         };
         this.tokenManager = TokenManager.getInstance();
 

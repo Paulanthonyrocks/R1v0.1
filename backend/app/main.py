@@ -133,7 +133,7 @@ def setup_cors(app: FastAPI, config: dict):
         allow_origin_regex=r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "X-Requested-With", "X-User-ID"],
+        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID"],
         expose_headers=["*"],
     )
 
