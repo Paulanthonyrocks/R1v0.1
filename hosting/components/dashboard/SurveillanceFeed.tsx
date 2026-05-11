@@ -22,7 +22,7 @@ import IdentityGallery from '../feature/IdentityGallery';
 
 const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed_id, minimalControls = false }, ref) => {
   const instanceId = useRef(Math.random().toString(36).substring(2, 9));
-  const { feeds } = useRealtimeUpdates();
+  const { feeds, startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
   const feed = feeds.find(f => f.feed_id === feed_id);
 
   if (!feed) {
@@ -34,7 +34,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
   }
 
   const { name: feedName, source, status } = feed;
-  const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
   const { token, userRole } = useAuth();
   const wsClient = useWebSocket();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();

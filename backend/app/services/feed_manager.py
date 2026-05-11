@@ -1189,7 +1189,7 @@ class FeedManager:
 
         await self._broadcast_feed_update(feed_id)
         await self._broadcast_kpi_update()
-        if not skip_sample_mgmt:
+        if not is_sample:
             await self._check_and_manage_sample_feed()
 
     async def restart_feed(self, feed_id: str):

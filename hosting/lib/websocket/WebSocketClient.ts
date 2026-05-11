@@ -678,7 +678,7 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     if (this.videoWorker) {
-                        console.log(`[WebSocketClient] Incoming binary frame for feed: ${message.data.feed_id}`);
+                        console.debug(`[WebSocketClient] Incoming binary frame for feed: ${message.data.feed_id}`);
                         this.videoWorker.postMessage({
                             binaryFrame: message.data,
                             feed_id: message.data.feed_id
@@ -702,30 +702,31 @@ export class WebSocketClient implements IWebSocketClient {
  const typeListeners = this.listeners.get(type);
  if (!typeListeners) return;
 
- if (type === WebSocketMessageType.VIDEO_FRAME) {
-     console.log(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
-     
-     typeListeners.forEach((entry: unknown) => {
-         try {
-             if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
-                 const scopedEntry = entry as ScopedListener;
-                 if (scope && scopedEntry.scope === scope) {
-                     console.log(`[WebSocketClient] Triggering listener for scope: ${scopedEntry.scope}`);
-                     scopedEntry.listener(data);
-                 }
-             } else {
-                 // Explicitly prevent VIDEO_FRAME from hitting unscoped listeners
-                 // to stop "bouncing" frames across components.
-                 // console.warn(`[WebSocketClient] Dropping unscoped VIDEO_FRAME delivery attempt.`);
-             }
-         } catch (error) {
-             console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type}:`, error);
-         }
-     });
-     return; // Early exit for VIDEO_FRAME to avoid double-processing
- }
+if (type === WebSocketMessageType.VIDEO_FRAME) {
+    if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+        console.log(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
+    }
+    
+    typeListeners.forEach((entry: unknown) => {
+        try {
+            if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
+                const scopedEntry = entry as ScopedListener;
+                if (scope && scopedEntry.scope === scope) {
+                    if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+                        console.log(`[WebSocketClient] Triggering listener for scope: ${scopedEntry.scope}`);
+                    }
+                    scopedEntry.listener(data);
+                }
+            } else {
+            }
+        } catch (error) {
+            console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type}:`, error);
+        }
+    });
+return;
+}
 
- // Standard routing for all other message types
+// Standard routing for all other message types
  typeListeners.forEach((entry: unknown) => {
  try {
  if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
@@ -750,14 +751,17 @@ export class WebSocketClient implements IWebSocketClient {
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (scope) {
-            console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
+            console.debug(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
             if (!this.scopedListeners.has(messageType)) {
                 this.scopedListeners.set(messageType, new Map());
             }
             this.scopedListeners.get(messageType)!.set(scope, listener as unknown as MessageListener<unknown>);
             return () => this.unsubscribe(messageType, listener, scope);
         } else {
-            console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} (unscoped)`);
+            // Use debug level to reduce noise from Strict Mode x multiple hook instances
+            if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+                console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} (unscoped)`);
+            }
             if (!this.listeners.has(messageType)) {
                 this.listeners.set(messageType, new Set());
             }
@@ -768,13 +772,15 @@ export class WebSocketClient implements IWebSocketClient {
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void {
         if (scope) {
-            console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
+            console.debug(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
             const scopedMap = this.scopedListeners.get(messageType);
             if (scopedMap && scopedMap.get(scope) === listener) {
                 scopedMap.delete(scope);
             }
         } else {
-            console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} (unscoped)`);
+            if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+                console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} (unscoped)`);
+            }
             const typeListeners = this.listeners.get(messageType);
             if (typeListeners) {
                 typeListeners.delete(listener);
