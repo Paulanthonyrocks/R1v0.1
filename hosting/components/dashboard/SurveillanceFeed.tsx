@@ -20,18 +20,26 @@ import {
 } from "@/components/ui/dropdown-menu";
 import IdentityGallery from '../feature/IdentityGallery';
 
-const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed, minimalControls = false }, ref) => {
+const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed_id, minimalControls = false }, ref) => {
   const instanceId = useRef(Math.random().toString(36).substring(2, 9));
-  console.debug(`[SurveillanceFeed] Render: Instance=${instanceId.current}, Feed=${feed.feed_id}`);
-  const { feed_id, name: feedName, source, status } = feed;
+  const { feeds } = useRealtimeUpdates();
+  const feed = feeds.find(f => f.feed_id === feed_id);
+
+  if (!feed) {
+    return (
+      <div className="bg-black aspect-video flex items-center justify-center">
+        <Loader2 className="animate-spin h-10 w-10 text-lcd-text/20" />
+      </div>
+    );
+  }
+
+  const { name: feedName, source, status } = feed;
   const { startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
   const { token, userRole } = useAuth();
   const wsClient = useWebSocket();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
   // Only subscribe if the feed is in an active state
-  // NOTE: useVideoSocket handles dedup internally via module-level tracking,
-  // so React Strict Mode remounts won't cause subscribe/unsubscribe storms.
   const shouldSubscribe = status === 'running' || status === 'starting';
   const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
     shouldSubscribe ? feed_id : "",
@@ -739,14 +747,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         </Card>
     );
 }), (prevProps, nextProps) => {
-    // Custom equality check to prevent re-renders when only metrics in the feed object change
-    // (since we use useVideoSocket for live metrics)
-    return prevProps.feed.feed_id === nextProps.feed.feed_id && 
-           prevProps.feed.status === nextProps.feed.status &&
-           prevProps.feed.name === nextProps.feed.name &&
-           prevProps.feed.source === nextProps.feed.source &&
-           prevProps.minimalControls === nextProps.minimalControls &&
-           JSON.stringify(prevProps.feed.config) === JSON.stringify(nextProps.feed.config);
+    return prevProps.feed_id === nextProps.feed_id && 
+           prevProps.minimalControls === nextProps.minimalControls;
 });
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';

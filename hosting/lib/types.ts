@@ -130,7 +130,7 @@ export interface CongestionNodeProps {
 }
 
 export interface SurveillanceFeedProps {
-  feed: FeedStatusData; // Primary prop is now the feed object
+  feed_id: string; // Changed from feed: FeedStatusData to feed_id: string
   minimalControls?: boolean;
 }
 export interface LegendItemProps { color: string; text: string; }

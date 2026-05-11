@@ -461,7 +461,7 @@ const DashboardPage: React.FC = () => {
                             <span>NODE_{feed.feed_id.slice(-4)}</span>
                             <span>{feed.status.toUpperCase()}</span>
                         </div>
-                        <SurveillanceFeed feed={feed} />
+                        <SurveillanceFeed feed_id={feed.feed_id} />
                       </div>
                     ))
                   ) : (

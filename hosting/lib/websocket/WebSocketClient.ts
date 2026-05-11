@@ -122,7 +122,8 @@ enum ConnectionState {
 let lastActiveInstanceId: string | null = null;
 
 export class WebSocketClient implements IWebSocketClient {
-    private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown> | ScopedListener>> = new Map();
+    private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown>>> = new Map();
+    private scopedListeners: Map<WebSocketMessageType, Map<string, MessageListener<unknown>>> = new Map();
     private ws: WebSocket | null = null;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 10;
@@ -187,7 +188,7 @@ export class WebSocketClient implements IWebSocketClient {
                 if (e.data.error) {
                     console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
                 } else {
-                    console.debug(`[WebSocketClient] Worker returned frame for feed: ${e.data.feed_id}`);
+                    console.log(`[WebSocketClient] Worker returned frame for feed: ${e.data.feed_id}`);
                     // e.data contains feed_id, frame (ArrayBuffer), metrics, vehicles, etc.
                     this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, e.data, e.data.feed_id);
                 }
@@ -677,9 +678,7 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     if (this.videoWorker) {
-                        // Pass binary chunks to worker for reconstruction.
-                        // The worker now coalesces frames and uses AbortController
-                        // to cancel stale decodes, so we can post eagerly.
+                        console.log(`[WebSocketClient] Incoming binary frame for feed: ${message.data.feed_id}`);
                         this.videoWorker.postMessage({
                             binaryFrame: message.data,
                             feed_id: message.data.feed_id
@@ -704,13 +703,14 @@ export class WebSocketClient implements IWebSocketClient {
  if (!typeListeners) return;
 
  if (type === WebSocketMessageType.VIDEO_FRAME) {
-     console.debug(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
+     console.log(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
      
      typeListeners.forEach((entry: unknown) => {
          try {
              if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
                  const scopedEntry = entry as ScopedListener;
                  if (scope && scopedEntry.scope === scope) {
+                     console.log(`[WebSocketClient] Triggering listener for scope: ${scopedEntry.scope}`);
                      scopedEntry.listener(data);
                  }
              } else {
@@ -749,30 +749,36 @@ export class WebSocketClient implements IWebSocketClient {
  }
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
-        if (!this.listeners.has(messageType)) this.listeners.set(messageType, new Set());
-
         if (scope) {
-            const scopedListener: ScopedListener = { scope, listener: listener as unknown as MessageListener<unknown> };
-            this.listeners.get(messageType)?.add(scopedListener);
+            console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
+            if (!this.scopedListeners.has(messageType)) {
+                this.scopedListeners.set(messageType, new Map());
+            }
+            this.scopedListeners.get(messageType)!.set(scope, listener as unknown as MessageListener<unknown>);
             return () => this.unsubscribe(messageType, listener, scope);
         } else {
-            this.listeners.get(messageType)?.add(listener as unknown as MessageListener<unknown>);
+            console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} (unscoped)`);
+            if (!this.listeners.has(messageType)) {
+                this.listeners.set(messageType, new Set());
+            }
+            this.listeners.get(messageType)!.add(listener as unknown as MessageListener<unknown>);
             return () => this.unsubscribe(messageType, listener);
         }
     }
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void {
-        const typeListeners = this.listeners.get(messageType);
-        if (!typeListeners) return;
-
         if (scope) {
-            typeListeners.forEach((entry: unknown) => {
-                if (typeof entry === 'object' && entry !== null && (entry as ScopedListener).scope === scope && (entry as ScopedListener).listener === listener) {
-                    typeListeners.delete(entry as ScopedListener);
-                }
-            });
+            console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
+            const scopedMap = this.scopedListeners.get(messageType);
+            if (scopedMap && scopedMap.get(scope) === listener) {
+                scopedMap.delete(scope);
+            }
         } else {
-            typeListeners.delete(listener as MessageListener<unknown>);
+            console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} (unscoped)`);
+            const typeListeners = this.listeners.get(messageType);
+            if (typeListeners) {
+                typeListeners.delete(listener);
+            }
         }
     }
 

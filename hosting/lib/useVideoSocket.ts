@@ -13,6 +13,7 @@ import {
 } from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string, token: string | null, instanceId?: string) => {
+  console.log(`[useVideoSocket] Hook initializing for streamId: ${streamId}`);
   const client = useWebSocket();
   
   // --- State Management ---

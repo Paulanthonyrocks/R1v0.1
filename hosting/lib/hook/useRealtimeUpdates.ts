@@ -161,15 +161,20 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
  const statusData = data.feed_status_data;
  setFeeds(prevFeeds => {
  const index = prevFeeds.findIndex(feed => feed.feed_id === statusData.feed_id);
- let newFeeds: FeedStatusData[];
  if (index !== -1) {
- newFeeds = [...prevFeeds];
- newFeeds[index] = statusData;
- } else {
- newFeeds = [...prevFeeds, statusData];
+ // Only update if the status or config has actually changed to prevent rerender storms
+ const existing = prevFeeds[index];
+ if (existing.status === statusData.status && 
+     JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
+     return prevFeeds;
  }
- // Re-sort to maintain stable key ordering after upsert
+ 
+ const newFeeds = [...prevFeeds];
+ newFeeds[index] = statusData;
  return newFeeds.sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+ } else {
+ return [...prevFeeds, statusData].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+ }
  });
  }));
 
