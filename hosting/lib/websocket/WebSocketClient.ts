@@ -699,56 +699,33 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
  private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
- const typeListeners = this.listeners.get(type);
- if (!typeListeners) return;
+     // 1. Handle Scoped Listeners
+     if (scope) {
+         const scopedMap = this.scopedListeners.get(type);
+         if (scopedMap) {
+             const listener = scopedMap.get(scope);
+             if (listener) {
+                 try {
+                     listener(data);
+                 } catch (error) {
+                     console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
+                 }
+             }
+         }
+     }
 
-if (type === WebSocketMessageType.VIDEO_FRAME) {
-    if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
-        console.log(`[WebSocketClient] Routing frame | Event Scope: ${scope} | Total Listeners: ${typeListeners.size}`);
-    }
-    
-    typeListeners.forEach((entry: unknown) => {
-        try {
-            if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
-                const scopedEntry = entry as ScopedListener;
-                if (scope && scopedEntry.scope === scope) {
-                    if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
-                        console.log(`[WebSocketClient] Triggering listener for scope: ${scopedEntry.scope}`);
-                    }
-                    scopedEntry.listener(data);
-                }
-            } else {
-            }
-        } catch (error) {
-            console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type}:`, error);
-        }
-    });
-return;
-}
-
-// Standard routing for all other message types
- typeListeners.forEach((entry: unknown) => {
- try {
- if (typeof entry === 'object' && entry !== null && 'scope' in entry) {
- const scopedEntry = entry as ScopedListener;
- if (scope) {
- if (scopedEntry.scope === scope) {
- scopedEntry.listener(data);
+     // 2. Handle Unscoped Listeners
+     const unscopedListeners = this.listeners.get(type);
+     if (unscopedListeners) {
+         unscopedListeners.forEach((listener) => {
+             try {
+                 (listener as MessageListener<T>)(data);
+             } catch (error) {
+                 console.error(`[WebSocketClient ${this.instanceId}] Error in unscoped listener for ${type}:`, error);
+             }
+         });
+     }
  }
- } else {
- if (!scopedEntry.scope) {
- scopedEntry.listener(data);
- }
- }
- } else {
- (entry as MessageListener<T>)(data);
- }
- } catch (error) {
- console.error(`[WebSocketClient ${this.instanceId}] Error in listener for ${type}:`, error);
- }
- });
- }
-
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (scope) {
             console.debug(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);

@@ -152,7 +152,13 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
  // for reconciliation — if the array order changes between renders,
  // components unmount/remount, destroying and recreating WebSocket
  // subscriptions and video decoders. Stable sort prevents this.
- setFeeds([...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id)));
+ const sortedFeeds = [...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+ setFeeds(sortedFeeds);
+ 
+ // Automatically subscribe to all discovered feeds to enable real-time broadcasts
+ sortedFeeds.forEach(feed => {
+   subscribeToFeed(feed.feed_id);
+ });
  }
  }));
 
@@ -231,7 +237,7 @@ export const useRealtimeUpdates = (): RealtimeUpdates & {
       _topicsSubscribedForInstance = null;
     }
   };
-  }, [client]);
+  }, [client, sendMessage]);
 
  const subscribeToFeed = useCallback((feedId: string) => {
  // Check if this feed is already subscribed by useVideoSocket
