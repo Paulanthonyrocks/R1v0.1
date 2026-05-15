@@ -387,6 +387,12 @@ def inference_worker(
 
                     frame = None
                     if should_detect or is_lane_frame:
+                        if frame_bytes is None:
+                            logger.error(f"[Worker {worker_id}] frame_bytes is None for ref {shm_ref}")
+                            if msg_id and hasattr(slot_q_ref, "ack"):
+                                slot_q_ref.ack(msg_id)
+                            continue
+
                         if isinstance(frame_bytes, memoryview):
                             frame = cv2.imdecode(
                                 np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR

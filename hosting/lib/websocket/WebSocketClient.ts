@@ -706,9 +706,9 @@ export class WebSocketClient implements IWebSocketClient {
              const listener = scopedMap.get(scope);
              if (listener) {
                  try {
+                     console.log(`[WebSocketClient ${this.instanceId}] Notifying scoped listener for ${type} (scope: ${scope})`);
                      listener(data);
-                 } catch (error) {
-                     console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
+                 } catch (error) {                     console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
                  }
              }
          }
@@ -717,6 +717,7 @@ export class WebSocketClient implements IWebSocketClient {
      // 2. Handle Unscoped Listeners
      const unscopedListeners = this.listeners.get(type);
      if (unscopedListeners) {
+         console.log(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
          unscopedListeners.forEach((listener) => {
              try {
                  (listener as MessageListener<T>)(data);
@@ -728,7 +729,7 @@ export class WebSocketClient implements IWebSocketClient {
  }
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (scope) {
-            console.debug(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
+            console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
             if (!this.scopedListeners.has(messageType)) {
                 this.scopedListeners.set(messageType, new Map());
             }
@@ -749,7 +750,7 @@ export class WebSocketClient implements IWebSocketClient {
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void {
         if (scope) {
-            console.debug(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
+            console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
             const scopedMap = this.scopedListeners.get(messageType);
             if (scopedMap && scopedMap.get(scope) === listener) {
                 scopedMap.delete(scope);

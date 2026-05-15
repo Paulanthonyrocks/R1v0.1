@@ -213,14 +213,11 @@ const unsubscribeFromFeed = useCallback(() => {
       subscribeToFeed();
     }
 
- // Scoped subscription: only receives frames matching our streamId.
- // The WebSocketClient.notifyListeners routes by scope, so this
- // callback should NEVER receive frames for other feeds. The feed_id
- // check below is a hardening guard in case routing changes.
- const currentStreamId = streamId;
- const unsubscribeFrame = client.subscribe(
- WebSocketMessageType.VIDEO_FRAME, 
- (frameData: VideoFrameMessage) => {
+    console.log(`[useVideoSocket] Mounting hook for streamId: ${streamId}. Subscribing to VIDEO_FRAME...`);
+    const currentStreamId = streamId;
+    const unsubscribeFrame = client.subscribe(
+    WebSocketMessageType.VIDEO_FRAME, 
+    (frameData: VideoFrameMessage) => {
  // Note: the worker posts data directly, not wrapped in WebSocketMessage.
  // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
  if (frameData && frameData.frame) {
