@@ -26,6 +26,7 @@ import IncidentCommandCenter from '@/components/dashboard/IncidentCommandCenter'
 
 const DashboardPage: React.FC = () => {
   const { kpis, alerts, feeds, isConnected, isReady } = useRealtimeUpdates();
+  const { vehicles, version: vehicleVersion } = useVehicleTracking();
   const [activeTab, setActiveTab] = useState<'overview' | 'incidents'>('overview');
   const [kpiHistory, setKpiHistory] = useState<TrendDataPoint[]>([]);
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);

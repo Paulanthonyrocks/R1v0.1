@@ -11,6 +11,7 @@ interface VehicleStateMap {
 
 export const useVehicleTracking = () => {
     const vehicleStateRef = useRef<VehicleStateMap>({});
+    const [version, setVersion] = useState(0);
 
     const mergeVehicleUpdates = useCallback((updates: any[]) => {
         const currentParams = vehicleStateRef.current;
@@ -39,11 +40,14 @@ export const useVehicleTracking = () => {
                 delete currentParams[vid];
             }
         });
+
+        // Trigger re-render for components that depend on vehicle count/list
+        setVersion(v => v + 1);
     }, []);
 
     const getVehicles = useCallback(() => {
         return Object.values(vehicleStateRef.current);
     }, []);
 
-    return { vehicles: vehicleStateRef, mergeVehicleUpdates, getVehicles };
+    return { vehicles: vehicleStateRef, version, mergeVehicleUpdates, getVehicles };
 };

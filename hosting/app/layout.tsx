@@ -7,6 +7,8 @@ import { UserProvider } from '@/lib/auth/UserContext';
 import { VehicleSelectionProvider } from '@/lib/context/VehicleSelectionContext';
 import { WebSocketProvider } from '@/lib/websocket/WebSocketProvider';
 
+import { RealtimeStateProvider } from '@/lib/context/RealtimeStateContext';
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -14,9 +16,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
           <UserProvider>
             <WebSocketProvider>
-              <VehicleSelectionProvider>
-                {children}
-              </VehicleSelectionProvider>
+              <RealtimeStateProvider>
+                <VehicleSelectionProvider>
+                  {children}
+                </VehicleSelectionProvider>
+              </RealtimeStateProvider>
             </WebSocketProvider>
           </UserProvider>
         </AuthProvider>

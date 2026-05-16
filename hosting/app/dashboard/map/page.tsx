@@ -22,7 +22,7 @@ const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
 });
 
 const LiveMapPage: React.FC = () => {
-  const { vehicles } = useVehicleTracking();
+  const { vehicles, version: vehicleVersion } = useVehicleTracking();
   const mapRef = useRef<any>(null);
   const [activeLayer, setActiveLayer] = useState<'satellite' | 'vector' | 'thermal'>('satellite');
   const [showLayerControl, setShowLayerControl] = useState(false);
