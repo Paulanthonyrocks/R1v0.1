@@ -16,7 +16,7 @@ interface RealtimeState {
 }
 
 interface RealtimeStateContextType extends RealtimeState {
-    sendMessage: (action: string, payload?: object) => boolean;
+    sendMessage: (action: WebSocketMessageType, payload?: object) => boolean;
     subscribeToFeed: (feedId: string) => void;
     unsubscribeFromFeed: (feedId: string) => void;
     startWebSocket: () => void;
@@ -34,7 +34,7 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
     const [isReady, setIsReady] = useState(client.isConnected());
     const [error, setError] = useState<string | null>(null);
 
-    const sendMessage = useCallback((action: string, payload?: object): boolean => {
+    const sendMessage = useCallback((action: WebSocketMessageType, payload?: object): boolean => {
         if (client && client.isConnected()) {
             try {
                 client.send({ type: action, data: payload });
@@ -48,11 +48,11 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
     }, [client]);
 
     const subscribeToFeed = useCallback((feedId: string) => {
-        client.send({ type: 'SUBSCRIBE_FEED', data: { feed_id: feedId } });
+        client.send({ type: WebSocketMessageType.SUBSCRIBE_TO_FEED, data: { feed_id: feedId } });
     }, [client]);
 
     const unsubscribeFromFeed = useCallback((feedId: string) => {
-        client.send({ type: 'UNSUBSCRIBE_FEED', data: { feed_id: feedId } });
+        client.send({ type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, data: { feed_id: feedId } });
     }, [client]);
 
     const startWebSocket = useCallback(() => {
@@ -71,6 +71,18 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         };
 
         updateConnectionState();
+
+        // Subscribe to server-side topics on every (re)connection
+        const unsubStatus = client.onStatusChange((status) => {
+            if (status === 'connected') {
+                client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
+                const topics = ['kpi', 'node_congestion'];
+                topics.forEach(topic => {
+                    client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic } });
+                });
+            }
+        });
+        subscriptions.push(unsubStatus);
 
         subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
             if (data && Array.isArray(data.feeds)) {

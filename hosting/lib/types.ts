@@ -214,7 +214,7 @@ export interface RealtimeDataActions {
   setInitialAlerts: (alerts: AlertData[]) => void;
 }
 
-export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { sendMessage: (action: string, payload?: object) => boolean; };
+export type UseRealtimeUpdatesReturn = RealtimeData & RealtimeDataActions & { sendMessage: (action: WebSocketMessageType, payload?: object) => boolean; };
 
 export interface VehicleFrontendData {
   vehicle_id: string;

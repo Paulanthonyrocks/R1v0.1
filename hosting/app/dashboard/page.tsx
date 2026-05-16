@@ -6,6 +6,7 @@ import AuthGuard from "@/components/auth/AuthGuard";
 import { Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck, ChevronRight, Loader2, BarChart2, Terminal, Cpu, Globe } from 'lucide-react';
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
