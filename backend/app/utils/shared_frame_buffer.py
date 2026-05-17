@@ -193,13 +193,22 @@ class SharedFrameBuffer:
         
         # Read header using struct.unpack_from — matches write format
         import struct
-        try:
-            size, w, h, c = struct.unpack_from('<iiii', buf, 0)
-        except struct.error:
-            raise ValueError(f'Invalid header in segment {name}')
+        import time
         
-        if size <= 0 or size > self.max_frame_size:
-            logger.warning(f'Invalid size {size} detected in segment {name}. Returning None.')
+        # Retry loop to handle race conditions where writer is currently updating the header
+        for attempt in range(3):
+            try:
+                size, w, h, c = struct.unpack_from('<iiii', buf, 0)
+                if size > 0 and size <= self.max_frame_size:
+                    break
+            except struct.error:
+                pass
+            
+            if attempt < 2:
+                time.sleep(0.001) # Tiny delay to let writer finish
+        else:
+            # All retries failed or size is still invalid
+            logger.warning(f'Invalid size {size if "size" in locals() else "unknown"} detected in segment {name} after retries. Returning None.')
             return None, (0, 0, 0)
             
         # Update last_used timestamp to prevent pruning while being read
