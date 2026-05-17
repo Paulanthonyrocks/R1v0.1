@@ -63,7 +63,14 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
       }
 
       if (lastFrameRef.current?.image instanceof ImageBitmap && lastFrameRef.current.image !== image) {
-        lastFrameRef.current.image.close();
+        const oldImage = lastFrameRef.current.image;
+        setTimeout(() => {
+          try {
+            oldImage.close();
+          } catch (e) {
+            // Ignore if already closed
+          }
+        }, 100); // Delay closure to ensure the render loop has drawn the frame
       }
 
       updateVehicles(vehicles);

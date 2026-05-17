@@ -452,7 +452,7 @@ class ConnectionManager:
         for client_id in list(client_ids): 
             await self.send_personal_message(message, client_id)
 
-    async def subscribe_to_topic(self, client_id: str, topic: str):
+    async def subscribe_to_topic(self, client_id: str, topic: str, on_subscribe_callback: Optional[callable] = None):
         if client_id not in self.active_connections:
             return
 
@@ -461,6 +461,12 @@ class ConnectionManager:
         self.topic_subscriptions[topic].add(client_id)
         self.client_id_to_topics.setdefault(client_id, set()).add(topic)
         logger.info(f"Client {client_id} subscribed to topic: {topic}")
+        
+        if on_subscribe_callback:
+            try:
+                await on_subscribe_callback(client_id)
+            except Exception as e:
+                logger.error(f"Error executing on_subscribe_callback for client {client_id} on topic {topic}: {e}")
 
     async def subscribe_to_feed(self, client_id: str, feed_id: str):
         if feed_id not in self.feed_subscriptions:

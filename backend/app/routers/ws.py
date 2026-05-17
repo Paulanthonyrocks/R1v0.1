@@ -185,7 +185,18 @@ async def message_receiver(
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
                         sub_data = SubscribeData(**data)
-                        await connection_manager.subscribe_to_topic(client_id, sub_data.topic)
+                        
+                        # Define a callback to push an immediate update when subscribing to specific topics
+                        async def on_subscribe(cid: str):
+                            if sub_data.topic == 'kpi':
+                                logger.info(f"Triggering immediate KPI push for client {cid} upon subscription")
+                                await feed_manager._broadcast_kpi_update()
+                        
+                        await connection_manager.subscribe_to_topic(
+                            client_id, 
+                            sub_data.topic, 
+                            on_subscribe_callback=on_subscribe
+                        )
                     except Exception as e:
                         logger.warning(f"Subscribe error: {e}")
 
