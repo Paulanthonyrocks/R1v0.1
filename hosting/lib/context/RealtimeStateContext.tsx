@@ -74,7 +74,11 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
 
         // Subscribe to server-side topics on every (re)connection
         const unsubStatus = client.onStatusChange((status) => {
-            if (status === 'connected') {
+            const connected = status === 'connected';
+            setIsConnected(connected);
+            setIsReady(connected);
+
+            if (connected) {
                 client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
                 const topics = ['kpi', 'node_congestion'];
                 topics.forEach(topic => {
