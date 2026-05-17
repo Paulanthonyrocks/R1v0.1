@@ -1909,7 +1909,7 @@ class FeedManager:
             data=kpi_data.model_dump(),
         )
         await self._connection_manager.broadcast_to_topic(
-            message.model_dump_json(), topic='kpi', priority=MessagePriority.NORMAL
+            message.model_dump_json(), topic='kpi', priority=MessagePriority.HIGH
         )
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
