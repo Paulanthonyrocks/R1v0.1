@@ -677,16 +677,17 @@ export class WebSocketClient implements IWebSocketClient {
                 };
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
+                    const feedId = message.data.f || message.data.feed_id;
                     if (this.videoWorker) {
-                        console.debug(`[WebSocketClient] Incoming binary frame for feed: ${message.data.feed_id}`);
+                        console.debug(`[WebSocketClient] Incoming binary frame for feed: ${feedId}`);
                         this.videoWorker.postMessage({
                             binaryFrame: message.data,
-                            feed_id: message.data.feed_id
+                            feed_id: feedId
                         });
                     } else {
-                        this.notifyListeners(message.type, message.data, message.data.feed_id);
+                        this.notifyListeners(message.type, message.data, feedId);
                     }
-                    // Don't fall through to notifyListeners — the worker
+                    return; // <--- STOP: It never calls notifyListeners if a worker exists
                     // will post back the decoded frame via onmessage handler
                     return;
                 } else {

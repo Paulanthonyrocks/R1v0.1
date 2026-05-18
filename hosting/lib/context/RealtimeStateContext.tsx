@@ -70,7 +70,34 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
             setIsReady(connected);
         };
 
+    const initializeConnection = useCallback(async () => {
+        console.debug('[RealtimeStateProvider] Initializing connection subscriptions...');
+        try {
+            client.send({ 
+                type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, 
+                data: {} 
+            });
+            
+            const topics = ['kpi', 'node_congestion'];
+            topics.forEach(topic => {
+                client.send({ 
+                    type: WebSocketMessageType.SUBSCRIBE, 
+                    data: { topic } 
+                });
+            });
+            console.debug('[RealtimeStateProvider] Initial subscription requests sent.');
+        } catch (e) {
+            console.error('[RealtimeStateProvider] Failed to send initial subscriptions:', e);
+        }
+    }, [client]);
+
+    useEffect(() => {
         updateConnectionState();
+
+        // If already connected on mount, trigger initialization immediately
+        if (client.isConnected()) {
+            initializeConnection();
+        }
 
         // Subscribe to server-side topics on every (re)connection
         const unsubStatus = client.onStatusChange((status) => {
@@ -79,13 +106,10 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
             setIsReady(connected);
 
             if (connected) {
-                client.send({ type: WebSocketMessageType.GET_INITIAL_FEED_STATUSES, data: {} });
-                const topics = ['kpi', 'node_congestion'];
-                topics.forEach(topic => {
-                    client.send({ type: WebSocketMessageType.SUBSCRIBE, data: { topic } });
-                });
+                initializeConnection();
             }
         });
+
         subscriptions.push(unsubStatus);
 
         subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {

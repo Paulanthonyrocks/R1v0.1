@@ -60,12 +60,12 @@ self.onmessage = async function (e) {
     let metadata = {};
 
     if (binaryFrame) {
-        // Modern binary msgpack path
+        // Modern binary msgpack path - align with backend short keys
         metadata = {
-            frame_index: binaryFrame.frame_index || 0,
-            metrics: binaryFrame.metrics,
-            vehicles: binaryFrame.vehicles,
-            timestamp: binaryFrame.timestamp
+            frame_index: binaryFrame.i || binaryFrame.frame_index || 0,
+            metrics: binaryFrame.m || binaryFrame.metrics,
+            vehicles: binaryFrame.v || binaryFrame.vehicles,
+            timestamp: binaryFrame.ts || binaryFrame.timestamp
         };
 
         // Priority: frame (standalone JPEG) > background+ROIs (reconstruction)
