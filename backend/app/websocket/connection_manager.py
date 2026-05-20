@@ -176,11 +176,21 @@ class ConnectionManager:
                 # 2. Remove queue (Idempotent)
                 self.client_queues.pop(client_id, None)
 
-                # 3. Remove from active connections (Idempotent)
-                # Check again because control might have been yielded during task await
+                # 3. Explicitly close the WebSocket connection
+                # Retrieve the socket if it wasn't provided, ensuring we close the current active connection
+                ws_to_close = websocket or self.active_connections.get(client_id)
+                if ws_to_close:
+                    try:
+                        await ws_to_close.close(code=1000, reason="Disconnected")
+                        logger.debug(f"WebSocket explicitly closed for {client_id}")
+                    except Exception as e:
+                        logger.debug(f"Error closing WebSocket for {client_id}: {e}")
+
+                # 4. Remove from active connections (Idempotent)
+                # Check again because control might have yielded during task await or socket close
                 if client_id not in self.active_connections:
                     return
-                    
+
                 if websocket and self.active_connections[client_id] != websocket:
                     return
 
