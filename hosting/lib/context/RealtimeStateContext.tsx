@@ -3,10 +3,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { WebSocketClient, WebSocketMessageType } from '../websocket/WebSocketClient';
 import { useWebSocket } from '../websocket/WebSocketProvider';
-import { KPIData, AlertData, FeedStatusData } from '../types/api';
+import { KpiData, AlertData, FeedStatusData } from '../types';
 
 interface RealtimeState {
-    kpis: KPIData | null;
+    kpis: KpiData | null;
     alerts: AlertData[];
     feeds: FeedStatusData[];
     nodeCongestionData: any[];
@@ -26,7 +26,7 @@ const RealtimeStateContext = createContext<RealtimeStateContextType | null>(null
 
 export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const client = useWebSocket();
-    const [kpis, setKpis] = useState<KPIData | null>(null);
+    const [kpis, setKpis] = useState<KpiData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     const [nodeCongestionData, setNodeCongestionData] = useState<any[]>([]);
@@ -61,14 +61,11 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         }
     }, [client]);
 
-    useEffect(() => {
-        const subscriptions: (() => void)[] = [];
-
-        const updateConnectionState = () => {
-            const connected = client.isConnected();
-            setIsConnected(connected);
-            setIsReady(connected);
-        };
+    const updateConnectionState = useCallback(() => {
+        const connected = client.isConnected();
+        setIsConnected(connected);
+        setIsReady(connected);
+    }, [client]);
 
     const initializeConnection = useCallback(async () => {
         console.debug('[RealtimeStateProvider] Initializing connection subscriptions...');
@@ -92,6 +89,8 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
     }, [client]);
 
     useEffect(() => {
+        const subscriptions: (() => void)[] = [];
+
         updateConnectionState();
 
         // If already connected on mount, trigger initialization immediately
@@ -139,7 +138,7 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
             });
         }));
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KPIData) => setKpis(data)));
+        subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => setKpis(data)));
 
         subscriptions.push(client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {
             if (data && Array.isArray(data.nodes)) {
@@ -185,7 +184,7 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         return () => {
             subscriptions.forEach(unsubscribe => unsubscribe());
         };
-    }, [client, subscribeToFeed]);
+    }, [client, subscribeToFeed, updateConnectionState, initializeConnection]);
 
     const value = {
         kpis,

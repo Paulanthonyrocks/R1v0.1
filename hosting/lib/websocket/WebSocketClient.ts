@@ -762,7 +762,7 @@ export class WebSocketClient implements IWebSocketClient {
             }
             const typeListeners = this.listeners.get(messageType);
             if (typeListeners) {
-                typeListeners.delete(listener);
+                typeListeners.delete(listener as any);
             }
         }
     }

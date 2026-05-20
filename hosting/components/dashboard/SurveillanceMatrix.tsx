@@ -100,7 +100,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     <span>{feed.status.toUpperCase()}</span>
                                 </div>
                                 <SurveillanceFeed 
-                                    feed={feed} 
+                                    feed_id={feed.feed_id} 
                                     minimalControls={true}
                                 />
                                 <div className="absolute inset-0 bg-transparent group-hover:bg-primary/5 pointer-events-none"></div>
@@ -122,7 +122,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                             </div>
                             {feeds.find(f => f.feed_id === focusedFeedId) && (
                                 <SurveillanceFeed 
-                                    feed={feeds.find(f => f.feed_id === focusedFeedId)!} 
+                                    feed_id={focusedFeedId} 
                                 />
                             )}
                         </div>
@@ -146,7 +146,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     )}>
                                         <span className="truncate">{feed.name?.toUpperCase() || `NODE_${feed.feed_id.slice(-4)}`}</span>
                                     </div>
-                                    <SurveillanceFeed feed={feed} minimalControls={true} />
+                                    <SurveillanceFeed feed_id={feed.feed_id} minimalControls={true} />
                                 </div>
                             ))}
                         </div>

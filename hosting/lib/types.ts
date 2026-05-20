@@ -1,6 +1,7 @@
 // lib/types.ts
 import React from 'react';
 import { LucideIcon } from 'lucide-react';
+import { WebSocketMessageType } from './websocket/WebSocketClient';
 
 // --- Core Data Types ---
 export type SeverityLevel = 'Critical' | 'Warning' | 'Anomaly' | 'INFO' | 'ERROR';
