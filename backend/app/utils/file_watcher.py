@@ -1,8 +1,22 @@
 import logging
 import asyncio
 from pathlib import Path
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    WATCHDOG_INSTALLED = True
+except ImportError:
+    WATCHDOG_INSTALLED = False
+    # Define dummy classes to prevent crashes
+    class Observer:
+        def schedule(self, *args, **kwargs): pass
+        def start(self): pass
+        def stop(self): pass
+        def join(self): pass
+
+    class FileSystemEventHandler:
+        def on_created(self, event): pass
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +42,21 @@ class FileSystemWatcher:
         self.path = Path(path)
         self.on_new_video_callback = on_new_video_callback
         self.observer = Observer()
-        self.event_handler = VideoFileEventHandler(asyncio.get_running_loop(), self.on_new_video_callback)
+        # We must be careful with asyncio.get_running_loop() here because
+        # the watcher might be initialized before the loop is running.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            
+        self.event_handler = VideoFileEventHandler(loop, self.on_new_video_callback)
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def start(self):
+        if not WATCHDOG_INSTALLED:
+            self.logger.warning("Watchdog not installed. FileSystemWatcher is disabled.")
+            return
+
         if not self.path.is_dir():
             self.logger.error(f"Monitoring path does not exist or is not a directory: {self.path}")
             return
@@ -41,6 +66,9 @@ class FileSystemWatcher:
         self.logger.info(f"Started monitoring for new video files in: {self.path}")
 
     def stop(self):
+        if not WATCHDOG_INSTALLED:
+            return
+
         self.observer.stop()
         self.observer.join()
         self.logger.info(f"Stopped monitoring for new video files in: {self.path}")

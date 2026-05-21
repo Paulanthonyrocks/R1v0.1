@@ -20,13 +20,7 @@ from contextlib import asynccontextmanager, contextmanager
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from pymongo import MongoClient
-from pymongo.database import Database as MongoDatabase
-from pymongo.errors import (
-    ConnectionFailure,
-    ConfigurationError as MongoConfigurationError,
-    ServerSelectionTimeoutError,
-)
+# Removed pymongo top-level imports
 from app.models.alerts import Alert  # Import the Alert model
 import json  # Import json for serializing details
 import math
@@ -73,8 +67,8 @@ class DatabaseManager:
         self.raw_traffic_collection_name: str = (
             "raw_traffic_data"  # Default, can be from config
         )
-        self.mongo_client: Optional[MongoClient] = None
-        self.mongo_db: Optional[MongoDatabase] = None
+        self.mongo_client: Any = None
+        self.mongo_db: Any = None
         self.async_engine = None  # Corrected attribute name
         self.async_session_factory = None  # Corrected attribute name
         self.timescale_engine = None
@@ -461,8 +455,16 @@ class DatabaseManager:
             )
             return
 
+        from pymongo import MongoClient
+        from pymongo.errors import (
+            ConnectionFailure,
+            ConfigurationError as MongoConfigurationError,
+            ServerSelectionTimeoutError,
+        )
+
         @retry(
             wait=wait_exponential(multiplier=1, min=2, max=10),
+
             stop=stop_after_attempt(3),
             retry=retry_if_exception_type((ConnectionFailure, MongoConfigurationError, ServerSelectionTimeoutError)),
             reraise=True, # Reraise so we can catch it in the outer try-except
