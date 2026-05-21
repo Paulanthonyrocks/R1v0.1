@@ -159,14 +159,14 @@ class SharedFrameBuffer:
         shm = self._segments[name]
         buf = shm.buf  # direct memoryview of SHM — writes go to shared memory
         
-        # Write header using struct.pack (returns bytes).
-        # Assigning bytes to memoryview slice works across all Python versions.
+        # Write payload FIRST.
+        # This ensures that by the time the reader sees size > 0, the data is already there.
+        buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
+        
+        # Write header LAST.
         # Header layout: [size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
         now = time.time()
         buf[0:24] = struct.pack('<iiiid', size, w, h, c, now)
-        
-        # Write payload — bytes slice assignment to memoryview always works
-        buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
 
     def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
@@ -196,7 +196,8 @@ class SharedFrameBuffer:
         import time
         
         # Retry loop to handle race conditions where writer is currently updating the header
-        for attempt in range(3):
+        # Increased retries and sleep for better stability
+        for attempt in range(10):
             try:
                 size, w, h, c = struct.unpack_from('<iiii', buf, 0)
                 if size > 0 and size <= self.max_frame_size:
@@ -204,8 +205,8 @@ class SharedFrameBuffer:
             except struct.error:
                 pass
             
-            if attempt < 2:
-                time.sleep(0.001) # Tiny delay to let writer finish
+            if attempt < 9:
+                time.sleep(0.005) # 5ms delay to let writer finish
         else:
             # All retries failed or size is still invalid
             logger.warning(f'Invalid size {size if "size" in locals() else "unknown"} detected in segment {name} after retries. Returning None.')
