@@ -3,13 +3,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Union
 
-from pymongo.collection import Collection
 import pandas as pd
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
-def get_average_traffic_data(db_collection: Collection, sensor_ids: List[str], start_time: datetime, end_time: datetime) -> Dict[str, Optional[float]]:
+def get_average_traffic_data(db_collection: Any, sensor_ids: List[str], start_time: datetime, end_time: datetime) -> Dict[str, Optional[float]]:
     """
     Queries the database for processed traffic data within the specified parameters and
     calculates the average vehicle count and average speed.
@@ -55,7 +54,7 @@ def get_average_traffic_data(db_collection: Collection, sensor_ids: List[str], s
         logger.error(f"Error fetching average traffic data: {e}", exc_info=True)
         return {"average_vehicle_count": None, "average_speed": None}
 
-def identify_traffic_pattern(db_collection: Collection, sensor_id: str, time_range: str) -> Dict[str, Optional[float]]:
+def identify_traffic_pattern(db_collection: Any, sensor_id: str, time_range: str) -> Dict[str, Optional[float]]:
     """
     Queries historical data for a sensor within similar time ranges and calculates
     the average vehicle count and speed for that pattern.
@@ -199,7 +198,7 @@ def detect_simple_anomaly(current_data: Dict[str, Union[int, float]], historical
         logger.info("No simple anomaly detected.")
         return False
 
-def get_time_series_data(db_collection: Collection, sensor_id: str, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+def get_time_series_data(db_collection: Any, sensor_id: str, start_time: datetime, end_time: datetime) -> pd.DataFrame:
     """
     Queries the database for processed traffic data for a given sensor ID within a time range,
     and returns a pandas DataFrame with a datetime index.
@@ -314,72 +313,72 @@ def identify_seasonality_trend(dataframe: pd.DataFrame, period: str) -> Dict[str
     return results
 
 # Example Usage (requires a running MongoDB and data in the collection)
-if __name__ == "__main__":
-    # This is a placeholder for demonstration.
-    # In a real application, you would get the MongoDB collection
-    # from your application's database connection pool.
-    from pymongo import MongoClient
-    from datetime import timedelta
-
-    # Ensure you have a MongoDB instance running and accessible
-    # and data in the 'processed_traffic_data' collection of 'traffic_db_improved' database.
-    MONGO_URI = "mongodb://localhost:27017/"
-    MONGO_DB_NAME = "traffic_db_improved"
-    PROCESSED_DATA_COLLECTION_NAME = "processed_traffic_data"
-    
-    try:
-        client = MongoClient(MONGO_URI)
-        db = client[MONGO_DB_NAME]
-        processed_collection = db[PROCESSED_DATA_COLLECTION_NAME]
-        logger.info("Connected to MongoDB for example usage.")
-
-        # --- Example 1: Get average traffic data for a specific time range and sensors ---
-        end_t = datetime.now(timezone.utc)
-        start_t = end_t - timedelta(minutes=30)
-        sensor_list = ["sensor_1", "sensor_2"]
-
-        avg_data = get_average_traffic_data(processed_collection, sensor_list, start_t, end_t)
-        print(f"\nAverage data for {sensor_list} between {start_t} and {end_t}: {avg_data}")
-
-        # --- Example 2: Identify traffic pattern for a sensor ---
-        sensor_id_pattern = "sensor_1"
-        pattern_data_rush_hour = identify_traffic_pattern(processed_collection, sensor_id_pattern, "rush_hour")
-        print(f"\nHistorical rush hour pattern data for {sensor_id_pattern}: {pattern_data_rush_hour}")
-
-        pattern_data_midnight = identify_traffic_pattern(processed_collection, sensor_id_pattern, "midnight")
-        print(f"\nHistorical midnight pattern data for {sensor_id_pattern}: {pattern_data_midnight}")
-
-
-        # --- Example 3: Detect simple anomaly ---
-        # Simulate some current data
-        current_traffic = {"vehicle_count": 150, "average_speed": 10.5}
-        # Use the identified pattern data (if successful)
-        historical_pattern = pattern_data_rush_hour # or pattern_data_midnight
-        anomaly_threshold = 30.0 # 30% deviation
-
-        print(f"\nChecking for anomaly with current data: {current_traffic} against historical pattern: {historical_pattern}")
-        is_anomaly = detect_simple_anomaly(current_traffic, historical_pattern, anomaly_threshold)
-        print(f"Anomaly detected: {is_anomaly}")
-
-        # --- Example 4: Get time series data and calculate rolling averages ---
-        sensor_id_ts = "sensor_1"
-        start_ts = datetime.now(timezone.utc) - timedelta(hours=24) # Last 24 hours
-        end_ts = datetime.now(timezone.utc)
-
-        ts_data = get_time_series_data(processed_collection, sensor_id_ts, start_ts, end_ts)
-        print(f"\nTime series data for {sensor_id_ts}:\n{ts_data.head()}")
-
-        if not ts_data.empty:
-            rolling_avg_data = calculate_rolling_averages(ts_data, '15min')
-            print(f"\nTime series data with rolling 15min averages:\n{rolling_avg_data.head()}")
-
-            # --- Example 5: Identify seasonality and trend ---
-            seasonality_trend_daily = identify_seasonality_trend(ts_data, 'daily')
-            print(f"\nSeasonality and Trend analysis (daily): {seasonality_trend_daily}")
-
-    except Exception as e:
-        logger.error(f"An error occurred during example usage: {e}", exc_info=True)
-    finally:
-        if 'client' in locals() and client:
-            client.close()
-            logger.info("MongoDB connection closed.")
+# if __name__ == "__main__":
+#     # This is a placeholder for demonstration.
+#     # In a real application, you would get the MongoDB collection
+#     # from your application's database connection pool.
+#     from pymongo import MongoClient
+#     from datetime import timedelta
+#
+#     # Ensure you have a MongoDB instance running and accessible
+#     # and data in the 'processed_traffic_data' collection of 'traffic_db_improved' database.
+#     MONGO_URI = "mongodb://localhost:27017/"
+#     MONGO_DB_NAME = "traffic_db_improved"
+#     PROCESSED_DATA_COLLECTION_NAME = "processed_traffic_data"
+#     
+#     try:
+#         client = MongoClient(MONGO_URI)
+#         db = client[MONGO_DB_NAME]
+#         processed_collection = db[PROCESSED_DATA_COLLECTION_NAME]
+#         logger.info("Connected to MongoDB for example usage.")
+#
+#         # --- Example 1: Get average traffic data for a specific time range and sensors ---
+#         end_t = datetime.now(timezone.utc)
+#         start_t = end_t - timedelta(minutes=30)
+#         sensor_list = ["sensor_1", "sensor_2"]
+#
+#         avg_data = get_average_traffic_data(processed_collection, sensor_list, start_t, end_t)
+#         print(f"\nAverage data for {sensor_list} between {start_t} and {end_t}: {avg_data}")
+#
+#         # --- Example 2: Identify traffic pattern for a sensor ---
+#         sensor_id_pattern = "sensor_1"
+#         pattern_data_rush_hour = identify_traffic_pattern(processed_collection, sensor_id_pattern, "rush_hour")
+#         print(f"\nHistorical rush hour pattern data for {sensor_id_pattern}: {pattern_data_rush_hour}")
+#
+#         pattern_data_midnight = identify_traffic_pattern(processed_collection, sensor_id_pattern, "midnight")
+#         print(f"\nHistorical midnight pattern data for {sensor_id_pattern}: {pattern_data_midnight}")
+#
+#
+#         # --- Example 3: Detect simple anomaly ---
+#         # Simulate some current data
+#         current_traffic = {"vehicle_count": 150, "average_speed": 10.5}
+#         # Use the identified pattern data (if successful)
+#         historical_pattern = pattern_data_rush_hour # or pattern_data_midnight
+#         anomaly_threshold = 30.0 # 30% deviation
+#
+#         print(f"\nChecking for anomaly with current data: {current_traffic} against historical pattern: {historical_pattern}")
+#         is_anomaly = detect_simple_anomaly(current_traffic, historical_pattern, anomaly_threshold)
+#         print(f"Anomaly detected: {is_anomaly}")
+#
+#         # --- Example 4: Get time series data and calculate rolling averages ---
+#         sensor_id_ts = "sensor_1"
+#         start_ts = datetime.now(timezone.utc) - timedelta(hours=24) # Last 24 hours
+#         end_ts = datetime.now(timezone.utc)
+#
+#         ts_data = get_time_series_data(processed_collection, sensor_id_ts, start_ts, end_ts)
+#         print(f"\nTime series data for {sensor_id_ts}:\n{ts_data.head()}")
+#
+#         if not ts_data.empty:
+#             rolling_avg_data = calculate_rolling_averages(ts_data, '15min')
+#             print(f"\nTime series data with rolling 15min averages:\n{rolling_avg_data.head()}")
+#
+#             # --- Example 5: Identify seasonality and trend ---
+#             seasonality_trend_daily = identify_seasonality_trend(ts_data, 'daily')
+#             print(f"\nSeasonality and Trend analysis (daily): {seasonality_trend_daily}")
+#
+#     except Exception as e:
+#         logger.error(f"An error occurred during example usage: {e}", exc_info=True)
+#     finally:
+#         if 'client' in locals() and client:
+#             client.close()
+#             logger.info("MongoDB connection closed.")closed.")

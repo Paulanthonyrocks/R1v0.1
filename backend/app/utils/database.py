@@ -455,46 +455,9 @@ class DatabaseManager:
             )
             return
 
-        from pymongo import MongoClient
-        from pymongo.errors import (
-            ConnectionFailure,
-            ConfigurationError as MongoConfigurationError,
-            ServerSelectionTimeoutError,
-        )
-
-        @retry(
-            wait=wait_exponential(multiplier=1, min=2, max=10),
-
-            stop=stop_after_attempt(3),
-            retry=retry_if_exception_type((ConnectionFailure, MongoConfigurationError, ServerSelectionTimeoutError)),
-            reraise=True, # Reraise so we can catch it in the outer try-except
-        )
-        def connect_with_retry():
-            logger.info(f"Attempting to connect to MongoDB at {self.mongo_uri}...")
-            client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=5000)
-            # The 'ismaster' command is a cheap way to verify the connection
-            client.admin.command("ismaster")
-            return client
-
-        try:
-            self.mongo_client = connect_with_retry()
-            if self.mongo_client:
-                self.mongo_db = self.mongo_client[self.mongo_db_name]
-                logger.info(
-                    f"Successfully connected to MongoDB server. Database: '{self.mongo_db_name}'"
-                )
-        except (RetryError, ConnectionFailure, ServerSelectionTimeoutError) as e:
-            logger.warning(f"MongoDB connection failed (it may be down or unreachable): {e}")
-            logger.info("MongoDB features will be disabled for this session.")
-            self.mongo_client = None
-            self.mongo_db = None
-        except Exception as e:
-            logger.error(
-                f"Unexpected error during MongoDB initialization: {e}",
-                exc_info=True,
-            )
-            self.mongo_client = None
-            self.mongo_db = None
+        logger.warning("pymongo module is disabled. MongoDB features will not be initialized.")
+        self.mongo_client = None
+        self.mongo_db = None
 
     def prune_old_data(self, retention_days: int = 7) -> int:
         """Prunes vehicle tracks older than the specified number of days."""

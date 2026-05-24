@@ -6,8 +6,6 @@ import time
 from datetime import datetime, timezone
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, OperationFailure
 from pydantic import ValidationError
 from typing import Any
 
@@ -637,6 +635,16 @@ def main():
             kafka_dlq_producer.close()
 
         # if kafka_dlq_producer: kafka_dlq_producer.close()
+        if mongo_client:
+            logger.info("Closing MongoDB connection...")
+            mongo_client.close()
+            logger.info("MongoDB connection closed.")
+        logger.info("Application shutdown complete.")
+
+
+if __name__ == "__main__":
+    main()
+ka_dlq_producer: kafka_dlq_producer.close()
         if mongo_client:
             logger.info("Closing MongoDB connection...")
             mongo_client.close()

@@ -42,7 +42,6 @@ sqlalchemy
 asyncpg
 aiosqlite
 cryptography
-pymongo>=4.0.0
 aiokafka>=0.8.0
 
 # Firebase
