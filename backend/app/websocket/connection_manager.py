@@ -116,7 +116,9 @@ class ConnectionManager:
             # ... (Collision logic) ...
             # Handle reconnection: Close existing connection if present
             if client_id in self.active_connections:
-                logger.warning(f"Collision detected for {client_id}. Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
+                user_id = self.client_id_to_user_id.get(client_id, "unknown")
+                role = self.client_id_to_user_role.get(client_id, "unknown")
+                logger.warning(f"Collision detected for {client_id} (user: {user_id}, role: {role}). Closing OLD connection to accept NEW one. (This is normal during page reloads, but indicates tab duplication if frequent)")
                 old_ws = self.active_connections[client_id]
                 # Force disconnect the old socket structure
                 await self.disconnect(client_id, old_ws)
@@ -251,14 +253,19 @@ class ConnectionManager:
                     msg_count = 0
                 
                 try:
-                    # Use a timeout for the actual socket send to detect dead sockets faster
+                    # Use a more lenient timeout for the actual socket send to detect dead sockets 
+                    # without being too aggressive on jittery high-bandwidth connections.
                     if isinstance(message, bytes):
                         logger.debug(f"Sending binary frame to {client_id}, size: {len(message)} bytes")
-                        await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                        await asyncio.wait_for(websocket.send_bytes(message), timeout=10.0)
                     else:
-                        await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                        await asyncio.wait_for(websocket.send_text(message), timeout=10.0)
                     queue.task_done()
-                except (asyncio.TimeoutError, Exception) as e:
+                except asyncio.TimeoutError:
+                    logger.warning(f"[Sender {client_id}] Timeout sending message (10s limit). Possible network congestion. Disconnecting.")
+                    await self.disconnect(client_id, websocket)
+                    break
+                except Exception as e:
                     logger.warning(f"Error sending to {client_id}: {e}. Disconnecting.")
                     await self.disconnect(client_id, websocket)
                     break

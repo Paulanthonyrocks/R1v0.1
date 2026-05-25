@@ -247,13 +247,14 @@ async def websocket_endpoint(
 
     try:
         if not token:
-            logger.warning(f"WebSocket connection attempt without token from {client_id}")
+            logger.warning(f"WebSocket connection attempt from {client_id} failed: Token is missing.")
             raise Exception("Token is missing")
 
         try:
             decoded_token = await verify_firebase_token(token)
             username = decoded_token.get("uid") or decoded_token.get("sub")
             if not username:
+                logger.warning(f"WebSocket auth failed for {client_id}: Token valid but missing uid/sub claims.")
                 raise Exception("Invalid token claims: missing uid/sub")
             
             user = User(
