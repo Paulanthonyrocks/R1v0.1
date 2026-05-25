@@ -122,13 +122,22 @@ def ingestion_worker(
     for attempt in range(max_retries):
         try:
             source = video_path
-            if isinstance(video_path, str) and video_path.startswith("webcam:"):
-                try:
-                    source = int(video_path.split(":")[1])
-                except (IndexError, ValueError):
-                    logger.warning(
-                        f"[{feed_id}] Invalid webcam index '{video_path}', defaulting to camera 0"
-                    )
+            if isinstance(video_path, str):
+                if video_path.startswith("webcam:"):
+                    try:
+                        source = int(video_path.split(":")[1])
+                    except (IndexError, ValueError):
+                        logger.warning(
+                            f"[{feed_id}] Invalid webcam index '{video_path}', defaulting to camera 0"
+                        )
+                        source = 0
+                elif not video_path.startswith(("rtsp:", "http:", "https:", "tcp:")):
+                    # Resolve relative to project root to avoid CWD issues in multiprocess
+                    root = config.get("project_root_dir")
+                    if root:
+                        source = str(Path(root) / video_path)
+                    else:
+                        source = str(Path(video_path).resolve())
 
             reader = FrameReader(
                 source,

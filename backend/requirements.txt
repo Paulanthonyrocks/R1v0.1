@@ -31,9 +31,6 @@ joblib>=1.3.2
 # TensorFlow (with GPU support)
 tensorflow>=2.16.1
 
-# ONNX Runtime (with GPU support)
-onnxruntime-gpu>=1.15.1
-
 # Data
 pandas>=1.3.0
 
