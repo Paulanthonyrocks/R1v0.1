@@ -257,12 +257,12 @@ class ConnectionManager:
                     # without being too aggressive on jittery high-bandwidth connections.
                     if isinstance(message, bytes):
                         logger.debug(f"Sending binary frame to {client_id}, size: {len(message)} bytes")
-                        await asyncio.wait_for(websocket.send_bytes(message), timeout=10.0)
+                        await asyncio.wait_for(websocket.send_bytes(message), timeout=30.0)
                     else:
-                        await asyncio.wait_for(websocket.send_text(message), timeout=10.0)
+                        await asyncio.wait_for(websocket.send_text(message), timeout=30.0)
                     queue.task_done()
                 except asyncio.TimeoutError:
-                    logger.warning(f"[Sender {client_id}] Timeout sending message (10s limit). Possible network congestion. Disconnecting.")
+                    logger.warning(f"[Sender {client_id}] Timeout sending message (30s limit). Possible network congestion. Disconnecting.")
                     await self.disconnect(client_id, websocket)
                     break
                 except Exception as e:
