@@ -56,7 +56,22 @@ const getWsUrl = (path: string) => {
   // Build final path
   const cleanPath = path.startsWith('/') ? path : '/' + path;
   return `${baseUrlObj.origin}${cleanPath}`;
-}
+};
+
+/**
+ * Check if the backend is reachable before attempting WebSocket connection.
+ * Returns true if healthy, false otherwise.
+ */
+const checkBackendHealth = async (baseUrl: string): Promise<boolean> => {
+  try {
+    const healthUrl = `${baseUrl.replace('ws', 'http')}/health`;
+    const response = await fetch(healthUrl, { method: 'GET', mode: 'cors' });
+    return response.ok;
+  } catch (error) {
+    console.error(`[WebSocketProvider] Backend health check failed:`, error);
+    return false;
+  }
+};
 
 const WS_BASE_URL = getWsUrl('/api/v1/ws');
 
@@ -106,32 +121,44 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
  }, [webSocketClient]);
 
  useEffect(() => {
- if (loading) {
- console.log("Auth state is loading, WebSocket connection deferred.");
- return;
- }
+  if (loading) {
+    console.log("Auth state is loading, WebSocket connection deferred.");
+    return;
+  }
 
- const debounceTimeout = setTimeout(() => {
- // Skip if client was already destroyed by the debounced cleanup
- if (isDestroyedRef.current) return;
+  const debounceTimeout = setTimeout(async () => {
+    // Skip if client was already destroyed by the debounced cleanup
+    if (isDestroyedRef.current) return;
 
- if (token) {
- if (!webSocketClient.isConnected() && webSocketClient.getConnectionState() !== 'connecting') {
- console.log(`[WebSocketProvider] Token available. Connecting instance: ${webSocketClient.getInstanceId()}`);
- webSocketClient.connect(token).catch(error => {
- console.error("WebSocket connection error on connect:", error);
- });
- }
- } else {
- if (webSocketClient.getConnectionState() !== 'disconnected') {
- console.log(`[WebSocketProvider] No token. Disconnecting instance: ${webSocketClient.getInstanceId()}`);
- webSocketClient.disconnect();
- }
- }
- }, 500);
+    if (token) {
+      if (!webSocketClient.isConnected() && webSocketClient.getConnectionState() !== 'connecting') {
+        // Check backend health before attempting WebSocket connection
+        const healthOk = await checkBackendHealth(WS_BASE_URL);
+        
+        if (!healthOk) {
+          console.error(
+            `[WebSocketProvider] Backend health check failed. The backend at ${WS_BASE_URL} is not reachable. ` +
+            `Ensure the backend is running on port 8000 and accessible. ` +
+            `Run: curl ${WS_BASE_URL.replace('ws', 'http')}/health`
+          );
+          // Still attempt connection but with a warning
+        }
+        
+        console.log(`[WebSocketProvider] Token available. Connecting instance: ${webSocketClient.getInstanceId()}`);
+        webSocketClient.connect(token).catch(error => {
+          console.error("WebSocket connection error on connect:", error);
+        });
+      }
+    } else {
+      if (webSocketClient.getConnectionState() !== 'disconnected') {
+        console.log(`[WebSocketProvider] No token. Disconnecting instance: ${webSocketClient.getInstanceId()}`);
+        webSocketClient.disconnect();
+      }
+    }
+  }, 500);
 
- return () => clearTimeout(debounceTimeout);
- }, [token, loading, webSocketClient]);
+  return () => clearTimeout(debounceTimeout);
+}, [token, loading, webSocketClient]);
 
  return (
  <WebSocketContext.Provider value={webSocketClient}>
