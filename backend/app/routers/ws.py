@@ -279,6 +279,19 @@ async def websocket_endpoint(
         await connection_manager.connect(websocket, client_id, user.username, user.role)
 
         try:
+            # Heartbeat Jumpstart: Send an immediate message to the client to prevent 
+            # cloud proxy termination (common in cloud workstation tunnels).
+            from app.websocket.connection_manager import MessagePriority
+            await connection_manager.send_personal_message(
+                WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                    data=AuthSuccessData().model_dump()
+                ).model_dump_json(),
+                client_id,
+                priority=MessagePriority.HIGH
+            )
+            logger.info(f"Jumpstart message sent to {client_id}")
+
             # Run the receiver loop directly.
             # The ConnectionManager handles keepalives (ping/pong) independently.
             await message_receiver(websocket, client_id, connection_manager, feed_manager, rate_limiter)

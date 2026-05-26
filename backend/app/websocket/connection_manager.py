@@ -266,7 +266,7 @@ class ConnectionManager:
                     await self.disconnect(client_id, websocket)
                     break
                 except Exception as e:
-                    logger.warning(f"Error sending to {client_id}: {e}. Disconnecting.")
+                    logger.warning(f"Error sending to {client_id}: {repr(e)}. Disconnecting.")
                     await self.disconnect(client_id, websocket)
                     break
         except asyncio.CancelledError:
