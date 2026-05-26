@@ -16,23 +16,46 @@ export const useWebSocket = () => {
 };
 
 const getWsUrl = (path: string) => {
- const wsEnvUrl = process.env.NEXT_PUBLIC_WS_URL;
- if (wsEnvUrl) {
- const baseUrl = wsEnvUrl.replace(/\/$/, '');
- return `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
- }
+  // 1. Explicit env var for the WebSocket endpoint (highest priority)
+  const wsEnvUrl = process.env.NEXT_PUBLIC_WS_URL;
+  if (wsEnvUrl) {
+    const baseUrl = wsEnvUrl.replace(/\/$/, '');
+    return `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
+  }
 
- let httpBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  // 2. Derive from API base URL
+  let httpBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
- if (!httpBaseUrl && typeof window !== 'undefined') {
- httpBaseUrl = window.location.origin;
- }
+  // 3. Fall back to window.location.origin if running in browser
+  if (!httpBaseUrl && typeof window !== 'undefined') {
+    httpBaseUrl = window.location.origin;
+  }
 
- httpBaseUrl = httpBaseUrl || 'http://localhost:8000';
+  // 4. Final fallback for SSR or when nothing is available
+  httpBaseUrl = httpBaseUrl || 'http://localhost:8000';
 
- const wsBaseUrl = httpBaseUrl.replace(/^(http)/, 'ws');
- 
- return `${wsBaseUrl.replace(/\/$/, '')}${path}`;
+  // Guard against malformed URLs (protocol-only strings like "https:")
+  let baseUrlObj: URL;
+  try {
+    baseUrlObj = new URL(httpBaseUrl);
+  } catch {
+    // If it's missing a host (e.g. just "https:"), prepend a dummy host to parse it,
+    // then restore the real host from window.location if available.
+    if (httpBaseUrl.endsWith(':')) {
+      httpBaseUrl += '//localhost';
+    } else {
+      httpBaseUrl = 'http://localhost:8000';
+    }
+    baseUrlObj = new URL(httpBaseUrl);
+  }
+
+  // Replace http with ws (http -> ws, https -> wss)
+  const wsProtocol = baseUrlObj.protocol === 'https:' ? 'wss:' : 'ws:';
+  baseUrlObj.protocol = wsProtocol;
+
+  // Build final path
+  const cleanPath = path.startsWith('/') ? path : '/' + path;
+  return `${baseUrlObj.origin}${cleanPath}`;
 }
 
 const WS_BASE_URL = getWsUrl('/api/v1/ws');

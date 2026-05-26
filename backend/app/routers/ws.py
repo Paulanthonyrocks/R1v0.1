@@ -281,16 +281,20 @@ async def websocket_endpoint(
         try:
             # Heartbeat Jumpstart: Send an immediate message to the client to prevent 
             # cloud proxy termination (common in cloud workstation tunnels).
-            from app.websocket.connection_manager import MessagePriority
-            await connection_manager.send_personal_message(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
-                    data=AuthSuccessData().model_dump()
-                ).model_dump_json(),
-                client_id,
-                priority=MessagePriority.HIGH
+            # CRITICAL: Send directly (not via queue) to guarantee immediate wire-time.
+            jumpstart_msg = WebSocketMessage(
+                type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                data=AuthSuccessData().model_dump()
             )
-            logger.info(f"Jumpstart message sent to {client_id}")
+            try:
+                await websocket.send_text(jumpstart_msg.model_dump_json())
+                logger.info(f"Jumpstart (direct) sent to {client_id}")
+            except Exception as e:
+                logger.warning(f"Failed to send jumpstart to {client_id}: {e}. Client may have disconnected immediately.")
+                # If we can't even send the jumpstart, the connection is dead on arrival.
+                # Don't bother entering the receiver loop, just disconnect cleanly.
+                await connection_manager.disconnect(client_id, websocket)
+                return
 
             # Run the receiver loop directly.
             # The ConnectionManager handles keepalives (ping/pong) independently.
