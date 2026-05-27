@@ -86,18 +86,35 @@ class FrameReader:
         # Select backend and options based on GPU config
         backend = cv2.CAP_ANY
         if self.gpu_acceleration and self.is_file:
-            # Note: This requires OpenCV built with FFMPEG and specific environment setup
-            # We use CAP_FFMPEG to allow for hardware acceleration flags
+            # Note: Hardware acceleration via OpenCV/FFMPEG is highly environment-dependent.
+            # We use CAP_FFMPEG to allow for hardware acceleration flags if available.
             backend = cv2.CAP_FFMPEG
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid" # Example for NVIDIA
-            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG.")
-
-        cap = cv2.VideoCapture(self.source, backend)
-        if not cap.isOpened():
-            logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
-            self.started_event.set() # Unblock init
-            return
+            logger.info(f"FrameReader '{self.source_name}' attempting GPU acceleration via FFMPEG backend.")
         
+        try:
+            cap = cv2.VideoCapture(self.source, backend)
+            if not cap.isOpened():
+                logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
+                self.started_event.set() # Unblock init
+                return
+            
+            # Test read to ensure the backend is actually working (GPU delegates can crash here)
+            ret, _ = cap.read()
+            if not ret:
+                logger.warning(f"FrameReader '{self.source_name}': Initial read failed. GPU acceleration might be unstable.")
+                if self.gpu_acceleration:
+                    logger.info(f"FrameReader '{self.source_name}' falling back to CPU decoding.")
+                    cap.release()
+                    cap = cv2.VideoCapture(self.source, cv2.CAP_ANY)
+                    if not cap.isOpened():
+                        logger.error(f"FrameReader '{self.source_name}': CPU fallback also failed.")
+                        self.started_event.set()
+                        return
+        except Exception as e:
+            logger.error(f"FrameReader '{self.source_name}' crashed during initialization: {e}")
+            self.started_event.set()
+            return
+
         self.started_event.set()
         consecutive_fails = 0
         max_read_fails = 100 if not self.is_file else 0 # Be more patient with streams

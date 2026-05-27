@@ -113,6 +113,7 @@ enum ConnectionState {
     DISCONNECTED = 'disconnected',
     CONNECTING = 'connecting',
     CONNECTED = 'connected',
+    AUTHENTICATED = 'authenticated',
     RECONNECTING = 'reconnecting',
     ERROR = 'error'
 }
@@ -122,6 +123,7 @@ enum ConnectionState {
 let lastActiveInstanceId: string | null = null;
 
 export class WebSocketClient implements IWebSocketClient {
+    public static DEBUG = false;
     private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown>>> = new Map();
     private scopedListeners: Map<WebSocketMessageType, Map<string, MessageListener<unknown>>> = new Map();
     private ws: WebSocket | null = null;
@@ -144,7 +146,10 @@ export class WebSocketClient implements IWebSocketClient {
     private shouldReconnect: boolean = true;
     private unsubscribeTokenRefresh: (() => void) | null = null;
     private connectionPromise: Promise<void> | null = null;
+    private resolveConnection: (() => void) | null = null;
+    private rejectConnection: ((reason: any) => void) | null = null;
     private currentToken: string | null = null;
+    private authenticated = false;
     private videoWorker: Worker | null = null;
     private requiresClientId: boolean;
     private clientId: string | null = null;
@@ -155,9 +160,12 @@ export class WebSocketClient implements IWebSocketClient {
     private networkChangeHandler: (() => void) | null = null;
     private networkOfflineHandler: (() => void) | null = null;
 
-    constructor(baseUrl: string, requiresClientId = true) {
+    private workerUrl: string;
+
+    constructor(baseUrl: string, requiresClientId = true, workerUrl = '/workers/video-worker.js') {
         this.url = baseUrl;
         this.requiresClientId = requiresClientId;
+        this.workerUrl = workerUrl;
         this.tokenManager = TokenManager.getInstance();
         this.clientId = this.requiresClientId ? getOrCreateClientId() : null;
 
@@ -183,7 +191,7 @@ export class WebSocketClient implements IWebSocketClient {
 
         // Setup Worker if needed
         if (this.requiresClientId && !this.videoWorker) {
-            this.videoWorker = new Worker('/workers/video-worker.js');
+            this.videoWorker = new Worker(this.workerUrl);
             this.videoWorker.onmessage = (e) => {
                 if (e.data.error) {
                     console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
@@ -304,32 +312,41 @@ export class WebSocketClient implements IWebSocketClient {
         this.statusListeners.add(listener);
         // Immediately notify the listener of the current state
         try {
-            listener(this.connectionState, "Initial state on subscription");
+            listener(this.connectionState);
         } catch (error) {
             console.error(`[WebSocketClient ${this.instanceId}] Error in initial status notification:`, error);
         }
         return () => this.statusListeners.delete(listener);
     }
 
+    private tokenRefreshTimeout: NodeJS.Timeout | null = null;
+
     private async handleTokenRefresh(token: string): Promise<void> {
-        this.currentToken = token;
-
-        if (!this.isInstanceActive()) {
-            console.debug(`[WebSocketClient ${this.instanceId}] Instance dormant. Ignoring token refresh.`);
-            return;
+        if (this.tokenRefreshTimeout) {
+            clearTimeout(this.tokenRefreshTimeout);
         }
 
-        if (this.isConnected()) {
-            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is connected. Sending re-authentication.`);
-            this.send({ type: WebSocketMessageType.AUTHENTICATE, data: { token } });
-        } else if (this.connectionState === ConnectionState.DISCONNECTED || this.connectionState === ConnectionState.ERROR) {
-            console.log(`[WebSocketClient ${this.instanceId}] WebSocket is ${this.connectionState}. Reconnecting with new token.`);
-            try {
-                await this.reconnectWithNewToken(token);
-            } catch (e) {
-                console.error(`[WebSocketClient ${this.instanceId}] Reconnection with new token failed:`, e);
+        this.tokenRefreshTimeout = setTimeout(async () => {
+            this.currentToken = token;
+
+            if (!this.isInstanceActive()) {
+                console.debug(`[WebSocketClient ${this.instanceId}] Instance dormant. Ignoring token refresh.`);
+                return;
             }
-        }
+
+            if (this.isConnected()) {
+                console.log(`[WebSocketClient ${this.instanceId}] WebSocket is connected. Sending re-authentication.`);
+                this.send({ type: WebSocketMessageType.AUTHENTICATE, data: { token } });
+            } else if (this.connectionState === ConnectionState.DISCONNECTED || this.connectionState === ConnectionState.ERROR) {
+                console.log(`[WebSocketClient ${this.instanceId}] WebSocket is ${this.connectionState}. Reconnecting with new token.`);
+                try {
+                    await this.reconnectWithNewToken(token);
+                } catch (e) {
+                    console.error(`[WebSocketClient ${this.instanceId}] Reconnection with new token failed:`, e);
+                }
+            }
+            this.tokenRefreshTimeout = null;
+        }, 200); // 200ms debounce
     }
 
     public async reconnectWithNewToken(token: string): Promise<void> {
@@ -389,6 +406,9 @@ export class WebSocketClient implements IWebSocketClient {
 
         return new Promise<void>((resolve, reject) => {
             try {
+                this.resolveConnection = resolve;
+                this.rejectConnection = reject;
+
                 if (!this.isInstanceActive()) {
                     reject(new Error('Instance became dormant during connection setup'));
                     return;
@@ -402,8 +422,6 @@ export class WebSocketClient implements IWebSocketClient {
                     const pathParts = ['api', 'v1', 'ws', clientId].filter(Boolean);
                     url.pathname = '/' + pathParts.join('/');
                 }
-
-                url.searchParams.set('token', token as string);
 
                 console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, url.toString());
 
@@ -427,12 +445,23 @@ export class WebSocketClient implements IWebSocketClient {
                     }
 
                     console.log(`[WebSocketClient ${this.instanceId}] WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
+                    
+                    // Immediately authenticate upon connection
+                    if (this.currentToken) {
+                        this.send({
+                            type: WebSocketMessageType.AUTHENTICATE,
+                            data: { token: this.currentToken }
+                        });
+                        console.log(`[WebSocketClient ${this.instanceId}] Sent initial AUTHENTICATE message`);
+                    } else {
+                        console.warn(`[WebSocketClient ${this.instanceId}] No token available for initial authentication`);
+                    }
+
                     this.setState(ConnectionState.CONNECTED, 'Connection established');
                     this.reconnectAttempts = 0;
                     this.reconnectDelay = 1000;
                     this.startPingInterval();
-                    this.flushMessageQueue();
-                    resolve();
+                    // Do not flush queue here; wait for AUTH_SUCCESS
                 };
 
                 this.ws.onclose = (event: CloseEvent) => {
@@ -623,10 +652,31 @@ export class WebSocketClient implements IWebSocketClient {
                     return;
                 }
 
+                if (message.type === WebSocketMessageType.AUTH_SUCCESS) {
+                    console.log(`[WebSocketClient ${this.instanceId}] Authentication successful.`);
+                    this.authenticated = true;
+                    this.setState(ConnectionState.AUTHENTICATED, 'Authenticated');
+                    this.reconnectAttempts = 0;
+                    this.reconnectDelay = 1000;
+                    this.flushMessageQueue();
+                    
+                    if (this.resolveConnection) {
+                        this.resolveConnection();
+                        this.resolveConnection = null;
+                    }
+                    return;
+                }
+
                 if (message.type === WebSocketMessageType.AUTH_FAILURE) {
                     console.warn(`[WebSocketClient ${this.instanceId}] Authentication failed:`, message.data);
+                    this.authenticated = false;
                     this.currentToken = null;
                     
+                    if (this.rejectConnection) {
+                        this.rejectConnection(new Error(`Authentication failed: ${JSON.stringify(message.data)}`));
+                        this.rejectConnection = null;
+                    }
+
                     // Attempt to refresh token and reconnect
                     setTimeout(() => {
                         if (this.isInstanceActive() && this.shouldReconnect) {
@@ -638,6 +688,7 @@ export class WebSocketClient implements IWebSocketClient {
                                 .catch(e => console.error(`[WebSocketClient ${this.instanceId}] Token refresh failed:`, e));
                         }
                     }, 5000); // 5s delay before retry
+                    return;
                 }
 
                 if (message.type === WebSocketMessageType.INITIAL_FEED_STATUSES) {
@@ -677,7 +728,7 @@ export class WebSocketClient implements IWebSocketClient {
                 };
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
-                    const feedId = message.data.f || message.data.feed_id;
+                    const feedId = message.data.feed_id || message.data.f;
                     if (this.videoWorker) {
                         console.debug(`[WebSocketClient] Incoming binary frame for feed: ${feedId}`);
                         this.videoWorker.postMessage({
@@ -687,8 +738,6 @@ export class WebSocketClient implements IWebSocketClient {
                     } else {
                         this.notifyListeners(message.type, message.data, feedId);
                     }
-                    return; // <--- STOP: It never calls notifyListeners if a worker exists
-                    // will post back the decoded frame via onmessage handler
                     return;
                 } else {
                     this.notifyListeners(message.type, message.data);
@@ -780,24 +829,49 @@ export class WebSocketClient implements IWebSocketClient {
 
     public send(message: WebSocketMessage): void {
         const messageToSend: WebSocketMessage = { ...message, timestamp: message.timestamp ?? Date.now() };
-        if (this.isConnected()) {
+        
+        // Special case: allow AUTHENTICATE messages regardless of state
+        if (message.type === WebSocketMessageType.AUTHENTICATE) {
+            if (this.isConnected()) {
+                this.ws!.send(JSON.stringify(messageToSend));
+            } else {
+                // Queue authentication if disconnected (though usually we connect first)
+                this.addToQueue(messageToSend);
+            }
+            return;
+        }
+
+        if (this.isConnected() && this.authenticated) {
             this.ws!.send(JSON.stringify(messageToSend));
         } else {
-            if (this.messageQueue.length >= this.maxMessageQueueSize) {
-                this.messageQueue.shift();
-                console.warn(`[WebSocketClient ${this.instanceId}] WebSocket message queue full. Dropping oldest message.`);
+            // If disconnected or not yet authenticated, queue high-priority messages.
+            const priority = message.priority ?? MessagePriority.NORMAL;
+            if (priority === MessagePriority.LOW) {
+                if (WebSocketClient.DEBUG) console.debug(`[WebSocketClient ${this.instanceId}] Socket not ready/auth'd. Dropping LOW priority message.`);
+                return;
             }
-            this.messageQueue.push(messageToSend);
-            
-            // Sort queue by priority (lower value = higher priority) and then by timestamp (FIFO for same priority)
-            this.messageQueue.sort((a, b) => {
-                const priorityA = a.priority ?? MessagePriority.NORMAL;
-                const priorityB = b.priority ?? MessagePriority.NORMAL;
-                if (priorityA !== priorityB) {
-                    return priorityA - priorityB;
-                }
-                return (a.timestamp ?? 0) - (b.timestamp ?? 0);
-            });
+
+            this.addToQueue(messageToSend);
+        }
+    }
+
+    private addToQueue(message: WebSocketMessage): void {
+        this.messageQueue.push(message);
+        
+        // Sort queue by priority (lower value = higher priority) and then by timestamp (FIFO)
+        this.messageQueue.sort((a, b) => {
+            const priorityA = a.priority ?? MessagePriority.NORMAL;
+            const priorityB = b.priority ?? MessagePriority.NORMAL;
+            if (priorityA !== priorityB) {
+                return priorityA - priorityB;
+            }
+            return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+        });
+
+        // If queue is full, drop the LOWEST priority message (which is now at the end)
+        if (this.messageQueue.length > this.maxMessageQueueSize) {
+            this.messageQueue.pop();
+            if (WebSocketClient.DEBUG) console.warn(`[WebSocketClient ${this.instanceId}] WebSocket message queue full. Dropped lowest priority message.`);
         }
     }
 
@@ -819,6 +893,7 @@ export class WebSocketClient implements IWebSocketClient {
         this.errorListeners.clear();
         this.statusListeners.clear();
         this.qualityListeners.clear();
+        this.scopedListeners.clear();
         this.unsubscribeTokenRefresh?.();
         this.videoWorker?.terminate();
         this.messageQueue.length = 0;

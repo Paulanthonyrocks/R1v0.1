@@ -29,11 +29,7 @@ class TrackingManager:
         self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
         self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
         self.use_appearance_in_tracking = tracking_cfg.get("use_appearance_in_tracking", True)
-        self.stationary_cleanup_timeout = tracking_cfg.get("stationary_cleanup_timeout", 300)
-        self.stationary_cleanup_enabled = tracking_cfg.get("stationary_cleanup_enabled", False)
         
-        # Use class-level counter for global uniqueness
-        # No instance counter needed - using UUIDs
         # Callback for track expiration cleanup
         self.on_track_expired: Optional[Callable] = None
 
@@ -146,10 +142,7 @@ class TrackingManager:
                         new_or_updated_tracks[track["vehicle_id"]] = track
 
         unmatched_dets_1 = [d for i, d in enumerate(high_conf_dets) if i not in matched_dets_1]
-        # FIX: Ensure we match IDs correctly (tid is the key in self.vehicle_data)
-        # Convert matched_tracks_1 to set of strings for proper comparison
-        matched_ids_str = set(str(mid) for mid in matched_tracks_1)
-        unmatched_tracks_1 = [t for tid, t in self.vehicle_data.items() if str(tid) not in matched_ids_str]
+        unmatched_tracks_1 = [t for tid, t in self.vehicle_data.items() if tid not in matched_tracks_1]
 
         # 4. Second Association: Low Confidence (IoU Only)
         matched_tracks_2 = set()
@@ -181,8 +174,9 @@ class TrackingManager:
                     # Clip to frame - but don't silently drop, mark as out_of_frame
                     px1, py1, px2, py2 = track["bbox"]
                     if px2 < 0 or px1 > w or py2 < 0 or py1 > h:
-                        track["status"] = "out_of_frame"
-                        new_or_updated_tracks[tid] = track
+                        if self.on_track_expired:
+                            self.on_track_expired(track)
+                        # Do not include in new_or_updated_tracks, which effectively drops the track
                     else:
                         new_or_updated_tracks[tid] = track
                 else:
@@ -265,21 +259,26 @@ class TrackingManager:
         
         # ReID cost (Fallback to loops only for ReID as embeddings vary in presence)
         if use_reid:
-            reid_costs = np.zeros((num_dets, num_tracks))
-            for d in range(num_dets):
-                det_emb = detections[d][3]
-                if det_emb is None:
-                    reid_costs[d, :] = 1.0
-                    continue
-                norm_det_emb = det_emb / (np.linalg.norm(det_emb) + 1e-6)
-                for t in range(num_tracks):
-                    track_emb = tracks[t].get("embedding")
-                    if track_emb is not None:
-                        norm_track_emb = track_emb / (np.linalg.norm(track_emb) + 1e-6)
-                        reid_costs[d, t] = (1.0 - np.dot(norm_det_emb, norm_track_emb)) * self.appearance_weight
-                    else:
-                        reid_costs[d, t] = 1.0
-            total_cost = motion_cost + reid_costs
+            # FIX: Skip appearance cost if no detections carry an embedding
+            # This prevents high-confidence association from breaking when embeddings are absent.
+            if any(d[3] is not None for d in detections):
+                reid_costs = np.zeros((num_dets, num_tracks))
+                for d in range(num_dets):
+                    det_emb = detections[d][3]
+                    if det_emb is None:
+                        reid_costs[d, :] = 0.0
+                        continue
+                    norm_det_emb = det_emb / (np.linalg.norm(det_emb) + 1e-6)
+                    for t in range(num_tracks):
+                        track_emb = tracks[t].get("embedding")
+                        if track_emb is not None:
+                            norm_track_emb = track_emb / (np.linalg.norm(track_emb) + 1e-6)
+                            reid_costs[d, t] = (1.0 - np.dot(norm_det_emb, norm_track_emb)) * self.appearance_weight
+                        else:
+                            reid_costs[d, t] = 0.0
+                total_cost = motion_cost + reid_costs
+            else:
+                total_cost = motion_cost
         else:
             total_cost = motion_cost
             
@@ -297,17 +296,6 @@ class TrackingManager:
         track["class_id"] = cls
         # FIX: Update centroid
         track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-        
-        # Update last_moved_time if vehicle has shifted significantly
-        if "ground_coordinates" in track:
-            curr_pos = track["ground_coordinates"]
-            prev_pos = track.get("prev_ground_pos")
-            if prev_pos:
-                dist = math.sqrt((curr_pos[0]-prev_pos[0])**2 + (curr_pos[1]-prev_pos[1])**2)
-                if dist > 0.1: # Moved more than 10cm
-                    track["last_moved_time"] = current_time
-            else:
-                track["last_moved_time"] = current_time
         
         # Update Kalman
         kf = track.get("kalman_filter")
@@ -336,6 +324,7 @@ class TrackingManager:
             "confidence": conf,
             "last_seen": current_time,
             "status": "active",
+            "prev_status": "unknown",
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
         }

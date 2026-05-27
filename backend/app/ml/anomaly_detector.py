@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import joblib
 from sklearn.preprocessing import StandardScaler
 from typing import List, Dict, Any, Optional
 import logging
@@ -10,14 +11,28 @@ logger = logging.getLogger(__name__)
 class TrafficAnomalyDetector:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.sequence_length = config.get("anomaly_detection", {}).get("sequence_length", 12) # e.g., last 12 intervals (1 hour if 5min intervals)
-        self.threshold = config.get("anomaly_detection", {}).get("threshold", 0.5)
-        self.scaler = StandardScaler()
+        anomaly_cfg = config.get("anomaly_detection", {})
+        self.sequence_length = anomaly_cfg.get("sequence_length", 12) # e.g., last 12 intervals (1 hour if 5min intervals)
+        self.threshold = anomaly_cfg.get("threshold", 0.5)
+        
+        self.scaler: Optional[StandardScaler] = None
         self.model: Any = None
         
-        model_path = config.get("anomaly_detection", {}).get("model_path")
+        model_path = anomaly_cfg.get("model_path")
+        scaler_path = anomaly_cfg.get("scaler_path")
+        
         if model_path:
             self.load_model(model_path)
+        
+        if scaler_path:
+            try:
+                self.scaler = joblib.load(scaler_path)
+                logger.info(f"Anomaly detector scaler loaded from {scaler_path}")
+            except Exception as e:
+                logger.error(f"Failed to load anomaly detector scaler from {scaler_path}: {e}")
+        
+        if self.model and not self.scaler:
+            logger.warning("Anomaly detection model loaded but no scaler found. ML path will fallback to statistical detection.")
 
     def _initialize_model(self, feature_count: int):
         """Initialize an LSTM Autoencoder for anomaly detection."""
@@ -64,23 +79,24 @@ class TrafficAnomalyDetector:
         df = pd.DataFrame(recent_data)
         features = self.prepare_features(df)
         
-        # Fallback to statistical detection if no ML model
-        if self.model is None:
+        # Fallback to statistical detection if no ML model or scaler
+        if self.model is None or self.scaler is None:
             return self._statistical_detection(df)
 
         try:
             # Scale and reshape
             scaled = self.scaler.transform(features)
             
-            # Padding if needed
+            # Padding if needed - pad with the first valid value to avoid zero-distortion
             if len(scaled) < self.sequence_length:
-                padding = np.zeros((self.sequence_length - len(scaled), scaled.shape[1]))
+                pad_val = scaled[0] if len(scaled) > 0 else np.zeros(scaled.shape[1])
+                padding = np.tile(pad_val, (self.sequence_length - len(scaled), 1))
                 scaled = np.vstack((padding, scaled))
             
             sequence = scaled[-self.sequence_length:].reshape(1, self.sequence_length, -1)
             
             # Predict (Reconstruct)
-            reconstruction = self.model.predict(sequence)
+            reconstruction = self.model.predict(sequence, verbose=0)
             
             # Calculate MAE as anomaly score
             loss = np.mean(np.abs(reconstruction - sequence))
@@ -113,18 +129,18 @@ class TrafficAnomalyDetector:
         
         z_score = abs(current_speed - hist_avg_speed) / hist_std_speed
         
-        # Check for sudden vehicle count spikes
+        # Check for sudden vehicle count changes (spikes or drops)
         counts = df["vehicle_count"].values
         current_count = counts[-1]
         hist_avg_count = np.mean(counts[:-1])
         hist_std_count = np.std(counts[:-1]) + 0.1
-        count_z_score = (current_count - hist_avg_count) / hist_std_count
+        count_z_score = abs(current_count - hist_avg_count) / hist_std_count
 
         is_anomaly = z_score > 3.0 or count_z_score > 4.0
         
         reason = []
         if z_score > 3.0: reason.append("Sudden speed deviation")
-        if count_z_score > 4.0: reason.append("Sudden vehicle spike")
+        if count_z_score > 4.0: reason.append("Sudden vehicle count deviation")
 
         return {
             "is_anomaly": bool(is_anomaly),

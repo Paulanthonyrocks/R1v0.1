@@ -38,6 +38,7 @@ def ingestion_worker(
     except Exception:
         pass  # Fall back to default logging config
 
+    # Initialize global config instance for this process
     set_config_instance(config)
 
     from app.utils.redis_client import get_redis_client
@@ -80,6 +81,7 @@ def ingestion_worker(
 
     perf_cfg = config.get("performance", {})
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
+    logger.info(f"[{feed_id}] Video GPU Acceleration enabled: {gpu_acceleration}")
 
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
@@ -106,14 +108,40 @@ def ingestion_worker(
 
     logger.debug(f"[{feed_id}] Initializing FrameReader...")
 
+    def safe_put(item: Any, timeout: float = 0.1, critical: bool = False) -> bool:
+        """Wrapper for queue.put to ensure compatibility across backends and guaranteed delivery for critical signals."""
+        start_time = time.time()
+        while True:
+            try:
+                # Try to put the item. 
+                # RedisStreamQueue.put might not support timeout, so we catch AttributeError.
+                try:
+                    central_input_queue.put(item, timeout=timeout)
+                except AttributeError:
+                    # Fallback for queues without timeout: use put_nowait
+                    central_input_queue.put_nowait(item)
+                return True
+            except (queue.Full, Exception) as e:
+                if not critical:
+                    # Non-critical frames are just dropped if the queue is full
+                    return False
+                
+                # Critical signals (start/stop) must be delivered. Retry until timeout (max 10s).
+                if (time.time() - start_time) > 10.0:
+                    logger.critical(f"[{feed_id}] FAILED to deliver critical signal after 10s: {item}")
+                    return False
+                
+                logger.warning(f"[{feed_id}] Queue full, retrying critical signal delivery...")
+                time.sleep(0.5)
+
     try:
-        central_input_queue.put(
-            (feed_id, -888, b"", {"type": "feed_started", "timestamp": time.time()}),
-            timeout=2.0,
-        )
-        logger.info(f"[{feed_id}] Sent feed_started signal")
+        # Sent feed_started signal with guaranteed delivery
+        if not safe_put((feed_id, -888, b"", {"type": "feed_started", "timestamp": time.time()}), critical=True):
+            logger.error(f"[{feed_id}] Critical failure: could not send feed_started signal")
+        else:
+            logger.info(f"[{feed_id}] Sent feed_started signal")
     except Exception as e:
-        logger.error(f"[{feed_id}] Failed to send feed_started signal: {e}")
+        logger.error(f"[{feed_id}] Unexpected error sending feed_started signal: {e}")
 
     reader = None
     max_retries = 3
@@ -197,36 +225,39 @@ def ingestion_worker(
             logger.warning(f"[{feed_id}] save_snapshot requested but no frame available")
             return
 
-        try:
-            from app.config import get_current_config
+        def save_snapshot_async():
+            try:
+                from app.config import get_current_config
 
-            cfg = get_current_config()
-            snap_dir = Path(cfg.snapshots_dir)
-            snap_dir.mkdir(parents=True, exist_ok=True)
+                cfg = get_current_config()
+                snap_dir = Path(cfg.snapshots_dir)
+                snap_dir.mkdir(parents=True, exist_ok=True)
 
-            ext = ".png" if last_frame_format == "png" else ".jpg"
-            snap_path = snap_dir / f"{feed_id}_{incident_id}{ext}"
+                ext = ".png" if last_frame_format == "png" else ".jpg"
+                snap_path = snap_dir / f"{feed_id}_{incident_id}{ext}"
 
-            with open(snap_path, "wb") as f:
-                f.write(last_frame_bytes)
+                with open(snap_path, "wb") as f:
+                    f.write(last_frame_bytes)
 
-            logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
+                logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
 
-            central_input_queue.put(
-                (
-                    feed_id,
-                    -999,
-                    b"",
-                    {
-                        "type": "snapshot_saved",
-                        "incident_id": incident_id,
-                        "snapshot_path": str(snap_path),
-                    },
-                ),
-                timeout=1.0,
-            )
-        except Exception as e:
-            logger.error(f"[{feed_id}] Error saving snapshot: {e}")
+                safe_put(
+                    (
+                        feed_id,
+                        -999,
+                        b"",
+                        {
+                            "type": "snapshot_saved",
+                            "incident_id": incident_id,
+                            "snapshot_path": str(snap_path),
+                        },
+                    ),
+                    critical=True,
+                )
+            except Exception as e:
+                logger.error(f"[{feed_id}] Async snapshot save failed: {e}")
+        # Offload disk I/O to a background thread
+        threading.Thread(target=save_snapshot_async, daemon=True).start()
 
     try:
         while True:
@@ -361,9 +392,8 @@ def ingestion_worker(
                     frame_buffer.write(shm_ref, last_frame_bytes)
 
                     try:
-                        central_input_queue.put(
-                            (feed_id, frame_index, shm_ref, time.time()), timeout=0.1
-                        )
+                        if not safe_put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1):
+                            raise queue.Full
                         metrics.frames_processed += 1
                         shm_ref = None  # Ownership transferred; guard against double-release
                     except queue.Full:
@@ -384,7 +414,7 @@ def ingestion_worker(
                     if current_time - last_fps_log >= 5.0:
                         elapsed = current_time - last_fps_log
                         fps = metrics.frames_processed / elapsed if elapsed > 0 else 0
-                        logger.info(
+                        logger.debug(
                             f"[{feed_id}] Ingestion FPS: {fps:.2f} | "
                             f"Total Frames: {metrics.frames_processed}"
                         )
@@ -417,11 +447,13 @@ def ingestion_worker(
             reader.stop()
 
     try:
-        central_input_queue.put(
+        if not safe_put(
             (feed_id, -999, b"", {"type": "feed_ended", "timestamp": time.time()}),
-            timeout=2.0,
-        )
-        logger.info(f"[{feed_id}] Sent end-of-stream signal")
+            critical=True,
+        ):
+            logger.error(f"[{feed_id}] Critical failure: could not send feed_ended signal")
+        else:
+            logger.info(f"[{feed_id}] Sent end-of-stream signal")
     except Exception as e:
         logger.error(f"[{feed_id}] Error sending EOS signal: {e}")
 

@@ -10,7 +10,7 @@ class CarClassifier:
     def __init__(self, config: Dict):
         self.config = config
         model_path_rel = config.get("vehicle_detection", {}).get("car_classifier_model_path", "backend/models/Car_Make_Model.tflite")
-        project_root = Path(config.get("project_root_dir", ""))
+        project_root = Path(config.get("project_root_dir", "."))
         self.model_path = project_root / model_path_rel
         
         if not self.model_path.exists():
@@ -20,15 +20,6 @@ class CarClassifier:
 
         try:
             import tensorflow as tf
-            # --- CRITICAL: Enable GPU Memory Growth ---
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus:
-                try:
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                    logger.info("CarClassifier: TensorFlow GPU memory growth enabled.")
-                except RuntimeError as e:
-                    logger.warning(f"CarClassifier: Memory growth must be set before GPUs have been initialized: {e}")
             
             # Check for GPU acceleration config
             use_gpu = self.config.get("performance", {}).get("gpu_acceleration", False)
@@ -36,13 +27,22 @@ class CarClassifier:
             
             if use_gpu:
                 try:
-                    # Attempt to load the GPU delegate
-                    # This library name is standard for Linux/Colab environments with TF installed
-                    gpu_delegate = tf.lite.experimental.load_delegate('libtensorflowlite_gpu_delegate.so')
+                    # Try the cross-platform 'GPU' string first (supported in modern TFLite)
+                    gpu_delegate = tf.lite.experimental.load_delegate('GPU')
                     delegates.append(gpu_delegate)
                     logger.info("CarClassifier: GPU delegate loaded successfully.")
-                except Exception as e:
-                    logger.warning(f"CarClassifier: Failed to load GPU delegate, falling back to CPU. Error: {e}")
+                except Exception:
+                    try:
+                        # Fallback to explicit library name for Linux
+                        import sys
+                        if sys.platform.startswith('linux'):
+                            gpu_delegate = tf.lite.experimental.load_delegate('libtensorflowlite_gpu_delegate.so')
+                            delegates.append(gpu_delegate)
+                            logger.info("CarClassifier: GPU delegate loaded via .so successfully.")
+                        else:
+                            logger.warning("CarClassifier: GPU delegate not supported on this platform.")
+                    except Exception as e:
+                        logger.warning(f"CarClassifier: Failed to load GPU delegate, falling back to CPU. Error: {e}")
 
             self.interpreter = tf.lite.Interpreter(
                 model_path=str(self.model_path),
@@ -58,10 +58,15 @@ class CarClassifier:
             self.input_height = self.input_shape[1]
             self.input_width = self.input_shape[2]
             
-            logger.info(f"Car classifier loaded. Input: {self.input_width}x{self.input_height}")
+            # Store quantization parameters for the input
+            self.input_dtype = self.input_details[0]['dtype']
+            if self.input_dtype == np.int8:
+                self.input_scale, self.input_zero_point = self.input_details[0]['quantization']
+            else:
+                self.input_scale, self.input_zero_point = None, None
             
-            # Labels (Placeholder - usually provided in a separate file)
-            # If we don't have them, we might need to add them later or find the source.
+            logger.info(f"Car classifier loaded. Input: {self.input_width}x{self.input_height}, Dtype: {self.input_dtype}")
+            
             self.labels = self._load_labels()
             
         except (ImportError, OSError) as e:
@@ -90,7 +95,7 @@ class CarClassifier:
         return []
 
     def classify(self, vehicle_crop: np.ndarray) -> Tuple[Optional[str], float]:
-        if self.interpreter is None or vehicle_crop.size == 0:
+        if self.interpreter is None or vehicle_crop is None or vehicle_crop.size == 0:
             return None, 0.0
             
         try:
@@ -98,14 +103,15 @@ class CarClassifier:
             img = cv2.resize(vehicle_crop, (self.input_width, self.input_height))
             
             # Handle int8 quantization
-            if self.input_details[0]['dtype'] == np.int8:
-                input_scale, input_zero_point = self.input_details[0]['quantization']
-                if input_scale == 0: input_scale = 1.0
+            if self.input_dtype == np.int8:
+                # Normalise to [0,1] first (common for TFLite models)
+                img = img.astype(np.float32) / 255.0
                 
-                # Standard TFLite quantization: q = real / scale + zero_point
-                # For models expecting 0..255 shifted to -128..127
-                img = (img.astype(np.float32) / input_scale + input_zero_point).astype(np.int8)
+                # Quantise: q = (real / scale) + zero_point
+                if self.input_scale == 0: self.input_scale = 1.0
+                img = (img / self.input_scale + self.input_zero_point).astype(np.int8)
             else:
+                # Float models usually expect [0,1]
                 img = img.astype(np.float32) / 255.0
                 
             img = np.expand_dims(img, axis=0)

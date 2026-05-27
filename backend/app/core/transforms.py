@@ -49,7 +49,11 @@ class CoordinateTransformer:
             
             # Fix #5: Detect and handle normalized image points [0, 1]
             if img_pts.max() <= 1.0 and img_pts.max() > 0:
-                resolution = calibration_cfg.get("resolution", [1920, 1080])
+                resolution = calibration_cfg.get("resolution")
+                if resolution is None:
+                    logger.error("Image points appear normalized, but no 'resolution' provided in calibration config. Aborting homography calculation.")
+                    return
+                
                 logger.warning(f"Image points appear normalized (max={img_pts.max():.3f}). Scaling by {resolution}")
                 img_pts[:, 0] *= resolution[0]
                 img_pts[:, 1] *= resolution[1]
@@ -115,6 +119,11 @@ class CoordinateTransformer:
         
         # Reshape to (N, 1, 2) as required by perspectiveTransform
         pts = points.reshape(-1, 1, 2).astype(np.float32)
+        
+        if not np.isfinite(pts).all():
+            logger.error("Input points contain NaN or Inf values. Skipping transformation.")
+            return None
+            
         transformed = cv2.perspectiveTransform(pts, self.homography_matrix)
         return transformed.reshape(-1, 2)
 
@@ -150,6 +159,11 @@ class CoordinateTransformer:
             return None
         
         pts = ground_points.reshape(-1, 1, 2).astype(np.float32)
+        
+        if not np.isfinite(pts).all():
+            logger.error("Input ground points contain NaN or Inf values. Skipping transformation.")
+            return None
+            
         transformed = cv2.perspectiveTransform(pts, self.inv_homography_matrix)
         return transformed.reshape(-1, 2)
     

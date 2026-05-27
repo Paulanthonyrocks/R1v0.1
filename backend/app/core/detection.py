@@ -32,17 +32,28 @@ class DetectionEngine:
                 else:
                     logger.info(f"Using preloaded {self.model_type} model.")
                     # Run a warm-up inference to verify the model actually works
+                    self._warmup()
                     return
             # Fix: Remove redundant device parameter from inference
             if self.model_type == "yolo":
                 self.model = YOLO(self.model_path)
                 self.model.to(self.device)
                 logger.info(f"YOLO model loaded on {self.device}")
+                self._warmup()
             else:
                 raise ValueError(f"Unsupported model type: {self.model_type}. Only 'yolo' is currently supported.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
+    def _warmup(self):
+        """Performs a dummy inference to warm up the model and GPU."""
+        try:
+            dummy_img = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
+            self.model(dummy_img, imgsz=self.imgsz, verbose=False)
+            logger.info("Model warm-up inference completed successfully.")
+        except Exception as e:
+            logger.warning(f"Model warm-up failed: {e}")
 
     def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
         """Creates an ROI mask."""
@@ -90,12 +101,14 @@ class DetectionEngine:
         if self.model is None:
             raise RuntimeError("Model not loaded")
 
-        # Pre-compute scale factors once per frame
+        # Pre-compute scale factors only if ROI mask exists
         if self.roi_mask is not None and frame is not None:
             self.scale_factors = (
                 self.roi_mask.shape[0] / frame.shape[0],  # scale_y
                 self.roi_mask.shape[1] / frame.shape[1]  # scale_x
             )
+        else:
+            self.scale_factors = None
         
         # Fix: Add exception handling around model inference
         try:
@@ -113,22 +126,26 @@ class DetectionEngine:
                 conf = float(box.conf[0])
                 
                 # Fix: Only include vehicle classes (car, motorcycle, bus, truck, etc.)
-                # Based on COCO dataset class IDs for vehicles
-                if cls in [2, 3, 5, 7]:  # car, motorcycle, bus, truck
-                    # Scale coordinates to match ROI mask resolution
-                    scale_x = self.scale_factors[1] if self.scale_factors else 1.0
-                    scale_y = self.scale_factors[0] if self.scale_factors else 1.0
+                # Read from config to allow adaptation without code changes
+                vehicle_class_ids = self.config.get("vehicle_detection", {}).get("vehicle_class_ids", [2, 3, 5, 7])
+                if cls in vehicle_class_ids:
+                    # Use original bbox for the result
+                    orig_bbox = (b[0], b[1], b[2], b[3])
                     
-                    # Fix: Return scaled bbox after ROI filtering
-                    scaled_bbox = (
-                        b[0] * scale_x,
-                        b[1] * scale_y,
-                        b[2] * scale_x,
-                        b[3] * scale_y
-                    )
+                    # Scale coordinates only for ROI check
+                    if self.scale_factors:
+                        scale_y, scale_x = self.scale_factors
+                        scaled_bbox = (
+                            b[0] * scale_x,
+                            b[1] * scale_y,
+                            b[2] * scale_x,
+                            b[3] * scale_y
+                        )
+                    else:
+                        scaled_bbox = orig_bbox
                     
                     if self.is_in_roi(scaled_bbox):
-                        # Fix: Return scaled bbox and explicit None for embedding
-                        detections.append((scaled_bbox, cls, conf, None))
+                        # Return original bbox and explicit None for embedding
+                        detections.append((orig_bbox, cls, conf, None))
         
         return detections

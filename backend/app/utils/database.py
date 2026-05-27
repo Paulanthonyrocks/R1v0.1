@@ -867,6 +867,69 @@ class DatabaseManager:
                 raise DatabaseError(f"Failed save vehicle: {e}") from e
 
     @db_write_retry_decorator
+    def upsert_identified_vehicles_batch(self, vehicles_list: List[Dict]) -> int:
+        """Upserts a batch of vehicle identification records based on license plate."""
+        if not vehicles_list:
+            return 0
+
+        sql = """
+        INSERT INTO identified_vehicles (
+            license_plate, appearance_id, vehicle_type, make, model, color, 
+            first_seen, last_seen, reid_gallery, flags, total_detections
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(license_plate) DO UPDATE SET
+            appearance_id = COALESCE(excluded.appearance_id, identified_vehicles.appearance_id),
+            vehicle_type = COALESCE(excluded.vehicle_type, identified_vehicles.vehicle_type),
+            make = COALESCE(excluded.make, identified_vehicles.make),
+            model = COALESCE(excluded.model, identified_vehicles.model),
+            color = COALESCE(excluded.color, identified_vehicles.color),
+            reid_gallery = COALESCE(excluded.reid_gallery, identified_vehicles.reid_gallery),
+            last_seen = excluded.last_seen,
+            total_detections = identified_vehicles.total_detections + 1,
+            flags = COALESCE(excluded.flags, identified_vehicles.flags)
+        """
+        
+        batch_params = []
+        for vd in vehicles_list:
+            lp = vd.get("license_plate")
+            if not lp or lp == "Unknown":
+                continue
+                
+            gallery_blob = None
+            gallery = vd.get("embedding_gallery")
+            if gallery:
+                try:
+                    import numpy as np
+                    gallery_blob = np.array(gallery, dtype=np.float32).tobytes()
+                except Exception as e:
+                    logger.warning(f"Failed to serialize ReID gallery for {lp}: {e}")
+
+            now = vd.get("timestamp", time.time())
+            params = (
+                lp,
+                vd.get("appearance_id") or vd.get("global_vehicle_id"),
+                vd.get("vehicle_type"),
+                vd.get("make"),
+                vd.get("model"),
+                vd.get("color"),
+                now, # first_seen
+                now, # last_seen
+                gallery_blob,
+                vd.get("flags")
+            )
+            batch_params.append(params)
+
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, batch_params)
+                    conn.commit()
+            return len(batch_params)
+        except Exception as e:
+            logger.error(f"Error batch upserting identified vehicles: {e}")
+            raise DatabaseError(f"Batch upsert failed: {e}") from e
+
+    @db_write_retry_decorator
     def upsert_identified_vehicle(self, vehicle_data: Dict) -> bool:
         """Upserts a vehicle identification record based on license plate."""
         sql = """

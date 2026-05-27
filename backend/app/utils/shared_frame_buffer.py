@@ -219,7 +219,7 @@ class SharedFrameBuffer:
         except Exception as e:
             logger.debug(f"Failed to update heartbeat for {name}: {e}")
             
-        return buf[self.HEADER_SIZE : self.HEADER_SIZE + size], (w, h, c)
+        return bytes(buf[self.HEADER_SIZE : self.HEADER_SIZE + size]), (w, h, c)
 
     def release(self, name: str):
         if self._free_pool is None:

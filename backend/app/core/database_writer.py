@@ -1,6 +1,7 @@
 import logging
 import queue
 import signal
+import threading
 import time
 from collections import Counter
 from typing import Any, Dict, List
@@ -45,9 +46,11 @@ def database_writer_process(
 
     # --- Issue #1: Register the signal handler ---
     signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
     db_manager = None
     consecutive_failures = 0
+    circuit_trip_count = 0
     last_prune_time = 0.0  # Set after DB connection (Issue #14)
 
     # --- Issue #6: Retry DB connection on startup with backoff ---
@@ -71,6 +74,23 @@ def database_writer_process(
 
     # --- Issue #14: Start prune timer AFTER connection is confirmed ---
     last_prune_time = time.time()
+
+    def prune_worker():
+        """Background thread to prune old data without blocking the main loop."""
+        while not stop_event.is_set():
+            try:
+                # Prune every hour
+                time.sleep(3600)
+                if stop_event.is_set():
+                    break
+                pruned = db_manager.prune_old_data(retention_days=retention_days)
+                if pruned:
+                    logger.info(f"Background prune: removed {pruned} old records.")
+            except Exception as e:
+                logger.error(f"Background prune failed: {e}")
+
+    prune_thread = threading.Thread(target=prune_worker, daemon=True)
+    prune_thread.start()
 
     try:
         while not stop_event.is_set():
@@ -167,14 +187,14 @@ def database_writer_process(
 
                 # Identified vehicles
                 if identified_batch:
-                    for iv in identified_batch:
-                        try:
-                            db_manager.upsert_identified_vehicle(iv)
-                        except (DatabaseError, Exception) as e:
-                            logger.error(
-                                f"Failed to upsert identified vehicle: {e}"
-                            )
-                            failed_items.append(iv)
+                    try:
+                        rows = db_manager.upsert_identified_vehicles_batch(identified_batch)
+                        logger.debug(f"Upserted {rows} identified vehicles to DB.")
+                    except (DatabaseError, Exception) as e:
+                        logger.error(
+                            f"Failed to upsert {len(identified_batch)} identified vehicles: {e}"
+                        )
+                        failed_items.extend(identified_batch)
 
                 # --- Re-enqueue failed items (Issue #3 fix) ---
                 if failed_items:
@@ -196,26 +216,19 @@ def database_writer_process(
                 if failed_items:
                     consecutive_failures += 1
                     if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                        circuit_trip_count += 1
+                        # Progressive backoff: 30s, 60s, 120s... up to 300s (5 mins)
+                        pause_duration = min(30 * (2 ** (circuit_trip_count - 1)), 300)
                         logger.critical(
-                            f"Circuit-breaker tripped after "
+                            f"Circuit-breaker tripped (trip #{circuit_trip_count}) after "
                             f"{consecutive_failures} consecutive failures. "
-                            f"Pausing 30s before retry."
+                            f"Pausing {pause_duration}s before retry."
                         )
-                        time.sleep(30)
-                        consecutive_failures = 0  # Reset after pause
+                        time.sleep(pause_duration)
+                        consecutive_failures = 0  # Reset consecutive failures after pause
                 else:
                     consecutive_failures = 0
-
-                # --- Periodic pruning (Issue #8) ---
-                if time.time() - last_prune_time > 3600:
-                    try:
-                        pruned = db_manager.prune_old_data(
-                            retention_days=retention_days
-                        )
-                        logger.info(f"Pruned {pruned} old records from DB.")
-                    except Exception as e:
-                        logger.error(f"Prune failed: {e}")
-                    last_prune_time = time.time()
+                    circuit_trip_count = 0  # Reset trip count on success
 
                 # --- Issue #15: Operational metrics ---
                 total = len(valid_items)
@@ -258,7 +271,11 @@ def database_writer_process(
                             db_manager.upsert_identified_vehicle(item)
                         drained += 1
                     except Exception as e:
-                        logger.error(f"Failed to drain item: {e}")
+                        logger.error(f"Failed to drain item: {e}. Attempting re-enqueue...")
+                        try:
+                            db_queue.put_nowait(item)
+                        except Exception as put_e:
+                            logger.critical(f"Critical data loss: could not re-enqueue item during drain: {put_e}. Item: {item!r}")
                 else:
                     logger.warning(f"Skipping malformed drain item: {item!r}")
             except queue.Empty:

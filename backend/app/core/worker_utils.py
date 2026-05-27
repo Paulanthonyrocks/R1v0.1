@@ -12,25 +12,28 @@ from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Define as a constant Set for faster O(1) lookups
+VALID_STATUSES = {"active", "predicting"}
+
 
 from collections import deque
 
 class WorkerMetrics:
     """Tracks performance metrics for worker processes."""
     
-    def __init__(self, feed_id: str):
+    def __init__(self, feed_id: str, window_size: float = 10.0):
         self.feed_id = feed_id
         self.frames_processed = 0
         self.frames_dropped = 0
         self.errors = 0
-        self.start_time = time.time()
-        # Rolling window for current FPS (last 10 seconds)
+        self.start_time = time.monotonic()
+        # Rolling window for current FPS
         self._frame_timestamps = deque()
-        self._window_size = 10.0
+        self._window_size = window_size
     
     def mark_frame(self):
         """Call this every time a frame is successfully processed."""
-        now = time.time()
+        now = time.monotonic()
         self.frames_processed += 1
         self._frame_timestamps.append(now)
         # Prune timestamps older than the window size
@@ -38,9 +41,8 @@ class WorkerMetrics:
             self._frame_timestamps.popleft()
 
     def to_dict(self) -> Dict[str, Any]:
-        uptime = time.time() - self.start_time
-        # Calculate current rolling FPS
-        now = time.time()
+        now = time.monotonic()
+        uptime = now - self.start_time
         # Prune again just in case it's called without a frame recently
         while self._frame_timestamps and self._frame_timestamps[0] < now - self._window_size:
             self._frame_timestamps.popleft()
@@ -62,7 +64,7 @@ class WorkerMetrics:
         self.frames_processed = 0
         self.frames_dropped = 0
         self.errors = 0
-        self.start_time = time.time()
+        self.start_time = time.monotonic()
         self._frame_timestamps.clear()
 
 
@@ -82,7 +84,7 @@ def make_serializable(obj: Any) -> Any:
 
 
 def serialize_tracked_vehicles(
-    tracked_vehicles: Dict[str, Dict], 
+    tracked_vehicles: Dict[str, Dict[str, Any]], 
     scale_x: float = 1.0, 
     scale_y: float = 1.0,
     vehicle_type_map: Optional[Dict[int, str]] = None
@@ -103,6 +105,9 @@ def serialize_tracked_vehicles(
     v_map = vehicle_type_map or {}
     
     for vehicle_id, data in tracked_vehicles.items():
+        if data.get("status") not in VALID_STATUSES:
+            continue
+
         try:
             c_id = data.get("class_id", -1)
             c_name = v_map.get(c_id, "unknown")
@@ -122,24 +127,25 @@ def serialize_tracked_vehicles(
             serialized_list.append({
                 "vehicle_id": str(vehicle_id),
                 "bbox": [make_serializable(x) for x in scaled_bbox] if scaled_bbox else [],
-                "speed": make_serializable(data.get("speed", 0)),
+                "speed": make_serializable(data.get("speed", 0.0)),
                 "license_plate": str(data.get("license_plate", "Unknown")),
                 "class_id": int(c_id),
                 "class_name": c_name,
                 "behavior": str(data.get("behavior", "unknown")),
-                "confidence": make_serializable(data.get("confidence", 0)),
+                "confidence": make_serializable(data.get("confidence", 0.0)),
                 "is_occluded": bool(data.get("is_occluded", False)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
-                "vx": make_serializable(data.get("vx", 0)),
-                "vy": make_serializable(data.get("vy", 0)),
+                "vx": make_serializable(data.get("vx", 0.0)),
+                "vy": make_serializable(data.get("vy", 0.0)),
                 "ground_coordinates": [make_serializable(x) for x in data.get("ground_coordinates")] if "ground_coordinates" in data else None,
                 "car_model": data.get("car_model"),
-                "car_model_confidence": make_serializable(data.get("car_model_confidence", 0)),
+                "car_model_confidence": make_serializable(data.get("car_model_confidence", 0.0)),
                 "gallery_size": make_serializable(data.get("gallery_size", 0)),
+                "embedding": make_serializable(data.get("embedding")),
             })
         except Exception as e:
-            logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}")
+            logger.warning(f"Failed to serialize vehicle {vehicle_id}: {e}", exc_info=True)
             serialized_list.append({"vehicle_id": str(vehicle_id), "serialization_error": True})
             continue
     

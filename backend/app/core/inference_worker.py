@@ -23,16 +23,6 @@ from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
 logger = logging.getLogger("Inference")
 
 
-def _serialize_tracked_vehicles_with_map(
-    tracked_vehicles: Dict[str, Dict],
-    scale_x: float = 1.0,
-    scale_y: float = 1.0,
-) -> List[Dict[str, Any]]:
-    """Wrapper that uses CoreModule's vehicle_type_map."""
-    v_map = CoreModule.vehicle_type_map if CoreModule is not None else {}
-    return serialize_tracked_vehicles(tracked_vehicles, scale_x, scale_y, v_map)
-
-
 def _extract_rois(
     frame: np.ndarray,
     tracked_vehicles: List[Dict[str, Any]],
@@ -264,10 +254,11 @@ def inference_worker(
                 time.sleep(0.01)
                 continue
 
-            logger.info(f"[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue")
+            logger.debug(f"[Worker {worker_id}] Received {len(batch_tasks)} tasks from inference queue")
 
             # Fill batch up to batch_size within timeout
             start_wait = time.time()
+            skip_threshold = config.get("performance", {}).get("skip_threshold", 200)
             while len(batch_tasks) < batch_size and (time.time() - start_wait < inference_timeout):
                 for slot_id in slots:
                     try:
@@ -278,7 +269,7 @@ def inference_worker(
                         msg_id, task = _unpack_queue_result(res)
 
                         # Smart skip: drop non-control frames under heavy queue pressure
-                        if q_depth > 200 and isinstance(task, (tuple, list)) and len(task) >= 4:
+                        if q_depth > skip_threshold and isinstance(task, (tuple, list)) and len(task) >= 4:
                             t_feed_id, t_frame_idx = task[0], task[1]
                             if t_frame_idx not in (-888, -999):
                                 if t_feed_id in core_modules and getattr(
@@ -348,7 +339,7 @@ def inference_worker(
                                 slot_q_ref.ack(msg_id)
                             continue
                     else:
-                        frame_bytes, dims = shm_ref, (0, 0, 0)
+                        raise RuntimeError(f"[Worker {worker_id}] Frame buffer is missing but SHM reference {shm_ref} was provided.")
 
                     timestamp = extra_payload if isinstance(extra_payload, (int, float)) else time.time()
 
@@ -497,7 +488,9 @@ def inference_worker(
                     monitor.update_vehicles(vis_tracks)
                     metrics_obj.frames_processed += 1
 
-                    serialized_v = _serialize_tracked_vehicles_with_map(vis_tracks)
+                    serialized_v = serialize_tracked_vehicles(
+                        vis_tracks, vehicle_type_map=CoreModule.vehicle_type_map
+                    )
 
                     extra = {}
                     v_proc_cfg = config.get("video_processing", {})
@@ -516,7 +509,7 @@ def inference_worker(
                             (meta["feed_id"], f_idx, meta["shm_ref"], metrics_obj.to_dict(), serialized_v, extra)
                         )
                         sent_shm_refs.add(meta["shm_ref"])
-                        logger.info(
+                        logger.debug(
                             f"[Worker {worker_id}] Pushed result for {meta['feed_id']} "
                             f"frame {f_idx} to central_output"
                         )

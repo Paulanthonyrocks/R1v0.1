@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 
-from app.dependency_injection import get_current_active_user, get_tss
+from app.dependency_injection import get_current_active_user, get_traffic_signal_service
 from app.services.traffic_signal_service import (
     TrafficSignalService,
     TrafficSignalControlError,
@@ -14,7 +14,7 @@ router = APIRouter()
 @router.get("/signals")
 async def get_signals(
     current_user: dict = Depends(get_current_active_user),
-    tss: TrafficSignalService = Depends(get_tss),
+    tss: TrafficSignalService = Depends(get_traffic_signal_service),
 ):
     """Endpoint to retrieve the list of traffic signals. Requires authentication."""
 
@@ -39,7 +39,7 @@ async def set_signal_phase(
     signal_id: str,
     phase: str,
     current_user: dict = Depends(get_current_active_user),
-    tss: TrafficSignalService = Depends(get_tss),
+    tss: TrafficSignalService = Depends(get_traffic_signal_service),
 ):
     """Endpoint to update the phase of a traffic signal. Requires authentication."""
     valid_phases = [

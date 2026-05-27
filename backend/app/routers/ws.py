@@ -1,10 +1,11 @@
 import logging
 import json
 import time
+import asyncio
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager, get_rate_limiter_manager
 from app.services.feed_manager import FeedManager
-from app.websocket.connection_manager import ConnectionManager
+from app.websocket.connection_manager import ConnectionManager, MessagePriority
 from app.utils.auth_utils import verify_firebase_token
 from app.dependency_injection import is_admin as is_admin_check
 from app.models.websocket import (
@@ -28,7 +29,7 @@ router = APIRouter()
 
 async def message_receiver(
     websocket: WebSocket,
-    client_id: str,
+    initial_id: str,
     connection_manager: ConnectionManager,
     feed_manager: FeedManager,
     rate_limiter: RateLimiterManager
@@ -36,14 +37,87 @@ async def message_receiver(
     """
     Main loop for receiving and processing messages from a connected client.
     """
+    is_authenticated = False
+    client_id = initial_id
+    
     try:
+        # --- Initial Authentication Phase ---
+        try:
+            message_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            message_dict = json.loads(message_text)
+            message = WebSocketMessage.model_validate(message_dict)
+            
+            if message.type != WebSocketMessageTypeEnum.AUTHENTICATE:
+                # ... (error handling)
+                await websocket.send_text(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                        data=AuthFailureData(message="First message must be AUTHENTICATE").model_dump()
+                    ).model_dump_json()
+                )
+                await websocket.close(code=1008)
+                return
+
+            auth_data = AuthenticateData(**(message.data or {}))
+            decoded_token = await verify_firebase_token(auth_data.token)
+            username = decoded_token.get("uid") or decoded_token.get("sub")
+            if not username:
+                raise Exception("Invalid token claims: missing uid/sub")
+            
+            user = User(
+                username=username,
+                email=decoded_token.get("email", ""),
+                full_name=decoded_token.get("name", username),
+                role=decoded_token.get("role", "user"),
+            )
+
+            # Generate server-assigned client_id to prevent hijacking
+            import uuid
+            assigned_id = f"client_{uuid.uuid4().hex[:12]}"
+            
+            # If we had a temporary ID, we should ensure it's not used as the primary key in the manager
+            # though ConnectionManager.connect usually just adds/replaces.
+            await connection_manager.connect(websocket, assigned_id, user.username, user.role)
+            client_id = assigned_id
+            
+            # Send AUTH_SUCCESS with the assigned client_id
+            await websocket.send_text(
+                WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                    data=AuthSuccessData(client_id=assigned_id).model_dump()
+                ).model_dump_json()
+            )
+            
+            is_authenticated = True
+            logger.info(f"Client assigned {client_id} authenticated as {user.username}")
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Authentication timeout for {initial_id}. Disconnecting.")
+            await websocket.close(code=1008, reason="Auth timeout")
+            return
+        except Exception as e:
+            logger.warning(f"Initial authentication failed for {initial_id}: {e}")
+            await websocket.send_text(
+                WebSocketMessage(
+                    type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                    data=AuthFailureData(message=str(e)).model_dump()
+                ).model_dump_json()
+            )
+            await websocket.close(code=1008)
+            return
+
+        # --- Main Message Loop ---
         async for message_text in websocket.iter_text():
+            # 0. Inbound Size Limit (Security)
+            if len(message_text) > 64_000:
+                logger.warning(f"Message from {client_id} exceeds size limit ({len(message_text)} bytes). Dropping.")
+                continue
+
             try:
                 # 1. Parse raw JSON
                 message_dict = json.loads(message_text)
                 
                 # 2. Validate basic structure using Pydantic
-                # Using construct/dict access for speed if needed, but model_validate is safer
                 try:
                     message = WebSocketMessage.model_validate(message_dict)
                 except Exception as e:
@@ -83,11 +157,27 @@ async def message_receiver(
                     pass
 
                 elif msg_type == WebSocketMessageTypeEnum.AUTHENTICATE:
+                    # Auth Rate Limiting
+                    if not await rate_limiter.is_allowed(f"auth_{client_id}"):
+                        logger.warning(f"Auth rate limit exceeded for {client_id}")
+                        await connection_manager.send_personal_message(
+                            WebSocketMessage(
+                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                data={"message": "Authentication requests too frequent. Please wait."}
+                            ).model_dump_json(),
+                            client_id,
+                            priority=MessagePriority.HIGH
+                        )
+                        continue
+
                     try:
                         auth_data = AuthenticateData(**data)
-                        await verify_firebase_token(auth_data.token)
-                        # If verification succeeds, we assume the user is still valid.
-                        # We could update the user_id mapping if the user changed, but typically it's a refresh.
+                        decoded_token = await verify_firebase_token(auth_data.token)
+                        
+                        # Re-verify and update the user role upon re-authentication
+                        new_role = decoded_token.get("role", "user")
+                        connection_manager.update_user_role(client_id, new_role)
+                        
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
@@ -95,7 +185,7 @@ async def message_receiver(
                             ).model_dump_json(),
                             client_id
                         )
-                        logger.info(f"Client {client_id} re-authenticated successfully.")
+                        logger.info(f"Client {client_id} re-authenticated successfully. Role updated to {new_role}.")
                     except Exception as e:
                         logger.warning(f"Client {client_id} failed re-authentication: {e}")
                         await connection_manager.send_personal_message(
@@ -105,10 +195,6 @@ async def message_receiver(
                             ).model_dump_json(),
                             client_id
                         )
-                        # Disconnect if authentication fails
-                        # The client should handle the AUTH_FAILURE and maybe redirect to login
-                        # but we should close the socket from our end to be safe.
-                        # However, we'll let the client close it or the next ping fail if context is lost.
 
                 elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                     statuses = await feed_manager.get_all_statuses()
@@ -118,7 +204,6 @@ async def message_receiver(
                     )
                     # CRITICAL: Use HIGH priority so initial statuses are never dropped
                     # when the client queue is loaded with video frames (LOW priority).
-                    from app.websocket.connection_manager import MessagePriority
                     await connection_manager.send_personal_message(response.model_dump_json(), client_id, priority=MessagePriority.HIGH)
 
                 elif msg_type in [
@@ -130,7 +215,6 @@ async def message_receiver(
                     # 3a. Rate Limiting for Control Messages
                     if not await rate_limiter.is_allowed(client_id):
                         logger.warning(f"Rate limit exceeded for control messages from {client_id}")
-                        from app.websocket.connection_manager import MessagePriority
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
@@ -145,7 +229,6 @@ async def message_receiver(
                     user_role = connection_manager.get_user_role(client_id)
                     if user_role != "admin":
                         logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
-                        from app.websocket.connection_manager import MessagePriority
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
@@ -160,23 +243,22 @@ async def message_receiver(
                     try:
                         if msg_type == WebSocketMessageTypeEnum.START_FEED:
                             feed_id_data = FeedIdData(**data)
-                            await feed_manager.start_feed(feed_id_data.feed_id)
+                            asyncio.create_task(feed_manager.start_feed(feed_id_data.feed_id))
                         elif msg_type == WebSocketMessageTypeEnum.STOP_FEED:
                             feed_id_data = FeedIdData(**data)
-                            await feed_manager.stop_feed(feed_id_data.feed_id)
+                            asyncio.create_task(feed_manager.stop_feed(feed_id_data.feed_id))
                         elif msg_type == WebSocketMessageTypeEnum.RESTART_FEED:
                             feed_id_data = FeedIdData(**data)
-                            await feed_manager.restart_feed(feed_id_data.feed_id)
+                            asyncio.create_task(feed_manager.restart_feed(feed_id_data.feed_id))
                         elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
                             update_data = UpdateFeedConfigData(**data)
-                            await feed_manager.update_feed_config(update_data.feed_id, update_data.updates)
+                            asyncio.create_task(feed_manager.update_feed_config(update_data.feed_id, update_data.updates))
                     except Exception as e:
-                        logger.error(f"Error processing {msg_type}: {e}")
-                        from app.websocket.connection_manager import MessagePriority
+                        logger.error(f"Error scheduling {msg_type}: {e}")
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": f"Operation failed: {str(e)}"}
+                                data={"message": f"Operation scheduling failed: {str(e)}"}
                             ).model_dump_json(),
                             client_id,
                             priority=MessagePriority.HIGH
@@ -190,7 +272,7 @@ async def message_receiver(
                         async def on_subscribe(cid: str):
                             if sub_data.topic == 'kpi':
                                 logger.info(f"Triggering immediate KPI push for client {cid} upon subscription")
-                                await feed_manager._broadcast_kpi_update()
+                                await feed_manager.trigger_kpi_push()
                         
                         await connection_manager.subscribe_to_topic(
                             client_id, 
@@ -231,84 +313,38 @@ async def message_receiver(
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
 
-@router.websocket("/ws/{client_id}")
+@router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
     rate_limiter: RateLimiterManager = Depends(get_rate_limiter_manager),
-    token: str | None = Query(None),
 ):
     """
-    WebSocket endpoint that accepts connection immediately to handle auth errors gracefully.
+    WebSocket endpoint. Authentication must be performed via an AUTHENTICATE message as the first frame.
+    Server assigns the client_id after successful authentication.
     """
     await websocket.accept()
 
+    # Temporary ID for tracking before authentication
+    temp_client_id = f"temp_{id(websocket)}"
+
     try:
-        if not token:
-            logger.warning(f"WebSocket connection attempt from {client_id} failed: Token is missing.")
-            raise Exception("Token is missing")
-
         try:
-            decoded_token = await verify_firebase_token(token)
-            username = decoded_token.get("uid") or decoded_token.get("sub")
-            if not username:
-                logger.warning(f"WebSocket auth failed for {client_id}: Token valid but missing uid/sub claims.")
-                raise Exception("Invalid token claims: missing uid/sub")
-            
-            user = User(
-                username=username,
-                email=decoded_token.get("email", ""),
-                full_name=decoded_token.get("name", username),
-                role=decoded_token.get("role", "user"),
-            )
-        except Exception as e:
-            logger.warning(f"WebSocket auth failed for {client_id}: {e}")
-            # Send explicit AUTH_FAILURE message before closing
-            await websocket.send_text(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                    data=AuthFailureData(message=str(e)).model_dump()
-                ).model_dump_json()
-            )
-            await websocket.close(code=1008, reason="Authentication failed")
-            return
-
-        # Proceed with connection
-        await connection_manager.connect(websocket, client_id, user.username, user.role)
-
-        try:
-            # Heartbeat Jumpstart: Send an immediate message to the client to prevent 
-            # cloud proxy termination (common in cloud workstation tunnels).
-            # CRITICAL: Send directly (not via queue) to guarantee immediate wire-time.
-            jumpstart_msg = WebSocketMessage(
-                type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
-                data=AuthSuccessData().model_dump()
-            )
-            try:
-                await websocket.send_text(jumpstart_msg.model_dump_json())
-                logger.info(f"Jumpstart (direct) sent to {client_id}")
-            except Exception as e:
-                logger.warning(f"Failed to send jumpstart to {client_id}: {e}. Client may have disconnected immediately.")
-                # If we can't even send the jumpstart, the connection is dead on arrival.
-                # Don't bother entering the receiver loop, just disconnect cleanly.
-                await connection_manager.disconnect(client_id, websocket)
-                return
-
-            # Run the receiver loop directly.
-            # The ConnectionManager handles keepalives (ping/pong) independently.
-            await message_receiver(websocket, client_id, connection_manager, feed_manager, rate_limiter)
+            # Run the receiver loop.
+            await message_receiver(websocket, temp_client_id, connection_manager, feed_manager, rate_limiter)
 
         except Exception as e:
-            logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
+            logger.error(f"Critical WebSocket error for {temp_client_id}: {e}", exc_info=True)
         finally:
-            await connection_manager.disconnect(client_id, websocket)
+            # Disconnect using the actual ID if it was assigned, otherwise the temp ID
+            # Note: message_receiver updates the connection_manager mapping.
+            # We must ensure we disconnect the correct session.
+            await connection_manager.disconnect(temp_client_id, websocket)
 
     except Exception as e:
-        # Catch-all for connection setup errors
-        logger.error(f"Error in websocket_endpoint for {client_id}: {e}", exc_info=True)
+        logger.error(f"Error in websocket_endpoint for {temp_client_id}: {e}", exc_info=True)
         try:
-            await websocket.close(code=1011) # Internal Error
+            await websocket.close(code=1011)
         except:
             pass

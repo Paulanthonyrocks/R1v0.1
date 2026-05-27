@@ -40,7 +40,6 @@ from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitConfig
 from app.middleware.security_middleware import SecurityHeadersMiddleware
 from app.services.audit_logger import AuditLogger
-from app.database import get_database_manager
 
 # --- Routers ---
 from app.routers import (
@@ -66,37 +65,38 @@ def to_dict(obj):
 
 # --- Configuration Loading ---
 
-# Wrap in MainProcess guard to prevent recursive execution during multiprocessing spawn
-loaded_config = None
-container = None
-cfg_dict = None
+config_path = BASE_DIR / "configs" / "config.yaml"
+if not config_path.exists():
+    config_path = Path("/app/configs/config.yaml")
 
-if multiprocessing.current_process().name == 'MainProcess':
-    config_path = BASE_DIR / "configs" / "config.yaml"
-    if not config_path.exists():
-        config_path = Path("/app/configs/config.yaml")
-
-    try:
-        loaded_config = initialize_config(str(config_path))
-        container = get_container()
-        container.set_config(loaded_config)
-        cfg_dict = to_dict(loaded_config)
-        logger.info(f"Configuration loaded from {config_path}")
-    except Exception as e:
-        logger.critical(f"Failed to load configuration at startup: {e}")
-        raise RuntimeError(f"Config Load Failed: {e}")
+try:
+    loaded_config = initialize_config(str(config_path))
+    container = get_container()
+    container.set_config(loaded_config)
+    cfg_dict = to_dict(loaded_config)
+    logger.info(f"Configuration loaded from {config_path}")
+except Exception as e:
+    logger.critical(f"Failed to load configuration at startup: {e}")
+    raise RuntimeError(f"Config Load Failed: {e}")
 
 # --- Context Variables ---
 request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
 
 # --- Background Task Management ---
-background_tasks = set()
+background_tasks: List[asyncio.Task] = []
+_tasks_lock = asyncio.Lock()
 
-def create_background_task(coro):
-    task = asyncio.create_task(coro)
-    background_tasks.add(task)
-    task.add_done_callback(background_tasks.discard)
-    return task
+async def create_background_task(coro):
+    async with _tasks_lock:
+        task = asyncio.create_task(coro)
+        background_tasks.append(task)
+        task.add_done_callback(lambda t: asyncio.create_task(_discard_task(t)))
+        return task
+
+async def _discard_task(task):
+    async with _tasks_lock:
+        if task in background_tasks:
+            background_tasks.remove(task)
 
 # --- Database Migrations ---
 async def run_migrations():
@@ -109,13 +109,11 @@ def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
     allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
     
-    # Always allow local development origins and the specific cloud workstation
+    # Local development origins
     origins = [
         "http://localhost",
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://3000-firebase-r1v01-1774108349517.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev",
-        "https://r1-backend-stream.loca.lt",
     ]
     
     if env != "development":
@@ -127,10 +125,17 @@ def setup_cors(app: FastAPI, config: dict):
     
     logger.info(f"CORS origins configured: {origins}")
 
+    # Use a restrictive regex or disable it in production
+    allow_origin_regex = None
+    if env == "development":
+        # Only allow specific patterns if absolutely necessary for dev tunnels
+        # In a real production scenario, this should be None or very specific
+        allow_origin_regex = r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev"
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_origin_regex=r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev",
+        allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID"],
@@ -232,13 +237,13 @@ async def lifespan(app: FastAPI):
             scheduler = fm.get_prediction_scheduler()
             if scheduler: app.state.prediction_scheduler = scheduler
 
-            p_cfg = loaded_config.get("prediction_scheduler", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "prediction_scheduler", {})
-            p_enabled = p_cfg.get("enabled", True) if isinstance(p_cfg, dict) else getattr(p_cfg, "enabled", True)
+            p_cfg = cfg_dict.get("prediction_scheduler", {})
+            p_enabled = p_cfg.get("enabled", True)
 
             # Start processing if configured, as it launches the inference pool
-            auto_start = loaded_config.get("auto_start_processing", False) if isinstance(loaded_config, dict) else getattr(loaded_config, "auto_start_processing", False)
+            auto_start = cfg_dict.get("auto_start_processing", False)
             if auto_start:
-                create_background_task(fm.start_processing())
+                await create_background_task(fm.start_processing())
                 logger.info("Feed Manager started processing automatically (background task).")
 
             if p_enabled:
@@ -257,18 +262,18 @@ async def lifespan(app: FastAPI):
         app.state.health_service = health_service
         
         # 5.2 File Watcher
-        fw_cfg = loaded_config.get("file_watcher", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "file_watcher", {})
-        if fw_cfg.get("enabled", False) if isinstance(fw_cfg, dict) else getattr(fw_cfg, "enabled", False):
-            watch_dir = Path(fw_cfg.get("watch_directory") if isinstance(fw_cfg, dict) else fw_cfg.watch_directory)
+        fw_cfg = cfg_dict.get("file_watcher", {})
+        if fw_cfg.get("enabled", False):
+            watch_dir = Path(fw_cfg.get("watch_directory"))
             if not watch_dir.is_absolute(): watch_dir = BASE_DIR.parent / watch_dir
             watch_dir.mkdir(parents=True, exist_ok=True)
 
             def on_new_video(p_str):
-                create_background_task(fm.add_and_start_feed(
+                asyncio.create_task(create_background_task(fm.add_and_start_feed(
                     source=p_str, is_looped=True, name_hint=Path(p_str).name,
                     latitude=34.05 + (random.random()-0.5)*0.01, 
                     longitude=-118.24 + (random.random()-0.5)*0.01
-                ))
+                )))
 
             watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
             watcher.start()
@@ -280,22 +285,22 @@ async def lifespan(app: FastAPI):
                     on_new_video(str(vf))
 
         # 5.3 Post Startup Processing (Sample Feeds) - Registration
-        psp_cfg = loaded_config.get("post_startup_processing", {}) if isinstance(loaded_config, dict) else getattr(loaded_config, "post_startup_processing", {})
-        psp_enabled = psp_cfg.get("enabled", False) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "enabled", False)
-        sample_feeds = psp_cfg.get("sample_feeds", []) if isinstance(psp_cfg, dict) else getattr(psp_cfg, "sample_feeds", [])
+        psp_cfg = cfg_dict.get("post_startup_processing", {})
+        psp_enabled = psp_cfg.get("enabled", False)
+        sample_feeds = psp_cfg.get("sample_feeds", [])
         
         if sample_feeds:
             async def _register_sample_feeds():
                 logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
                 for feed in sample_feeds:
-                    f_path = feed.get("path") if isinstance(feed, dict) else getattr(feed, "path")
+                    f_path = feed.get("path")
                     try:
                         await fm.add_and_start_feed(
                             source=f_path,
-                            is_looped=feed.get("is_looped", True) if isinstance(feed, dict) else getattr(feed, "is_looped", True),
-                            latitude=feed.get("latitude") if isinstance(feed, dict) else getattr(feed, "latitude"),
-                            longitude=feed.get("longitude") if isinstance(feed, dict) else getattr(feed, "longitude"),
-                            name_hint=feed.get("name") if isinstance(feed, dict) else getattr(feed, "name", Path(f_path).name),
+                            is_looped=feed.get("is_looped", True),
+                            latitude=feed.get("latitude"),
+                            longitude=feed.get("longitude"),
+                            name_hint=feed.get("name", Path(f_path).name),
                             is_sample_feed=True,
                             start=psp_enabled
                         )
@@ -303,7 +308,7 @@ async def lifespan(app: FastAPI):
                         logger.error(f"Failed to register sample feed {f_path}: {e}")
                 logger.info("Sample feeds registration complete.")
 
-            create_background_task(_register_sample_feeds())
+            await create_background_task(_register_sample_feeds())
 
     except Exception as e:
         logger.error(f"Optional Services Failed: {e}")
@@ -318,19 +323,15 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "file_watcher") and app.state.file_watcher: app.state.file_watcher.stop()
     
     if background_tasks:
-        for t in background_tasks: t.cancel()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
+        async with _tasks_lock:
+            tasks = list(background_tasks)
+        for t in tasks: t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     await shutdown_services()
     if hasattr(app.state, "connection_manager"): await app.state.connection_manager.shutdown()
     await close_database()
     
-    remaining = multiprocessing.active_children()
-    for p in remaining:
-        p.terminate()
-        p.join(timeout=2.0)
-        if p.is_alive(): p.kill()
-
     logger.info("Shutdown complete.")
 
 # --- App Instance ---
@@ -351,7 +352,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(
+        status_code=exc.status_code, 
+        content={"detail": exc.detail}, 
+        headers=exc.headers
+    )
 
 # --- Middleware Registration ---
 app.add_middleware(RequestIDMiddleware)
@@ -365,7 +370,7 @@ rate_limits = {
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
 
 # Initialize CORS
-if multiprocessing.current_process().name == 'MainProcess' and cfg_dict:
+if cfg_dict:
     setup_cors(app, cfg_dict)
 
 # Audit Logger Middleware

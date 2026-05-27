@@ -5,13 +5,6 @@ import threading
 
 logger = logging.getLogger(__name__)
 
-from typing import Dict, Any, Optional, List, Tuple
-import hashlib
-import logging
-import threading
-
-logger = logging.getLogger(__name__)
-
 class FeatureFlags:
     """Manages feature flags for the application with support for overrides and percentage rollouts."""
     
@@ -40,6 +33,10 @@ class FeatureFlags:
             
         Returns:
             bool: True if the feature is enabled, False otherwise.
+            
+        Note: If percentage is set but no user_id is provided, the result is 
+        determined by the 'default_without_user' key in the flag configuration 
+        (defaults to False).
         """
         with self._lock:
             # 1. Check shared Redis overrides first
@@ -73,11 +70,12 @@ class FeatureFlags:
                 if "percentage" in flag_config:
                     percentage = flag_config["percentage"]
                     
-                    # Validate percentage is a valid integer in [0, 100]
-                    if not isinstance(percentage, int) or not (0 <= percentage <= 100):
-                        logger.warning(f"Invalid percentage value for feature {feature}: {percentage}. Expected int [0, 100].")
+                    # Relaxed type check: allow int or float
+                    if not isinstance(percentage, (int, float)) or not (0 <= percentage <= 100):
+                        logger.warning(f"Invalid percentage value for feature {feature}: {percentage}. Expected numeric [0, 100].")
                         return False
                         
+                    percentage = int(percentage)
                     if user_id:
                         # Use SHA-256 for secure and consistent bucketing
                         hash_input = f"{feature}:{user_id}".encode()
@@ -95,15 +93,18 @@ class FeatureFlags:
             return False
     
     def set_override(self, feature: str, enabled: bool):
-        """Set a runtime override for a feature flag in shared Redis store."""
+        """Set a runtime override for a feature flag in shared Redis store.
+        Overrides have a TTL to prevent indefinite accumulation.
+        """
         with self._lock:
             if not self._redis:
                 logger.error("Cannot set override: Redis client not available.")
                 return
             
             try:
-                self._redis.set(f"{self._redis_prefix}{feature}", str(enabled).lower())
-                logger.info(f"Setting shared feature flag override: {feature}={enabled}")
+                ttl = self._config.get("feature_flags", {}).get("override_ttl", 3600)
+                self._redis.setex(f"{self._redis_prefix}{feature}", ttl, str(enabled).lower())
+                logger.info(f"Setting shared feature flag override: {feature}={enabled} (TTL: {ttl}s)")
             except Exception as e:
                 logger.error(f"Failed to set feature override in Redis: {e}")
     
@@ -120,20 +121,26 @@ class FeatureFlags:
                     self._redis.delete(f"{self._redis_prefix}{feature}")
                     logger.info(f"Removing shared feature flag override for: {feature}")
                 else:
-                    logger.warning(f"Attempted to remove override for unknown feature: {feature}")
+                    logger.warning(f"No override exists for feature: {feature}")
             except Exception as e:
                 logger.error(f"Failed to remove feature override from Redis: {e}")
 
-    def get_all_flags(self) -> Dict[str, bool]:
-        """Returns the effective state of all configured feature flags."""
+    def get_all_flags(self) -> Dict[str, Any]:
+        """
+        Returns the state of all configured feature flags.
+        
+        For simple flags, returns the boolean value.
+        For complex flags, returns a dict with 'enabled' and 'percentage' (if applicable).
+        """
         with self._lock:
             effective_flags = {}
             for feature in self._flags:
-                # Check Redis first
+                # 1. Check Redis override first (highest priority)
                 if self._redis:
                     try:
                         val = self._redis.get(f"{self._redis_prefix}{feature}")
                         if val is not None:
+                            # Overrides are treated as absolute boolean state
                             effective_flags[feature] = val.decode('utf-8').lower() == 'true'
                             continue
                     except Exception:
@@ -143,9 +150,12 @@ class FeatureFlags:
                 if isinstance(conf, bool):
                     effective_flags[feature] = conf
                 elif isinstance(conf, dict):
-                    is_on = conf.get("enabled", False)
-                    has_perc = conf.get("percentage", 0) > 0 if isinstance(conf.get("percentage"), int) else False
-                    effective_flags[feature] = is_on or has_perc
+                    # Return the rich configuration to allow the caller to distinguish 
+                    # global enable vs percentage rollout.
+                    effective_flags[feature] = {
+                        "enabled": conf.get("enabled", False),
+                        "percentage": conf.get("percentage")
+                    }
                 else:
                     effective_flags[feature] = False
             return effective_flags

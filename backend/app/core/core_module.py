@@ -97,6 +97,7 @@ class CoreModule:
 
         calib_cfg = v_cfg.get("calibration", {})
         self.transformer = CoordinateTransformer(calib_cfg)
+        self.homography_matrix = None
         self._update_homography(calib_cfg)
 
         # 4. State & Helpers
@@ -104,7 +105,12 @@ class CoreModule:
             ReIDEmbedder(self.config) if v_cfg.get("reid_enabled", True) else None
         )
         self.ocr_executor = ThreadPoolExecutor(max_workers=2)
-        self.ocr_results_queue: queue.Queue = queue.Queue()
+        self.ocr_results_queue: queue.Queue = queue.Queue(maxsize=100)
+
+        # Persistent state for tracking across frames
+        self._first_detection_done = False
+        self._last_db_save_times: Dict[str, float] = {}
+        self._prev_vehicle_statuses: Dict[str, str] = {}
 
         self.last_detected_lane_lines = None
         self.cached_lane_boundaries: list = []
@@ -270,9 +276,17 @@ class CoreModule:
 
         # 3. Tracking (pass detections without embeddings first)
         dets_for_tracker = [(d[0], d[2], d[1], None) for d in detections]
+        
+        # Capture current statuses as 'previous' before updating the tracker
+        # We use a copy of the tracker's data or our own persistent mapping
+        current_statuses = {tid: track.get("status", "unknown") 
+                           for tid, track in self.tracker.tracks.items()} if hasattr(self.tracker, 'tracks') else {}
+
         vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
 
-        # 4. Selective ReID enrichment (batched)
+        # Apply previous statuses for adaptive ReID
+        for tid, track in vehicle_data.items():
+            track["prev_status"] = current_statuses.get(tid, "unknown")
         if self.reid_embedder:
             needs_emb = []
             h, w = frame.shape[:2]
@@ -398,7 +412,8 @@ class CoreModule:
 
         now = time.time()
         for vehicle_id, data in tracked_vehicles.items():
-            if now - data.get("_last_db_save", 0) < 1.0:
+            # Use persistent storage for last save time to ensure throttling works across frames
+            if now - self._last_db_save_times.get(vehicle_id, 0) < 1.0:
                 continue
             try:
                 self.db_queue.put_nowait({
@@ -417,9 +432,15 @@ class CoreModule:
                     "status": str(data["status"]),
                     "lane": int(data.get("lane", -1)),
                 })
-                data["_last_db_save"] = now
+                self._last_db_save_times[vehicle_id] = now
             except queue.Full:
                 pass
+
+        # Prune stale save times for vehicles no longer tracked
+        active_ids = set(tracked_vehicles.keys())
+        for vid in list(self._last_db_save_times.keys()):
+            if vid not in active_ids:
+                del self._last_db_save_times[vid]
 
     def _process_ocr_results(self, vehicle_data: Dict[str, Dict]):
         """Drains the OCR results queue and updates vehicle data."""

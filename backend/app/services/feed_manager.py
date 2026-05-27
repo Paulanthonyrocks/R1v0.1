@@ -1370,14 +1370,16 @@ class FeedManager:
         """CPU-bound processing of a single result item (SHM read -> bytes)."""
         try:
             feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
-            raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
-            frame_bytes = raw_jpg_view.tobytes()
-            
-            # Explicitly release the memoryview to avoid BufferError during SHM cleanup
-            if hasattr(raw_jpg_view, 'release'):
-                raw_jpg_view.release()
+            try:
+                raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
+                frame_bytes = raw_jpg_view.tobytes()
                 
-            self.frame_buffer.release(shm_ref)
+                # Explicitly release the memoryview to avoid BufferError during SHM cleanup
+                if hasattr(raw_jpg_view, 'release'):
+                    raw_jpg_view.release()
+            finally:
+                self.frame_buffer.release(shm_ref)
+                
             return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
         except Exception as e:
             now = time.time()
@@ -1465,6 +1467,12 @@ class FeedManager:
                         except Exception as e:
                             logger.error(f"Failed to ack message {msg_id}: {e}")
 
+                # Prune dedup dictionary to prevent memory leak
+                active_feeds = self.process_registry.keys()
+                for fid in list(_feed_last_processed_ts.keys()):
+                    if fid not in active_feeds:
+                        del _feed_last_processed_ts[fid]
+
                 if skipped_count > 0:
                     logger.info(
                         f"[RESULT_READER] Dedup: {skipped_count} stale frames skipped, "
@@ -1506,7 +1514,7 @@ class FeedManager:
 
                     # Transition STARTING -> RUNNING
                     if entry["status"] == FeedOperationalStatusEnum.STARTING:
-                        async with self._lock:
+                        async with self._get_feed_lock(feed_id):
                             if (
                                 self.process_registry.get(feed_id, {}).get("status")
                                 == FeedOperationalStatusEnum.STARTING
@@ -1527,20 +1535,20 @@ class FeedManager:
                         metrics["longitude"] = entry["config_info"].longitude
                         metrics["location_name"] = entry["config_info"].name
 
-                    entry["latest_metrics"] = metrics
-                    entry["last_frame_time"] = now
-                    if entry.get("timer"):
-                        entry["timer"].tick()
+                    async with self._get_feed_lock(feed_id):
+                        entry["latest_metrics"] = metrics
+                        entry["last_frame_time"] = now
+                        if entry.get("timer"):
+                            entry["timer"].tick()
 
-                    if extra and extra.get("type") == "snapshot":
-                        inc_id = extra.get("incident_id")
-                        path = extra.get("path")
-                        if self._analytics_service and inc_id:
-                            asyncio.create_task(
-                                self._analytics_service.update_incident_snapshot(inc_id, path)
-                            )
-                        continue
-
+                        if extra and extra.get("type") == "snapshot":
+                            inc_id = extra.get("incident_id")
+                            path = extra.get("path")
+                            if self._analytics_service and inc_id:
+                                asyncio.create_task(
+                                    self._analytics_service.update_incident_snapshot(inc_id, path)
+                                )
+                            continue
                     if entry.get("video_writer_queue"):
                         try:
                             entry["video_writer_queue"].put_nowait((frame_bytes, metrics))
@@ -1617,7 +1625,7 @@ class FeedManager:
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 
-    def _compute_vehicle_deltas(
+    async def _compute_vehicle_deltas(
         self, feed_id: str, vehicles: List[Dict], frame_idx: int
     ) -> List[Dict]:
         """
@@ -1628,59 +1636,60 @@ class FeedManager:
         KEYFRAME_INTERVAL = 30
         is_keyframe = (frame_idx % KEYFRAME_INTERVAL == 0)
 
-        entry = self.process_registry.get(feed_id)
-        if not entry:
-            return vehicles
+        async with self._get_feed_lock(feed_id):
+            entry = self.process_registry.get(feed_id)
+            if not entry:
+                return vehicles
 
-        if "vehicle_states" not in entry:
-            entry["vehicle_states"] = {}
+            if "vehicle_states" not in entry:
+                entry["vehicle_states"] = {}
 
-        last_states = entry["vehicle_states"]
-        current_ids: set = set()
-        delta_vehicles = []
+            last_states = entry["vehicle_states"]
+            current_ids: set = set()
+            delta_vehicles = []
 
-        static_fields = [
-            "class_name", "class_id", "car_model",
-            "license_plate", "color", "behavior",
-            "car_model_confidence", "gallery_size",
-        ]
+            static_fields = [
+                "class_name", "class_id", "car_model",
+                "license_plate", "color", "behavior",
+                "car_model_confidence", "gallery_size",
+            ]
 
-        for v in vehicles:
-            vid = v["vehicle_id"]
-            current_ids.add(vid)
+            for v in vehicles:
+                vid = v["vehicle_id"]
+                current_ids.add(vid)
 
-            if is_keyframe or vid not in last_states:
-                delta_vehicles.append(v)
+                if is_keyframe or vid not in last_states:
+                    delta_vehicles.append(v)
+                    last_states[vid] = v.copy()
+                    continue
+
+                last_v = last_states[vid]
+                delta: Dict[str, Any] = {
+                    "vehicle_id": vid,
+                    "bbox": v["bbox"],
+                    "vx": v.get("vx", 0),
+                    "vy": v.get("vy", 0),
+                }
+
+                for field in static_fields:
+                    val = v.get(field)
+                    if val != last_v.get(field):
+                        delta[field] = val
+
+                if v.get("status") != last_v.get("status"):
+                    delta["status"] = v.get("status")
+                if v.get("is_occluded") != last_v.get("is_occluded"):
+                    delta["is_occluded"] = v.get("is_occluded")
+
+                delta_vehicles.append(delta)
                 last_states[vid] = v.copy()
-                continue
 
-            last_v = last_states[vid]
-            delta: Dict[str, Any] = {
-                "vehicle_id": vid,
-                "bbox": v["bbox"],
-                "vx": v.get("vx", 0),
-                "vy": v.get("vy", 0),
-            }
+            # Remove stale vehicle states
+            for missing_id in list(last_states.keys()):
+                if missing_id not in current_ids:
+                    del last_states[missing_id]
 
-            for field in static_fields:
-                val = v.get(field)
-                if val != last_v.get(field):
-                    delta[field] = val
-
-            if v.get("status") != last_v.get("status"):
-                delta["status"] = v.get("status")
-            if v.get("is_occluded") != last_v.get("is_occluded"):
-                delta["is_occluded"] = v.get("is_occluded")
-
-            delta_vehicles.append(delta)
-            last_states[vid] = v.copy()
-
-        # Remove stale vehicle states
-        for missing_id in list(last_states.keys()):
-            if missing_id not in current_ids:
-                del last_states[missing_id]
-
-        return delta_vehicles
+            return delta_vehicles
 
     async def _broadcast_video_frame(
         self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra_payload=None
@@ -1767,6 +1776,11 @@ class FeedManager:
     async def _watchdog_loop(self):
         """Periodically checks if processing workers are alive and responsive."""
         logger.info("Watchdog task started.")
+        
+        # Track restart attempts and next allowed restart time per feed
+        restart_attempts: Dict[str, int] = {}
+        next_restart_time: Dict[str, float] = {}
+
         while not self._stop_reader_flag:
             try:
                 await asyncio.sleep(5.0)
@@ -1789,15 +1803,37 @@ class FeedManager:
                                 )
                             else:
                                 logger.info(f"Video process {feed_id} ended (likely reached EOF).")
-                            feeds_to_restart.append(feed_id)
+                            
+                            # Check if we can restart based on exponential backoff
+                            now = time.time()
+                            if now >= next_restart_time.get(feed_id, 0):
+                                feeds_to_restart.append(feed_id)
+                            else:
+                                logger.debug(f"Watchdog: Feed {feed_id} is in backoff until {next_restart_time[feed_id]}")
 
                 for feed_id in feeds_to_restart:
                     try:
                         logger.info(f"Watchdog: Restarting video feed: {feed_id}")
                         await self.restart_feed(feed_id)
                         logger.info(f"Watchdog: Video feed restarted successfully: {feed_id}")
+                        # Reset backoff on successful restart (if it stays alive long enough)
+                        # Note: we actually reset this when we see it's RUNNING in the next loop
                     except Exception as e:
                         logger.error(f"Watchdog: Failed to restart video feed {feed_id}: {e}")
+                        # Increment backoff
+                        attempts = restart_attempts.get(feed_id, 0) + 1
+                        restart_attempts[feed_id] = attempts
+                        # Exponential backoff: 5s, 10s, 20s, 40s, 80s, max 1 hour
+                        delay = min(5 * (2 ** (attempts - 1)), 3600)
+                        next_restart_time[feed_id] = time.time() + delay
+                        logger.warning(f"Watchdog: Feed {feed_id} restart failed. Backing off for {delay}s (attempt {attempts})")
+
+                # Reset backoff for feeds that are now healthy
+                async with self._lock:
+                    for feed_id, entry in self.process_registry.items():
+                        if entry["status"] == FeedOperationalStatusEnum.RUNNING:
+                            restart_attempts.pop(feed_id, None)
+                            next_restart_time.pop(feed_id, None)
 
                 # Check inference pool workers
                 dead_workers = []
@@ -1846,6 +1882,10 @@ class FeedManager:
         )
         # HIGH priority so status updates are never dropped by video-frame back-pressure
         await self._connection_manager.broadcast(msg.model_dump_json(), priority=MessagePriority.HIGH)
+
+    async def trigger_kpi_push(self):
+        """Public method to force a KPI update broadcast to all subscribed clients."""
+        await self._broadcast_kpi_update()
 
     async def _broadcast_kpi_update(self):
         if not self._connection_manager:

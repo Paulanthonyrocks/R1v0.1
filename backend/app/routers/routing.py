@@ -12,7 +12,7 @@ from app.models.routing import (
     UserRoutingProfile,
     SupportedAreasResponse,
 )
-from app.dependency_injection import get_current_active_user, get_prs, get_route_optimization_service
+from app.dependency_injection import get_current_active_user, get_personalized_routing_service, get_route_optimization_service
 from app.services.personalized_routing_service import PersonalizedRoutingService
 from app.services.route_optimization_service import RouteOptimizationService
 
@@ -52,7 +52,7 @@ class SuggestionFeedbackRequest(BaseModel):
 async def get_personalized_route(
     request: PersonalizedRouteRequest = Body(...),
     current_user: Dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> PersonalizedRouteResponse:
     logger.info(
         f"POST /personalized endpoint called by user: {current_user.get('uid')}"
@@ -84,7 +84,7 @@ async def get_personalized_route(
 async def record_route_history(
     entry: RouteHistoryEntry = Body(...),
     current_user: Dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> Dict[str, str]:
     logger.info(f"POST /history endpoint called by user: {current_user.get('uid')}")
     """Record a route in user's history"""
@@ -114,7 +114,7 @@ async def record_route_history(
 )
 async def get_user_profile(
     current_user: Dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> UserRoutingProfile:
     logger.info(f"GET /profile endpoint called by user: {current_user.get('uid')}")
     """Get user's routing profile"""
@@ -136,7 +136,7 @@ async def get_user_profile(
 async def get_route_history(
     limit: int = Query(default=50, ge=1, le=1000),
     current_user: Dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> List[RouteHistoryEntry]:
     logger.info(f"GET /history endpoint called by user: {current_user.get('uid')}")
     """Get user's route history"""
@@ -158,7 +158,7 @@ async def get_route_history(
 )
 async def get_route_history_analytics(
     current_user: dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
     limit: int = Query(20, ge=1, le=100),
 ) -> Dict[str, Any]:
     logger.info(
@@ -180,12 +180,12 @@ async def get_route_history_analytics(
     "/suggestions/feedback",
     summary="Record Feedback on Proactive Suggestion",
     description="Allows users to submit feedback (acceptance, rejection, rating, text) on a proactive route suggestion they received.",
-    status_code=200,  # Default, can be overridden
+    status_code=200,
 )
 async def record_suggestion_feedback_endpoint(
     feedback_data: SuggestionFeedbackRequest = Body(...),
     current_user: Dict = Depends(get_current_active_user),
-    routing_service: PersonalizedRoutingService = Depends(get_prs),
+    routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ):
     """
     Records feedback for a given proactive suggestion.
@@ -193,7 +193,7 @@ async def record_suggestion_feedback_endpoint(
     try:
         success = await routing_service.record_suggestion_feedback(
             suggestion_id=feedback_data.suggestion_id,
-            user_id=current_user["uid"],  # Use authenticated user's ID
+            user_id=current_user["uid"], 
             interaction_status=feedback_data.interaction_status,
             feedback_text=feedback_data.feedback_text,
             rating=feedback_data.rating,
@@ -202,19 +202,14 @@ async def record_suggestion_feedback_endpoint(
         if success:
             return {"message": "Feedback recorded successfully"}
         else:
-            # The service returns False for known issues like "not found" or "user mismatch"
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Suggestion ID not found, user mismatch, or invalid data. Feedback not recorded.",
             )
 
     except HTTPException as http_exc:
-        # Re-raise HTTPException directly to let FastAPI handle it
         raise http_exc
     except Exception as e:
-        # Catch any other unexpected errors from the service layer or elsewhere
-        # Log the error server-side for diagnosis
-        # logger.error(f"Unexpected error recording suggestion feedback: {e}", exc_info=True) # Assuming logger is available
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while recording feedback: {str(e)}",

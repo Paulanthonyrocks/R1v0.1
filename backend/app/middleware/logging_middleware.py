@@ -12,19 +12,27 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
+        start_time = time.monotonic()
+        request_id = request.headers.get("x-request-id", "N/A")
 
         # Log request details
         logger.info(
-            f"Request: {request.method} {request.url.path} from {request.client.host}"
+            f"Request: {request.method} {request.url.path} from {request.client.host} [ReqID: {request_id}]"
         )
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            elapsed = time.monotonic() - start_time
+            logger.warning(
+                f"Request failed: {request.method} {request.url.path} after {elapsed:.4f}s [ReqID: {request_id}]"
+            )
+            raise
 
-        process_time = time.time() - start_time
+        process_time = time.monotonic() - start_time
         # Log response details
         logger.info(
-            f"Response: {request.method} {request.url.path} Status: {response.status_code} - Processed in {process_time:.4f}s"
+            f"Response: {request.method} {request.url.path} Status: {response.status_code} - {process_time:.4f}s [ReqID: {request_id}]"
         )
 
         return response
