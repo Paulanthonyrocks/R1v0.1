@@ -168,7 +168,7 @@ class SharedFrameBuffer:
         now = time.time()
         buf[0:24] = struct.pack('<iiiid', size, w, h, c, now)
 
-    def read(self, name: Union[str, bytes]) -> Tuple[memoryview, Tuple[int, int, int]]:
+    def read(self, name: Union[str, bytes]) -> Tuple[bytes, Tuple[int, int, int]]:
         """Returns (data_view, (w, h, c))."""
         if isinstance(name, bytes):
             try:

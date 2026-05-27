@@ -1371,12 +1371,7 @@ class FeedManager:
         try:
             feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
             try:
-                raw_jpg_view, dims = self.frame_buffer.read(shm_ref)
-                frame_bytes = raw_jpg_view.tobytes()
-                
-                # Explicitly release the memoryview to avoid BufferError during SHM cleanup
-                if hasattr(raw_jpg_view, 'release'):
-                    raw_jpg_view.release()
+                frame_bytes, dims = self.frame_buffer.read(shm_ref)
             finally:
                 self.frame_buffer.release(shm_ref)
                 
