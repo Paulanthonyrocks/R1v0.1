@@ -27,6 +27,8 @@ export const SystemHealthMonitor: React.FC = () => {
     const client = useWebSocket();
 
     useEffect(() => {
+        if (!client) return;
+
         const unsubscribe = client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
             if (data.message_type === 'system_health') {
                 setStats(data.status);

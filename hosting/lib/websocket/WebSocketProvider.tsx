@@ -5,11 +5,11 @@ import React, { createContext, useContext, useEffect, useRef } from 'react';
 import { WebSocketClient } from './WebSocketClient';
 import { useAuth } from '../auth/AuthProvider';
 
-const WebSocketContext = createContext<WebSocketClient | null>(null);
+const WebSocketContext = createContext<WebSocketClient | null | undefined>(undefined);
 
 export const useWebSocket = () => {
  const context = useContext(WebSocketContext);
- if (!context) {
+ if (context === undefined) {
  throw new Error('useWebSocket must be used within a WebSocketProvider');
  }
  return context;

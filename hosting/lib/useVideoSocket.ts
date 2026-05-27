@@ -19,7 +19,7 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
   // --- State Management ---
   const [metrics, setMetrics] = useState<SurveillanceFeedMessage | null>(null);
   const [vehicles, setVehicles] = useState<VehicleFrontendData[] | null>(null);
-  const [isConnected, setIsConnected] = useState(client.isConnected());
+  const [isConnected, setIsConnected] = useState(() => client?.isConnected() ?? false);
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
 
@@ -104,7 +104,7 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
 
   const subscribeToFeed = useCallback(() => {
     const streamIdLocal = streamId;
-    if (client.isConnected() && streamIdLocal) {
+    if (client?.isConnected() && streamIdLocal) {
       const pending = _pendingUnsubscribes.get(streamIdLocal);
       if (pending) {
         clearTimeout(pending);
@@ -121,7 +121,7 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
       }
       if (!_subscribedFeeds.has(streamIdLocal)) {
         _subscribedFeeds.add(streamIdLocal);
-        client.send({
+        client?.send({
           type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
           data: { feed_id: streamIdLocal },
         });
@@ -140,7 +140,7 @@ const unsubscribeFromFeed = useCallback(() => {
         _pendingUnsubscribes.delete(streamIdLocal);
         if (!_subscribedFeeds.has(streamIdLocal)) return;
         _subscribedFeeds.delete(streamIdLocal);
-        client.send({
+        client?.send({
           type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED,
           data: { feed_id: streamIdLocal },
         });
@@ -216,13 +216,13 @@ const unsubscribeFromFeed = useCallback(() => {
     const currentCount = _feedHookCounts.get(streamId) ?? 0;
     _feedHookCounts.set(streamId, currentCount + 1);
 
-    if (client.isConnected()) {
+    if (client?.isConnected()) {
       subscribeToFeed();
     }
 
     console.log(`[useVideoSocket] Mounting hook for streamId: ${streamId}. Subscribing to VIDEO_FRAME...`);
     const currentStreamId = streamId;
-    const unsubscribeFrame = client.subscribe(
+    const unsubscribeFrame = client?.subscribe(
     WebSocketMessageType.VIDEO_FRAME, 
     (frameData: VideoFrameMessage) => {
  // Note: the worker posts data directly, not wrapped in WebSocketMessage.
@@ -255,7 +255,7 @@ const unsubscribeFromFeed = useCallback(() => {
       }
     }, 1000);
 
-    const unsubscribeStatus = client.onStatusChange((status) => {
+    const unsubscribeStatus = client?.onStatusChange((status) => {
       setIsConnected(status === 'connected');
       if (status === 'connected') {
         // When reconnecting, cancel any pending unsubscribes so they don't
@@ -294,13 +294,13 @@ const unsubscribeFromFeed = useCallback(() => {
 
         const cleanupTimer = setTimeout(() => {
           _pendingCleanups.delete(streamId);
-          client.cleanupWorkerResources(streamId);
+          client?.cleanupWorkerResources(streamId);
         }, UNSUBSCRIBE_DEBOUNCE_MS);
 
         _pendingCleanups.set(streamId, cleanupTimer);
       }
-      unsubscribeFrame();
-      unsubscribeStatus();
+      if (unsubscribeFrame) unsubscribeFrame();
+      if (unsubscribeStatus) unsubscribeStatus();
       clearInterval(stalenessInterval);
       if (lastFrameRef.current?.image instanceof ImageBitmap) {
         lastFrameRef.current.image.close();
@@ -403,7 +403,7 @@ const unsubscribeFromFeed = useCallback(() => {
     error, 
     drawFrame, 
     frameRate, 
-    updateFeedConfig: (config: any) => client.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
+    updateFeedConfig: (config: any) => client?.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
   };
 };
 

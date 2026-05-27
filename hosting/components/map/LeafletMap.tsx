@@ -161,7 +161,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
       console.error("Leaflet initialization failed:", error);
     }
 
-    const unsubscribe = wsClient.subscribe(WebSocketMessageType.SIGNAL_UPDATE, (data: any) => {
+    const unsubscribe = wsClient?.subscribe(WebSocketMessageType.SIGNAL_UPDATE, (data: any) => {
       if (data?.signal_data) {
         setSignalStates(prev => ({
           ...prev,
@@ -171,7 +171,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
     });
 
     return () => {
-      unsubscribe();
+      if (unsubscribe) unsubscribe();
       if (resizeObserver) {
         resizeObserver.disconnect();
       }

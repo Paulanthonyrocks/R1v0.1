@@ -52,6 +52,8 @@ export default function GalleryPage() {
     useEffect(() => {
         fetchIncidentsWithSnapshots();
 
+        if (!client) return;
+
         // Listen for new snapshots
         const unsubscribe = client.subscribe(WebSocketMessageType.SNAPSHOT_READY, (data: any) => {
             console.log("New snapshot ready received in gallery:", data);

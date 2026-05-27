@@ -30,8 +30,8 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
     const [alerts, setAlerts] = useState<AlertData[]>([]);
     const [feeds, setFeeds] = useState<FeedStatusData[]>([]);
     const [nodeCongestionData, setNodeCongestionData] = useState<any[]>([]);
-    const [isConnected, setIsConnected] = useState(client.isConnected());
-    const [isReady, setIsReady] = useState(client.isConnected());
+    const [isConnected, setIsConnected] = useState(() => client?.isConnected() ?? false);
+    const [isReady, setIsReady] = useState(() => client?.isConnected() ?? false);
     const [error, setError] = useState<string | null>(null);
 
     const sendMessage = useCallback((action: WebSocketMessageType, payload?: object): boolean => {
@@ -48,26 +48,27 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
     }, [client]);
 
     const subscribeToFeed = useCallback((feedId: string) => {
-        client.send({ type: WebSocketMessageType.SUBSCRIBE_TO_FEED, data: { feed_id: feedId } });
+        client?.send({ type: WebSocketMessageType.SUBSCRIBE_TO_FEED, data: { feed_id: feedId } });
     }, [client]);
 
     const unsubscribeFromFeed = useCallback((feedId: string) => {
-        client.send({ type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, data: { feed_id: feedId } });
+        client?.send({ type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED, data: { feed_id: feedId } });
     }, [client]);
 
     const startWebSocket = useCallback(() => {
-        if (!client.isConnected()) {
+        if (!client?.isConnected()) {
             // Trigger connection attempt if needed
         }
     }, [client]);
 
     const updateConnectionState = useCallback(() => {
-        const connected = client.isConnected();
+        const connected = client?.isConnected() ?? false;
         setIsConnected(connected);
         setIsReady(connected);
     }, [client]);
 
     const initializeConnection = useCallback(async () => {
+        if (!client) return;
         console.debug('[RealtimeStateProvider] Initializing connection subscriptions...');
         try {
             client.send({ 
@@ -94,12 +95,12 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         updateConnectionState();
 
         // If already connected on mount, trigger initialization immediately
-        if (client.isConnected()) {
+        if (client?.isConnected()) {
             initializeConnection();
         }
 
         // Subscribe to server-side topics on every (re)connection
-        const unsubStatus = client.onStatusChange((status) => {
+        const unsubStatus = client?.onStatusChange((status) => {
             const connected = status === 'connected';
             setIsConnected(connected);
             setIsReady(connected);
@@ -109,17 +110,18 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
             }
         });
 
-        subscriptions.push(unsubStatus);
+        if (unsubStatus) subscriptions.push(unsubStatus);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
+        const unsubInitialFeeds = client?.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
             if (data && Array.isArray(data.feeds)) {
                 const sortedFeeds = [...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
                 setFeeds(sortedFeeds);
                 sortedFeeds.forEach(feed => subscribeToFeed(feed.feed_id));
             }
-        }));
+        });
+        if (unsubInitialFeeds) subscriptions.push(unsubInitialFeeds);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
+        const unsubFeedUpdate = client?.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
             if (!data?.feed_status_data) return;
             const statusData = data.feed_status_data;
             setFeeds(prevFeeds => {
@@ -136,26 +138,30 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
                     return [...prevFeeds, statusData].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
                 }
             });
-        }));
+        });
+        if (unsubFeedUpdate) subscriptions.push(unsubFeedUpdate);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => setKpis(data)));
+        const unsubKpi = client?.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => setKpis(data));
+        if (unsubKpi) subscriptions.push(unsubKpi);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {
+        const unsubCongestion = client?.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {
             if (data && Array.isArray(data.nodes)) {
                 setNodeCongestionData(data.nodes);
             }
-        }));
+        });
+        if (unsubCongestion) subscriptions.push(unsubCongestion);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
+        const unsubAlert = client?.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
             if (data?.alert_data) {
                 setAlerts(prevAlerts => {
                     if (prevAlerts.some(a => a.id === data.alert_data.id)) return prevAlerts;
                     return [...prevAlerts, data.alert_data].slice(-20);
                 });
             }
-        }));
+        });
+        if (unsubAlert) subscriptions.push(unsubAlert);
 
-        subscriptions.push(client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
+        const unsubGen = client?.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
             if (data?.message_type === 'new_incident') {
                 const newIncident: AlertData = {
                     id: data.incident_id,
@@ -177,9 +183,11 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
                         : alert
                 ));
             }
-        }));
+        });
+        if (unsubGen) subscriptions.push(unsubGen);
 
-        subscriptions.push(client.onError((_type, message) => setError(message)));
+        const unsubError = client?.onError((_type, message) => setError(message));
+        if (unsubError) subscriptions.push(unsubError);
 
         return () => {
             subscriptions.forEach(unsubscribe => unsubscribe());

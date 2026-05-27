@@ -48,6 +48,8 @@ const TrafficMap = forwardRef<any, {
   const lastTimeRef = useRef<number>(Date.now());
 
   useEffect(() => {
+    if (!client) return;
+
     const unsubscribe = client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: unknown) => {
       const frame = data as WebSocketVideoFrame;
       if (frame && frame.v) {
