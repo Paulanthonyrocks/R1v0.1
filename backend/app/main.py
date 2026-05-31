@@ -378,15 +378,15 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     )
 
 # --- Middleware Registration ---
-app.add_middleware(RequestIDMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(LoggingMiddleware)
+# app.add_middleware(RequestIDMiddleware)
+# app.add_middleware(SecurityHeadersMiddleware)
+# app.add_middleware(LoggingMiddleware)
 
-rate_limits = {
-    "/api/v1/analytics": RateLimitConfig(limit=10, window=60),
-    "/api/v1/feeds": RateLimitConfig(limit=30, window=60)
-}
-app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+# rate_limits = {
+#     "/api/v1/analytics": RateLimitConfig(limit=10, window=60),
+#     "/api/v1/feeds": RateLimitConfig(limit=30, window=60)
+# }
+# app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
 
 # Initialize CORS
 if cfg_dict:
@@ -509,4 +509,12 @@ async def detailed_health_check():
 if __name__ == "__main__":
     import uvicorn
     # Use standard uvicorn runner for development
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run(
+        "app.main:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=True, 
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )

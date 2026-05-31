@@ -107,6 +107,9 @@ async def message_receiver(
             except RuntimeError as re:
                 logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
             return
+        except WebSocketDisconnect:
+            logger.warning(f"Client {initial_id} disconnected before authenticating.")
+            return
         except Exception as e:
             logger.warning(f"Initial authentication failed for {initial_id}: {e}")
             try:

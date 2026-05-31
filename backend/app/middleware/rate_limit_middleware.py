@@ -1,9 +1,8 @@
 import time
 import asyncio
 from typing import Dict, Tuple, Optional, List
-from fastapi import Request, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response, JSONResponse
+from fastapi import Request
+from starlette.types import ASGIApp, Scope, Receive, Send
 import logging
 from pydantic import BaseModel
 
@@ -13,7 +12,7 @@ class RateLimitConfig(BaseModel):
     limit: int
     window: int
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+class RateLimitMiddleware:
     """
     In-memory rate limiting middleware.
     
@@ -23,7 +22,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     def __init__(
         self, 
-        app, 
+        app: ASGIApp, 
         limit: int = 100, 
         window: int = 60,
         rate_limits: Optional[Dict[str, RateLimitConfig]] = None
@@ -33,7 +32,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         :param window: Default window size in seconds
         :param rate_limits: Optional dict mapping paths to RateLimitConfig
         """
-        super().__init__(app)
+        self.app = app
         self.default_config = RateLimitConfig(limit=limit, window=window)
         self.rate_limits = rate_limits or {}
         # In-memory storage: {(user_id, path_pattern): [timestamps]}
@@ -78,26 +77,34 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return pattern, config
         return "default", self.default_config
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            # WebSocket or lifespan – pass through untouched
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+
         # Skip rate limiting for OPTIONS requests (CORS preflight)
         if request.method == "OPTIONS":
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         path = request.url.path
         
         # Skip rate limiting for static files, specific paths, and WebSocket connections
         if path.startswith("/snapshots") or path.startswith("/static") or path.startswith("/api/v1/snapshots") or path.startswith("/api/v1/ws"):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        # Identify user: Never trust X-User-ID header for rate limiting as it is trivially spoofable.
-        # Use client IP as the primary identifier.
+        # Identify user: Use client IP as the primary identifier.
         user_id = request.client.host if request.client else "unknown"
         user_tier = getattr(request.state, "user_tier", "anonymous")
 
         # Determine limits based on tier or path-specific config
         pattern, config = self._get_config_for_path(path)
         
-        # If path specific config is default, use tier limits logic
+        # If path specific is default, use tier limits logic
         if pattern == "default":
             limit, window = self.tier_limits.get(user_tier, self.tier_limits["anonymous"])
         else:
@@ -115,24 +122,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
             if len(self.request_counts[key]) >= limit:
                 logger.warning(f"Rate limit exceeded for User: {user_id} ({user_tier}) on path: {path}")
-                return JSONResponse(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    content={"detail": "Rate limit exceeded. Please try again later."},
-                    headers={"Retry-After": str(window)}
-                )
+                await send({
+                    "type": "http.response.start",
+                    "status": 429,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"retry-after", str(window).encode()),
+                    ],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b'{"detail": "Rate limit exceeded. Please try again later."}',
+                })
+                return
 
             self.request_counts[key] = self.request_counts[key] + [now]
             
             # Calculate reset time for the sliding window (earliest timestamp + window)
-            reset_time = now + window
-            if self.request_counts[key]:
-                reset_time = self.request_counts[key][0] + window
+            reset_time = self.request_counts[key][0] + window if self.request_counts[key] else now + window
         
-        response = await call_next(request)
-        
-        # Add rate limit headers
-        response.headers["X-RateLimit-Limit"] = str(limit)
-        response.headers["X-RateLimit-Remaining"] = str(limit - len(self.request_counts.get(key, [])))
-        response.headers["X-RateLimit-Reset"] = str(int(reset_time))
-        
-        return response
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"x-ratelimit-limit", str(limit).encode()))
+                headers.append((b"x-ratelimit-remaining", str(limit - len(self.request_counts.get(key, []))).encode()))
+                headers.append((b"x-ratelimit-reset", str(int(reset_time)).encode()))
+                message["headers"] = headers
+            await send(message)
+            
+        await self.app(scope, receive, send_wrapper)
