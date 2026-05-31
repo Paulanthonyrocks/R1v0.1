@@ -2,7 +2,6 @@ import logging
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional, Any
-from ultralytics import YOLO
 
 logger = logging.getLogger("app.ml.detection")
 
@@ -19,7 +18,7 @@ class DetectionEngine:
         
         # ROI Cache
         self.roi_mask = None
-        self.scale_factors = None
+        self.normalized_roi_points: Optional[np.ndarray] = None
 
     def load_model(self):
         """Loads the model and validate the model object."""
@@ -36,6 +35,7 @@ class DetectionEngine:
                     return
             # Fix: Remove redundant device parameter from inference
             if self.model_type == "yolo":
+                from ultralytics import YOLO
                 self.model = YOLO(self.model_path)
                 self.model.to(self.device)
                 logger.info(f"YOLO model loaded on {self.device}")
@@ -43,32 +43,34 @@ class DetectionEngine:
             else:
                 raise ValueError(f"Unsupported model type: {self.model_type}. Only 'yolo' is currently supported.")
         except Exception as e:
+            self.model = None
             logger.error(f"Failed to load model: {e}")
             raise
 
     def _warmup(self):
         """Performs a dummy inference to warm up the model and GPU."""
-        try:
-            dummy_img = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
-            self.model(dummy_img, imgsz=self.imgsz, verbose=False)
-            logger.info("Model warm-up inference completed successfully.")
-        except Exception as e:
-            logger.warning(f"Model warm-up failed: {e}")
+        dummy_img = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
+        self.model(dummy_img, imgsz=self.imgsz, verbose=False)
+        logger.info("Model warm-up inference completed successfully.")
 
     def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
-        """Creates an ROI mask."""
-        # Create mask in a local variable first to ensure atomic update
-        mask = np.zeros((resolution[1], resolution[0]), dtype=np.uint8)
+        """Creates an ROI mask based on normalized points to support dynamic resolution changes."""
         if roi_points:
-            pts = np.array(roi_points, np.int32)
+            self.normalized_roi_points = np.array(roi_points, dtype=np.float32) / np.array(resolution, dtype=np.float32)
+        else:
+            self.normalized_roi_points = None
+        
+        self.roi_mask = self._create_mask(resolution[1], resolution[0], self.normalized_roi_points)
+
+    def _create_mask(self, h: int, w: int, points: Optional[np.ndarray]) -> np.ndarray:
+        """Helper to build a binary ROI mask from normalized points."""
+        mask = np.zeros((h, w), dtype=np.uint8)
+        if points is not None:
+            pts = (points * [w, h]).astype(np.int32)
             cv2.fillPoly(mask, [pts], 255)
         else:
-            # Create all-255 mask when no ROI points provided (allow everything)
             mask.fill(255)
-        
-        self.roi_mask = mask
-        # Pre-compute scale factors once per initialization
-        self.scale_factors = None
+        return mask
 
     def is_in_roi(self, bbox: np.ndarray) -> bool:
         if self.roi_mask is None:
@@ -98,17 +100,16 @@ class DetectionEngine:
 
     def detect(self, frame: np.ndarray, confidence_threshold: float) -> List[Tuple]:
         """Runs detection on the frame and returns bounding boxes and classes."""
+        if frame is None:
+            return []
+
         if self.model is None:
             raise RuntimeError("Model not loaded")
 
-        # Pre-compute scale factors only if ROI mask exists
-        if self.roi_mask is not None and frame is not None:
-            self.scale_factors = (
-                self.roi_mask.shape[0] / frame.shape[0],  # scale_y
-                self.roi_mask.shape[1] / frame.shape[1]  # scale_x
-            )
-        else:
-            self.scale_factors = None
+        # Ensure ROI mask matches current frame resolution to avoid scaling artifacts
+        if self.roi_mask is not None:
+            if frame.shape[0] != self.roi_mask.shape[0] or frame.shape[1] != self.roi_mask.shape[1]:
+                self.roi_mask = self._create_mask(frame.shape[0], frame.shape[1], self.normalized_roi_points)
         
         # Fix: Add exception handling around model inference
         try:
@@ -132,20 +133,11 @@ class DetectionEngine:
                     # Use original bbox for the result
                     orig_bbox = (b[0], b[1], b[2], b[3])
                     
-                    # Scale coordinates only for ROI check
-                    if self.scale_factors:
-                        scale_y, scale_x = self.scale_factors
-                        scaled_bbox = (
-                            b[0] * scale_x,
-                            b[1] * scale_y,
-                            b[2] * scale_x,
-                            b[3] * scale_y
-                        )
-                    else:
-                        scaled_bbox = orig_bbox
-                    
-                    if self.is_in_roi(scaled_bbox):
+                    if self.is_in_roi(orig_bbox):
                         # Return original bbox and explicit None for embedding
                         detections.append((orig_bbox, cls, conf, None))
+                elif len(results) > 0 and not detections:
+                    # Warn if detections exist but none match the filtered vehicle classes
+                    logger.debug(f"Detection found class {cls}, but it is not in vehicle_class_ids {vehicle_class_ids}")
         
         return detections

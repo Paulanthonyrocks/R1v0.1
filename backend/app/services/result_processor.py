@@ -1,0 +1,172 @@
+from typing import Dict, Any, List, Optional, Tuple
+import asyncio
+import logging
+import time
+import queue
+from concurrent.futures import ThreadPoolExecutor
+from app.utils.shared_frame_buffer import SharedFrameBuffer
+from app.services.constants import FeedManagerConstants
+from app.models.feeds import FeedOperationalStatusEnum
+
+logger = logging.getLogger("app.services.result_processor")
+
+class ResultProcessor:
+    """
+    Handles the reading and processing of inference results from the central queue.
+    Decouples the data pipeline (SHM read, dedup, KPI updates) from feed orchestration.
+    """
+    def __init__(self, 
+                 central_output_queue: Any, 
+                 frame_buffer: SharedFrameBuffer, 
+                 executor: ThreadPoolExecutor, 
+                 config: Dict[str, Any],
+                 registry: Any,
+                 broadcaster: Any):
+        self._central_output_queue = central_output_queue
+        self.frame_buffer = frame_buffer
+        self._executor = executor
+        self.config = config
+        self.registry = registry
+        self.broadcaster = broadcaster
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+
+    def _process_single_result(self, item):
+        """CPU-bound processing of a single result item (SHM read -> bytes)."""
+        try:
+            feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
+            try:
+                frame_bytes, dims = self.frame_buffer.read(shm_ref)
+            finally:
+                self.frame_buffer.release(shm_ref)
+
+            return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
+        except Exception as e:
+            # Simple error suppression for stale SHM refs
+            logger.error(f"Error processing result for {item[0] if item else 'unknown'}: {e}")
+            return None
+
+    async def process_results_loop(self, handle_periodic_tasks_callback):
+        """
+        Main loop for processing results.
+        Calls handle_periodic_tasks_callback when the queue is empty.
+        """
+        logger.info("Result processor loop started.")
+        last_heartbeat = time.time()
+        _feed_last_processed_ts: Dict[str, float] = {}
+
+        while not self._stop_flag:
+            try:
+                if time.time() - last_heartbeat > 10.0:
+                    logger.debug("Result processor heartbeat: loop is active")
+                    last_heartbeat = time.time()
+
+                items_buffer = []
+                try:
+                    for _ in range(FeedManagerConstants.RESULT_BATCH_SIZE):
+                        res = self._central_output_queue.get(block=False)
+                        if isinstance(res, tuple) and len(res) == 2:
+                            msg_id, item = res
+                            items_buffer.append((msg_id, item))
+                        else:
+                            items_buffer.append((None, res))
+                except queue.Empty:
+                    pass
+
+                if not items_buffer:
+                    await asyncio.sleep(FeedManagerConstants.RESULT_READER_IDLE_SLEEP)
+                    await handle_periodic_tasks_callback()
+                    continue
+
+                processed_items = await asyncio.gather(*[
+                    asyncio.get_running_loop().run_in_executor(
+                        self._executor,
+                        self._process_single_result,
+                        item,
+                    )
+                    for msg_id, item in items_buffer
+                ])
+
+                # Dedup logic
+                latest_per_feed: Dict[str, int] = {}
+                for i, result in enumerate(processed_items):
+                    if result is None:
+                        continue
+                    latest_per_feed[result[0]] = i
+
+                latest_indices = set(latest_per_feed.values())
+
+                # ACK all
+                for i, result in enumerate(processed_items):
+                    msg_id, _ = items_buffer[i]
+                    if msg_id:
+                        try:
+                            self._central_output_queue.ack(msg_id)
+                        except Exception as e:
+                            logger.error(f"Failed to ack message {msg_id}: {e}")
+
+                # Prune dedup
+                active_feeds = self.registry.process_registry.keys()
+                for fid in list(_feed_last_processed_ts.keys()):
+                    if fid not in active_feeds:
+                        del _feed_last_processed_ts[fid]
+
+                for i, result in enumerate(processed_items):
+                    if result is None or i not in latest_indices:
+                        continue
+
+                    feed_id, frame_idx, frame_bytes, metrics, vehicles, extra = result
+
+                    now_dedup = time.time()
+                    target_fps_dedup = self.config.get("video_output", {}).get("fps", 10)
+                    dedup_window = 1.0 / target_fps_dedup
+                    if now_dedup - _feed_last_processed_ts.get(feed_id, 0.0) < dedup_window:
+                        continue
+                    _feed_last_processed_ts[feed_id] = now_dedup
+
+                    # Registry check
+                    entry = self.registry.get_entry(feed_id)
+                    if not entry:
+                        continue
+
+                    # Handle status transition
+                    if entry["status"] == FeedOperationalStatusEnum.STARTING:
+                        entry["status"] = FeedOperationalStatusEnum.RUNNING
+                        
+                        # Construct FeedStatusData to avoid passing None to the broadcaster
+                        from app.models.feeds import FeedStatusData, FeedConfigInfo
+                        status_data = FeedStatusData(
+                            feed_id=feed_id,
+                            config=entry.get("config_info") or FeedConfigInfo(
+                                name="Unknown", source_type="unknown", source_identifier=entry["source"]
+                            ),
+                            source=entry["source"],
+                            status=entry["status"],
+                            current_fps=entry["timer"].get_fps("loop_total") if entry.get("timer") else None,
+                            last_error=entry.get("error_message"),
+                            latest_metrics=entry.get("latest_metrics"),
+                        )
+                        if self.broadcaster:
+                            await self.broadcaster.broadcast_feed_update(status_data)
+                        else:
+                            logger.warning(f"Broadcaster is None; skipping feed update for {feed_id}")
+
+                    # Process metrics and vehicles (delegated to FeedManager or specialized service)
+                    # To keep it surgical, I'll leave the complex metrics logic in FeedManager 
+                    # and call a callback.
+                    await self._process_frame_data(feed_id, frame_idx, frame_bytes, metrics, vehicles, extra)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in result processor loop: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
+
+    async def _process_frame_data(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
+        """
+        Placeholder for the logic that updates metrics, broadcasts frames, etc.
+        This will be implemented as a callback from FeedManager to avoid circular deps.
+        """
+        pass

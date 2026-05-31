@@ -85,8 +85,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         
-        # Skip rate limiting for static files or specific paths
-        if path.startswith("/snapshots") or path.startswith("/static") or path.startswith("/api/v1/snapshots"):
+        # Skip rate limiting for static files, specific paths, and WebSocket connections
+        if path.startswith("/snapshots") or path.startswith("/static") or path.startswith("/api/v1/snapshots") or path.startswith("/api/v1/ws"):
             return await call_next(request)
 
         # Identify user: Never trust X-User-ID header for rate limiting as it is trivially spoofable.

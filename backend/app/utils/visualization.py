@@ -214,7 +214,15 @@ def visualize_data(
                 speed = data.get("speed", 0.0)
                 plate = data.get("license_plate", "")
                 class_id = data.get("class_id", -1)
-                class_name = TrafficMonitor.vehicle_type_map.get(class_id, "?")
+                
+                vehicle_type_map = {
+                    2: "car",
+                    3: "motorcycle",
+                    5: "bus",
+                    7: "truck",
+                    -1: "unknown",
+                }
+                class_name = vehicle_type_map.get(class_id, "?")
                 behavior = data.get("behavior", "unknown")
 
                 logger.debug(f"[{feed_id}] Processing vehicle {veh_id}. Bbox: {bbox}, Behavior: {behavior}")

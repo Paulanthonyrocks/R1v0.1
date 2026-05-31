@@ -11,7 +11,7 @@ class FeatureFlags:
     def __init__(self, config: Dict[str, Any]):
         self._config = config
         self._flags = config.get("feature_flags", {})
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         
         # Initialize Redis client for shared overrides
         try:
@@ -21,7 +21,6 @@ class FeatureFlags:
         except Exception as e:
             logger.error(f"Failed to initialize Redis for FeatureFlags: {e}")
             self._redis = None
-            self._redis_prefix = None
     
     def is_enabled(self, feature: str, user_id: Optional[str] = None) -> bool:
         """
@@ -33,25 +32,20 @@ class FeatureFlags:
             
         Returns:
             bool: True if the feature is enabled, False otherwise.
-            
-        Note: If percentage is set but no user_id is provided, the result is 
-        determined by the 'default_without_user' key in the flag configuration 
-        (defaults to False).
         """
+        # 1. Check shared Redis overrides first (Network call outside lock)
+        if self._redis:
+            try:
+                val = self._redis.get(f"{self._redis_prefix}{feature}")
+                if val is not None:
+                    return val.decode('utf-8').lower() == 'true'
+            except Exception as e:
+                logger.warning(f"Error reading feature override from Redis: {e}")
+
         with self._lock:
-            # 1. Check shared Redis overrides first
-            if self._redis:
-                try:
-                    val = self._redis.get(f"{self._redis_prefix}{feature}")
-                    if val is not None:
-                        # Redis returns bytes; convert to boolean
-                        return val.decode('utf-8').lower() == 'true'
-                except Exception as e:
-                    logger.warning(f"Error reading feature override from Redis: {e}")
-            
             # 2. Get configuration for the feature
             if feature not in self._flags:
-                logger.warning(f"Querying unknown feature flag: {feature}")
+                logger.debug(f"Querying unknown feature flag: {feature}")
                 return False
                 
             flag_config = self._flags.get(feature)
@@ -110,20 +104,17 @@ class FeatureFlags:
     
     def remove_override(self, feature: str):
         """Remove a runtime override for a feature flag from shared Redis store."""
-        with self._lock:
-            if not self._redis:
-                logger.error("Cannot remove override: Redis client not available.")
-                return
-                
-            try:
-                # Check if it exists first to provide the warning from the audit
-                if self._redis.exists(f"{self._redis_prefix}{feature}"):
-                    self._redis.delete(f"{self._redis_prefix}{feature}")
-                    logger.info(f"Removing shared feature flag override for: {feature}")
-                else:
-                    logger.warning(f"No override exists for feature: {feature}")
-            except Exception as e:
-                logger.error(f"Failed to remove feature override from Redis: {e}")
+        if not self._redis:
+            logger.error("Cannot remove override: Redis client not available.")
+            return
+            
+        try:
+            # Delete directly. Redis delete returns the number of keys removed.
+            deleted_count = self._redis.delete(f"{self._redis_prefix}{feature}")
+            if deleted_count > 0:
+                logger.info(f"Removed shared feature flag override for: {feature}")
+        except Exception as e:
+            logger.error(f"Failed to remove feature override from Redis: {e}")
 
     def get_all_flags(self) -> Dict[str, Any]:
         """

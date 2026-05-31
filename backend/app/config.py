@@ -86,8 +86,8 @@ class AppConfig(BaseSettings):
     }
     firebase_admin: Dict[str, Any] = {"auth_enabled": False}
     video_input: Dict[str, Any] = {"sample_videos": []}
-    video_output: Dict[str, Any] = {"enabled": False, "output_directory": "recordings", "fps": 10}
-    reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "reid_gallery.pkl"}
+    video_output: Dict[str, Any] = {"enabled": False, "output_directory": "backend/data/recordings", "fps": 10}
+    reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "backend/data/reid_gallery.pkl"}
     prediction_scheduler: Dict[str, Any] = {"enabled": True}
     auto_start_processing: bool = False
     file_watcher: Dict[str, Any] = {"enabled": False}
@@ -95,8 +95,8 @@ class AppConfig(BaseSettings):
     cors: Dict[str, Any] = {"allowed_origins": []}
     
     # New settings for dynamic paths
-    feeds_config_path: str = "feeds_config.json"
-    snapshots_dir: str = "snapshots"
+    feeds_config_path: str = "backend/data/feeds_config.json"
+    snapshots_dir: str = "backend/data/snapshots"
     accel_threshold_mps2: float = 0.5
     advanced_analytics: Dict[str, Any] = {}
     analytics_service: Dict[str, Any] = {}
@@ -175,7 +175,13 @@ def _resolve_paths(config: AppConfig) -> None:
         config.video_output["output_directory"] = str(out_dir)
         
     if not Path(config.reid.get("persistence_path", "")).is_absolute():
-        config.reid["persistence_path"] = str((root_dir / config.reid.get("persistence_path", "reid_gallery.pkl")).resolve())
+        reid_p = config.reid.get("persistence_path", "reid_gallery.pkl")
+        if Path(reid_p).name == reid_p:
+            # Only a filename provided, resolve relative to data_dir
+            config.reid["persistence_path"] = str((Path(config.data_dir) / reid_p).resolve())
+        else:
+            # Path provided, resolve relative to root_dir
+            config.reid["persistence_path"] = str((root_dir / reid_p).resolve())
         
     if not Path(config.feeds_config_path).is_absolute():
         config.feeds_config_path = str((root_dir / config.feeds_config_path).resolve())
@@ -272,5 +278,33 @@ def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     global _config_instance
     logger.warning("Attempting configuration reload...")
     _config_instance = None  # Clear current instance
+    
+    # Invalidate RedisCient singletons to force reconnection with new config
+    try:
+        from app.utils.redis_client import RedisClient
+        RedisClient.reset()
+    except Exception as e:
+        logger.error(f"Failed to reset RedisClient during config reload: {e}")
+        
+    return initialize_config(config_path)  # Reload
+
+
+# Optional: Function to reload config (similar logic to router, but maybe called differently)
+def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Forces a reload of the configuration. Use with caution, especially with multiple workers.
+    Returns the newly loaded config.
+    """
+    global _config_instance
+    logger.warning("Attempting configuration reload...")
+    _config_instance = None  # Clear current instance
+    
+    # Invalidate RedisCient singletons to force reconnection with new config
+    try:
+        from app.utils.redis_client import RedisClient
+        RedisClient.reset()
+    except Exception as e:
+        logger.error(f"Failed to reset RedisClient during config reload: {e}")
+        
     return initialize_config(config_path)  # Reload
 

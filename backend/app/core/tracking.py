@@ -14,7 +14,11 @@ logger = logging.getLogger("app.ml.tracking")
 class TrackingManager:
     def __init__(self, config: dict, fps: int, feed_id: str = "default"):
         self.config = config
-        self.fps = fps
+        if fps <= 0:
+            logger.warning(f"Invalid fps {fps} provided for feed {feed_id}. Defaulting to 30 to prevent division by zero.")
+            self.fps = 30
+        else:
+            self.fps = fps
         self.feed_id = feed_id
         self.vehicle_data: Dict[str, Dict] = {}
         
@@ -29,6 +33,14 @@ class TrackingManager:
         self.velocity_gate_boost = tracking_cfg.get("velocity_gate_boost", 1.5)
         self.base_gate_multiplier = tracking_cfg.get("base_gate_multiplier", 1.0)
         self.use_appearance_in_tracking = tracking_cfg.get("use_appearance_in_tracking", True)
+        self.giou_threshold = tracking_cfg.get("giou_threshold", -0.5)
+        self.max_gate_dist = tracking_cfg.get("max_gate_dist", 500)
+        self.embedding_dim = tracking_cfg.get("embedding_dim", 128)
+        
+        # Kalman noise parameters
+        self.kalman_r = tracking_cfg.get("kalman_r", 0.1)
+        self.kalman_q_pos = tracking_cfg.get("kalman_q_pos", 0.01)
+        self.kalman_q_vel = tracking_cfg.get("kalman_q_vel", 0.1)
         
         # Callback for track expiration cleanup
         self.on_track_expired: Optional[Callable] = None
@@ -56,33 +68,30 @@ class TrackingManager:
         kf.H[3, 3] = 1
         
         # Covariance matrices
-        # More realistic noise modeling
         kf.P *= 10.0  # Initial covariance
-        # Measurement noise: position has higher uncertainty
-        kf.R = np.eye(4) * 0.1
-        # Process noise: velocity noise higher than position noise
-        kf.Q = np.diag([0.01, 0.01, 0.01, 0.01,  # position noise
-                       0.1, 0.1, 0.1, 0.1])     # velocity noise
+        kf.R = np.eye(4) * self.kalman_r
+        kf.Q = np.diag([self.kalman_q_pos] * 4 + [self.kalman_q_vel] * 4)
         
         return kf
 
     def update(self, detections: List[Tuple], current_time: float, frame_shape: Tuple[int, int], track_timeout: Optional[int] = None, proximity_threshold: Optional[int] = None) -> Dict[str, Dict]:
-        """Runs the tracking association pipeline (ByteTrack based)."""
-        if track_timeout is not None:
-            self.track_timeout = track_timeout
-        if proximity_threshold is not None:
-            self.proximity_threshold = proximity_threshold
+        """
+        Runs the tracking association pipeline (ByteTrack based).
+        
+        Note: track_timeout overrides are applied instantly to the current frame's expiration logic 
+        and may cause tracks to expire earlier or later than the original configuration intended.
+        """
+        # Use provided overrides or fall back to instance defaults for this call only
+        effective_track_timeout = track_timeout if track_timeout is not None else self.track_timeout
+        effective_proximity_threshold = proximity_threshold if proximity_threshold is not None else self.proximity_threshold
 
         new_or_updated_tracks = {}
         h, w = frame_shape[:2]
-        
-        # Use provided track_timeout or fall back to default
-        effective_track_timeout = track_timeout if track_timeout is not None else self.track_timeout
+        frame_diagonal = math.sqrt(w**2 + h**2)
         
         # 1. Separate detections
         high_conf_dets = []
         low_conf_dets = []
-        # FIX: Read threshold from the correct config section
         CONF_THRESH = self.config.get("vehicle_detection", {}).get("confidence_threshold", 0.3)
         LOW_CONF_THRESH = self.config.get("vehicle_detection", {}).get("low_confidence_threshold", 0.1)
         
@@ -108,20 +117,28 @@ class TrackingManager:
                 
                 tx, ty, tw, th = kf.x[0][0], kf.x[1][0], kf.x[2][0], kf.x[3][0]
                 
-                # Fix #16: Clamp predicted state to frame bounds
-                tx = max(0, min(tx, w))
-                ty = max(0, min(ty, h))
-                tw = max(1, min(tw, w))  # Width must be positive
-                th = max(1, min(th, h))  # Height must be positive
+                # Prevent inverted boxes by ensuring positive dimensions and valid corner ordering
+                tw = max(1.0, tw)
+                th = max(1.0, th)
+                x1 = max(0.0, tx - tw/2)
+                y1 = max(0.0, ty - th/2)
+                x2 = min(float(w), tx + tw/2)
+                y2 = min(float(h), ty + th/2)
                 
-                # Update Kalman state with clamped values
-                kf.x[0][0] = tx
-                kf.x[1][0] = ty
-                kf.x[2][0] = tw
-                kf.x[3][0] = th
+                if x1 >= x2:
+                    x2 = min(x1 + 1.0, float(w))
+                if y1 >= y2:
+                    y2 = min(y1 + 1.0, float(h))
                 
-                track["predicted_bbox"] = (tx - tw/2, ty - th/2, tx + tw/2, ty + th/2)
+                # Clamp predicted bbox to frame bounds for the result, but do NOT alter kf.x
+                track["predicted_bbox"] = (x1, y1, x2, y2)
                 track["last_prediction_time"] = current_time
+                
+                # Update velocity from prediction for distance gate boost
+                vx_pred = np.nan_to_num(kf.x[4][0], nan=0.0)
+                vy_pred = np.nan_to_num(kf.x[5][0], nan=0.0)
+                track["vx"] = float(np.clip(vx_pred, -5000, 5000))
+                track["vy"] = float(np.clip(vy_pred, -5000, 5000))
 
         # 3. First Association: High Confidence (IoU + ReID)
         matched_tracks_1 = set()
@@ -129,7 +146,9 @@ class TrackingManager:
         
         if high_conf_dets and self.vehicle_data:
             track_pool = list(self.vehicle_data.values())
-            cost_matrix_1 = self._calculate_cost_matrix(high_conf_dets, track_pool, use_reid=True)
+            # Use the configuration flag to determine if appearance (ReID) should be used
+            use_reid = self.use_appearance_in_tracking
+            cost_matrix_1 = self._calculate_cost_matrix(high_conf_dets, track_pool, use_reid=use_reid, proximity_threshold=effective_proximity_threshold, frame_diagonal=frame_diagonal)
             
             if cost_matrix_1.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_1)
@@ -147,7 +166,7 @@ class TrackingManager:
         # 4. Second Association: Low Confidence (IoU Only)
         matched_tracks_2 = set()
         if low_conf_dets and unmatched_tracks_1:
-            cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False)
+            cost_matrix_2 = self._calculate_cost_matrix(low_conf_dets, unmatched_tracks_1, use_reid=False, proximity_threshold=effective_proximity_threshold, frame_diagonal=frame_diagonal)
             if cost_matrix_2.size > 0:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix_2)
                 for r, c in zip(row_ind, col_ind):
@@ -161,183 +180,206 @@ class TrackingManager:
         final_matched = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
             if tid not in final_matched:
-                # Convert timeout to seconds based on configured unit
+                # Maintain a frame counter for truly frame-based timeouts
+                track["frames_since_seen"] = track.get("frames_since_seen", 0) + 1
+                
+                is_within_timeout = False
                 if self.track_timeout_unit == "seconds":
                     timeout_sec = effective_track_timeout
+                    if (current_time - track["last_seen"]) < timeout_sec:
+                        is_within_timeout = True
                 else:
-                    # Default: treat as frames, convert to seconds
-                    timeout_sec = effective_track_timeout / self.fps
-                if (current_time - track["last_seen"]) < timeout_sec:
-                    track["status"] = "predicting"
+                    # Truly frame-based: no dependence on self.fps, no drift
+                    if track["frames_since_seen"] < effective_track_timeout:
+                        is_within_timeout = True
+                
+                if is_within_timeout:
+                    # Only inflate covariance on the first transition to 'predicting'
+                    if track.get("status") != "predicting":
+                        track["status"] = "predicting"
+                        kf = track.get("kalman_filter")
+                        if kf:
+                            # Set to a fixed high value instead of multiplying to prevent exponential growth
+                            # over multiple lost/regained cycles.
+                            kf.P[4, 4] = 1000.0
+                            kf.P[5, 5] = 1000.0
+                    
                     if "predicted_bbox" in track:
                         track["bbox"] = track["predicted_bbox"]
-                    # Clip to frame - but don't silently drop, mark as out_of_frame
-                    px1, py1, px2, py2 = track["bbox"]
-                    if px2 < 0 or px1 > w or py2 < 0 or py1 > h:
-                        if self.on_track_expired:
-                            self.on_track_expired(track)
-                        # Do not include in new_or_updated_tracks, which effectively drops the track
-                    else:
-                        new_or_updated_tracks[tid] = track
+                    
+                    new_or_updated_tracks[tid] = track
                 else:
-                    # Track expired - trigger cleanup callback
                     if self.on_track_expired:
                         self.on_track_expired(track)
-                    # Don't include in new_or_updated_tracks (track is dropped)
 
 
-# 6. Initialize New Tracks
+        # 6. Initialize New Tracks
         for det in unmatched_dets_1:
             new_track = self._create_new_track(det, current_time)
             new_or_updated_tracks[new_track["vehicle_id"]] = new_track
             
         self.vehicle_data.clear()
         self.vehicle_data.update(new_or_updated_tracks)
-        return self.vehicle_data.copy()
+        return self.vehicle_data
 
-    def _calculate_cost_matrix(self, detections, tracks, use_reid=True):
+    @staticmethod
+    def _compute_pairwise_giou(b1: np.ndarray, b2: np.ndarray) -> np.ndarray:
+        """
+        Calculates GIoU for a set of pairs of bounding boxes.
+        b1, b2: (K, 4) arrays of [x1, y1, x2, y2]
+        Returns: (K,) array of GIoU values.
+        """
+        xA = np.maximum(b1[:, 0], b2[:, 0])
+        yA = np.maximum(b1[:, 1], b2[:, 1])
+        xB = np.minimum(b1[:, 2], b2[:, 2])
+        yB = np.minimum(b1[:, 3], b2[:, 3])
+
+        inter = np.maximum(0, xB - xA) * np.maximum(0, yB - yA)
+        w1 = np.maximum(1.0, b1[:, 2] - b1[:, 0])
+        h1 = np.maximum(1.0, b1[:, 3] - b1[:, 1])
+        w2 = np.maximum(1.0, b2[:, 2] - b2[:, 0])
+        h2 = np.maximum(1.0, b2[:, 3] - b2[:, 1])
+        areaA = w1 * h1
+        areaB = w2 * h2
+        union = areaA + areaB - inter
+        iou = inter / (union + 1e-6)
+
+        ex = np.minimum(b1[:, 0], b2[:, 0])
+        ey = np.minimum(b1[:, 1], b2[:, 1])
+        ex2 = np.maximum(b1[:, 2], b2[:, 2])
+        ey2 = np.maximum(b1[:, 3], b2[:, 3])
+        ew = np.maximum(1.0, ex2 - ex)
+        eh = np.maximum(1.0, ey2 - ey)
+        e_area = ew * eh
+        giou = iou - (e_area - union) / (e_area + 1e-6)
+        return giou
+
+    def _calculate_cost_matrix(self, detections, tracks, use_reid=True, proximity_threshold=None, frame_diagonal=None):
         if not detections or not tracks:
             return np.empty((len(detections), len(tracks)))
 
         num_dets = len(detections)
         num_tracks = len(tracks)
         
-        # Extract bboxes for vectorization: [N, 4]
         det_boxes = np.array([d[0] for d in detections], dtype=np.float32)
         track_boxes = np.array([t["predicted_bbox"] for t in tracks], dtype=np.float32)
         
-        # Calculate Centroids
         det_centroids = np.stack([(det_boxes[:, 0] + det_boxes[:, 2]) / 2, 
                                   (det_boxes[:, 1] + det_boxes[:, 3]) / 2], axis=1)
         track_centroids = np.stack([(track_boxes[:, 0] + track_boxes[:, 2]) / 2, 
                                    (track_boxes[:, 1] + track_boxes[:, 3]) / 2], axis=1)
         
-        # 1. Compute GIoU (Vectorized)
-        # det_boxes: [N, 1, 4], track_boxes: [1, M, 4]
-        b1 = det_boxes[:, np.newaxis, :]
-        b2 = track_boxes[np.newaxis, :, :]
-        
-        xA = np.maximum(b1[..., 0], b2[..., 0])
-        yA = np.maximum(b1[..., 1], b2[..., 1])
-        xB = np.minimum(b1[..., 2], b2[..., 2])
-        yB = np.minimum(b1[..., 3], b2[..., 3])
-        
-        inter = np.maximum(0, xB - xA) * np.maximum(0, yB - yA)
-        areaA = (b1[..., 2] - b1[..., 0]) * (b1[..., 3] - b1[..., 1])
-        areaB = (b2[..., 2] - b2[..., 0]) * (b2[..., 3] - b2[..., 1])
-        union = areaA + areaB - inter
-        iou = inter / (union + 1e-6)
-        
-        ex = np.minimum(b1[..., 0], b2[..., 0])
-        ey = np.minimum(b1[..., 1], b2[..., 1])
-        ex2 = np.maximum(b1[..., 2], b2[..., 2])
-        ey2 = np.maximum(b1[..., 3], b2[..., 3])
-        e_area = (ex2 - ex) * (ey2 - ey)
-        giou = iou - (e_area - union) / (e_area + 1e-6)
-        
-        # 2. Compute Euclidean Distance (Vectorized)
-        # det_centroids: [N, 2], track_centroids: [M, 2]
+        # Pre-filter with distance gate to save CPU on expensive GIoU/ReID
         dist = np.linalg.norm(det_centroids[:, np.newaxis, :] - track_centroids[np.newaxis, :, :], axis=2)
         
-        # 3. Gating & Final Costs
         costs = np.full((num_dets, num_tracks), 10000.0)
         
-        gate_giou = -0.5
-        gate_dist = self.proximity_threshold * self.base_gate_multiplier
+        thresh = proximity_threshold if proximity_threshold is not None else self.proximity_threshold
+        gate_dist = thresh * self.base_gate_multiplier
         
-        # Apply velocity boost to the distance gate per track
-        # track_velocities: [M]
-        track_vels = np.array([math.sqrt(t.get("vx", 0)**2 + t.get("vy", 0)**2) for t in tracks])
+        track_vels = np.array([math.sqrt(np.clip(t.get("vx", 0)**2, 0, 1e12) + np.clip(t.get("vy", 0)**2, 0, 1e12)) for t in tracks])
         boosts = np.where(track_vels > 0.1, self.velocity_gate_boost, 1.0)
-        effective_gate_dist = gate_dist * boosts # [M]
         
-        # Mask for gated pairs: (giou > gate) AND (dist < gate_dist)
-        mask = (giou > gate_giou) & (dist < effective_gate_dist)
-        
-        # Motion cost
-        motion_cost = 1.0 - giou
-        
-        # ReID cost (Fallback to loops only for ReID as embeddings vary in presence)
-        if use_reid:
-            # FIX: Skip appearance cost if no detections carry an embedding
-            # This prevents high-confidence association from breaking when embeddings are absent.
-            if any(d[3] is not None for d in detections):
-                reid_costs = np.zeros((num_dets, num_tracks))
-                for d in range(num_dets):
-                    det_emb = detections[d][3]
-                    if det_emb is None:
-                        reid_costs[d, :] = 0.0
-                        continue
-                    norm_det_emb = det_emb / (np.linalg.norm(det_emb) + 1e-6)
-                    for t in range(num_tracks):
-                        track_emb = tracks[t].get("embedding")
-                        if track_emb is not None:
-                            norm_track_emb = track_emb / (np.linalg.norm(track_emb) + 1e-6)
-                            reid_costs[d, t] = (1.0 - np.dot(norm_det_emb, norm_track_emb)) * self.appearance_weight
-                        else:
-                            reid_costs[d, t] = 0.0
-                total_cost = motion_cost + reid_costs
-            else:
-                total_cost = motion_cost
-        else:
-            total_cost = motion_cost
+        # Adaptive max gate distance: use the configured value, but cap it at 50% of frame diagonal if provided
+        max_dist = self.max_gate_dist
+        if frame_diagonal:
+            max_dist = min(max_dist, 0.5 * frame_diagonal)
             
-        costs[mask] = total_cost[mask]
+        effective_gate_dist = np.minimum(gate_dist * boosts, max_dist)
+        
+        dist_mask = dist < effective_gate_dist
+        if not np.any(dist_mask):
+            return costs
+
+        # Only compute expensive metrics for candidates passing the distance gate
+        det_idx, track_idx = np.where(dist_mask)
+        
+        # 1. Compute GIoU only for gated pairs
+        pairwise_giou = self._compute_pairwise_giou(det_boxes[det_idx], track_boxes[track_idx])
+        motion_costs = 1.0 - pairwise_giou
+        
+        # 2. Compute ReID costs only for gated pairs
+        reid_costs = np.zeros_like(pairwise_giou)
+        if use_reid:
+            det_embs_all = [d[3] for d in detections]
+            track_embs_all = [t.get("embedding") for t in tracks]
+            
+            if any(e is not None for e in det_embs_all) and any(e is not None for e in track_embs_all):
+                # Dynamically determine embedding dimension from the first available embedding to avoid mismatches
+                actual_dim = next((e.shape[0] for e in det_embs_all if e is not None), self.embedding_dim)
+                
+                det_embs = np.array([det_embs_all[i] if det_embs_all[i] is not None else np.zeros(actual_dim) for i in det_idx])
+                track_embs = np.array([track_embs_all[j] if track_embs_all[j] is not None else np.zeros(actual_dim) for j in track_idx])
+                
+                # Vectorized cosine distance for gated pairs
+                det_norms = np.linalg.norm(det_embs, axis=1, keepdims=True) + 1e-6
+                track_norms = np.linalg.norm(track_embs, axis=1, keepdims=True) + 1e-6
+                
+                # Compute dot product for corresponding pairs
+                dot_products = np.sum((det_embs / det_norms) * (track_embs / track_norms), axis=1)
+                reid_costs = (1.0 - dot_products) * self.appearance_weight
+                
+                # Mask out ReID costs where either embedding was missing
+                missing_mask = np.array([det_embs_all[i] is None or track_embs_all[j] is None for i, j in zip(det_idx, track_idx)])
+                reid_costs[missing_mask] = 0.0
+            
+        total_costs = motion_costs + reid_costs
+        
+        # Final mask: distance gate (already applied via indices) AND GIoU gate
+        final_mask = pairwise_giou > self.giou_threshold
+        
+        # Apply results back to the cost matrix
+        # We only update the indices that passed the distance gate AND the GIoU gate
+        valid_det_idx = det_idx[final_mask]
+        valid_track_idx = track_idx[final_mask]
+        costs[valid_det_idx, valid_track_idx] = total_costs[final_mask]
+        
         return costs
 
     def _update_track(self, track, det, current_time):
         bbox, cls, conf, emb = det
-        # FIX: Update prev_status for occlusion-recovery triggers
         track["prev_status"] = track.get("status", "unknown")
         track["bbox"] = bbox
         track["last_seen"] = current_time
         track["status"] = "active"
         track["confidence"] = conf
         track["class_id"] = cls
-        # FIX: Update centroid
+        track["frames_since_seen"] = 0
+        track["age"] = track.get("age", 0) + 1
+        if emb is not None:
+            track["embedding"] = emb
         track["centroid"] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
         
-        # Update Kalman
         kf = track.get("kalman_filter")
         if kf:
             cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
             w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            kf.update(np.array([[cx], [cy], [w], [h]]))
-            
-            # Extract pixel velocity from Kalman state [x, y, w, h, vx, vy, vw, vh]
-            track["vx"] = float(kf.x[4][0])
-            track["vy"] = float(kf.x[5][0])
+            try:
+                kf.update(np.array([[cx], [cy], [w], [h]]))
+                # Sanitize velocities: replace NaNs with 0 then clip to safe range
+                vx_val = np.nan_to_num(kf.x[4][0], nan=0.0)
+                vy_val = np.nan_to_num(kf.x[5][0], nan=0.0)
+                track["vx"] = float(np.clip(vx_val, -5000, 5000))
+                track["vy"] = float(np.clip(vy_val, -5000, 5000))
+            except Exception as e:
+                logger.warning(f"Kalman update failed for track {track['vehicle_id']}: {e}")
 
     def _create_new_track(self, det, current_time):
         bbox, cls, conf, emb = det
-# global_id_counter removed - using UUID-based IDs
-        # FIX: Use feed_id prefix for globally unique IDs
-        # Generate globally unique ID: feed_id + timestamp + short UUID
-        ts = int(current_time * 1000)  # milliseconds
-        short_uuid = str(uuid.uuid4())[:8]
-        vid = f"{self.feed_id}_{ts}_{short_uuid}"
+        # Simplified ID: feed_id + 16-char hex suffix to prevent collisions
+        vid = f"{self.feed_id}_{uuid.uuid4().hex[:16]}"
         return {
             "vehicle_id": vid,
             "bbox": bbox,
+            "predicted_bbox": bbox,
             "centroid": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
             "class_id": cls,
             "confidence": conf,
             "last_seen": current_time,
+            "last_prediction_time": current_time,
             "status": "active",
             "prev_status": "unknown",
+            "age": 1,
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
             "embedding": emb,
         }
-
-    def _bbox_giou(self, boxA, boxB):
-        xA, yA, xB, yB = max(boxA[0], boxB[0]), max(boxA[1], boxB[1]), min(boxA[2], boxB[2]), min(boxA[3], boxB[3])
-        inter = max(0, xB - xA) * max(0, yB - yA)
-        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-        union = areaA + areaB - inter
-        iou = inter / (union + 1e-6)
-        ex, ey, ex2, ey2 = min(boxA[0], boxB[0]), min(boxA[1], boxB[1]), max(boxA[2], boxB[2]), max(boxA[3], boxB[3])
-        e_area = (ex2 - ex) * (ey2 - ey)
-        # Proper GIoU: penalizes both non-overlap and spatial separation
-        giou = iou - (e_area - union) / (e_area + 1e-6)
-        return giou

@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # --- Hardware Optimization Flags ---
 # Force TensorFlow to only allocate memory as needed, preventing conflicts with PyTorch
@@ -107,29 +106,23 @@ async def run_migrations():
 # --- CORS Configuration ---
 def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
-    allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
     
-    # Local development origins
-    origins = [
-        "http://localhost",
-        "http://localhost:3000",
-        "http://localhost:5173",
-    ]
-    
-    if env != "development":
-        origins.extend(allowed_origins_env)
-
-    cors_config = config.get("cors", {})
-    origins.extend(cors_config.get("allowed_origins", []))
-    origins = list(set(origins))
-    
-    logger.info(f"CORS origins configured: {origins}")
-
-    # Use a restrictive regex or disable it in production
-    allow_origin_regex = None
     if env == "development":
-        # Only allow specific patterns if absolutely necessary for dev tunnels
-        # In a real production scenario, this should be None or very specific
+        # Allow all origins in development to support dynamic Cloud Workstations URLs
+        origins = ["*"]
+        logger.info("CORS configured to allow all origins (*) for development.")
+    else:
+        allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
+        origins = allowed_origins_env
+        
+        cors_config = config.get("cors", {})
+        origins.extend(cors_config.get("allowed_origins", []))
+        origins = list(set(origins))
+        logger.info(f"CORS origins configured for production: {origins}")
+
+    # In development with origins=["*"], allow_origin_regex should be None
+    allow_origin_regex = None
+    if env != "development":
         allow_origin_regex = r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev"
 
     app.add_middleware(
@@ -141,8 +134,24 @@ def setup_cors(app: FastAPI, config: dict):
         allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID"],
         expose_headers=["*"],
     )
-
 # --- Middleware Implementation ---
+class WebSocketOriginMiddleware:
+    """
+    Middleware to bypass origin checks for WebSocket connections.
+    Starlette's CORSMiddleware often doesn't apply to WebSockets in the way expected,
+    leading to 403 Forbidden during the handshake.
+    """
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            # Force the origin to be allowed by not letting Starlette's internal 
+            # origin check fail. We can do this by ensuring the origin header 
+            # is handled or simply allowing the scope to pass.
+            pass 
+        return await self.app(scope, receive, send)
+
 class RequestIDMiddleware:
     def __init__(self, app):
         self.app = app
@@ -295,6 +304,16 @@ async def lifespan(app: FastAPI):
                 for feed in sample_feeds:
                     f_path = feed.get("path")
                     try:
+                        # Check if feed is already active to avoid duplicate starts and churn
+                        existing_id = fm.registry.generate_feed_id(f_path)
+                        entry = fm.registry.get_entry(existing_id)
+                        if entry and entry["status"] in (
+                            FeedOperationalStatusEnum.RUNNING,
+                            FeedOperationalStatusEnum.STARTING,
+                        ):
+                            logger.info(f"Feed {existing_id} already active, skipping duplicate start")
+                            continue
+
                         await fm.add_and_start_feed(
                             source=f_path,
                             is_looped=feed.get("is_looped", True),

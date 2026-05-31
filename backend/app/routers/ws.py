@@ -43,19 +43,25 @@ async def message_receiver(
     try:
         # --- Initial Authentication Phase ---
         try:
-            message_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            message_text = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
             message_dict = json.loads(message_text)
             message = WebSocketMessage.model_validate(message_dict)
             
             if message.type != WebSocketMessageTypeEnum.AUTHENTICATE:
                 # ... (error handling)
-                await websocket.send_text(
-                    WebSocketMessage(
-                        type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                        data=AuthFailureData(message="First message must be AUTHENTICATE").model_dump()
-                    ).model_dump_json()
-                )
-                await websocket.close(code=1008)
+                try:
+                    await websocket.send_text(
+                        WebSocketMessage(
+                            type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                            data=AuthFailureData(message="First message must be AUTHENTICATE").model_dump()
+                        ).model_dump_json()
+                    )
+                except RuntimeError as re:
+                    logger.debug(f"Could not send auth failure to {initial_id} (client already disconnected): {re}")
+                try:
+                    await websocket.close(code=1008)
+                except RuntimeError as re:
+                    logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
                 return
 
             auth_data = AuthenticateData(**(message.data or {}))
@@ -81,29 +87,41 @@ async def message_receiver(
             client_id = assigned_id
             
             # Send AUTH_SUCCESS with the assigned client_id
-            await websocket.send_text(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
-                    data=AuthSuccessData(client_id=assigned_id).model_dump()
-                ).model_dump_json()
-            )
+            try:
+                await websocket.send_text(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
+                        data=AuthSuccessData(client_id=assigned_id).model_dump()
+                    ).model_dump_json()
+                )
+            except RuntimeError as re:
+                logger.debug(f"Could not send auth success to {initial_id} (client already disconnected): {re}")
             
             is_authenticated = True
             logger.info(f"Client assigned {client_id} authenticated as {user.username}")
 
         except asyncio.TimeoutError:
             logger.warning(f"Authentication timeout for {initial_id}. Disconnecting.")
-            await websocket.close(code=1008, reason="Auth timeout")
+            try:
+                await websocket.close(code=1008, reason="Auth timeout")
+            except RuntimeError as re:
+                logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
             return
         except Exception as e:
             logger.warning(f"Initial authentication failed for {initial_id}: {e}")
-            await websocket.send_text(
-                WebSocketMessage(
-                    type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                    data=AuthFailureData(message=str(e)).model_dump()
-                ).model_dump_json()
-            )
-            await websocket.close(code=1008)
+            try:
+                await websocket.send_text(
+                    WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.AUTH_FAILURE,
+                        data=AuthFailureData(message=str(e)).model_dump()
+                    ).model_dump_json()
+                )
+            except RuntimeError as re:
+                logger.debug(f"Could not send auth failure to {initial_id} (client already disconnected): {re}")
+            try:
+                await websocket.close(code=1008)
+            except RuntimeError as re:
+                logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
             return
 
         # --- Main Message Loop ---
@@ -313,9 +331,10 @@ async def message_receiver(
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
 
-@router.websocket("/ws")
+@router.websocket("/ws/{client_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
+    client_id: str,
     connection_manager: ConnectionManager = Depends(get_connection_manager),
     feed_manager: FeedManager = Depends(get_feed_manager),
     rate_limiter: RateLimiterManager = Depends(get_rate_limiter_manager),
@@ -326,8 +345,8 @@ async def websocket_endpoint(
     """
     await websocket.accept()
 
-    # Temporary ID for tracking before authentication
-    temp_client_id = f"temp_{id(websocket)}"
+    # Use the client_id from the path as the temporary ID for tracking before authentication
+    temp_client_id = client_id
 
     try:
         try:

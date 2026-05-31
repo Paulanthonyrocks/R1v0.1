@@ -4,7 +4,7 @@ import time
 import queue
 import os
 import redis
-from typing import Any, Optional, Tuple, Union, Callable
+from typing import Any, Optional, Tuple, Union, Callable, List
 from .redis_client import get_redis_client
 
 logger = logging.getLogger("app.utils.redis_queue")
@@ -17,14 +17,16 @@ class RedisEvent:
     def __init__(self, name: str):
         self.name = name
         self.key = f"event:{name}"
+        self.channel = f"event_chan:{name}"
 
     @property
     def redis(self):
         return get_redis_client()
 
     def set(self):
-        """Set the event to true."""
+        """Set the event to true and notify waiters."""
         self.redis.set(self.key, "1")
+        self.redis.publish(self.channel, "1")
 
     def clear(self):
         """Reset the event to false."""
@@ -35,13 +37,38 @@ class RedisEvent:
         return self.redis.exists(self.key) > 0
 
     def wait(self, timeout: Optional[float] = None) -> bool:
-        """Block until the event is set or timeout occurs."""
-        start_time = time.time()
-        while not self.is_set():
-            if timeout and (time.time() - start_time) > timeout:
-                return False
-            time.sleep(0.1)
-        return True
+        """Block until the event is set or timeout occurs using Pub/Sub notification."""
+        if self.is_set():
+            return True
+
+        pubsub = self.redis.pubsub()
+        try:
+            pubsub.subscribe(self.channel)
+            # use get_message with timeout to block efficiently
+            # we use a small internal timeout loop to allow for timeout check and non-blocking checks
+            start_time = time.time()
+            while True:
+                elapsed = time.time() - start_time
+                if timeout and elapsed > timeout:
+                    return False
+                
+                # block for a reasonable amount of time, but not exceeding the remaining timeout
+                wait_time = 1.0
+                if timeout:
+                    wait_time = min(1.0, timeout - elapsed)
+                    if wait_time <= 0:
+                        return False
+
+                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=wait_time)
+                if message:
+                    return True
+                
+                # Double check in case we missed the publish (race condition)
+                if self.is_set():
+                    return True
+        finally:
+            pubsub.unsubscribe(self.channel)
+            pubsub.close()
 
 class RedisPubSubSignal:
     """
@@ -60,24 +87,32 @@ class RedisPubSubSignal:
         """
         Block until a message is received on the channel.
         Returns True if a message was received, False if timeout occurred.
+        
+        Note: This is a fire-and-forget mechanism. Signals published to the 
+        channel before the call to subscribe_and_wait are not buffered and 
+        will be missed.
         """
         pubsub = self._redis.pubsub()
         try:
             pubsub.subscribe(self.channel)
             start_time = time.time()
             while True:
-                # Check for timeout
-                if timeout and (time.time() - start_time) > timeout:
+                elapsed = time.time() - start_time
+                if timeout and elapsed > timeout:
                     return False
                 
+                # use dynamic timeout to avoid overshooting outer timeout
+                wait_time = 0.5
+                if timeout:
+                    wait_time = min(0.5, timeout - elapsed)
+                    if wait_time <= 0:
+                        return False
+
                 # Check for message
                 # We use get_message(timeout=...) to avoid busy wait
-                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
+                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=wait_time)
                 if message:
                     return True
-                
-                # Small sleep to prevent high CPU usage if get_message is not truly blocking
-                time.sleep(0.01)
             return False
         finally:
             pubsub.unsubscribe(self.channel)
@@ -104,6 +139,11 @@ class RedisValue:
 
     @property
     def value(self) -> Any:
+        """
+        Returns the shared value. 
+        Note: If typecode is 'i', 'f', or 'b', this will raise ValueError if the 
+        stored value cannot be converted to that type.
+        """
         val = self.redis.get(self.key)
         if val is None:
             return None
@@ -158,18 +198,47 @@ class RedisQueue:
 
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
         """Pops an item from the front of the queue."""
-        if block:
-            res = self.redis.blpop(self.key, timeout=int(timeout) if timeout else 0)
-            if res:
-                return pickle.loads(res[1])
-            else:
-                raise queue.Empty
-        else:
+        if not block:
             res = self.redis.lpop(self.key)
             if res:
                 return pickle.loads(res)
             else:
                 raise queue.Empty
+
+        # For blocking reads
+        start_time = time.time()
+        while True:
+            # If we have a timeout and it's less than 1 second, we can't use BLPOP 
+            # directly with that value. We use LPOP and sleep.
+            remaining = timeout - (time.time() - start_time) if timeout is not None else None
+            
+            if timeout is not None and remaining is not None and remaining <= 0:
+                raise queue.Empty
+
+            if timeout is not None and remaining is not None and remaining < 1.0:
+                # Sub-second wait: use LPOP + sleep to avoid Redis ERR value is not an integer
+                res = self.redis.lpop(self.key)
+                if res:
+                    return pickle.loads(res)
+                time.sleep(0.05)
+                continue
+            
+            # Wait for 1s or the remaining integer timeout
+            blpop_timeout = int(remaining) if remaining is not None else 0
+            res = self.redis.blpop(self.key, timeout=blpop_timeout)
+            if res:
+                return pickle.loads(res[1])
+            
+            if timeout is not None:
+                # BLPOP returned None (timeout), check if we've exceeded the overall timeout
+                if (time.time() - start_time) > timeout:
+                    raise queue.Empty
+            else:
+                # block=True but timeout=None and BLPOP returned None unexpectedly.
+                # This should not happen for timeout=0 unless there is a connection issue.
+                # Use a longer sleep to prevent CPU spin during transient failures.
+                logger.warning("Redis BLPOP returned None unexpectedly during indefinite block. Retrying with backoff...")
+                time.sleep(1.0)
 
     def get_nowait(self) -> Any:
         """Pops an item from the front of the queue without blocking."""
@@ -216,7 +285,7 @@ class RedisStreamQueue:
         
         # Ensure group is created
         self._ensure_group()
-        logger.info(f"Initialized RedisStreamQueue '{name}' (Group: {group_name}, Consumer: {self.consumer_id})")
+        logger.info(f"Initialized RedisStreamQueue '{name}' (Group: {group_name}, Consumer: {self.consumer_id}, Maxlen: {maxlen})")
 
     @property
     def redis(self):
@@ -232,18 +301,12 @@ class RedisStreamQueue:
                 raise e
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None):
-        """Pushes an item to the stream using XADD."""
+        """
+        Pushes an item to the stream using XADD.
+        This method is non-blocking by nature. If the stream reaches `maxlen`, 
+        Redis automatically evicts old entries.
+        """
         data = pickle.dumps(item)
-
-        if self.maxlen > 0 and self.qsize() >= self.maxlen:
-            if not block:
-                raise queue.Full()
-
-            start_time = time.time()
-            while self.qsize() >= self.maxlen:
-                if timeout and (time.time() - start_time) > timeout:
-                    raise queue.Full()
-                time.sleep(0.01)
 
         # Use maxlen to prevent the stream from growing indefinitely
         self.redis.xadd(self.key, {"data": data}, maxlen=self.maxlen, approximate=True)
@@ -258,20 +321,22 @@ class RedisStreamQueue:
         First attempts to read pending messages (ID '0'), then new messages (ID '>').
         Returns: (message_id, item)
         """
-        block_ms = int(timeout * 1000) if timeout else 0
+        # If timeout is explicitly 0, it should be non-blocking.
+        # If timeout is None and block=True, it should block indefinitely.
+        block_ms = int(timeout * 1000) if timeout is not None else 0
         
         # Diagnostic log to trace group and consumer
         logger.debug(f"Polling stream {self.key} | Group: {self.group_name} | Consumer: {self.consumer_id}")
 
         # 1. Try to read pending messages first (ID '0')
-        # This ensures that messages delivered but not ACKed (e.g. after a crash) are processed
+        # Always read pending non-blockingly to avoid hanging before checking for new messages
         try:
             res = self.redis.xreadgroup(
                 self.group_name, 
                 self.consumer_id, 
                 {self.key: "0"}, 
                 count=1, 
-                block=block_ms if block else 0
+                block=0
             )
             if res and res[0][1]:
                 msg_id, data_dict = res[0][1][0]
@@ -280,10 +345,13 @@ class RedisStreamQueue:
             logger.debug(f"Error reading pending messages: {e}")
 
         # 2. Fallback to new messages (ID '>')
-        if not block:
+        if not block or (timeout is not None and timeout <= 0):
             res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1)
         else:
-            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=block_ms)
+            # block=True and (timeout is None or timeout > 0)
+            # Redis XREADGROUP block=0 means block indefinitely.
+            actual_block = block_ms if timeout is not None else 0
+            res = self.redis.xreadgroup(self.group_name, self.consumer_id, {self.key: ">"}, count=1, block=actual_block)
 
         if res and res[0][1]:
             msg_id, data_dict = res[0][1][0]
@@ -294,6 +362,64 @@ class RedisStreamQueue:
     def get_nowait(self) -> Tuple[str, Any]:
         """Pops an item from the stream without blocking."""
         return self.get(block=False)
+
+    def get_batch(self, batch_size: int = 100, block: bool = False, timeout: Optional[float] = None) -> List[Tuple[str, Any]]:
+        """
+        Reads a batch of messages from the stream.
+        First attempts to read pending messages, then fills the rest from new messages.
+        
+        Note: This method prioritizes processing pending messages to ensure at-least-once 
+        delivery. If a large backlog of pending messages exists, new messages may be 
+        delayed until the backlog is cleared.
+        """
+        block_ms = int(timeout * 1000) if timeout is not None else 0
+        results = []
+
+        # 1. Try to read pending messages first (ID '0')
+        # Always read pending non-blockingly to avoid hanging and process backlog first
+        try:
+            res = self.redis.xreadgroup(
+                self.group_name, 
+                self.consumer_id, 
+                {self.key: "0"}, 
+                count=batch_size, 
+                block=0
+            )
+            if res and res[0][1]:
+                for msg_id, data_dict in res[0][1]:
+                    results.append((msg_id, pickle.loads(data_dict[b"data"])))
+        except Exception as e:
+            logger.debug(f"Error reading pending batch: {e}")
+
+        # 2. Fill remaining batch size from new messages (ID '>')
+        remaining = batch_size - len(results)
+        if remaining > 0:
+            try:
+                # Use non-blocking if not block or if timeout is explicitly 0
+                if not block or (timeout is not None and timeout <= 0):
+                    res = self.redis.xreadgroup(
+                        self.group_name, 
+                        self.consumer_id, 
+                        {self.key: ">"}, 
+                        count=remaining
+                    )
+                else:
+                    # block=True and (timeout is None or timeout > 0)
+                    actual_block = block_ms if timeout is not None else 0
+                    res = self.redis.xreadgroup(
+                        self.group_name, 
+                        self.consumer_id, 
+                        {self.key: ">"}, 
+                        count=remaining, 
+                        block=actual_block
+                    )
+                if res and res[0][1]:
+                    for msg_id, data_dict in res[0][1]:
+                        results.append((msg_id, pickle.loads(data_dict[b"data"])))
+            except Exception as e:
+                logger.debug(f"Error reading new batch: {e}")
+
+        return results
 
     def ack(self, message_id: str):
         """Acknowledges a message to mark it as processed."""
@@ -308,18 +434,11 @@ class RedisStreamQueue:
         self.__dict__.update(state)
 
     def qsize(self) -> int:
-        """Returns the number of unread messages for this consumer group (pending + lag)."""
-        try:
-            # XPENDING returns (count, min_id, max_id, consumers) for the group
-            pending_info = self.redis.xpending(self.key, self.group_name)
-            pending_count = pending_info.get("pending", 0) if isinstance(pending_info, dict) else (pending_info[0] if pending_info else 0)
-            return pending_count
-        except Exception:
-            pass
-        # Fallback: use stream length (overcounts but safe)
+        """Returns the total number of messages currently in the stream."""
         try:
             return self.redis.xlen(self.key)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error getting stream length: {e}")
             return 0
 
     def empty(self) -> bool:

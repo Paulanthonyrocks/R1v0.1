@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
@@ -18,41 +17,17 @@ from app.config import initialize_config
 from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
 from app.utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
+from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, _extract_rois
 
 logger = logging.getLogger("Inference")
-
-
-def _extract_rois(
-    frame: np.ndarray,
-    tracked_vehicles: List[Dict[str, Any]],
-    scale: float = 1.0,
-) -> List[Dict[str, Any]]:
-    """Extracts high-res JPEG patches for active vehicles."""
-    rois = []
-    h, w = frame.shape[:2]
-    for v in tracked_vehicles:
-        bbox = v.get("bbox")
-        if not bbox or len(bbox) != 4:
-            continue
-
-        x1, y1, x2, y2 = map(int, bbox)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-
-        if x2 <= x1 or y2 <= y1:
-            continue
-
-        crop = frame[y1:y2, x1:x2]
-        _, crop_bytes = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        rois.append({"b": crop_bytes.tobytes(), "x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1})
-    return rois
 
 
 def _unpack_queue_result(res) -> Tuple[Optional[Any], Any]:
     """Normalise the (msg_id, task) pair returned by different queue backends."""
     if isinstance(res, tuple) and len(res) == 2:
         return res  # Works for both RedisStreamQueue and plain tuples
+    if isinstance(res, dict) and "msg_id" in res:
+        return res["msg_id"], res
     return None, res
 
 
@@ -69,7 +44,23 @@ def inference_worker(
 ):
     """
     Heavyweight AI process that processes frames from the central queue.
-    Can handle frames from multiple feeds interleaved.
+    
+    This worker manages:
+    1. Command handling (config updates).
+    2. Batching frames from multiple slots to optimize GPU inference.
+    3. Coordinating with CoreModule for detection and tracking.
+    4. Forwarding results to the central output queue.
+    
+    Args:
+        worker_id: Unique identifier for this process.
+        central_input_queue: List of queues (slots) containing frame tasks.
+        command_queue: Queue for receiving control messages.
+        stop_event: Signal to trigger graceful shutdown.
+        config: Global application configuration.
+        db_queue: Queue for asynchronous database writes.
+        frame_buffer: Shared memory manager for frame access.
+        pipeline_pressure: RedisValue indicating system-wide congestion.
+        slots: List of slot indices assigned to this worker.
     """
     print(
         f"[INFERENCE-BOOT] Worker {worker_id} PID={os.getpid()} slots={slots} starting...",
@@ -100,9 +91,27 @@ def inference_worker(
     redis_client = get_redis_client()
     central_output_queue = RedisStreamQueue("central_output", group_name="output-readers")
 
+    # Clean up stale stop signal from previous runs to prevent immediate exit
+    try:
+        redis_client.delete("signal:pipeline_stop")
+    except Exception as e:
+        logger.warning(f"Failed to clear stale pipeline stop signal: {e}")
+
+    if stop_event and hasattr(stop_event, "clear"):
+        try:
+            stop_event.clear()
+            logger.debug(f"[Worker {worker_id}] Cleared shared stop event on boot.")
+        except Exception as e:
+            logger.warning(f"Failed to clear shared stop event: {e}")
+
     slots = slots or []
 
+    signal_stop = False
+
     def should_stop() -> bool:
+        nonlocal signal_stop
+        if signal_stop:
+            return True
         if stop_event and getattr(stop_event, "is_set", lambda: False)():
             return True
         if redis_client and redis_client.exists("signal:pipeline_stop"):
@@ -110,9 +119,9 @@ def inference_worker(
         return False
 
     def signal_handler(signum, frame):
-        logger.info(f"[Worker {worker_id}] Received signal {signum}, stopping gracefully")
-        if stop_event:
-            stop_event.set()
+        nonlocal signal_stop
+        logger.info(f"[Worker {worker_id}] Received signal {signum}, setting local stop flag.")
+        signal_stop = True
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -153,7 +162,6 @@ def inference_worker(
     model_path = vehicle_det_cfg.get("model_path")
 
     # --- Shared model loading ---
-    model_load_failed = False
     shared_reid_embedder = None
 
     if model_path:
@@ -166,7 +174,12 @@ def inference_worker(
             full_model_path = str(Path(root_dir) / model_path)
             use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
 
-            from ultralytics import YOLO
+            try:
+                from ultralytics import YOLO
+            except ImportError as e:
+                logger.critical(f"[Worker {worker_id}] Failed to import 'ultralytics' package: {e}. Ensure it is installed in the environment.")
+                return
+
             import torch
 
             device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
@@ -231,11 +244,21 @@ def inference_worker(
             q_depth = sum(central_input_queue[s].qsize() for s in slots)
 
             batch_size = config.get("performance", {}).get("batch_size", 1)
-            if pipeline_pressure and pipeline_pressure.get("value", 0) > 0.7:
+            
+            # Handle both dict and multiprocessing.Value/RedisValue for pipeline_pressure
+            pressure_val = 0.0
+            if pipeline_pressure is not None:
+                pressure_val = (
+                    getattr(pipeline_pressure, 'value', 0.0) 
+                    if not isinstance(pipeline_pressure, dict) 
+                    else pipeline_pressure.get("value", 0.0)
+                )
+
+            if pressure_val > 0.7:
                 batch_size = max(1, batch_size // 2)
                 logger.debug(
                     f"[Worker {worker_id}] High pipeline pressure "
-                    f"({pipeline_pressure.get('value'):.2f}). Batch size -> {batch_size}"
+                    f"({pressure_val:.2f}). Batch size -> {batch_size}"
                 )
             batch_size = min(batch_size, 8)
             inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
@@ -271,12 +294,16 @@ def inference_worker(
                         # Smart skip: drop non-control frames under heavy queue pressure
                         if q_depth > skip_threshold and isinstance(task, (tuple, list)) and len(task) >= 4:
                             t_feed_id, t_frame_idx = task[0], task[1]
+                            shm_ref = task[2]
                             if t_frame_idx not in (-888, -999):
                                 if t_feed_id in core_modules and getattr(
                                     core_modules[t_feed_id], "_first_detection_done", False
                                 ):
                                     if msg_id and hasattr(slot_q, "ack"):
                                         slot_q.ack(msg_id)
+                                        acked_msgs.add(msg_id)
+                                    if frame_buffer:
+                                        frame_buffer.release(shm_ref)
                                     continue
 
                         batch_tasks.append((msg_id, task, slot_q))
@@ -286,6 +313,7 @@ def inference_worker(
 
             # --- Process batch ---
             sent_shm_refs: set = set()
+            acked_msgs: set = set()
             batch_meta: List[Dict] = []
             frames_to_infer: List[np.ndarray] = []
             inference_indices: List[int] = []
@@ -301,6 +329,7 @@ def inference_worker(
                             core_modules[feed_id]._first_detection_done = False
                         if msg_id and hasattr(slot_q_ref, "ack"):
                             slot_q_ref.ack(msg_id)
+                            acked_msgs.add(msg_id)
                         continue
 
                     if frame_index == -999:
@@ -312,6 +341,7 @@ def inference_worker(
                         metrics_map.pop(feed_id, None)
                         if msg_id and hasattr(slot_q_ref, "ack"):
                             slot_q_ref.ack(msg_id)
+                            acked_msgs.add(msg_id)
                         continue
 
                     # Read frame from shared memory
@@ -322,12 +352,22 @@ def inference_worker(
                             logger.error(f"[Worker {worker_id}] SHM read failed for ref {shm_ref}: {e}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            try:
+                                frame_buffer.release(shm_ref)
+                            except Exception:
+                                pass
                             continue
 
                         if res is None:
                             logger.error(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            try:
+                                frame_buffer.release(shm_ref)
+                            except Exception:
+                                pass
                             continue
                         if isinstance(res, tuple) and len(res) == 2:
                             frame_bytes, dims = res
@@ -337,6 +377,11 @@ def inference_worker(
                             )
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            try:
+                                frame_buffer.release(shm_ref)
+                            except Exception:
+                                pass
                             continue
                     else:
                         raise RuntimeError(f"[Worker {worker_id}] Frame buffer is missing but SHM reference {shm_ref} was provided.")
@@ -354,7 +399,7 @@ def inference_worker(
                             db_queue=db_queue,
                             gemini_api_key=ocr_cfg.get("gemini_api_key"),
                             model_type=vehicle_det_cfg.get("model_type", "yolo"),
-                            preloaded_model=shared_model if not model_load_failed else None,
+                            preloaded_model=shared_model,
                             preloaded_reid=shared_reid_embedder,
                         )
                         core_modules[feed_id]._first_detection_done = False
@@ -382,6 +427,7 @@ def inference_worker(
                             logger.error(f"[Worker {worker_id}] frame_bytes is None for ref {shm_ref}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
                             continue
 
                         if isinstance(frame_bytes, memoryview):
@@ -399,6 +445,11 @@ def inference_worker(
                             metrics_obj.errors += 1
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            try:
+                                frame_buffer.release(shm_ref)
+                            except Exception:
+                                pass
                             continue
 
                         core.last_activity = time.time()
@@ -440,7 +491,7 @@ def inference_worker(
                             for row in boxes_data:
                                 rx1, ry1, rx2, ry2, conf, cls_id = row
                                 formatted_dets.append(
-                                    ((rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off), conf, cls_id)
+                                    ((rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off), cls_id, conf)
                                 )
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
@@ -466,6 +517,7 @@ def inference_worker(
                         core._first_detection_done = True
 
                     for vid, track in vis_tracks.items():
+                        vehicle_map = core.vehicle_type_map
                         emb = track.get("embedding")
                         if emb is not None:
                             global_id = local_reid_manager.match_or_register(
@@ -473,7 +525,7 @@ def inference_worker(
                                 local_id=str(vid),
                                 embedding=np.array(emb),
                                 metadata={
-                                    "class_name": CoreModule.vehicle_type_map.get(
+                                    "class_name": vehicle_map.get(
                                         track["class_id"], "unknown"
                                     )
                                 },
@@ -486,10 +538,15 @@ def inference_worker(
                                 track["global_vehicle_id"] = mapped_id
 
                     monitor.update_vehicles(vis_tracks)
+                    
+                    # Merge operational metrics with traffic analytics
+                    combined_metrics = metrics_obj.to_dict()
+                    combined_metrics.update(monitor.get_metrics())
+                    
                     metrics_obj.frames_processed += 1
 
                     serialized_v = serialize_tracked_vehicles(
-                        vis_tracks, vehicle_type_map=CoreModule.vehicle_type_map
+                        vis_tracks, vehicle_type_map=core.vehicle_type_map
                     )
 
                     extra = {}
@@ -505,8 +562,10 @@ def inference_worker(
                         extra["rois"] = _extract_rois(frame, serialized_v, scale=roi_scale)
 
                     try:
-                        central_output_queue.put_nowait(
-                            (meta["feed_id"], f_idx, meta["shm_ref"], metrics_obj.to_dict(), serialized_v, extra)
+                        # RedisStreamQueue uses put(), not put_nowait()
+                        central_output_queue.put(
+                            (meta["feed_id"], f_idx, meta["shm_ref"], combined_metrics, serialized_v, extra),
+                            timeout=0.05
                         )
                         sent_shm_refs.add(meta["shm_ref"])
                         logger.debug(
@@ -530,7 +589,7 @@ def inference_worker(
                 for meta_item in batch_meta:
                     msg_id = meta_item.get("msg_id")
                     slot_q_ref = meta_item.get("slot_q")
-                    if msg_id and slot_q_ref and hasattr(slot_q_ref, "ack"):
+                    if msg_id and slot_q_ref and hasattr(slot_q_ref, "ack") and msg_id not in acked_msgs:
                         try:
                             slot_q_ref.ack(msg_id)
                         except Exception:
@@ -541,6 +600,9 @@ def inference_worker(
                         try:
                             frame_buffer.release(shm_ref)
                         except Exception:
+                            m_obj = meta_item.get("metrics")
+                            if m_obj:
+                                m_obj.shm_leaks += 1
                             pass
 
     except Exception as e:

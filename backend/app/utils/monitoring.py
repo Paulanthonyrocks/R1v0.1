@@ -76,15 +76,6 @@ def check_system_resources(cpu_interval: float = 0.1) -> Tuple[float, float]:
 
 
 class TrafficMonitor:
-    # Class attribute: Mapping of vehicle class IDs to their names.
-    vehicle_type_map: Dict[int, str] = {
-        2: "car",
-        3: "motorcycle",
-        5: "bus",
-        7: "truck",
-        -1: "unknown",
-    }
-
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.tracked_vehicles: Dict[str, Dict[str, Any]] = {}
@@ -156,7 +147,14 @@ class TrafficMonitor:
         stopped_count = 0
         speeding_count = 0
         speeds_list_kmh: list[float] = []
-        vehicle_type_counts: Dict[str, int] = {name: 0 for name in self.vehicle_type_map.values()}
+        vehicle_type_map = {
+            2: "car",
+            3: "motorcycle",
+            5: "bus",
+            7: "truck",
+            -1: "unknown",
+        }
+        vehicle_type_counts: Dict[str, int] = {name: 0 for name in vehicle_type_map.values()}
         if "unknown" not in vehicle_type_counts:
             vehicle_type_counts["unknown"] = 0
 
@@ -168,7 +166,7 @@ class TrafficMonitor:
             if speed_kmh > self.speed_limit_kmh:
                 speeding_count += 1
             class_id = data.get("class_id", -1)
-            type_name = self.vehicle_type_map.get(class_id, "unknown")
+            type_name = vehicle_type_map.get(class_id, "unknown")
             vehicle_type_counts[type_name] = vehicle_type_counts.get(type_name, 0) + 1
 
         avg_speed_kmh = float(np.median(speeds_list_kmh)) if speeds_list_kmh else 0.0

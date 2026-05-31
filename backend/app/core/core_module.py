@@ -6,7 +6,8 @@ import math
 import numpy as np
 import torch
 import queue
-from typing import Dict, List, Tuple, Optional, Any
+import threading
+from typing import Dict, List, Tuple, Optional, Any, TypedDict
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,18 +29,33 @@ except ImportError:
     LicensePlatePreprocessor = None
     process_frame_for_lanes = None
     get_lane_boundaries_from_lines = None
-    LocalOCR = None
     ReIDEmbedder = None
 
 logger = logging.getLogger("app.ml")
 
+class TrackData(TypedDict, total=False):
+    """Type definition for vehicle track metadata."""
+    bbox: List[float]
+    centroid: List[float]
+    status: str
+    prev_status: str
+    speed: float
+    last_reid_speed: float
+    embedding: Optional[np.ndarray]
+    last_reid_update: int
+    last_reid_attempt: int
+    ground_coordinates: Optional[Tuple[float, float]]
+    prev_ground_pos: Optional[Tuple[float, float]]
+    prev_t: float
+    confidence: float
+    class_id: int
+    license_plate: str
+    lane: int
+    last_seen: float
+    global_vehicle_id: str
+
 
 class CoreModule:
-    # Vehicle type mapping
-    vehicle_type_map = {
-        0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck",
-    }
-
     def __init__(
         self,
         feed_id: str,
@@ -55,18 +71,34 @@ class CoreModule:
         """
         Core processing module for a single video feed.
         Handles detection, tracking, ReID, and metadata extraction.
+
+        Args:
+            feed_id: Unique identifier for the video stream.
+            model_path: Path to the detection model weights.
+            config: System configuration dictionary.
+            fps: Frames per second of the input stream.
+            db_queue: Queue for sending vehicle data to the database.
+            gemini_api_key: API key for Gemini OCR (optional).
+            model_type: Type of detection model (e.g., 'yolo').
+            preloaded_model: Pre-loaded model instance to avoid reloading.
+            preloaded_reid: Pre-loaded ReID model instance.
         """
         self.feed_id = feed_id
         self.config = copy.deepcopy(config)
         self.fps = fps
         self.db_queue = db_queue
-        self.gemini_api_key = gemini_api_key  # FIX: was never stored; _init_ocr crashed
+        self.gemini_api_key = gemini_api_key
         self.model_type = model_type
 
         # 1. Configuration sections
         v_cfg = self.config.get("vehicle_detection", {})
         b_cfg = self.config.get("behavior_analysis", {})
         l_cfg = self.config.get("lane_detection", {})
+
+        # Configurable vehicle type mapping
+        self.vehicle_type_map = v_cfg.get("vehicle_type_map", {
+            0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck",
+        })
 
         self.project_root = Path(self.config.get("project_root_dir", ""))
         self.model_path = (
@@ -82,9 +114,9 @@ class CoreModule:
         self.max_active_tracks = v_cfg.get("max_active_tracks", 50)
 
         # 3. Modular engines
-        self.device = self._check_gpu_availability()
+        device = self._check_gpu_availability()
         self.detector = DetectionEngine(
-            str(self.model_path), self.config, self.device, preloaded_model=preloaded_model
+            str(self.model_path), self.config, device, preloaded_model=preloaded_model
         )
         self.detector.load_model()
 
@@ -104,13 +136,13 @@ class CoreModule:
         self.reid_embedder = preloaded_reid or (
             ReIDEmbedder(self.config) if v_cfg.get("reid_enabled", True) else None
         )
-        self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+        self.ocr_executor = None
         self.ocr_results_queue: queue.Queue = queue.Queue(maxsize=100)
 
         # Persistent state for tracking across frames
         self._first_detection_done = False
         self._last_db_save_times: Dict[str, float] = {}
-        self._prev_vehicle_statuses: Dict[str, str] = {}
+        self._last_queue_warn_time = 0.0
 
         self.last_detected_lane_lines = None
         self.cached_lane_boundaries: list = []
@@ -126,20 +158,32 @@ class CoreModule:
 
         self.preprocessor = None
         self.local_ocr = None
+        self.last_activity = 0.0
         self._reid_updates_this_frame = 0  # Per-frame budget control
+        self._lock = threading.RLock()
 
         if self.config.get("ocr_engine", {}).get("enabled", False):
             self._init_ocr()
 
     def _check_gpu_availability(self) -> str:
-        """Checks for GPU availability for YOLO and engines."""
+        """
+        Checks for GPU availability for YOLO and engines.
+
+        Returns:
+            A string representing the device to use ('cuda:0' or 'cpu').
+        """
         if torch.cuda.is_available():
             logger.info(f"[{self.feed_id}] GPU detected. Using CUDA.")
             return "cuda:0"
         return "cpu"
 
     def _initialize_roi_mask(self, resolution: List[int]):
-        """Initializes ROI and exclusion masks once per resolution change."""
+        """
+        Initializes ROI and exclusion masks once per resolution change.
+
+        Args:
+            resolution: The frame resolution as [width, height].
+        """
         w, h = resolution
         self.roi_mask = np.ones((h, w), dtype=np.uint8) * 255
 
@@ -154,8 +198,40 @@ class CoreModule:
             zone_np = (np.array(zone, dtype=np.float32) * [w, h]).astype(np.int32)
             cv2.fillPoly(self.roi_mask, [zone_np], 0)
 
-    def _update_homography(self, calibration_cfg: Dict):
-        """Perspective transformation for distance/speed math."""
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
+        """
+        Pre-processes the frame for inference. If an ROI is defined, it crops the frame 
+        to the ROI's bounding box to reduce inference load.
+
+        Returns:
+            Tuple of (processed_frame, roi_enabled, x_offset, y_offset).
+        """
+        if self.roi_polygon_points:
+            pts = np.array(self.roi_polygon_points)
+            x_min = int(np.min(pts[:, 0]))
+            y_min = int(np.min(pts[:, 1]))
+            x_max = int(np.max(pts[:, 0]))
+            y_max = int(np.max(pts[:, 1]))
+
+            # Clamp to frame dimensions
+            h, w = frame.shape[:2]
+            x_min, y_min = max(0, x_min), max(0, y_min)
+            x_max, y_max = min(w, x_max), min(h, y_max)
+
+            if x_max > x_min and y_max > y_min:
+                cropped_frame = frame[y_min:y_max, x_min:x_max]
+                return cropped_frame, True, x_min, y_min
+
+        return frame, False, 0, 0
+
+    def _update_homography(self, calibration_cfg: Dict, resolution: Optional[List[int]] = None):
+        """
+        Computes the perspective transformation matrix for distance and speed calculations.
+
+        Args:
+            calibration_cfg: Configuration containing image_points and world_points.
+            resolution: Optional explicit resolution [width, height] to use for scaling.
+        """
         if not calibration_cfg or "image_points" not in calibration_cfg:
             return
 
@@ -167,56 +243,105 @@ class CoreModule:
 
         # Normalised points (0–1) need scaling to pixel coordinates
         if np.max(img_pts) <= 1.0:
-            v_cfg = self.config.get("vehicle_detection", {})
-            width, height = v_cfg.get("frame_resolution", [640, 480])
+            if resolution:
+                width, height = resolution
+            else:
+                v_cfg = self.config.get("vehicle_detection", {})
+                width, height = v_cfg.get("frame_resolution", [640, 480])
             img_pts = img_pts * [width, height]
 
-        self.homography_matrix, _ = cv2.findHomography(img_pts, world_pts)
+        H, status = cv2.findHomography(img_pts, world_pts)
+        if H is None:
+            logger.warning(f"[{self.feed_id}] Homography computation failed – points may be degenerate.")
+            return
+        self.homography_matrix = H
         logger.info(f"[{self.feed_id}] Homography matrix recalibrated.")
 
-    def _init_ocr(self):
-        """Initializes OCR engines based on configuration."""
+    def _init_ocr(self) -> bool:
+        """
+        Initializes OCR engines (Gemini and Local) based on the provided configuration.
+        Sets up LicensePlatePreprocessor for Gemini and LocalOCR for local processing.
+        Ensures any existing executor is shut down to prevent resource leaks.
+
+        Returns:
+            True if at least one OCR engine was initialized, False otherwise.
+        """
         ocr_cfg = self.config.get("ocr_engine", {})
+        initialized = False
+
+        # Shut down existing executor to prevent resource leaks during re-init
+        if self.ocr_executor is not None:
+            self.ocr_executor.shutdown(wait=False)
+            self.ocr_executor = None
 
         # FIX: Use module-level imports; removed redundant local re-imports
-        if ocr_cfg.get("use_gemini_ocr", False) and self.gemini_api_key:
-            if LicensePlatePreprocessor is not None:
-                try:
-                    self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
-                except Exception as e:
-                    logger.error(f"Failed to initialize Gemini OCR: {e}")
+        if ocr_cfg.get("use_gemini_ocr", False):
+            if self.gemini_api_key:
+                if LicensePlatePreprocessor is not None:
+                    try:
+                        self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
+                        initialized = True
+                    except Exception as e:
+                        logger.error(f"Failed to initialize Gemini OCR: {e}")
+                else:
+                    logger.warning("LicensePlatePreprocessor unavailable (import failed at startup).")
             else:
-                logger.warning("LicensePlatePreprocessor unavailable (import failed at startup).")
+                logger.warning(f"[{self.feed_id}] Gemini OCR enabled in config but gemini_api_key is missing. Skipping.")
 
         if ocr_cfg.get("use_local", True):
             if LocalOCR is not None:
                 try:
                     self.local_ocr = LocalOCR(self.config)
+                    initialized = True
                 except Exception as e:
                     logger.error(f"Failed to initialize Local OCR: {e}")
             else:
                 logger.warning("LocalOCR unavailable (import failed at startup).")
 
-    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
-        """
-        Preprocesses the frame for inference.
-        Returns: (processed_frame, roi_enabled, x_offset, y_offset)
-        Currently passes the full frame through; extend here to add ROI cropping.
-        """
-        return frame, False, 0, 0
+        # Create executor if any OCR engine is enabled
+        if initialized:
+            self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+        
+        return initialized
 
-    def _pixel_based_speed(self, track: Dict) -> float:
-        """Converts pixel-space velocity to km/h. Used as fallback when ground coords unavailable."""
+    def _pixel_based_speed(self, track: TrackData) -> float:
+        """
+        Calculates vehicle speed in km/h based on pixel-space velocity.
+        Used as a fallback when ground-plane coordinates are unavailable.
+
+        Args:
+            track: The track data containing 'vx' and 'vy'.
+
+        Returns:
+            The calculated speed in km/h.
+        """
         vx = track.get("vx", 0.0)
         vy = track.get("vy", 0.0)
         pixel_speed = math.sqrt(vx ** 2 + vy ** 2)
         return (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
 
-    def _should_update_reid(self, tid: str, track: Dict, frame_index: int) -> bool:
-        """Determines if a vehicle's embedding should be updated."""
+    def _should_update_reid(self, tid: str, track: TrackData, frame_index: int) -> bool:
+        """
+        Determines if a vehicle's ReID embedding should be updated for the current frame.
+        Logic includes mandatory updates for new tracks, periodic fallbacks,
+        occlusion recovery, and significant velocity changes.
+
+        Args:
+            tid: The track ID.
+            track: The track data.
+            frame_index: The current frame index.
+
+        Returns:
+            True if an embedding update is requested, False otherwise.
+        """
         # 1. Mandatory update for new tracks
         if track.get("last_reid_update", -1) == -1:
             return True
+
+        # Cooldown for failed attempts to avoid looping on embedding failure
+        last_attempt = track.get("last_reid_attempt", -1)
+        if last_attempt != -1 and (frame_index - last_attempt) < 30:
+            return False
 
         # 2. Periodic safety fallback (every 60 frames)
         if (frame_index - track.get("last_reid_update", -1)) >= 60:
@@ -243,8 +368,26 @@ class CoreModule:
         track_timeout: Optional[int] = None,
         external_detections: Optional[List[Tuple]] = None,
         timestamp: Optional[float] = None,
-    ) -> Tuple[Dict[str, Dict], List[int], Any]:
-        """Orchestrates detection and tracking using modular engines."""
+    ) -> Tuple[Dict[str, TrackData], List[int], Any]:
+        """
+        Orchestrates the full pipeline: lane detection, vehicle detection, tracking, 
+        ReID embedding updates, and ground-plane metadata extraction.
+
+        Args:
+            frame: The input video frame.
+            frame_index: Sequential index of the frame.
+            confidence_threshold: Override for detection confidence.
+            proximity_threshold: Override for track proximity.
+            track_timeout: Override for track timeout.
+            external_detections: Pre-computed detections to skip the detector.
+            timestamp: Frame timestamp; defaults to wall clock if None.
+
+        Returns:
+            A tuple containing:
+            - vis_tracks: A dictionary of tracks currently visible/predictable.
+            - cached_lane_boundaries: Current detected lane boundaries.
+            - last_detected_lane_lines: Raw lane lines from the last detection.
+        """
         if frame is None or frame.size == 0:
             return {}, self.cached_lane_boundaries, self.last_detected_lane_lines
 
@@ -254,7 +397,7 @@ class CoreModule:
         if (
             self.config.get("lane_detection", {}).get("enabled", False)
             and process_frame_for_lanes
-            and (time.time() - self.last_lane_detection_time) >= self.lane_detection_interval
+            and (current_time - self.last_lane_detection_time) >= self.lane_detection_interval
         ):
             try:
                 lines = process_frame_for_lanes(frame, self.config)
@@ -263,8 +406,8 @@ class CoreModule:
                     self.cached_lane_boundaries = get_lane_boundaries_from_lines(
                         frame.shape[1], lines, self.config
                     )
-                    self.last_lane_detection_time = time.time()
-            except Exception as e:
+                    self.last_lane_detection_time = current_time
+            except (cv2.error, RuntimeError) as e:
                 logger.warning(f"Lane detection failed: {e}")
 
         # 2. Detection (skip if external detections provided)
@@ -275,12 +418,12 @@ class CoreModule:
             detections = self.detector.detect(frame, thresh)
 
         # 3. Tracking (pass detections without embeddings first)
-        dets_for_tracker = [(d[0], d[2], d[1], None) for d in detections]
+        dets_for_tracker = [(d[0], d[1], d[2], None) for d in detections]
         
         # Capture current statuses as 'previous' before updating the tracker
         # We use a copy of the tracker's data or our own persistent mapping
         current_statuses = {tid: track.get("status", "unknown") 
-                           for tid, track in self.tracker.tracks.items()} if hasattr(self.tracker, 'tracks') else {}
+                           for tid, track in self.tracker.vehicle_data.items()} if hasattr(self.tracker, 'vehicle_data') else {}
 
         vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
 
@@ -299,6 +442,8 @@ class CoreModule:
                 if self._should_update_reid(tid, track, frame_index):
                     bbox = track.get("bbox")
                     if bbox:
+                        # Mark attempt immediately to prevent loops on failure
+                        track["last_reid_attempt"] = frame_index
                         x1, y1, x2, y2 = map(int, bbox)
                         x1, y1 = max(0, x1), max(0, y1)
                         x2, y2 = min(w, x2), min(h, y2)
@@ -321,6 +466,9 @@ class CoreModule:
             valid_tids = []
             centroids_list = []
             for tid, track in vehicle_data.items():
+                # Optimization: Only process transforms for active or predicting tracks
+                if track.get("status") not in ("active", "predicting"):
+                    continue
                 bbox = track.get("bbox")
                 if bbox and len(bbox) == 4:
                     valid_tids.append(tid)
@@ -334,9 +482,6 @@ class CoreModule:
 
             for idx, tid in enumerate(valid_tids):
                 track = vehicle_data[tid]
-
-                # Keep previous status for adaptive ReID
-                track["prev_status"] = track.get("status", "unknown")
 
                 if ground_positions is not None and idx < len(ground_positions):
                     track["ground_coordinates"] = ground_positions[idx]
@@ -377,7 +522,7 @@ class CoreModule:
                 # Filtering for visualisation
                 if track["status"] == "active":
                     vis_tracks[tid] = track
-                    if self.local_ocr and track.get("confidence", 0) > 0.7:
+                    if (self.local_ocr or self.preprocessor) and track.get("confidence", 0) > 0.7:
                         bbox = track.get("bbox")
                         if bbox:
                             x1, y1, x2, y2 = map(int, bbox)
@@ -399,14 +544,31 @@ class CoreModule:
     def _run_ocr(self, tid: str, roi: np.ndarray):
         """Worker function for OCR executor."""
         try:
-            text = self.local_ocr.process(roi) if self.local_ocr else None
+            text = None
+            # 1. Try Gemini OCR via preprocessor if available
+            if self.preprocessor:
+                text = self.preprocessor.preprocess_and_ocr(roi)
+            
+            # 2. Fallback to local OCR if Gemini failed or is disabled
+            if not text and self.local_ocr:
+                text = self.local_ocr.process(roi)
+
             if text:
-                self.ocr_results_queue.put({"track_id": tid, "plate_text": text})
+                try:
+                    self.ocr_results_queue.put_nowait({"track_id": tid, "plate_text": text})
+                except queue.Full:
+                    logger.warning(f"[{self.feed_id}] OCR results queue full. Dropping result for {tid}.")
         except Exception as e:
             logger.error(f"OCR processing failed for {tid}: {e}")
 
-    def _save_vehicle_data(self, tracked_vehicles: Dict[str, Dict]):
-        """Throttled write of vehicle state to the DB queue (max 1 Hz per vehicle)."""
+    def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData]):
+        """
+        Throttled write of vehicle state to the DB queue (max 1 Hz per vehicle).
+        Filters for valid bbox and centroid before sending.
+
+        Args:
+            tracked_vehicles: Dictionary of currently tracked vehicles and their metadata.
+        """
         if not self.db_queue:
             return
 
@@ -415,6 +577,13 @@ class CoreModule:
             # Use persistent storage for last save time to ensure throttling works across frames
             if now - self._last_db_save_times.get(vehicle_id, 0) < 1.0:
                 continue
+
+            # Fix: Check for existence of bbox and centroid to avoid KeyError
+            bbox = data.get("bbox")
+            centroid = data.get("centroid")
+            if bbox is None or centroid is None:
+                continue
+
             try:
                 self.db_queue.put_nowait({
                     "type": "vehicle_data",
@@ -422,28 +591,35 @@ class CoreModule:
                     "vehicle_id": str(vehicle_id),
                     "global_vehicle_id": str(data.get("global_vehicle_id", "")),
                     "timestamp": float(now),
-                    "bbox": [float(x) for x in data["bbox"]],
-                    "centroid": [float(x) for x in data["centroid"]],
+                    "bbox": [float(x) for x in bbox],
+                    "centroid": [float(x) for x in centroid],
                     "speed": float(data.get("speed", 0.0)),
                     "license_plate": str(data.get("license_plate", "Unknown")),
-                    "class_id": int(data["class_id"]),
-                    "class_name": str(self.vehicle_type_map.get(data["class_id"], "unknown")),
-                    "confidence": float(data["confidence"]),
-                    "status": str(data["status"]),
+                    "class_id": int(data.get("class_id", -1)),
+                    "class_name": str(self.vehicle_type_map.get(data.get("class_id", -1), "unknown")),
+                    "confidence": float(data.get("confidence", 0.0)),
+                    "status": str(data.get("status", "unknown")),
                     "lane": int(data.get("lane", -1)),
                 })
                 self._last_db_save_times[vehicle_id] = now
             except queue.Full:
-                pass
+                if now - self._last_queue_warn_time > 1.0:
+                    logger.warning(f"[{self.feed_id}] DB queue full. Dropping vehicle data update.")
+                    self._last_queue_warn_time = now
 
         # Prune stale save times for vehicles no longer tracked
         active_ids = set(tracked_vehicles.keys())
-        for vid in list(self._last_db_save_times.keys()):
-            if vid not in active_ids:
-                del self._last_db_save_times[vid]
+        stale_keys = [vid for vid in self._last_db_save_times if vid not in active_ids]
+        for vid in stale_keys:
+            del self._last_db_save_times[vid]
 
-    def _process_ocr_results(self, vehicle_data: Dict[str, Dict]):
-        """Drains the OCR results queue and updates vehicle data."""
+    def _process_ocr_results(self, vehicle_data: Dict[str, TrackData]):
+        """
+        Drains the OCR results queue and updates the vehicle track data with detected license plates.
+
+        Args:
+            vehicle_data: Dictionary of current vehicle tracks to update.
+        """
         try:
             while True:
                 result = self.ocr_results_queue.get_nowait()
@@ -454,7 +630,9 @@ class CoreModule:
             pass
 
     def cleanup(self):
-        """Shutdown thread pools and release resources."""
+        """
+        Gracefully shuts down thread pools and releases resources used by the module.
+        """
         if self.ocr_executor:
             self.ocr_executor.shutdown(wait=True)
         self.reid_embedder = None
@@ -463,18 +641,46 @@ class CoreModule:
         logger.info(f"[{self.feed_id}] CoreModule resources cleaned up.")
 
     def update_config(self, updates: Dict[str, Any]):
-        """Dynamically updates configuration."""
-        if "vehicle_detection" in updates:
-            v_cfg = updates["vehicle_detection"]
-            self.confidence_threshold = v_cfg.get("confidence_threshold", self.confidence_threshold)
-            if "calibration" in v_cfg:
-                self._update_homography(v_cfg["calibration"])
-                self.transformer.update_calibration(v_cfg["calibration"])
+        """
+        Dynamically updates configuration and triggers necessary recalculations 
+        (e.g., ROI masks, homography matrices).
 
-        if "roi" in updates:
-            roi_points = updates["roi"]
-            if isinstance(roi_points, list):
-                self.roi_polygon_points = roi_points
-                res = self.config.get("vehicle_detection", {}).get("frame_resolution", [640, 480])
-                self._initialize_roi_mask(res)
-                self.detector.initialize_roi(res, self.roi_polygon_points)
+        Args:
+            updates: Dictionary containing the configuration keys to update.
+        """
+        with self._lock:
+            # 1. Update config and extract resolution
+            res_changed = False
+            if "vehicle_detection" in updates:
+                v_cfg_update = updates["vehicle_detection"]
+                current_v_cfg = self.config.get("vehicle_detection", {})
+                
+                if "frame_resolution" in v_cfg_update:
+                    res_changed = True
+                
+                self.config["vehicle_detection"] = {**current_v_cfg, **v_cfg_update}
+
+            v_cfg = self.config.get("vehicle_detection", {})
+            res = v_cfg.get("frame_resolution", [640, 480])
+
+            # 2. Apply updates to internal state
+            if "vehicle_detection" in updates:
+                v_cfg_update = updates["vehicle_detection"]
+                self.confidence_threshold = v_cfg_update.get("confidence_threshold", self.confidence_threshold)
+                
+                # Recompute homography if resolution changed or calibration updated
+                if "calibration" in v_cfg_update or res_changed:
+                    calib_cfg = v_cfg_update.get("calibration", v_cfg.get("calibration", {}))
+                    self._update_homography(calib_cfg, resolution=res)
+                    self.transformer.update_calibration(calib_cfg)
+
+            if "ocr_engine" in updates:
+                # Re-initialize OCR if enabled/disabled or settings changed
+                self._init_ocr()
+
+            if "roi" in updates:
+                roi_points = updates["roi"]
+                if isinstance(roi_points, list):
+                    self.roi_polygon_points = roi_points
+                    self._initialize_roi_mask(res)
+                    self.detector.initialize_roi(res, self.roi_polygon_points)

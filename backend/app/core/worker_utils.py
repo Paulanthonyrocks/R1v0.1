@@ -26,6 +26,7 @@ class WorkerMetrics:
         self.frames_processed = 0
         self.frames_dropped = 0
         self.errors = 0
+        self.shm_leaks = 0
         self.start_time = time.monotonic()
         # Rolling window for current FPS
         self._frame_timestamps = deque()
@@ -53,6 +54,7 @@ class WorkerMetrics:
             "feed_id": self.feed_id,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
+            "shm_leaks": self.shm_leaks,
             "errors": self.errors,
             "uptime_seconds": uptime,
             "fps": rolling_fps,
@@ -64,6 +66,7 @@ class WorkerMetrics:
         self.frames_processed = 0
         self.frames_dropped = 0
         self.errors = 0
+        self.shm_leaks = 0
         self.start_time = time.monotonic()
         self._frame_timestamps.clear()
 
@@ -150,3 +153,39 @@ def serialize_tracked_vehicles(
             continue
     
     return serialized_list
+
+def _extract_rois(frame: np.ndarray, serialized_vehicles: List[Dict], scale: float = 1.0) -> List[Dict[str, Any]]:
+    """
+    Extracts bounding box crops from the frame for adaptive streaming.
+    Returns a list of dicts with bytes and scaled coordinates.
+    """
+    rois = []
+    h, w = frame.shape[:2]
+    for veh in serialized_vehicles:
+        bbox = veh.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        
+        x1, y1, x2, y2 = map(int, bbox)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        if x2 <= x1 or y2 <= y1:
+            continue
+            
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+            
+        # Encode as JPEG
+        success, encoded_img = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if success:
+            rois.append({
+                "b": encoded_img.tobytes(),
+                "x": x1 * scale,
+                "y": y1 * scale,
+                "w": (x2 - x1) * scale,
+                "h": (y2 - y1) * scale
+            })
+            
+    return rois

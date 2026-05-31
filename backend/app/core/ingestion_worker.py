@@ -6,6 +6,7 @@ import time
 import queue
 import signal
 import json
+import threading
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -118,10 +119,10 @@ def ingestion_worker(
                 try:
                     central_input_queue.put(item, timeout=timeout)
                 except AttributeError:
-                    # Fallback for queues without timeout: use put_nowait
+                    # Fallback for queues without timeout support: use put_nowait
                     central_input_queue.put_nowait(item)
                 return True
-            except (queue.Full, Exception) as e:
+            except queue.Full:
                 if not critical:
                     # Non-critical frames are just dropped if the queue is full
                     return False
@@ -132,7 +133,7 @@ def ingestion_worker(
                     return False
                 
                 logger.warning(f"[{feed_id}] Queue full, retrying critical signal delivery...")
-                time.sleep(0.5)
+                time.sleep(0.1)
 
     try:
         # Sent feed_started signal with guaranteed delivery
@@ -225,7 +226,11 @@ def ingestion_worker(
             logger.warning(f"[{feed_id}] save_snapshot requested but no frame available")
             return
 
-        def save_snapshot_async():
+        # Capture current frame and format to avoid race conditions with the main loop
+        snapshot_bytes = last_frame_bytes
+        snapshot_format = last_frame_format
+
+        def save_snapshot_async(bytes_data: bytes, fmt: Optional[str]):
             try:
                 from app.config import get_current_config
 
@@ -233,11 +238,11 @@ def ingestion_worker(
                 snap_dir = Path(cfg.snapshots_dir)
                 snap_dir.mkdir(parents=True, exist_ok=True)
 
-                ext = ".png" if last_frame_format == "png" else ".jpg"
+                ext = ".png" if fmt == "png" else ".jpg"
                 snap_path = snap_dir / f"{feed_id}_{incident_id}{ext}"
 
                 with open(snap_path, "wb") as f:
-                    f.write(last_frame_bytes)
+                    f.write(bytes_data)
 
                 logger.info(f"[{feed_id}] Snapshot saved: {snap_path} for incident {incident_id}")
 
@@ -256,8 +261,9 @@ def ingestion_worker(
                 )
             except Exception as e:
                 logger.error(f"[{feed_id}] Async snapshot save failed: {e}")
-        # Offload disk I/O to a background thread
-        threading.Thread(target=save_snapshot_async, daemon=True).start()
+        
+        # Offload disk I/O to a background thread, passing the captured frame data
+        threading.Thread(target=save_snapshot_async, args=(snapshot_bytes, snapshot_format), daemon=True).start()
 
     try:
         while True:
@@ -288,8 +294,12 @@ def ingestion_worker(
                                 continue
                         except Exception:
                             pass
-                        logger.info(f"[{feed_id}] End of stream (or reconnect failed).")
-                        break
+                        
+                        # Verify if reader is actually back online before continuing
+                        if not reader.isOpened:
+                            logger.info(f"[{feed_id}] End of stream (or reconnect failed).")
+                            break
+                        continue
                     elif reader.end_of_video:
                         logger.info(f"[{feed_id}] End of stream.")
                         break
@@ -309,9 +319,9 @@ def ingestion_worker(
                 cached_pressure = 0.0
                 if pipeline_pressure is not None:
                     cached_pressure = (
-                        pipeline_pressure.get("value", 0.0)
-                        if isinstance(pipeline_pressure, dict)
-                        else 0.0
+                        getattr(pipeline_pressure, 'value', 0.0)
+                        if not isinstance(pipeline_pressure, dict)
+                        else pipeline_pressure.get("value", 0.0)
                     )
                 else:
                     if frame_check_counter % pressure_check_interval == 0:
@@ -327,14 +337,6 @@ def ingestion_worker(
                             f"Dropping frame {frame_index}."
                         )
                     continue
-
-                try:
-                    q_size = central_input_queue.qsize()
-                    if q_size > 300:
-                        metrics.frames_dropped += 1
-                        continue
-                except (AttributeError, NotImplementedError):
-                    pass
 
                 try:
                     # Normalise frame to uint8 BGR before resize/encode
@@ -353,20 +355,9 @@ def ingestion_worker(
                     if success:
                         last_frame_format = "jpg"
                     else:
-                        if metrics.errors < 3:
-                            logger.warning(
-                                f"[{feed_id}] JPEG encode failed for frame {frame_index}, "
-                                f"falling back to PNG"
-                            )
-                        success, snap_buf = cv2.imencode(".png", resized)
-                        if not success:
-                            logger.warning(
-                                f"[{feed_id}] Failed to encode frame {frame_index} "
-                                f"(both JPEG and PNG failed)"
-                            )
-                            metrics.errors += 1
-                            continue
-                        last_frame_format = "png"
+                        logger.warning(f"[{feed_id}] JPEG encode failed for frame {frame_index}, dropping frame")
+                        metrics.errors += 1
+                        continue
 
                     last_frame_bytes = snap_buf.tobytes()
 
@@ -421,7 +412,7 @@ def ingestion_worker(
                         last_fps_log = current_time
 
                     if current_time - last_metrics_log > 10.0:
-                        logger.info(f"[{feed_id}] METRICS: {json.dumps(metrics.to_dict())}")
+                        logger.info("[%s] METRICS: %s", feed_id, metrics.to_dict())
                         last_metrics_log = current_time
 
                 except Exception as e:
