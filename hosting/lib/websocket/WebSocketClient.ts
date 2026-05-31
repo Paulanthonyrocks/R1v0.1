@@ -398,6 +398,7 @@ export class WebSocketClient implements IWebSocketClient {
 
         if (!token) {
             console.warn(`[WebSocketClient ${this.instanceId}] No auth token for WebSocket, will wait for token update.`);
+            this.setState(ConnectionState.DISCONNECTED, 'Waiting for authentication token');
             this.notifyError('auth_error', 'No authentication token available.');
             return;
         }
@@ -484,8 +485,12 @@ export class WebSocketClient implements IWebSocketClient {
                 this.ws.onerror = (event: Event) => {
                     clearTimeout(connectionTimeout);
                     const error = event as WebSocketErrorEvent;
+                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error:`, {
+                        message: error?.message,
+                        readyState: this.ws?.readyState,
+                        url: this.ws?.url,
+                    });
                     const errorMessage = error?.message || 'Unknown WebSocket Error';
-                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error: "${errorMessage}".`, error);
                     this.setState(ConnectionState.ERROR, errorMessage);
                     this.notifyError('connection_error', errorMessage);
                     if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
