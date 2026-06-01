@@ -1,4 +1,4 @@
-import { User } from 'firebase/auth';
+import { User, IdTokenResult } from 'firebase/auth';
 
 export class TokenManager {
     private static instance: TokenManager;
@@ -81,7 +81,7 @@ export class TokenManager {
         }
 
         this.currentUser.getIdTokenResult()
-            .then(idTokenResult => {
+            .then((idTokenResult: IdTokenResult) => {
                 const expirationTime = new Date(idTokenResult.expirationTime).getTime();
                 const now = Date.now();
                 const refreshBuffer = 5 * 60 * 1000; // 5 minutes
@@ -98,7 +98,7 @@ export class TokenManager {
                     this.refreshToken();
                 }
             })
-            .catch(error => {
+            .catch((error: any) => {
                 console.error('Error scheduling token refresh:', error);
                 this.stopMonitoring();
             });
