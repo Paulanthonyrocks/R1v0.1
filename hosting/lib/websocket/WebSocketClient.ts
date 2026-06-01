@@ -447,13 +447,15 @@ export class WebSocketClient implements IWebSocketClient {
 
                     console.log(`[WebSocketClient ${this.instanceId}] WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
                     
-                    // Immediately authenticate upon connection
+                    // Authenticate upon connection with a small delay to ensure the socket is settled
                     if (this.currentToken) {
-                        this.send({
-                            type: WebSocketMessageType.AUTHENTICATE,
-                            data: { token: this.currentToken }
-                        });
-                        console.log(`[WebSocketClient ${this.instanceId}] Sent initial AUTHENTICATE message`);
+                        setTimeout(() => {
+                            this.send({
+                                type: WebSocketMessageType.AUTHENTICATE,
+                                data: { token: this.currentToken }
+                            });
+                            console.log(`[WebSocketClient ${this.instanceId}] Sent initial AUTHENTICATE message`);
+                        }, 50);
                     } else {
                         console.warn(`[WebSocketClient ${this.instanceId}] No token available for initial authentication`);
                     }
