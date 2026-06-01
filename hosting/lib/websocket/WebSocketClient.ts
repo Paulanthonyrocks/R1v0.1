@@ -549,8 +549,8 @@ export class WebSocketClient implements IWebSocketClient {
         console.debug(`[WebSocketClient ${this.instanceId}] Starting ping interval`);
 
         this.pingInterval = setInterval(() => {
-            if (!this.isConnected()) {
-                console.debug(`[WebSocketClient ${this.instanceId}] Ping interval skipping beat: socket not connected.`);
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                console.debug(`[WebSocketClient ${this.instanceId}] Ping interval skipping: socket not open.`);
                 return;
             }
 

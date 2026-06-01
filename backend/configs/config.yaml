@@ -614,6 +614,6 @@ weather_service:
   enabled: false
 websocket:
   max_connections: 1000
-  ping_interval: 15
-  pong_timeout: 60
+  ping_interval: 30
+  pong_timeout: 120
   token_refresh_interval: 300
