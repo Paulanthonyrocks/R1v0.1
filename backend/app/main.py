@@ -249,15 +249,10 @@ async def lifespan(app: FastAPI):
             p_cfg = cfg_dict.get("prediction_scheduler", {})
             p_enabled = p_cfg.get("enabled", True)
 
-            # Start processing if configured, as it launches the inference pool
-            auto_start = cfg_dict.get("auto_start_processing", False)
-            if auto_start:
-                await create_background_task(fm.start_processing())
-                logger.info("Feed Manager started processing automatically (background task).")
-
             if p_enabled:
                 # Prediction scheduler is started inside fm.start_processing()
                 pass
+
     except Exception as e:
         logger.critical(f"Core Services Failed: {e}")
         raise
@@ -329,6 +324,16 @@ async def lifespan(app: FastAPI):
 
             await create_background_task(_register_sample_feeds())
 
+        # Start processing if configured, as it launches the inference pool
+        # This is moved AFTER sample feed registration to avoid duplicate starts
+        auto_start = cfg_dict.get("auto_start_processing", False)
+        if auto_start:
+            await create_background_task(fm.start_processing())
+            logger.info("Feed Manager started processing automatically (background task).")
+
+        if p_enabled:
+            # Prediction scheduler is started inside fm.start_processing()
+            pass
     except Exception as e:
         logger.error(f"Optional Services Failed: {e}")
 

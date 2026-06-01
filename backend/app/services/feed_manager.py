@@ -879,6 +879,18 @@ class FeedManager:
 
         if start:
             try:
+                # --- Idempotency Check ---
+                # If the feed is already active, just update config and return.
+                async with self._lock:
+                    entry = self.process_registry.get(target_feed_id)
+                    if entry and entry["status"] in (FeedOperationalStatusEnum.RUNNING, FeedOperationalStatusEnum.STARTING):
+                        logger.info(f"Feed '{target_feed_id}' is already {entry['status'].value}. Skipping restart.")
+                        return {
+                            "feed_id": target_feed_id,
+                            "status": entry["status"].value,
+                            "error": entry["error_message"],
+                        }
+
                 await self._start_feed_internal(target_feed_id)
                 async with self._lock:
                     return {
@@ -998,7 +1010,7 @@ class FeedManager:
                     self.logger.warning(f"Could not clear stop signal: {e}")
 
                 self._inference_stop_event.clear()
-                await self.scale_pool(pool_size)
+                self.scale_pool(pool_size)
                 if not self._is_processing_active:
                     self._is_processing_active = True
 
