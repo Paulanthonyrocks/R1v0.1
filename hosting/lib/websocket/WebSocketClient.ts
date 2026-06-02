@@ -821,7 +821,7 @@ export class WebSocketClient implements IWebSocketClient {
             if (scopedMap) {
                 const listenersSet = scopedMap.get(scope);
                 if (listenersSet) {
-                    listenersSet.delete(listener);
+                    listenersSet.delete(listener as unknown as MessageListener<unknown>);
                     if (listenersSet.size === 0) {
                         scopedMap.delete(scope);
                     }
