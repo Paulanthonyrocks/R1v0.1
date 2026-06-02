@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { WebSocketMessageType, WebSocketMessage } from './websocket/WebSocketClient';
 import { useWebSocket } from './websocket/WebSocketProvider';
 import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from './types';
-import { useVehicleRegistry } from './hooks/useVehicleRegistry';
 import { useVideoDecoder } from './hooks/useVideoDecoder';
+import videoStreamManager from './videoStreamManager';
 import {
  _subscribedFeeds,
  _feedHookCounts,
@@ -47,13 +47,6 @@ const useVideoSocket = (streamId: string) => {
   const FPS_EMA_ALPHA = 0.1;
 
   // --- Sub-Hooks Implementation ---
-  const { 
-    updateVehicles, 
-    clear: clearVehicles 
-  } = useVehicleRegistry((updatedVehicles) => {
-    setVehicles(updatedVehicles);
-  });
-
   const { decode } = useVideoDecoder({
     onFrame: (decodedData) => {
       const { image, index, metrics, vehicles, timestamp } = decodedData;
@@ -73,7 +66,12 @@ const useVideoSocket = (streamId: string) => {
         }, 100); // Delay closure to ensure the render loop has drawn the frame
       }
 
-      updateVehicles(vehicles);
+      if (streamId) {
+        videoStreamManager.updateVehicles(streamId, vehicles);
+        if (videoStreamManager.shouldUpdateUI(streamId)) {
+          setVehicles(videoStreamManager.getVehicles(streamId));
+        }
+      }
 
       lastFrameRef.current = {
         image,
@@ -177,7 +175,8 @@ const unsubscribeFromFeed = useCallback(() => {
 
         if (data.frame_index < lastIndex) {
           if (data.frame_index < 20) {
-            clearVehicles();
+            if (streamId) videoStreamManager.clearRegistry(streamId);
+            setVehicles([]);
           } else if (lastIndex - data.frame_index < 100) {
             return;
           }
@@ -202,7 +201,7 @@ const unsubscribeFromFeed = useCallback(() => {
     } catch (err) {
       console.error('[useVideoSocket] handleFrame Error:', err);
     }
-  }, [client, streamId, decode, clearVehicles]);
+  }, [client, streamId, decode]);
 
   // Sync the latest handleFrame to the ref
   useEffect(() => {
