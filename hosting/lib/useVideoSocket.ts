@@ -102,17 +102,18 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
 
   // --- Core Logic ---
 
+  const streamIdRef = useRef(streamId);
+  useEffect(() => {
+    streamIdRef.current = streamId;
+  }, [streamId]);
+
   const subscribeToFeed = useCallback(() => {
-    const streamIdLocal = streamId;
+    const streamIdLocal = streamIdRef.current;
     if (client?.isConnected() && streamIdLocal) {
       const pending = _pendingUnsubscribes.get(streamIdLocal);
       if (pending) {
         clearTimeout(pending);
         _pendingUnsubscribes.delete(streamIdLocal);
-        // Don't return here — still send the subscribe since the
-        // unsubscribe timer was cancelled before it fired, so the
-        // server may still think we're subscribed. Sending a redundant
-        // subscribe is harmless; sending a redundant unsubscribe is not.
       }
       const pendingCleanup = _pendingCleanups.get(streamIdLocal);
       if (pendingCleanup) {
@@ -127,10 +128,10 @@ const useVideoSocket = (streamId: string, token: string | null, instanceId?: str
         });
       }
     }
-  }, [client, streamId]);
+  }, [client]);
 
 const unsubscribeFromFeed = useCallback(() => {
-    const streamIdLocal = streamId;
+    const streamIdLocal = streamIdRef.current;
     const count = _feedHookCounts.get(streamIdLocal) ?? 0;
     if (count === 0 && _subscribedFeeds.has(streamIdLocal)) {
       const existing = _pendingUnsubscribes.get(streamIdLocal);
@@ -148,7 +149,7 @@ const unsubscribeFromFeed = useCallback(() => {
 
       _pendingUnsubscribes.set(streamIdLocal, timer);
     }
-  }, [client, streamId]);
+  }, [client]);
 
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
     // Don't acquire lock here — the worker already coalesces.
