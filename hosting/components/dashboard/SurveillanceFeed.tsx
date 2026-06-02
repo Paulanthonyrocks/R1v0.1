@@ -329,6 +329,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     const frameWidth = frame.image?.width || 640;
                     const frameHeight = frame.image?.height || 480;
 
+                    // Debug: Log every 100th frame to avoid flooding, but verify the feed association
+                    if (frame.index % 100 === 0) {
+                        console.debug(`[SurveillanceFeed Render] Component for ${feed_id} is drawing frame ${frame.index} from feed ${frame.metrics?.feed_id || 'unknown'}`);
+                    }
+
                     // Set internal resolution to match video source
                     if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
                         canvas.width = frameWidth;
