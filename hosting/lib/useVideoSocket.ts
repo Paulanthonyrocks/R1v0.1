@@ -330,7 +330,11 @@ const unsubscribeFromFeed = useCallback(() => {
 
     // Draw video frame if available
     if (image) {
-      ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      try {
+        ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      } catch (e) {
+        console.warn('[useVideoSocket] Failed to draw frame - image likely detached', e);
+      }
     }
 
     // Draw vehicle detections if available

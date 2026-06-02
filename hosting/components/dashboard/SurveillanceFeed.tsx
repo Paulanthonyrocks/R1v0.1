@@ -330,7 +330,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
                     // Debug: Log every 100th frame to avoid flooding, but verify the feed association
                     if (frame.index % 100 === 0) {
-                        console.debug(`[SurveillanceFeed Render] Component for ${feed_id} is drawing frame ${frame.index} from feed ${frame.metrics?.feed_id || 'unknown'}`);
+                        console.debug(`[SurveillanceFeed Render] Component for ${feed_id} is drawing frame ${frame.index} from feed ${feed_id}`);
                     }
 
                     // Set internal resolution to match video source
