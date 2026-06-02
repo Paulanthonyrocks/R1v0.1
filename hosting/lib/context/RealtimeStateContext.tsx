@@ -66,9 +66,10 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
     }, [client]);
 
     const updateConnectionState = useCallback(() => {
-        const connected = client?.isConnected() ?? false;
+        const state = client?.getConnectionState() ?? 'disconnected';
+        const connected = state === 'connected' || state === 'authenticated';
         setIsConnected(connected);
-        setIsReady(connected);
+        setIsReady(state === 'authenticated');
     }, [client]);
 
     const initializeConnection = useCallback(async () => {
@@ -98,18 +99,18 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
 
         updateConnectionState();
 
-        // If already connected on mount, trigger initialization immediately
-        if (client?.isConnected()) {
+        // Only initialize if already authenticated on mount
+        if (client?.getConnectionState() === 'authenticated') {
             initializeConnection();
         }
 
         // Subscribe to server-side topics on every (re)connection
         const unsubStatus = client?.onStatusChange((status: string) => {
-            const connected = status === 'connected';
+            const connected = status === 'connected' || status === 'authenticated';
             setIsConnected(connected);
-            setIsReady(connected);
+            setIsReady(status === 'authenticated');
 
-            if (connected) {
+            if (status === 'authenticated') {
                 initializeConnection();
             }
         });

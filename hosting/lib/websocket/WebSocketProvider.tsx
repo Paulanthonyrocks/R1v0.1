@@ -91,8 +91,9 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     } else {
       if (client.getConnectionState() !== 'disconnected') {
-        console.log(`[WebSocketProvider] No token. Disconnecting instance: ${client.getInstanceId()}`);
-        client.disconnect();
+        console.log(`[WebSocketProvider] No token. Client will remain disconnected: ${client.getInstanceId()}`);
+        // We no longer call client.disconnect() here to avoid killing the singleton instance during HMR.
+        // The client itself handles not connecting if it doesn't have a token in performConnection.
       }
     }
   };

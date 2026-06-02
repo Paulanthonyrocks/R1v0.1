@@ -256,8 +256,8 @@ const unsubscribeFromFeed = useCallback(() => {
     }, 1000);
 
     const unsubscribeStatus = client?.onStatusChange((status) => {
-      setIsConnected(status === 'connected');
-      if (status === 'connected') {
+      setIsConnected(status === 'connected' || status === 'authenticated');
+      if (status === 'authenticated') {
         // When reconnecting, cancel any pending unsubscribes so they don't
         // fire after the re-subscribe. Do NOT call resetFeedSubscriptionState()
         // because that wipes _subscribedFeeds which the subscribe logic checks.

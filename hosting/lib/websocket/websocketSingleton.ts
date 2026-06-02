@@ -1,24 +1,32 @@
 import { WebSocketClient } from './WebSocketClient';
 
-let globalClient: WebSocketClient | null = null;
+const SINGLETON_KEY = '__ws_client_singleton__';
+
+function getGlobal(): any {
+    if (typeof window !== 'undefined') return window;
+    if (typeof globalThis !== 'undefined') return globalThis;
+    return {};
+}
 
 /**
  * Gets the existing global WebSocketClient instance or creates a new one if it doesn't exist.
- * This ensures that the WebSocket connection survives React HMR/Fast Refresh.
+ * Stored on window/globalThis to ensure the connection survives React HMR/Fast Refresh.
  */
 export function getOrCreateWebSocketClient(baseUrl: string): WebSocketClient {
-    if (!globalClient) {
-        globalClient = new WebSocketClient(baseUrl);
-        console.log(`[WebSocketSingleton] Created new global WebSocketClient instance: ${globalClient.getInstanceId()}`);
+    const global = getGlobal();
+    if (!global[SINGLETON_KEY]) {
+        global[SINGLETON_KEY] = new WebSocketClient(baseUrl);
+        console.log(`[WebSocketSingleton] Created new global WebSocketClient instance: ${global[SINGLETON_KEY].getInstanceId()}`);
     }
-    return globalClient;
+    return global[SINGLETON_KEY];
 }
 
 /**
  * Returns the current global WebSocketClient instance, or null if it hasn't been created yet.
  */
 export function getWebSocketClient(): WebSocketClient | null {
-    return globalClient;
+    const global = getGlobal();
+    return global[SINGLETON_KEY] || null;
 }
 
 /**
@@ -26,9 +34,10 @@ export function getWebSocketClient(): WebSocketClient | null {
  * Should be called during full application shutdown or explicit logout if required.
  */
 export function destroyWebSocketClient(): void {
-    if (globalClient) {
-        console.log(`[WebSocketSingleton] Destroying global WebSocketClient instance: ${globalClient.getInstanceId()}`);
-        globalClient.destroy();
-        globalClient = null;
+    const global = getGlobal();
+    if (global[SINGLETON_KEY]) {
+        console.log(`[WebSocketSingleton] Destroying global WebSocketClient instance: ${global[SINGLETON_KEY].getInstanceId()}`);
+        global[SINGLETON_KEY].destroy();
+        delete global[SINGLETON_KEY];
     }
 }
