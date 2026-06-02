@@ -12,7 +12,7 @@ import {
  UNSUBSCRIBE_DEBOUNCE_MS,
 } from './websocket/feedSubscriptionState';
 
-const useVideoSocket = (streamId: string, token: string | null, instanceId?: string) => {
+const useVideoSocket = (streamId: string) => {
   console.log(`[useVideoSocket] Hook initializing for streamId: ${streamId}`);
   const client = useWebSocket();
   

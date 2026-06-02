@@ -41,8 +41,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
   // Only subscribe if the feed is in an active state
   const shouldSubscribe = status === 'running' || status === 'starting';
   const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
-    shouldSubscribe ? feed_id : "",
-    token
+    shouldSubscribe ? feed_id : ""
   );
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
