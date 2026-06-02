@@ -202,7 +202,7 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
         };
     }, [client, subscribeToFeed, updateConnectionState, initializeConnection]);
 
-    const value = {
+    const value = React.useMemo(() => ({
         kpis,
         alerts,
         feeds,
@@ -214,7 +214,7 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
         subscribeToFeed,
         unsubscribeFromFeed,
         startWebSocket
-    };
+    }), [kpis, alerts, feeds, nodeCongestionData, isConnected, isReady, error, sendMessage, subscribeToFeed, unsubscribeFromFeed, startWebSocket]);
 
     return (
         <RealtimeStateContext.Provider value={value}>
