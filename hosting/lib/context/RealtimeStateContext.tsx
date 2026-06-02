@@ -146,7 +146,10 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
         });
         if (unsubFeedUpdate) subscriptions.push(unsubFeedUpdate);
 
-        const unsubKpi = client?.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => setKpis(data));
+        const unsubKpi = client?.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => {
+            console.debug('[RealtimeStateProvider] Updating KPIs:', data);
+            setKpis(data);
+        });
         if (unsubKpi) subscriptions.push(unsubKpi);
 
         const unsubCongestion = client?.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {

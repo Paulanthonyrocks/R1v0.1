@@ -741,7 +741,7 @@ export class WebSocketClient implements IWebSocketClient {
                     if (this.videoWorker) {
                         console.debug(`[WebSocketClient] Incoming binary frame for feed: ${feedId}`);
                         this.videoWorker.postMessage({
-                            binaryFrame: message.data,
+                            binaryFrame: decoded,
                             feed_id: feedId
                         });
                     } else {
