@@ -100,8 +100,9 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     <span>{feed.status.toUpperCase()}</span>
                                 </div>
                                 <SurveillanceFeed 
+                                    key={feed.feed_id}
                                     feed_id={feed.feed_id} 
-                                    minimalControls={true}
+                                    minimalControls={true} 
                                 />
                                 <div className="absolute inset-0 bg-transparent group-hover:bg-primary/5 pointer-events-none"></div>
                             </div>
@@ -146,7 +147,11 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                                     )}>
                                         <span className="truncate">{feed.name?.toUpperCase() || `NODE_${feed.feed_id.slice(-4)}`}</span>
                                     </div>
-                                    <SurveillanceFeed feed_id={feed.feed_id} minimalControls={true} />
+                                    <SurveillanceFeed 
+                                        key={feed.feed_id}
+                                        feed_id={feed.feed_id} 
+                                        minimalControls={true} 
+                                    />
                                 </div>
                             ))}
                         </div>
