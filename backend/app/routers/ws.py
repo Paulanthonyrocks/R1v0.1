@@ -158,7 +158,8 @@ async def message_receiver(
                             data=PongData().model_dump(),
                             correlation_id=message.correlation_id
                         ).model_dump_json(),
-                        client_id
+                        client_id,
+                        priority=MessagePriority.CRITICAL
                     )
                 elif msg_type == WebSocketMessageTypeEnum.PONG:
                     # Client responded to a server PING

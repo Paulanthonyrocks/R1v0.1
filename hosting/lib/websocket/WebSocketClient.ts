@@ -498,7 +498,10 @@ export class WebSocketClient implements IWebSocketClient {
                     if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
                 };
 
-                this.ws.onmessage = this.handleMessage.bind(this);
+                this.ws.onmessage = (event) => {
+                    console.log(`[WebSocketClient ${this.instanceId}] RAW message received:`, event.data);
+                    this.handleMessage(event);
+                };
 
             } catch (error) {
                 console.error(`[WebSocketClient ${this.instanceId}] WebSocket connection error:`, error);
@@ -918,7 +921,8 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public isConnected(): boolean {
-        return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.connectionState === ConnectionState.CONNECTED;
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN && 
+               (this.connectionState === ConnectionState.CONNECTED || this.connectionState === ConnectionState.AUTHENTICATED);
     }
 
     public cleanupWorkerResources(feed_id: string): void {
