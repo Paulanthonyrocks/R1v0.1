@@ -778,7 +778,7 @@ export class WebSocketClient implements IWebSocketClient {
 
      // 2. Handle Unscoped Listeners
      const unscopedListeners = this.listeners.get(type);
-     if (unscopedListeners) {
+     if (unscopedListeners && type !== WebSocketMessageType.VIDEO_FRAME) {
          console.log(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
          unscopedListeners.forEach((listener) => {
              try {
