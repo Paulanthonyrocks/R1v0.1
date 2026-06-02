@@ -24,7 +24,11 @@ interface RealtimeStateContextType extends RealtimeState {
 
 const RealtimeStateContext = createContext<RealtimeStateContextType | null>(null);
 
-export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+interface RealtimeStateProviderProps {
+    children: React.ReactNode;
+}
+
+export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) => {
     const client = useWebSocket();
     const [kpis, setKpis] = useState<KpiData | null>(null);
     const [alerts, setAlerts] = useState<AlertData[]>([]);
@@ -100,7 +104,7 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         }
 
         // Subscribe to server-side topics on every (re)connection
-        const unsubStatus = client?.onStatusChange((status) => {
+        const unsubStatus = client?.onStatusChange((status: string) => {
             const connected = status === 'connected';
             setIsConnected(connected);
             setIsReady(connected);
@@ -124,8 +128,8 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         const unsubFeedUpdate = client?.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
             if (!data?.feed_status_data) return;
             const statusData = data.feed_status_data;
-            setFeeds(prevFeeds => {
-                const index = prevFeeds.findIndex(feed => feed.feed_id === statusData.feed_id);
+            setFeeds((prevFeeds: FeedStatusData[]) => {
+                const index = prevFeeds.findIndex((feed: FeedStatusData) => feed.feed_id === statusData.feed_id);
                 if (index !== -1) {
                     const existing = prevFeeds[index];
                     if (existing.status === statusData.status && JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
@@ -153,8 +157,8 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
 
         const unsubAlert = client?.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
             if (data?.alert_data) {
-                setAlerts(prevAlerts => {
-                    if (prevAlerts.some(a => a.id === data.alert_data.id)) return prevAlerts;
+                setAlerts((prevAlerts: AlertData[]) => {
+                    if (prevAlerts.some((a: AlertData) => a.id === data.alert_data.id)) return prevAlerts;
                     return [...prevAlerts, data.alert_data].slice(-20);
                 });
             }
@@ -172,12 +176,12 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
                     description: data.message,
                     status: 'REPORTED'
                 };
-                setAlerts(prevAlerts => {
-                    if (prevAlerts.some(a => a.id === newIncident.id)) return prevAlerts;
+                setAlerts((prevAlerts: AlertData[]) => {
+                    if (prevAlerts.some((a: AlertData) => a.id === newIncident.id)) return prevAlerts;
                     return [...prevAlerts, newIncident].slice(-20);
                 });
             } else if (data?.message_type === 'incident_update') {
-                setAlerts(prevAlerts => prevAlerts.map(alert =>
+                setAlerts((prevAlerts: AlertData[]) => prevAlerts.map((alert: AlertData) =>
                     alert.id === data.incident_id || String(alert.id) === String(data.incident_id)
                         ? { ...alert, status: data.status, resolution_notes: data.notes, updated_at: new Date().toISOString() }
                         : alert
@@ -186,7 +190,7 @@ export const RealtimeStateProvider: React.FC<{ children: React.ReactNode }> = ({
         });
         if (unsubGen) subscriptions.push(unsubGen);
 
-        const unsubError = client?.onError((_type, message) => setError(message));
+        const unsubError = client?.onError((_type: string, message: string) => setError(message));
         if (unsubError) subscriptions.push(unsubError);
 
         return () => {
