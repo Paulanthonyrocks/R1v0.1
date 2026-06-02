@@ -222,13 +222,16 @@ async def message_receiver(
 
                 elif msg_type == WebSocketMessageTypeEnum.GET_INITIAL_FEED_STATUSES:
                     statuses = await feed_manager.get_all_statuses()
+                    logger.info(f"GET_INITIAL_FEED_STATUSES for {client_id}: found {len(statuses)} feeds")
                     response = WebSocketMessage(
                         type=WebSocketMessageTypeEnum.INITIAL_FEED_STATUSES,
                         data=InitialFeedStatusesData(feeds=statuses).model_dump()
                     )
+                    response_json = response.model_dump_json()
+                    logger.debug(f"Sending INITIAL_FEED_STATUSES to {client_id}: {response_json}")
                     # CRITICAL: Use HIGH priority so initial statuses are never dropped
                     # when the client queue is loaded with video frames (LOW priority).
-                    await connection_manager.send_personal_message(response.model_dump_json(), client_id, priority=MessagePriority.HIGH)
+                    await connection_manager.send_personal_message(response_json, client_id, priority=MessagePriority.HIGH)
 
                 elif msg_type in [
                     WebSocketMessageTypeEnum.START_FEED,

@@ -53,7 +53,7 @@ class FeedBroadcaster:
         """Broadcasts aggregated KPI metrics to the 'kpi' topic."""
         if not self._connection_manager:
             return
-        
+
         try:
             message = WebSocketMessage(
                 type=WebSocketMessageTypeEnum.KPI_UPDATE,
@@ -64,3 +64,18 @@ class FeedBroadcaster:
             )
         except Exception as e:
             logger.error(f"Error broadcasting KPI update: {e}", exc_info=True)
+
+    async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
+        """
+        Broadcasts binary frame data to subscribers of a specific feed.
+        Delegates to ConnectionManager for prioritized delivery.
+        """
+        if not self._connection_manager:
+            logger.warning("ConnectionManager is None; cannot broadcast realtime bytes.")
+            return
+
+        try:
+            await self._connection_manager.broadcast_to_feed_realtime_bytes(feed_id, data, frame_index)
+        except Exception as e:
+            logger.error(f"Error broadcasting realtime bytes for {feed_id}: {e}", exc_info=True)
+

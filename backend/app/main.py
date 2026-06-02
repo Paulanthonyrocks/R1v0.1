@@ -299,16 +299,6 @@ async def lifespan(app: FastAPI):
                 for feed in sample_feeds:
                     f_path = feed.get("path")
                     try:
-                        # Check if feed is already active to avoid duplicate starts and churn
-                        existing_id = fm.registry.generate_feed_id(f_path)
-                        entry = fm.registry.get_entry(existing_id)
-                        if entry and entry["status"] in (
-                            FeedOperationalStatusEnum.RUNNING,
-                            FeedOperationalStatusEnum.STARTING,
-                        ):
-                            logger.info(f"Feed {existing_id} already active, skipping duplicate start")
-                            continue
-
                         await fm.add_and_start_feed(
                             source=f_path,
                             is_looped=feed.get("is_looped", True),

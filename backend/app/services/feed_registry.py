@@ -29,12 +29,12 @@ class FeedRegistry:
         else:
             base_name = re.sub(r"[^\w\-.]+", "_", Path(source).stem)
 
-        feed_id = f"Feed_{self._feed_id_counter}_{base_name}"
-        while feed_id in self.process_registry:
-            self._feed_id_counter += 1
+        while True:
             feed_id = f"Feed_{self._feed_id_counter}_{base_name}"
-        self._feed_id_counter += 1
-        return feed_id
+            if feed_id not in self.process_registry:
+                self._feed_id_counter += 1
+                return feed_id
+            self._feed_id_counter += 1
 
     def save_persistence(self):
         """Saves current feeds configuration to disk."""

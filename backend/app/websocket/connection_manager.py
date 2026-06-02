@@ -263,13 +263,16 @@ class ConnectionManager:
         2. Drain all available high-priority (NORMAL+) messages from client_queues.
         3. If no high-priority messages, send ONE low-priority (LOW) message from low_priority_queues.
         """
+        logger.info(f"[Sender {client_id}] Task started.")
         high_priority_queue = self.client_queues.get(client_id)
         low_priority_queue = self.low_priority_queues.get(client_id)
         signal_queue = self.signal_queues.get(client_id)
         
-        if not (high_priority_queue and low_priority_queue and signal_queue):
+        if high_priority_queue is None or low_priority_queue is None or signal_queue is None:
+            logger.error(f"[Sender {client_id}] Task exiting: Missing queues. HighQ: {bool(high_priority_queue)}, LowQ: {bool(low_priority_queue)}, SigQ: {bool(signal_queue)}")
             return
         
+        logger.info(f"[Sender {client_id}] Task entered main loop.")
         # Diagnostics tracking
         msg_count = 0
         last_diag_time = time.time()
@@ -290,8 +293,10 @@ class ConnectionManager:
                         
                         try:
                             if isinstance(message, bytes):
+                                logger.debug(f"[Sender {client_id}] Sending binary high-priority msg (size: {len(message)})")
                                 await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                             else:
+                                logger.debug(f"[Sender {client_id}] Sending text high-priority msg: {message[:100]}...")
                                 await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
                             high_priority_queue.task_done()
                         except (asyncio.TimeoutError, Exception) as e:
@@ -327,9 +332,11 @@ class ConnectionManager:
                     msg_count = 0
                     
         except asyncio.CancelledError:
-            pass
+            logger.info(f"[Sender {client_id}] Task cancelled.")
         except Exception as e:
-            logger.error(f"Unexpected error in sender task for {client_id}: {e}")
+            logger.error(f"Unexpected error in sender task for {client_id}: {e}", exc_info=True)
+        finally:
+            logger.info(f"[Sender {client_id}] Task exiting.")
 
     def _calculate_queue_size(self, client_id: str) -> int:
         """Calculate adaptive queue size based on client latency."""

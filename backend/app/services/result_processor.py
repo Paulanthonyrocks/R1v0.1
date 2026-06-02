@@ -3,10 +3,12 @@ import asyncio
 import logging
 import time
 import queue
+import msgpack
 from concurrent.futures import ThreadPoolExecutor
 from app.utils.shared_frame_buffer import SharedFrameBuffer
 from app.services.constants import FeedManagerConstants
 from app.models.feeds import FeedOperationalStatusEnum
+from app.models.websocket import WebSocketMessageTypeEnum
 
 logger = logging.getLogger("app.services.result_processor")
 
@@ -32,6 +34,11 @@ class ResultProcessor:
 
     def stop(self):
         self._stop_flag = True
+
+    def set_broadcaster(self, broadcaster: Any):
+        """Updates the broadcaster instance used for streaming updates."""
+        self.broadcaster = broadcaster
+        logger.info("ResultProcessor broadcaster updated.")
 
     def _process_single_result(self, item):
         """CPU-bound processing of a single result item (SHM read -> bytes)."""
@@ -166,7 +173,37 @@ class ResultProcessor:
 
     async def _process_frame_data(self, feed_id, frame_idx, frame_bytes, metrics, vehicles, extra):
         """
-        Placeholder for the logic that updates metrics, broadcasts frames, etc.
-        This will be implemented as a callback from FeedManager to avoid circular deps.
+        Updates metrics and broadcasts the frame to subscribers using Msgpack for binary efficiency.
         """
-        pass
+        try:
+            # 1. Update registry metrics
+            entry = self.registry.get_entry(feed_id)
+            if entry:
+                entry["latest_metrics"] = metrics
+
+            # 2. Serialize as Msgpack to match frontend expectations
+            # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
+            compact_message = {
+                "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
+                "f": feed_id,
+                "i": frame_idx,
+                "ts": time.time() * 1000,
+                "v": vehicles,
+                "m": metrics,
+                "bg": frame_bytes
+            }
+            binary_data = msgpack.packb(compact_message, use_bin_type=True)
+
+            # 3. Broadcast via broadcaster
+            if self.broadcaster:
+                await self.broadcaster.broadcast_to_feed_realtime_bytes(
+                    feed_id=feed_id,
+                    data=binary_data,
+                    frame_index=frame_idx
+                )
+            else:
+                logger.warning(f"Broadcaster is None; cannot broadcast frame for {feed_id}")
+
+        except Exception as e:
+            logger.error(f"Error broadcasting frame data for {feed_id}: {e}", exc_info=True)
+

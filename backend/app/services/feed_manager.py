@@ -337,7 +337,9 @@ class FeedManager:
     def set_connection_manager(self, manager: ConnectionManager):
         self._connection_manager = manager
         self.broadcaster = FeedBroadcaster(manager)
-        logger.info("WebSocket ConnectionManager set in FeedManager. Broadcaster initialized.")
+        if self.result_processor:
+            self.result_processor.set_broadcaster(self.broadcaster)
+        logger.info("WebSocket ConnectionManager set in FeedManager. Broadcaster initialized and pushed to ResultProcessor.")
 
     async def _scaling_monitor(self):
         """Monitors queue depth and scales the worker pool dynamically."""

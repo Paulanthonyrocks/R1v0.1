@@ -62,21 +62,14 @@ self.onmessage = async function (e) {
     if (binaryFrame) {
         // Modern binary msgpack path - align with backend short keys
         metadata = {
-            frame_index: binaryFrame.i || binaryFrame.frame_index || 0,
-            metrics: binaryFrame.m || binaryFrame.metrics,
-            vehicles: binaryFrame.v || binaryFrame.vehicles,
-            timestamp: binaryFrame.ts || binaryFrame.timestamp
+            frame_index: binaryFrame.i || 0,
+            metrics: binaryFrame.m,
+            vehicles: binaryFrame.v,
+            timestamp: binaryFrame.ts
         };
 
-        // Priority: frame (standalone JPEG) > background+ROIs (reconstruction)
-        if (binaryFrame.frame) {
-            jpegBytes = binaryFrame.frame; // Already an ArrayBuffer
-        }
-        // ROI reconstruction path — expensive, only enter if needed
-        // (Backend currently sends standalone frames, not bg+rois)
-        // else if (binaryFrame.background && binaryFrame.rois) {
-        //     // See fallback below
-        // }
+        // The binary frame bytes are in the 'bg' key
+        jpegBytes = binaryFrame.bg; 
     } else if (frameData && typeof frameData === 'string') {
         // Legacy base64 path — fast decode using Fetch + Data URL
         jpegBytes = frameData; // Will be converted below
