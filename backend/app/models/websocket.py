@@ -208,7 +208,7 @@ class WebSocketMessage(BaseModel):
     correlation_id: Optional[str] = None
     timestamp: Optional[float] = None
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, extra="allow")
 
     # Helper method to parse data only when needed
     def parse_data(self, model_class):

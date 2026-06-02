@@ -129,6 +129,9 @@ async def message_receiver(
 
         # --- Main Message Loop ---
         async for message_text in websocket.iter_text():
+            # Log every raw message for debugging purposes
+            logger.info(f"RAW message from {client_id}: {message_text}")
+
             # 0. Inbound Size Limit (Security)
             if len(message_text) > 64_000:
                 logger.warning(f"Message from {client_id} exceeds size limit ({len(message_text)} bytes). Dropping.")
@@ -142,7 +145,7 @@ async def message_receiver(
                 try:
                     message = WebSocketMessage.model_validate(message_dict)
                 except Exception as e:
-                    logger.warning(f"Invalid message format from {client_id}: {e}")
+                    logger.info(f"Invalid message format from {client_id}: {e} | Data: {message_dict}")
                     continue
 
                 msg_type = message.type
@@ -150,17 +153,16 @@ async def message_receiver(
 
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
-                    logger.debug(f"Received PING from {client_id}")
-                    # Echo back the correlation_id for RTT calculation
-                    await connection_manager.send_personal_message(
-                        WebSocketMessage(
-                            type=WebSocketMessageTypeEnum.PONG,
-                            data=PongData().model_dump(),
-                            correlation_id=message.correlation_id
-                        ).model_dump_json(),
-                        client_id,
-                        priority=MessagePriority.CRITICAL
-                    )
+                    logger.info(f"Received PING from {client_id}, sending direct PONG")
+                    pong_msg = WebSocketMessage(
+                        type=WebSocketMessageTypeEnum.PONG,
+                        data=PongData().model_dump(),
+                        correlation_id=message.correlation_id
+                    ).model_dump_json()
+                    try:
+                        await websocket.send_text(pong_msg)
+                    except Exception as e:
+                        logger.error(f"Direct PONG send failed: {e}")
                 elif msg_type == WebSocketMessageTypeEnum.PONG:
                     # Client responded to a server PING
                     logger.debug(f"Received PONG from {client_id}")

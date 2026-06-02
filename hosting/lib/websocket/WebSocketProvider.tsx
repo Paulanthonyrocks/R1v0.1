@@ -4,6 +4,7 @@
 import React, { createContext, useContext, useEffect, useRef } from 'react';
 import { WebSocketClient } from './WebSocketClient';
 import { useAuth } from '../auth/AuthProvider';
+import { getOrCreateWebSocketClient } from './websocketSingleton';
 
 const WebSocketContext = createContext<WebSocketClient | null | undefined>(undefined);
 
@@ -55,16 +56,14 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
  // Initialize the WebSocket client exactly once on mount.
  // This ensures a fresh instance per mount cycle and avoids singleton state issues.
  useEffect(() => {
-   const client = new WebSocketClient(WS_BASE_URL);
+   const client = getOrCreateWebSocketClient(WS_BASE_URL);
    clientRef.current = client;
    client.activate();
    
    console.log(`[WebSocketProvider] Mounted. Client instance: ${client.getInstanceId()}`);
 
    return () => {
-     console.log(`[WebSocketProvider] Unmounting. Destroying client: ${client.getInstanceId()}`);
-     client.destroy();
-     clientRef.current = null;
+     console.log(`[WebSocketProvider] Unmounting. Connection persists via singleton.`);
    };
  }, []);
 

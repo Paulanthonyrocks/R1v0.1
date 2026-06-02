@@ -290,15 +290,13 @@ class ConnectionManager:
                         
                         try:
                             if isinstance(message, bytes):
-                                await asyncio.wait_for(websocket.send_bytes(message), timeout=30.0)
+                                await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                             else:
-                                await asyncio.wait_for(websocket.send_text(message), timeout=30.0)
+                                await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
                             high_priority_queue.task_done()
                         except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"[Sender {client_id}] Error sending high-priority msg: {repr(e)}. Disconnecting.")
-                            async with await self._get_client_lock(client_id):
-                                await self._disconnect_unsafe(client_id, websocket)
-                            return # Terminate task
+                            logger.warning(f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. Dropping message.")
+                            high_priority_queue.task_done()
                     except asyncio.QueueEmpty:
                         break
 
@@ -312,14 +310,11 @@ class ConnectionManager:
                         
                         try:
                             if isinstance(message, bytes):
-                                await asyncio.wait_for(websocket.send_bytes(message), timeout=30.0)
+                                await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                             else:
-                                await asyncio.wait_for(websocket.send_text(message), timeout=30.0)
+                                await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
                         except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"[Sender {client_id}] Error sending low-priority msg: {repr(e)}. Disconnecting.")
-                            async with await self._get_client_lock(client_id):
-                                await self._disconnect_unsafe(client_id, websocket)
-                            return # Terminate task
+                            logger.warning(f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. Dropping message.")
                     except IndexError:
                         # Queue empty
                         pass
