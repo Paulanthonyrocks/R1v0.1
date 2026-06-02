@@ -125,7 +125,7 @@ let lastActiveInstanceId: string | null = null;
 export class WebSocketClient implements IWebSocketClient {
     public static DEBUG = false;
     private listeners: Map<WebSocketMessageType, Set<MessageListener<unknown>>> = new Map();
-    private scopedListeners: Map<WebSocketMessageType, Map<string, MessageListener<unknown>>> = new Map();
+    private scopedListeners: Map<WebSocketMessageType, Map<string, Set<MessageListener<unknown>>>> = new Map();
     private ws: WebSocket | null = null;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 10;
@@ -762,13 +762,16 @@ export class WebSocketClient implements IWebSocketClient {
      if (scope) {
          const scopedMap = this.scopedListeners.get(type);
          if (scopedMap) {
-             const listener = scopedMap.get(scope);
-             if (listener) {
-                 try {
-                     console.log(`[WebSocketClient ${this.instanceId}] Notifying scoped listener for ${type} (scope: ${scope})`);
-                     listener(data);
-                 } catch (error) {                     console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
-                 }
+             const listenersSet = scopedMap.get(scope);
+             if (listenersSet) {
+                 listenersSet.forEach(listener => {
+                     try {
+                         console.log(`[WebSocketClient ${this.instanceId}] Notifying scoped listener for ${type} (scope: ${scope})`);
+                         listener(data);
+                     } catch (error) {
+                         console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
+                     }
+                 });
              }
          }
      }
@@ -792,7 +795,11 @@ export class WebSocketClient implements IWebSocketClient {
             if (!this.scopedListeners.has(messageType)) {
                 this.scopedListeners.set(messageType, new Map());
             }
-            this.scopedListeners.get(messageType)!.set(scope, listener as unknown as MessageListener<unknown>);
+            const scopedMap = this.scopedListeners.get(messageType)!;
+            if (!scopedMap.has(scope)) {
+                scopedMap.set(scope, new Set());
+            }
+            scopedMap.get(scope)!.add(listener as unknown as MessageListener<unknown>);
             return () => this.unsubscribe(messageType, listener, scope);
         } else {
             // Use debug level to reduce noise from Strict Mode x multiple hook instances
@@ -811,8 +818,14 @@ export class WebSocketClient implements IWebSocketClient {
         if (scope) {
             console.log(`[WebSocketClient ${this.instanceId}] UNSUBSCRIBING from ${messageType} with scope: ${scope}`);
             const scopedMap = this.scopedListeners.get(messageType);
-            if (scopedMap && scopedMap.get(scope) === listener) {
-                scopedMap.delete(scope);
+            if (scopedMap) {
+                const listenersSet = scopedMap.get(scope);
+                if (listenersSet) {
+                    listenersSet.delete(listener);
+                    if (listenersSet.size === 0) {
+                        scopedMap.delete(scope);
+                    }
+                }
             }
         } else {
             if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
