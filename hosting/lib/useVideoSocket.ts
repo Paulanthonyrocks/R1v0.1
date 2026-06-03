@@ -40,6 +40,7 @@ const useVideoSocket = (streamId: string) => {
   const frameCountRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
+  const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Constants
   const STATE_UPDATE_INTERVAL = 200;
@@ -71,6 +72,8 @@ const useVideoSocket = (streamId: string) => {
         if (videoStreamManager.shouldUpdateUI(streamId)) {
           setVehicles(videoStreamManager.getVehicles(streamId));
         }
+        // Clear any previous error state upon successful frame receipt
+        setError(null);
       }
 
       lastFrameRef.current = {
@@ -180,7 +183,7 @@ const unsubscribeFromFeed = useCallback(() => {
       if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
         if (data.metrics) {
           const metricsData = data.metrics;
-          setMetrics(prev => (prev && prev.timestamp === metricsData.timestamp) ? prev : (metricsData ?? null));
+          setMetrics((prev: SurveillanceFeedMessage | null) => (prev && prev.timestamp === metricsData.timestamp) ? prev : (metricsData ?? null));
         }
         lastStateUpdateRef.current = now;
       }
@@ -243,7 +246,7 @@ const unsubscribeFromFeed = useCallback(() => {
       }
     }, 1000);
 
-    const unsubscribeStatus = client?.onStatusChange((status) => {
+    const unsubscribeStatus = client?.onStatusChange((status: string) => {
       setIsConnected(status === 'connected' || status === 'authenticated');
       if (status === 'authenticated') {
         // When reconnecting, cancel any pending unsubscribes so they don't
@@ -290,6 +293,9 @@ const unsubscribeFromFeed = useCallback(() => {
       if (unsubscribeFrame) unsubscribeFrame();
       if (unsubscribeStatus) unsubscribeStatus();
       clearInterval(stalenessInterval);
+      if (frameClosureTimeoutRef.current) {
+        clearTimeout(frameClosureTimeoutRef.current);
+      }
       if (lastFrameRef.current?.image instanceof ImageBitmap) {
         lastFrameRef.current.image.close();
       }

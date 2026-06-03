@@ -13,7 +13,6 @@ interface DecoderOptions {
 }
 
 export const useVideoDecoder = (options: DecoderOptions) => {
-    const isProcessingRef = useRef<boolean>(false);
     const optionsRef = useRef(options);
 
     useEffect(() => {
@@ -21,9 +20,6 @@ export const useVideoDecoder = (options: DecoderOptions) => {
     }, [options]);
 
     const decode = useCallback(async (data: VideoFrameMessage) => {
-        if (isProcessingRef.current) return;
-        isProcessingRef.current = true;
-
         try {
             let decodedImage: ImageBitmap | HTMLImageElement | null = null;
 
@@ -69,8 +65,6 @@ export const useVideoDecoder = (options: DecoderOptions) => {
             }
         } catch (error: any) {
             optionsRef.current.onError?.(error);
-        } finally {
-            isProcessingRef.current = false;
         }
     }, []);
 
