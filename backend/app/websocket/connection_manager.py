@@ -166,6 +166,67 @@ class ConnectionManager:
         async with await self._get_client_lock(client_id):
             await self._disconnect_unsafe(client_id, websocket)
 
+    async def _disconnect_unsafe(self, client_id: str, websocket: Optional[WebSocket] = None):
+        """Performs the actual resource cleanup for a client. 
+        Assumes the client lock is already held by the caller.
+        """
+        logger.info(f"Disconnecting client {client_id}...")
+        
+        # 1. Close WebSocket if provided or found in active_connections
+        ws = websocket or self.active_connections.get(client_id)
+        if ws:
+            try:
+                # Only close if not already closed
+                if ws.client_state != WebSocketState.DISCONNECTED:
+                    await ws.close(code=1000)
+            except Exception as e:
+                logger.debug(f"Error closing WebSocket for {client_id}: {e}")
+
+        # 2. Cancel and clean up the sender task
+        task = self.client_tasks.pop(client_id, None)
+        if task and not task.done():
+            task.cancel()
+            # We don't await the task here to avoid blocking the disconnect flow
+            asyncio.create_task(self._await_task_safely(task))
+
+        # 3. Remove from all mappings
+        self.active_connections.pop(client_id, None)
+        user_id = self.client_id_to_user_id.pop(client_id, None)
+        if user_id and user_id in self.user_id_to_client_ids:
+            if client_id in self.user_id_to_client_ids[user_id]:
+                self.user_id_to_client_ids[user_id].remove(client_id)
+            if not self.user_id_to_client_ids[user_id]:
+                del self.user_id_to_client_ids[user_id]
+
+        self.client_id_to_user_role.pop(client_id, None)
+        self.last_pong_received_time.pop(client_id, None)
+        self.client_latencies.pop(client_id, None)
+        self.client_queues.pop(client_id, None)
+        self.low_priority_queues.pop(client_id, None)
+        self.signal_queues.pop(client_id, None)
+        
+        # Topic cleanup
+        topics = self.client_id_to_topics.pop(client_id, set())
+        for topic in topics:
+            if topic in self.topic_subscriptions:
+                self.topic_subscriptions[topic].discard(client_id)
+                if not self.topic_subscriptions[topic]:
+                    del self.topic_subscriptions[topic]
+
+        # Feed cleanup
+        feeds = self.client_id_to_feeds.pop(client_id, set())
+        for feed_id in feeds:
+            if feed_id in self.feed_subscriptions:
+                self.feed_subscriptions[feed_id].discard(client_id)
+                if not self.feed_subscriptions[feed_id]:
+                    del self.feed_subscriptions[feed_id]
+
+        # Lock cleanup: we keep the lock object itself in _client_locks 
+        # to avoid race conditions where a connect() call creates a new lock 
+        # while a disconnect() is still finishing.
+        
+        logger.info(f"Client {client_id} successfully disconnected. Total active: {len(self.active_connections)}")
+
     async def _disconnect_old_connection(self, client_id: str, old_ws: WebSocket):
         """Safely clean up a replaced connection without risking deadlocks.
         This is called in the background after a new connection has taken over.
