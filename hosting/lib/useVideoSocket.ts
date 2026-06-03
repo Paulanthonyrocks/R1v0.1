@@ -153,18 +153,23 @@ const unsubscribeFromFeed = useCallback(() => {
   }, [client]);
 
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
-    // Strict Monotonicity: If we receive a frame older than the last one we processed,
-    // drop it immediately. This prevents "rewind" juggling.
-    if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-      return;
-    }
-
-    try {
-      if (!data.feed_id || data.feed_id !== streamId) {
+      // Strict Monotonicity: If we receive a frame older than the last one we processed,
+      // drop it immediately. This prevents "rewind" juggling.
+      if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
+        console.debug(`[useVideoSocket] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${streamId}`);
         return;
       }
 
-      if (data.frame_index !== undefined) {
+      try {
+        if (!data.feed_id) {
+          console.warn(`[useVideoSocket.handleFrame] DROPPING frame without feed_id for ${streamId}`);
+          return;
+        }
+        if (data.feed_id !== streamId) {
+          console.error(`[useVideoSocket.handleFrame] CRITICAL: frame feed_id mismatch! Expected ${streamId}, got ${data.feed_id}`);
+          return;
+        }
+        if (data.frame_index !== undefined) {
         const lastIndex = lastProcessedIndexRef.current;
         if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
           const dropped = data.frame_index - lastIndex - 1;
@@ -218,15 +223,27 @@ const unsubscribeFromFeed = useCallback(() => {
     (frameData: VideoFrameMessage) => {
  // Note: the worker posts data directly, not wrapped in WebSocketMessage.
  // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
+ if (!frameData.feed_id) {
+   console.warn(`[useVideoSocket] DROPPING frame with missing feed_id. Data keys: ${Object.keys(frameData || {}).join(',')}`);
+   // Close the ImageBitmap if present to prevent memory leak
+   if (frameData.frame instanceof ImageBitmap) {
+     frameData.frame.close();
+   }
+   return;
+ }
  if (frameData && frameData.frame) {
  // Hard guard: reject frames not matching our subscribed feed.
  // This prevents stale-closure leaks if the scoped routing
  // ever delivers a mismatched frame (e.g. during reconnect).
- if (frameData.feed_id && frameData.feed_id !== currentStreamId) {
- console.warn(`[useVideoSocket] HARD GUARD DROP: expected ${currentStreamId}, got ${frameData.feed_id}.`);
+ if (frameData.feed_id !== currentStreamId) {
+ console.warn(`[useVideoSocket] HARD GUARD DROP: expected ${currentStreamId}, got ${frameData.feed_id}`);
+ // Close the ImageBitmap to prevent memory leak
+ if (frameData.frame instanceof ImageBitmap) {
+   frameData.frame.close();
+ }
  return;
  }
- console.debug(`[useVideoSocket] ACCEPTED frame for ${currentStreamId}`);
+ console.debug(`[useVideoSocket] ACCEPTED frame for ${currentStreamId} (index: ${frameData.frame_index})`);
  handleFrameRef.current?.(frameData);
  }
  }, 
