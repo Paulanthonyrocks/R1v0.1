@@ -182,7 +182,7 @@ def ingestion_worker(
                 )
                 last_fps_log = time.time()
                 last_metrics_log = time.time()
-                metrics.start_time = last_fps_log
+                metrics.start_time = time.monotonic()
                 break
             else:
                 logger.warning(
@@ -386,6 +386,7 @@ def ingestion_worker(
                         if not safe_put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1):
                             raise queue.Full
                         metrics.frames_processed += 1
+                        metrics.mark_frame()
                         shm_ref = None  # Ownership transferred; guard against double-release
                     except queue.Full:
                         # Queue is full — release the SHM slot we just acquired
