@@ -226,7 +226,7 @@ const unsubscribeFromFeed = useCallback(() => {
  // Note: the worker posts data directly, not wrapped in WebSocketMessage.
  // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
  if (!frameData.feed_id) {
-   console.warn(`[useVideoSocket] DROPPING frame with missing feed_id. Data keys: ${Object.keys(frameData || {}).join(',')}`);
+   console.warn(`[useVideoSocket] DROPPING frame with missing feed_id for ${currentStreamId}. Data keys: ${Object.keys(frameData || {}).join(',')}`);
    // Close the ImageBitmap if present to prevent memory leak
    if (frameData.frame instanceof ImageBitmap) {
      frameData.frame.close();

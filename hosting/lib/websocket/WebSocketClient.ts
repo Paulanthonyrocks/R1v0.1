@@ -764,22 +764,26 @@ export class WebSocketClient implements IWebSocketClient {
          if (scopedMap) {
              const listenersSet = scopedMap.get(scope);
              if (listenersSet) {
+                 console.debug(`[WebSocketClient ${this.instanceId}] Routing ${type} to scope ${scope} (${listenersSet.size} listeners)`);
                  listenersSet.forEach(listener => {
                      try {
-                         console.log(`[WebSocketClient ${this.instanceId}] Notifying scoped listener for ${type} (scope: ${scope})`);
                          listener(data);
                      } catch (error) {
                          console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
                      }
                  });
+             } else {
+                 console.debug(`[WebSocketClient ${this.instanceId}] No listeners for scope ${scope} of type ${type}`);
              }
          }
+     } else {
+         console.debug(`[WebSocketClient ${this.instanceId}] No scope provided for ${type} message`);
      }
 
      // 2. Handle Unscoped Listeners
      const unscopedListeners = this.listeners.get(type);
      if (unscopedListeners && type !== WebSocketMessageType.VIDEO_FRAME) {
-         console.log(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
+         console.debug(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
          unscopedListeners.forEach((listener) => {
              try {
                  (listener as MessageListener<T>)(data);
