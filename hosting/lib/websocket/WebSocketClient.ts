@@ -101,8 +101,8 @@ export interface IWebSocketClient {
     connect(token: string): Promise<void>;
     disconnect(): void;
     send<T>(data: WebSocketMessage<T>): void;
-    subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): () => void;
-    unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>): void;
+    subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void;
+    unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void;
     reconnectWithNewToken(token: string): Promise<void>;
     getConnectionQuality(): ConnectionQuality;
     getConnectionState(): string;
@@ -757,7 +757,7 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
- private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
+    private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
      // 1. Handle Scoped Listeners
      if (scope) {
          const scopedMap = this.scopedListeners.get(type);
@@ -789,6 +789,7 @@ export class WebSocketClient implements IWebSocketClient {
          });
      }
  }
+
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (scope) {
             console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} with scope: ${scope}`);
@@ -800,9 +801,7 @@ export class WebSocketClient implements IWebSocketClient {
                 scopedMap.set(scope, new Set());
             }
             scopedMap.get(scope)!.add(listener as unknown as MessageListener<unknown>);
-            return () => this.unsubscribe(messageType, listener, scope);
         } else {
-            // Use debug level to reduce noise from Strict Mode x multiple hook instances
             if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
                 console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} (unscoped)`);
             }
@@ -810,8 +809,9 @@ export class WebSocketClient implements IWebSocketClient {
                 this.listeners.set(messageType, new Set());
             }
             this.listeners.get(messageType)!.add(listener as unknown as MessageListener<unknown>);
-            return () => this.unsubscribe(messageType, listener);
         }
+
+        return () => this.unsubscribe(messageType, listener, scope);
     }
 
     public unsubscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): void {

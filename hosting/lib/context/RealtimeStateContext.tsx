@@ -117,81 +117,93 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
 
         if (unsubStatus) subscriptions.push(unsubStatus);
 
-        const unsubInitialFeeds = client?.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
-            if (data && Array.isArray(data.feeds)) {
-                const sortedFeeds = [...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
-                setFeeds(sortedFeeds);
-                sortedFeeds.forEach(feed => subscribeToFeed(feed.feed_id));
-            }
-        });
+        const unsubInitialFeeds = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.INITIAL_FEED_STATUSES, (data: { feeds: FeedStatusData[] }) => {
+                if (data && Array.isArray(data.feeds)) {
+                    const sortedFeeds = [...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+                    setFeeds(sortedFeeds);
+                    sortedFeeds.forEach(feed => subscribeToFeed(feed.feed_id));
+                }
+            }) 
+            : null;
         if (unsubInitialFeeds) subscriptions.push(unsubInitialFeeds);
 
-        const unsubFeedUpdate = client?.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
-            if (!data?.feed_status_data) return;
-            const statusData = data.feed_status_data;
-            setFeeds((prevFeeds: FeedStatusData[]) => {
-                const index = prevFeeds.findIndex((feed: FeedStatusData) => feed.feed_id === statusData.feed_id);
-                if (index !== -1) {
-                    const existing = prevFeeds[index];
-                    if (existing.status === statusData.status && JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
-                        return prevFeeds;
+        const unsubFeedUpdate = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.FEED_STATUS_UPDATE, (data: { feed_status_data: FeedStatusData }) => {
+                if (!data?.feed_status_data) return;
+                const statusData = data.feed_status_data;
+                setFeeds((prevFeeds: FeedStatusData[]) => {
+                    const index = prevFeeds.findIndex((feed: FeedStatusData) => feed.feed_id === statusData.feed_id);
+                    if (index !== -1) {
+                        const existing = prevFeeds[index];
+                        if (existing.status === statusData.status && JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
+                            return prevFeeds;
+                        }
+                        const newFeeds = [...prevFeeds];
+                        newFeeds[index] = statusData;
+                        return newFeeds.sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+                    } else {
+                        return [...prevFeeds, statusData].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
                     }
-                    const newFeeds = [...prevFeeds];
-                    newFeeds[index] = statusData;
-                    return newFeeds.sort((a, b) => a.feed_id.localeCompare(b.feed_id));
-                } else {
-                    return [...prevFeeds, statusData].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
-                }
-            });
-        });
+                });
+            }) 
+            : null;
         if (unsubFeedUpdate) subscriptions.push(unsubFeedUpdate);
 
-        const unsubKpi = client?.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => {
-            console.debug('[RealtimeStateProvider] Updating KPIs:', data);
-            setKpis(data);
-        });
+        const unsubKpi = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.KPI_UPDATE, (data: KpiData) => {
+                console.debug('[RealtimeStateProvider] Updating KPIs:', data);
+                setKpis(data);
+            }) 
+            : null;
         if (unsubKpi) subscriptions.push(unsubKpi);
 
-        const unsubCongestion = client?.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {
-            if (data && Array.isArray(data.nodes)) {
-                setNodeCongestionData(data.nodes);
-            }
-        });
+        const unsubCongestion = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.NODE_CONGESTION_UPDATE, (data: { nodes: any[] }) => {
+                if (data && Array.isArray(data.nodes)) {
+                    setNodeCongestionData(data.nodes);
+                }
+            }) 
+            : null;
         if (unsubCongestion) subscriptions.push(unsubCongestion);
 
-        const unsubAlert = client?.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
-            if (data?.alert_data) {
-                setAlerts((prevAlerts: AlertData[]) => {
-                    if (prevAlerts.some((a: AlertData) => a.id === data.alert_data.id)) return prevAlerts;
-                    return [...prevAlerts, data.alert_data].slice(-20);
-                });
-            }
-        });
+        const unsubAlert = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
+                if (data?.alert_data) {
+                    setAlerts((prevAlerts: AlertData[]) => {
+                        if (prevAlerts.some((a: AlertData) => a.id === data.alert_data.id)) return prevAlerts;
+                        return [...prevAlerts, data.alert_data].slice(-20);
+                    });
+                }
+            }) 
+            : null;
         if (unsubAlert) subscriptions.push(unsubAlert);
 
-        const unsubGen = client?.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
-            if (data?.message_type === 'new_incident') {
-                const newIncident: AlertData = {
-                    id: data.incident_id,
-                    timestamp: new Date(),
-                    severity: data.severity,
-                    feed_id: data.feed_id,
-                    message: data.title || "New Incident",
-                    description: data.message,
-                    status: 'REPORTED'
-                };
-                setAlerts((prevAlerts: AlertData[]) => {
-                    if (prevAlerts.some((a: AlertData) => a.id === newIncident.id)) return prevAlerts;
-                    return [...prevAlerts, newIncident].slice(-20);
-                });
-            } else if (data?.message_type === 'incident_update') {
-                setAlerts((prevAlerts: AlertData[]) => prevAlerts.map((alert: AlertData) =>
-                    alert.id === data.incident_id || String(alert.id) === String(data.incident_id)
-                        ? { ...alert, status: data.status, resolution_notes: data.notes, updated_at: new Date().toISOString() }
-                        : alert
-                ));
-            }
-        });
+        const unsubGen = typeof client?.subscribe === 'function' 
+            ? client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {
+                if (data?.message_type === 'new_incident') {
+                    const newIncident: AlertData = {
+                        id: data.incident_id,
+                        timestamp: new Date(),
+                        severity: data.severity,
+                        feed_id: data.feed_id,
+                        message: data.title || "New Incident",
+                        description: data.message,
+                        status: 'REPORTED'
+                    };
+                    setAlerts((prevAlerts: AlertData[]) => {
+                        if (prevAlerts.some((a: AlertData) => a.id === newIncident.id)) return prevAlerts;
+                        return [...prevAlerts, newIncident].slice(-20);
+                    });
+                } else if (data?.message_type === 'incident_update') {
+                    setAlerts((prevAlerts: AlertData[]) => prevAlerts.map((alert: AlertData) =>
+                        alert.id === data.incident_id || String(alert.id) === String(data.incident_id)
+                            ? { ...alert, status: data.status, resolution_notes: data.notes, updated_at: new Date().toISOString() }
+                            : alert
+                    ));
+                }
+            }) 
+            : null;
         if (unsubGen) subscriptions.push(unsubGen);
 
         const unsubError = client?.onError((_type: string, message: string) => setError(message));

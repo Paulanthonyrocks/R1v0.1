@@ -153,20 +153,22 @@ const unsubscribeFromFeed = useCallback(() => {
   }, [client]);
 
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
+      const currentStreamId = streamIdRef.current;
+
       // Strict Monotonicity: If we receive a frame older than the last one we processed,
       // drop it immediately. This prevents "rewind" juggling.
       if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-        console.debug(`[useVideoSocket] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${streamId}`);
+        console.debug(`[useVideoSocket] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${currentStreamId}`);
         return;
       }
 
       try {
         if (!data.feed_id) {
-          console.warn(`[useVideoSocket.handleFrame] DROPPING frame without feed_id for ${streamId}`);
+          console.warn(`[useVideoSocket.handleFrame] DROPPING frame without feed_id for ${currentStreamId}`);
           return;
         }
-        if (data.feed_id !== streamId) {
-          console.error(`[useVideoSocket.handleFrame] CRITICAL: frame feed_id mismatch! Expected ${streamId}, got ${data.feed_id}`);
+        if (data.feed_id !== currentStreamId) {
+          console.error(`[useVideoSocket.handleFrame] CRITICAL: frame feed_id mismatch! Expected ${currentStreamId}, got ${data.feed_id}`);
           return;
         }
         if (data.frame_index !== undefined) {
@@ -174,7 +176,7 @@ const unsubscribeFromFeed = useCallback(() => {
         if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
           const dropped = data.frame_index - lastIndex - 1;
           if (dropped > 30) {
-            console.warn(`[useVideoSocket] Significant frame gap for ${streamId}: ${dropped} frames`);
+            console.warn(`[useVideoSocket] Significant frame gap for ${currentStreamId}: ${dropped} frames`);
           }
         }
         lastProcessedIndexRef.current = data.frame_index;
@@ -197,7 +199,7 @@ const unsubscribeFromFeed = useCallback(() => {
     } catch (err) {
       console.error('[useVideoSocket] handleFrame Error:', err);
     }
-  }, [client, streamId, decode]);
+  }, [client, decode]);
 
   // Sync the latest handleFrame to the ref
   useEffect(() => {

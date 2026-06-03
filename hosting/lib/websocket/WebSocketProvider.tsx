@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { createContext, useContext, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from './WebSocketClient';
 import { useAuth } from '../auth/AuthProvider';
 import { getOrCreateWebSocketClient } from './websocketSingleton';
@@ -51,16 +51,16 @@ const WS_BASE_URL = getWsUrl('/api/v1/ws');
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
  const { token, loading } = useAuth();
- const clientRef = useRef<WebSocketClient | null>(null);
+ const [client, setClient] = useState<WebSocketClient | null>(null);
 
  // Initialize the WebSocket client exactly once on mount.
  // This ensures a fresh instance per mount cycle and avoids singleton state issues.
  useEffect(() => {
-   const client = getOrCreateWebSocketClient(WS_BASE_URL);
-   clientRef.current = client;
-   client.activate();
+   const clientInstance = getOrCreateWebSocketClient(WS_BASE_URL);
+   setClient(clientInstance);
+   clientInstance.activate();
    
-   console.log(`[WebSocketProvider] Mounted. Client instance: ${client.getInstanceId()}`);
+   console.log(`[WebSocketProvider] Mounted. Client instance: ${clientInstance.getInstanceId()}`);
 
    return () => {
      console.log(`[WebSocketProvider] Unmounting. Connection persists via singleton.`);
@@ -73,7 +73,6 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }
 
   let isCurrent = true;
-  const client = clientRef.current;
   if (!client) return;
 
   const handleConnection = async () => {
@@ -92,8 +91,6 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } else {
       if (client.getConnectionState() !== 'disconnected') {
         console.log(`[WebSocketProvider] No token. Client will remain disconnected: ${client.getInstanceId()}`);
-        // We no longer call client.disconnect() here to avoid killing the singleton instance during HMR.
-        // The client itself handles not connecting if it doesn't have a token in performConnection.
       }
     }
   };
@@ -105,14 +102,10 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     isCurrent = false;
     clearTimeout(debounceTimeout);
   };
-}, [token, loading]);
+}, [token, loading, client]);
 
- // We provide the current clientRef value to the context. 
- // Since the client is created once in useEffect and then persists in the ref,
- // we can safely pass it. Note: children will need to be mindful that 
- // the client might be null on the very first render.
  return (
- <WebSocketContext.Provider value={clientRef.current}>
+ <WebSocketContext.Provider value={client}>
  {children}
  </WebSocketContext.Provider>
  );

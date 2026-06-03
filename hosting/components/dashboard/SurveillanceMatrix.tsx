@@ -123,6 +123,7 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
                             </div>
                             {feeds.find(f => f.feed_id === focusedFeedId) && (
                                 <SurveillanceFeed 
+                                    key={focusedFeedId}
                                     feed_id={focusedFeedId} 
                                 />
                             )}
