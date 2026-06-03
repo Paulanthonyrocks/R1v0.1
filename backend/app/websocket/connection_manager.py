@@ -150,13 +150,14 @@ class ConnectionManager:
             self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
             # Initialize sender queues and task with adaptive sizing and priority
-            queue_size = self._calculate_queue_size(client_id)
+            high_q_size = self._calculate_high_priority_queue_size(client_id)
+            low_q_size = self._calculate_low_priority_queue_size(client_id)
             
             # 1. High-priority queue (NORMAL, HIGH, CRITICAL)
-            self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=queue_size + 10)
+            self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=high_q_size + 10)
             
             # 2. Low-priority queue (LOW) - Fixed size deque for efficient frame dropping
-            self.low_priority_queues[client_id] = deque(maxlen=queue_size)
+            self.low_priority_queues[client_id] = deque(maxlen=low_q_size)
             
             # 3. Signal queue to notify sender task of new messages in either queue
             self.signal_queues[client_id] = asyncio.Queue()
@@ -260,8 +261,9 @@ class ConnectionManager:
         
         Implementation:
         1. Wait for a signal from the signal_queue.
-        2. Drain all available high-priority (NORMAL+) messages from client_queues.
-        3. If no high-priority messages, send ONE low-priority (LOW) message from low_priority_queues.
+        2. Interleave high-priority (NORMAL+) and low-priority (LOW) messages.
+        3. For every 5 high-priority messages sent, send 1 low-priority frame.
+        4. If no high-priority messages are left, just send low-priority frames.
         """
         logger.info(f"[Sender {client_id}] Task started.")
         high_priority_queue = self.client_queues.get(client_id)
@@ -276,60 +278,66 @@ class ConnectionManager:
         # Diagnostics tracking
         msg_count = 0
         last_diag_time = time.time()
+        high_msg_streak = 0
 
         try:
             while True:
                 # Wait for a signal that new data is available
                 await signal_queue.get()
                 
-                # 1. Exhaust high-priority messages first
-                while not high_priority_queue.empty():
-                    try:
-                        prioritized_msg = high_priority_queue.get_nowait()
-                        message = prioritized_msg.message
-                        
-                        # Diagnostics
-                        msg_count += 1
-                        
+                # Process queues until both are empty
+                while not high_priority_queue.empty() or low_priority_queue:
+                    sent_something = False
+                    
+                    # 1. Try to send high-priority messages (up to 5)
+                    while not high_priority_queue.empty() and high_msg_streak < 5:
                         try:
-                            if isinstance(message, bytes):
-                                logger.debug(f"[Sender {client_id}] Sending binary high-priority msg (size: {len(message)})")
-                                await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
-                            else:
-                                logger.debug(f"[Sender {client_id}] Sending text high-priority msg: {message[:100]}...")
-                                await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
-                            high_priority_queue.task_done()
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. Dropping message.")
-                            high_priority_queue.task_done()
-                    except asyncio.QueueEmpty:
+                            prioritized_msg = high_priority_queue.get_nowait()
+                            message = prioritized_msg.message
+                            
+                            msg_count += 1
+                            high_msg_streak += 1
+                            sent_something = True
+                            
+                            try:
+                                if isinstance(message, bytes):
+                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                                else:
+                                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                                high_priority_queue.task_done()
+                            except (asyncio.TimeoutError, Exception) as e:
+                                logger.warning(f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. Dropping message.")
+                                high_priority_queue.task_done()
+                        except asyncio.QueueEmpty:
+                            break
+
+                    # 2. Send ONE low-priority frame if available
+                    if low_priority_queue:
+                        try:
+                            message = low_priority_queue.popleft()
+                            msg_count += 1
+                            sent_something = True
+                            high_msg_streak = 0 # Reset streak after interleaving
+                            
+                            try:
+                                if isinstance(message, bytes):
+                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                                else:
+                                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                            except (asyncio.TimeoutError, Exception) as e:
+                                logger.warning(f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. Dropping message.")
+                        except IndexError:
+                            pass
+                    
+                    if not sent_something:
                         break
 
-                # 2. Send ONE low-priority message if no high-priority ones are left
-                if low_priority_queue:
-                    try:
-                        message = low_priority_queue.popleft()
-                        
-                        # Diagnostics
-                        msg_count += 1
-                        
-                        try:
-                            if isinstance(message, bytes):
-                                await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
-                            else:
-                                await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. Dropping message.")
-                    except IndexError:
-                        # Queue empty
-                        pass
-
-                # Periodic diagnostic logging
-                now = time.time()
-                if now - last_diag_time > 30.0:
-                    logger.debug(f"[Sender {client_id}] Sent {msg_count} msgs in 30s. HighQ: {high_priority_queue.qsize()} | LowQ: {len(low_priority_queue)}")
-                    last_diag_time = now
-                    msg_count = 0
+                    # Periodic diagnostic logging
+                    now = time.time()
+                    if now - last_diag_time > 30.0:
+                        logger.debug(f"[Sender {client_id}] Sent {msg_count} msgs in 30s. HighQ: {high_priority_queue.qsize()} | LowQ: {len(low_priority_queue)}")
+                        last_diag_time = now
+                        msg_count = 0
                     
         except asyncio.CancelledError:
             logger.info(f"[Sender {client_id}] Task cancelled.")
@@ -338,18 +346,26 @@ class ConnectionManager:
         finally:
             logger.info(f"[Sender {client_id}] Task exiting.")
 
-    def _calculate_queue_size(self, client_id: str) -> int:
-        """Calculate adaptive queue size based on client latency."""
-        base_queue_size = 300  # Increased from 100 — 3 feeds @ ~60fps need more buffer
-        latency_ms = self.client_latencies.get(client_id, 50)  # Default 50ms
-        
-        # Higher latency = larger queue to buffer more frames
+    def _calculate_high_priority_queue_size(self, client_id: str) -> int:
+        """Calculate adaptive queue size for high-priority messages."""
+        latency_ms = self.client_latencies.get(client_id, 50)
         if latency_ms > 200:
             return 1000
         elif latency_ms > 100:
             return 600
-        else:
-            return base_queue_size
+        return 300
+
+    def _calculate_low_priority_queue_size(self, client_id: str) -> int:
+        """Calculate adaptive queue size for low-priority messages (video).
+        For video, we want to avoid large buffers that cause stale frames.
+        Higher latency clients should have SMALLER buffers to force real-time updates.
+        """
+        latency_ms = self.client_latencies.get(client_id, 50)
+        if latency_ms > 200:
+            return 30   # Very aggressive dropping for high latency
+        elif latency_ms > 100:
+            return 60
+        return 120      # ~2 seconds of 60fps total across feeds (simplified)
     
     def update_client_latency(self, client_id: str, rtt_ms: float):
         """Update tracked latency for adaptive behavior."""

@@ -150,17 +150,14 @@ const unsubscribeFromFeed = useCallback(() => {
   }, [client]);
 
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
-    // Don't acquire lock here — the worker already coalesces.
-    // We just need to track the latest frame index for dropping.
+    // Strict Monotonicity: If we receive a frame older than the last one we processed,
+    // drop it immediately. This prevents "rewind" juggling.
     if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-      // Stale frame — skip
       return;
     }
 
     try {
-      // Critical fix: Ensure we only process frames for the correct feed
       if (!data.feed_id || data.feed_id !== streamId) {
-        console.debug(`[useVideoSocket] Skipping frame for feed ${data.feed_id} in component for feed ${streamId}`);
         return;
       }
 
@@ -168,17 +165,8 @@ const unsubscribeFromFeed = useCallback(() => {
         const lastIndex = lastProcessedIndexRef.current;
         if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
           const dropped = data.frame_index - lastIndex - 1;
-          if (dropped > 5) {
-            console.warn(`[useVideoSocket] Frame drop detected for feed ${streamId}: dropped ${dropped} frames (last: ${lastIndex}, current: ${data.frame_index})`);
-          }
-        }
-
-        if (data.frame_index < lastIndex) {
-          if (data.frame_index < 20) {
-            if (streamId) videoStreamManager.clearRegistry(streamId);
-            setVehicles([]);
-          } else if (lastIndex - data.frame_index < 100) {
-            return;
+          if (dropped > 30) {
+            console.warn(`[useVideoSocket] Significant frame gap for ${streamId}: ${dropped} frames`);
           }
         }
         lastProcessedIndexRef.current = data.frame_index;
