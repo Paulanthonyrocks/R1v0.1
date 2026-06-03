@@ -31,6 +31,9 @@ const useVideoSocket = (streamId: string) => {
     metrics: SurveillanceFeedMessage | null
   } | null>(null);
   
+  const vehiclesRef = useRef<VehicleFrontendData[] | null>(null);
+  const metricsRef = useRef<SurveillanceFeedMessage | null>(null);
+
   const lastFrameTimeRef = useRef<number>(0);
   const smoothedFrameTimeRef = useRef<number>(0);
   const lastFpsUpdateRef = useRef<number>(0);
@@ -43,14 +46,14 @@ const useVideoSocket = (streamId: string) => {
   const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Constants
-  const STATE_UPDATE_INTERVAL = 200;
+  const STATE_UPDATE_INTERVAL = 500; // Throttle UI updates to 2Hz
   const FRAME_STALENESS_THRESHOLD = 60000;
   const FPS_EMA_ALPHA = 0.1;
 
   // --- Sub-Hooks Implementation ---
   const { decode } = useVideoDecoder({
     onFrame: (decodedData) => {
-      const { image, index, metrics, vehicles, timestamp } = decodedData;
+      const { image, index, metrics: frameMetrics, vehicles: frameVehicles, timestamp } = decodedData;
       if (index < (lastFrameRef.current?.index ?? -1)) {
         if (image instanceof ImageBitmap) image.close();
         return;
@@ -68,19 +71,23 @@ const useVideoSocket = (streamId: string) => {
       }
 
       if (streamId) {
-        videoStreamManager.updateVehicles(streamId, vehicles);
+        videoStreamManager.updateVehicles(streamId, frameVehicles);
+        vehiclesRef.current = frameVehicles;
+        metricsRef.current = frameMetrics;
+        
         if (videoStreamManager.shouldUpdateUI(streamId)) {
+          // We still call setVehicles, but the a la-carte update logic in 
+          // videoStreamManager.shouldUpdateUI already throttles this.
           setVehicles(videoStreamManager.getVehicles(streamId));
         }
-        // Clear any previous error state upon successful frame receipt
         setError(null);
       }
 
       lastFrameRef.current = {
         image,
         index,
-        vehicles,
-        metrics
+        vehicles: frameVehicles,
+        metrics: frameMetrics
       };
 
       const now = performance.now();
