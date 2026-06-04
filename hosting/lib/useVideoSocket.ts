@@ -443,8 +443,4 @@ const unsubscribeFromFeed = useCallback(() => {
   };
 };
 
-export default useVideoSocket;mId, updates: config } })
-  };
-};
-
 export default useVideoSocket;
