@@ -731,7 +731,6 @@ export class WebSocketClient implements IWebSocketClient {
             }
         }
     }
-    }
 
     private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
         // Special handling for high-frequency video frames to ensure strict routing and performance
