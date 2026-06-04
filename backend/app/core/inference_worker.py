@@ -261,7 +261,7 @@ def inference_worker(
                     f"({pressure_val:.2f}). Batch size -> {batch_size}"
                 )
             batch_size = min(batch_size, 8)
-            inference_timeout = config.get("performance", {}).get("inference_timeout", 0.005)
+            inference_timeout = config.get("performance", {}).get("inference_timeout", 0.05)
 
             # Initial poll of each slot
             for slot_id in slots:
@@ -516,26 +516,28 @@ def inference_worker(
                     if vis_tracks and meta["first_detect"]:
                         core._first_detection_done = True
 
-                    for vid, track in vis_tracks.items():
-                        vehicle_map = core.vehicle_type_map
-                        emb = track.get("embedding")
-                        if emb is not None:
-                            global_id = local_reid_manager.match_or_register(
-                                feed_id=meta["feed_id"],
-                                local_id=str(vid),
-                                embedding=np.array(emb),
-                                metadata={
-                                    "class_name": vehicle_map.get(
-                                        track["class_id"], "unknown"
-                                    )
-                                },
-                                confidence=track.get("confidence", 1.0),
-                            )
-                            track["global_vehicle_id"] = global_id
-                        elif not track.get("global_vehicle_id"):
-                            mapped_id = local_reid_manager.get_global_id(meta["feed_id"], str(vid))
-                            if mapped_id:
-                                track["global_vehicle_id"] = mapped_id
+                    # Re-ID matching (guarded by config)
+                    if vehicle_det_cfg.get("reid_enabled", True):
+                        for vid, track in vis_tracks.items():
+                            vehicle_map = core.vehicle_type_map
+                            emb = track.get("embedding")
+                            if emb is not None:
+                                global_id = local_reid_manager.match_or_register(
+                                    feed_id=meta["feed_id"],
+                                    local_id=str(vid),
+                                    embedding=np.array(emb),
+                                    metadata={
+                                        "class_name": vehicle_map.get(
+                                            track["class_id"], "unknown"
+                                        )
+                                    },
+                                    confidence=track.get("confidence", 1.0),
+                                )
+                                track["global_vehicle_id"] = global_id
+                            elif not track.get("global_vehicle_id"):
+                                mapped_id = local_reid_manager.get_global_id(meta["feed_id"], str(vid))
+                                if mapped_id:
+                                    track["global_vehicle_id"] = mapped_id
 
                     monitor.update_vehicles(vis_tracks)
                     

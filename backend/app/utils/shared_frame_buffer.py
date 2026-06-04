@@ -141,10 +141,11 @@ class SharedFrameBuffer:
         if stale_count > 0:
             logger.info(f"Recovered {stale_count} stale SHM segments.")
 
-    def acquire(self, timeout: float = 0.05) -> Optional[str]:
+    def acquire(self, timeout: float = 0.2) -> Optional[str]:
         try:
             return self._free_pool.get(timeout=timeout)
         except queue.Empty:
+            logger.warning("SHM free pool empty – frame will be dropped")
             return None
 
     def write(self, name: str, data: Union[bytes, np.ndarray]):

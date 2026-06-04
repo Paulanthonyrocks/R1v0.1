@@ -351,6 +351,12 @@ class FeedManager:
                 avg_depth = total_depth / self.slot_count
                 current_size = self.pool_manager.pool_size
 
+                self.logger.debug(
+                    f"[ScalingMonitor] avg_depth={avg_depth:.1f}, current_workers={current_size}, "
+                    f"up_threshold={FeedManagerConstants.SCALE_UP_THRESHOLD}, "
+                    f"down_threshold={FeedManagerConstants.SCALE_DOWN_THRESHOLD}"
+                )
+
                 if avg_depth > FeedManagerConstants.SCALE_UP_THRESHOLD and current_size < FeedManagerConstants.MAX_WORKERS:
                     logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
                     self.pool_manager.scale_pool(current_size + 1)
@@ -364,16 +370,21 @@ class FeedManager:
                 await asyncio.sleep(5.0)
 
     async def _update_pipeline_pressure(self):
-        """Updates the global pressure signal based on ConnectionManager queue depths."""
+        """Updates the global pressure signal based on inference input queue depths."""
         while not self._stop_reader_flag:
             try:
-                if self._connection_manager:
-                    queues = self._connection_manager.client_queues.values()
-                    if queues:
-                        total_fill = sum(q.qsize() / q.maxsize for q in queues)
-                        self.pipeline_pressure.value = total_fill / len(queues)
-                    else:
-                        self.pipeline_pressure.value = 0.0
+                total_depth = sum(
+                    q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize')
+                )
+                avg_depth = total_depth / self.slot_count
+                
+                # Normalize pressure relative to a reasonable backlog (e.g., 10 frames per slot)
+                # This provides a 0.0 to 1.0 signal to ingestion workers
+                max_backlog_threshold = 10.0 
+                pressure = min(1.0, avg_depth / max_backlog_threshold)
+                
+                self.pipeline_pressure.value = pressure
+                
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error updating pipeline pressure: {e}")

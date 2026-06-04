@@ -62,7 +62,7 @@ inference:
   batch_size: 1
   detection_model: models/yolov8n.engine
   device: cpu
-  num_workers: 1
+  num_workers: 3
   use_tensorrt: false
 ingestion:
   shared_memory_ipc: false
@@ -440,7 +440,7 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: false
   image_gpu_acceleration: false
-  inference_pool_size: 1
+  inference_pool_size: 3
   inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
@@ -453,6 +453,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
+  shm_pool_size: 200
   video_gpu_acceleration: false
 personalized_routing:
   enabled: false
@@ -506,6 +507,7 @@ redis:
   enabled: true
   host: localhost
   port: 6379
+kpi_broadcast_interval: 5
 roi_processing:
   crop_rect:
   - 0
@@ -540,8 +542,8 @@ vehicle_detection:
   confidence_threshold: 0.25
   enabled: true
   frame_resolution:
-  - 640
-  - 480
+  - 320
+  - 240
   low_confidence_threshold: 0.01
   max_active_tracks: 100
   max_aspect_ratio: 100.0
@@ -606,7 +608,7 @@ video_output:
   - 480
 video_processing:
   adaptive_streaming: false
-  target_fps: 5
+  target_fps: 2
 vis_options_default:
 - Grid Overlay
 - Lane Lines
