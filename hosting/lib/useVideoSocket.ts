@@ -14,16 +14,21 @@ import {
 
 const useVideoSocket = (streamId: string) => {
   const hookId = useRef(Math.random().toString(36).substring(2, 7));
-  console.log(`[useVideoSocket ${hookId.current}] Hook initializing for streamId: ${streamId}`);
   const client = useWebSocket();
   
   // --- State Management ---
-  // Only keep connectivity and error in state as they are low-frequency
   const [isConnected, setIsConnected] = useState(() => client?.isConnected() ?? false);
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
-  const [vehicles, setVehicles] = useState<VehicleFrontendData[] | null>(null);
-  const [metrics, setMetrics] = useState<SurveillanceFeedMessage | null>(null);
+  
+  // Consolidate vehicles and metrics to reduce re-render count
+  const [feedState, setFeedState] = useState<{
+    vehicles: VehicleFrontendData[] | null,
+    metrics: SurveillanceFeedMessage | null
+  }>({
+    vehicles: null,
+    metrics: null
+  });
 
   // --- Refs for High-Frequency Data ---
   const lastFrameRef = useRef<{
@@ -36,12 +41,9 @@ const useVideoSocket = (streamId: string) => {
   const vehiclesRef = useRef<VehicleFrontendData[] | null>(null);
   const metricsRef = useRef<SurveillanceFeedMessage | null>(null);
 
-  const lastVehiclesRef = useRef<string>("");
-  const lastMetricsRef = useRef<string>("");
-  const vehiclesThrottleTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const metricsThrottleTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const VEHICLES_UPDATE_MS = 100; // 10 FPS max for UI state
-  const METRICS_UPDATE_MS = 500;  // 2 FPS max for UI state
+  const lastStateJsonRef = useRef<string>("");
+  const throttleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const UPDATE_INTERVAL_MS = 100; // 10 FPS max for UI updates
 
   const lastFrameTimeRef = useRef<number>(0);
   const smoothedFrameTimeRef = useRef<number>(0);
@@ -54,8 +56,14 @@ const useVideoSocket = (streamId: string) => {
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
   const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Log only on actual mount/unmount to stop the console flood
+  useEffect(() => {
+    console.log(`[useVideoSocket ${hookId.current}] Hook mounted for streamId: ${streamId}`);
+    return () => console.log(`[useVideoSocket ${hookId.current}] Hook unmounted for streamId: ${streamId}`);
+  }, [streamId]);
+
   // Constants
-  const STATE_UPDATE_INTERVAL = 500; // Throttle UI updates to 2Hz
+  const STATE_UPDATE_INTERVAL = 500; 
   const FRAME_STALENESS_THRESHOLD = 60000;
   const FPS_EMA_ALPHA = 0.1;
 
@@ -73,10 +81,8 @@ const useVideoSocket = (streamId: string) => {
         setTimeout(() => {
           try {
             oldImage.close();
-          } catch (e) {
-            // Ignore if already closed
-          }
-        }, 100); // Delay closure to ensure the render loop has drawn the frame
+          } catch (e) {}
+        }, 100);
       }
 
       if (streamId) {
@@ -85,30 +91,22 @@ const useVideoSocket = (streamId: string) => {
         metricsRef.current = frameMetrics;
         setError(null);
 
-        // Throttled state update for vehicles
-        if (!vehiclesThrottleTimerRef.current) {
-          vehiclesThrottleTimerRef.current = setTimeout(() => {
-            vehiclesThrottleTimerRef.current = null;
+        // Robust throttled state update
+        if (!throttleTimerRef.current) {
+          throttleTimerRef.current = setTimeout(() => {
+            throttleTimerRef.current = null;
             const currentVehicles = videoStreamManager.getVehicles(streamId);
-            const vehiclesJson = JSON.stringify(currentVehicles);
-            if (vehiclesJson !== lastVehiclesRef.current) {
-              lastVehiclesRef.current = vehiclesJson;
-              setVehicles(currentVehicles);
-            }
-          }, VEHICLES_UPDATE_MS);
-        }
-
-        // Throttled state update for metrics
-        if (!metricsThrottleTimerRef.current) {
-          metricsThrottleTimerRef.current = setTimeout(() => {
-            metricsThrottleTimerRef.current = null;
             const currentMetrics = metricsRef.current;
-            const metricsJson = JSON.stringify(currentMetrics);
-            if (metricsJson !== lastMetricsRef.current) {
-              lastMetricsRef.current = metricsJson;
-              setMetrics(currentMetrics);
+            
+            const stateSnapshot = JSON.stringify({ v: currentVehicles, m: currentMetrics });
+            if (stateSnapshot !== lastStateJsonRef.current) {
+              lastStateJsonRef.current = stateSnapshot;
+              setFeedState({
+                vehicles: currentVehicles,
+                metrics: currentMetrics
+              });
             }
-          }, METRICS_UPDATE_MS);
+          }, UPDATE_INTERVAL_MS);
         }
       }
 
@@ -433,8 +431,8 @@ const unsubscribeFromFeed = useCallback(() => {
 
   return { 
     lastFrameRef, 
-    metrics, 
-    vehicles, 
+    metrics: feedState.metrics, 
+    vehicles: feedState.vehicles, 
     isConnected, 
     error, 
     drawFrame, 
