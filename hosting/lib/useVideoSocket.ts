@@ -13,7 +13,8 @@ import {
 } from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string) => {
-  console.log(`[useVideoSocket] Hook initializing for streamId: ${streamId}`);
+  const hookId = useRef(Math.random().toString(36).substring(2, 7));
+  console.log(`[useVideoSocket ${hookId.current}] Hook initializing for streamId: ${streamId}`);
   const client = useWebSocket();
   
   // --- State Management ---
@@ -76,8 +77,6 @@ const useVideoSocket = (streamId: string) => {
         metricsRef.current = frameMetrics;
         
         if (videoStreamManager.shouldUpdateUI(streamId)) {
-          // We still call setVehicles, but the a la-carte update logic in 
-          // videoStreamManager.shouldUpdateUI already throttles this.
           setVehicles(videoStreamManager.getVehicles(streamId));
         }
         setError(null);
@@ -103,7 +102,7 @@ const useVideoSocket = (streamId: string) => {
       lastSuccessfulFrameTimeRef.current = now;
     },
     onError: (err) => {
-      console.error('[useVideoSocket] Decoder Error:', err);
+      console.error(`[useVideoSocket ${hookId.current}] Decoder Error:`, err);
       setError(err.message);
     }
   });
@@ -162,20 +161,18 @@ const unsubscribeFromFeed = useCallback(() => {
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
       const currentStreamId = streamIdRef.current;
 
-      // Strict Monotonicity: If we receive a frame older than the last one we processed,
-      // drop it immediately. This prevents "rewind" juggling.
       if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-        console.debug(`[useVideoSocket] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${currentStreamId}`);
+        console.debug(`[useVideoSocket ${hookId.current}] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${currentStreamId}`);
         return;
       }
 
       try {
         if (!data.feed_id) {
-          console.warn(`[useVideoSocket.handleFrame] DROPPING frame without feed_id for ${currentStreamId}`);
+          console.warn(`[useVideoSocket ${hookId.current}] DROPPING frame without feed_id for ${currentStreamId}`);
           return;
         }
         if (data.feed_id !== currentStreamId) {
-          console.error(`[useVideoSocket.handleFrame] CRITICAL: frame feed_id mismatch! Expected ${currentStreamId}, got ${data.feed_id}`);
+          console.error(`[useVideoSocket ${hookId.current}] CRITICAL: frame feed_id mismatch! Expected ${currentStreamId}, got ${data.feed_id}`);
           return;
         }
         if (data.frame_index !== undefined) {
@@ -183,7 +180,7 @@ const unsubscribeFromFeed = useCallback(() => {
         if (lastIndex !== -1 && data.frame_index > lastIndex + 1) {
           const dropped = data.frame_index - lastIndex - 1;
           if (dropped > 30) {
-            console.warn(`[useVideoSocket] Significant frame gap for ${currentStreamId}: ${dropped} frames`);
+            console.warn(`[useVideoSocket ${hookId.current}] Significant frame gap for ${currentStreamId}: ${dropped} frames`);
           }
         }
         lastProcessedIndexRef.current = data.frame_index;
@@ -204,7 +201,7 @@ const unsubscribeFromFeed = useCallback(() => {
 
       await decode(data);
     } catch (err) {
-      console.error('[useVideoSocket] handleFrame Error:', err);
+      console.error(`[useVideoSocket ${hookId.current}] handleFrame Error:`, err);
     }
   }, [client, decode]);
 
@@ -225,34 +222,27 @@ const unsubscribeFromFeed = useCallback(() => {
       subscribeToFeed();
     }
 
-    console.log(`[useVideoSocket] Mounting hook for streamId: ${streamId}. Subscribing to VIDEO_FRAME...`);
+    console.log(`[useVideoSocket ${hookId.current}] Mounting hook for streamId: ${streamId}. Subscribing to VIDEO_FRAME...`);
     const currentStreamId = streamId;
     const unsubscribeFrame = client?.subscribe(
     WebSocketMessageType.VIDEO_FRAME, 
     (frameData: VideoFrameMessage) => {
- // Note: the worker posts data directly, not wrapped in WebSocketMessage.
- // frameData = { feed_id, frame: ImageBitmap, frame_index, metrics, vehicles, timestamp }
  if (!frameData.feed_id) {
-   console.warn(`[useVideoSocket] DROPPING frame with missing feed_id for ${currentStreamId}. Data keys: ${Object.keys(frameData || {}).join(',')}`);
-   // Close the ImageBitmap if present to prevent memory leak
+   console.warn(`[useVideoSocket ${hookId.current}] DROPPING frame with missing feed_id for ${currentStreamId}.`);
    if (frameData.frame instanceof ImageBitmap) {
      frameData.frame.close();
    }
    return;
  }
  if (frameData && frameData.frame) {
- // Hard guard: reject frames not matching our subscribed feed.
- // This prevents stale-closure leaks if the scoped routing
- // ever delivers a mismatched frame (e.g. during reconnect).
  if (frameData.feed_id !== currentStreamId) {
- console.warn(`[useVideoSocket] HARD GUARD DROP: expected ${currentStreamId}, got ${frameData.feed_id}`);
- // Close the ImageBitmap to prevent memory leak
+ console.warn(`[useVideoSocket ${hookId.current}] HARD GUARD DROP: expected ${currentStreamId}, got ${frameData.feed_id}`);
  if (frameData.frame instanceof ImageBitmap) {
    frameData.frame.close();
  }
  return;
  }
- console.debug(`[useVideoSocket] ACCEPTED frame for ${currentStreamId} (index: ${frameData.frame_index})`);
+ console.debug(`[useVideoSocket ${hookId.current}] ACCEPTED frame for ${currentStreamId} (index: ${frameData.frame_index})`);
  handleFrameRef.current?.(frameData);
  }
  }, 
@@ -275,9 +265,6 @@ const unsubscribeFromFeed = useCallback(() => {
     const unsubscribeStatus = client?.onStatusChange((status: string) => {
       setIsConnected(status === 'connected' || status === 'authenticated');
       if (status === 'authenticated') {
-        // When reconnecting, cancel any pending unsubscribes so they don't
-        // fire after the re-subscribe. Do NOT call resetFeedSubscriptionState()
-        // because that wipes _subscribedFeeds which the subscribe logic checks.
         const pending = _pendingUnsubscribes.get(streamId);
         if (pending) {
           clearTimeout(pending);
@@ -286,8 +273,6 @@ const unsubscribeFromFeed = useCallback(() => {
         _subscribedFeeds.delete(streamId);
         subscribeToFeed();
       } else if (status === 'disconnected') {
-        // Cancel pending unsubscribes — don't clear subscription state because
-        // the server still tracks our subscription and will restore it on reconnect.
         const pending = _pendingUnsubscribes.get(streamId);
         if (pending) {
           clearTimeout(pending);
@@ -344,21 +329,17 @@ const unsubscribeFromFeed = useCallback(() => {
       showAllDetections = false
     } = options;
 
-    // Clear canvas
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Draw video frame if available
     if (image) {
       try {
         ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
       } catch (e) {
-        console.warn('[useVideoSocket] Failed to draw frame - image likely detached', e);
+        console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image likely detached`, e);
       }
     }
 
-    // Draw vehicle detections if available
     if (vehicles && showBoundingBoxes && vehicles.length > 0) {
-      // Filter vehicles based on showAllDetections setting
       const vehiclesToShow = showAllDetections ? vehicles : vehicles.filter(v => selectedVehicleIds.has(v.global_vehicle_id || v.vehicle_id));
 
       vehiclesToShow.forEach(vehicle => {
@@ -374,7 +355,6 @@ const unsubscribeFromFeed = useCallback(() => {
           vehicle_id
         } = vehicle;
 
-        // Draw bounding box
         if (bbox && Array.isArray(bbox) && bbox.length === 4) {
           const [x1, y1, x2, y2] = bbox;
           const width = (x2 - x1) * ctx.canvas.width;
@@ -382,16 +362,13 @@ const unsubscribeFromFeed = useCallback(() => {
           const x = x1 * ctx.canvas.width;
           const y = y1 * ctx.canvas.height;
 
-          // Only draw if we have a valid size
           if (width > 0 && height > 0) {
             const isSelected = selectedVehicleIds.has(global_vehicle_id || vehicle_id);
 
-            // Set style based on selection and vehicle properties
             ctx.strokeStyle = isSelected ? '#00ff00' : '#ff0000';
             ctx.lineWidth = isSelected ? 3 : 2;
             ctx.strokeRect(x, y, width, height);
 
-            // Draw vehicle details if enabled
             if (showVehicleDetails) {
               ctx.fillStyle = isSelected ? 'rgba(0, 255, 0, 0.3)' : 'rgba(255, 0, 0, 0.3)';
               ctx.font = '12px monospace';
@@ -405,9 +382,7 @@ const unsubscribeFromFeed = useCallback(() => {
       });
     }
 
-    // Draw metrics if available
     if (metrics && showVehicleDetails) {
-      // Draw basic metrics on canvas
       ctx.fillStyle = '#00ff00';
       ctx.font = '14px monospace';
       if (metrics.total_vehicles !== undefined) {
