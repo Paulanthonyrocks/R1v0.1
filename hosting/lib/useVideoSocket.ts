@@ -18,8 +18,7 @@ const useVideoSocket = (streamId: string) => {
   const client = useWebSocket();
   
   // --- State Management ---
-  const [metrics, setMetrics] = useState<SurveillanceFeedMessage | null>(null);
-  const [vehicles, setVehicles] = useState<VehicleFrontendData[] | null>(null);
+  // Only keep connectivity and error in state as they are low-frequency
   const [isConnected, setIsConnected] = useState(() => client?.isConnected() ?? false);
   const [error, setError] = useState<string | null>(null);
   const [frameRate, setFrameRate] = useState<number>(0);
@@ -75,10 +74,6 @@ const useVideoSocket = (streamId: string) => {
         videoStreamManager.updateVehicles(streamId, frameVehicles);
         vehiclesRef.current = frameVehicles;
         metricsRef.current = frameMetrics;
-        
-        if (videoStreamManager.shouldUpdateUI(streamId)) {
-          setVehicles(videoStreamManager.getVehicles(streamId));
-        }
         setError(null);
       }
 
@@ -161,9 +156,17 @@ const unsubscribeFromFeed = useCallback(() => {
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
       const currentStreamId = streamIdRef.current;
 
-      if (data.frame_index !== undefined && data.frame_index < lastProcessedIndexRef.current) {
-        console.debug(`[useVideoSocket ${hookId.current}] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${currentStreamId}`);
-        return;
+      if (data.frame_index !== undefined) {
+        // Detect feed restart/loop: if index drops significantly, reset the tracker
+        if (lastProcessedIndexRef.current > 100 && data.frame_index < 10) {
+          console.warn(`[useVideoSocket ${hookId.current}] Detected feed restart for ${currentStreamId}, resetting frame index tracker`);
+          lastProcessedIndexRef.current = -1;
+        }
+
+        if (data.frame_index < lastProcessedIndexRef.current) {
+          console.debug(`[useVideoSocket ${hookId.current}] DROPPING stale frame ${data.frame_index} < ${lastProcessedIndexRef.current} for ${currentStreamId}`);
+          return;
+        }
       }
 
       try {
@@ -193,8 +196,7 @@ const unsubscribeFromFeed = useCallback(() => {
 
       if (now - lastStateUpdateRef.current > STATE_UPDATE_INTERVAL) {
         if (data.metrics) {
-          const metricsData = data.metrics;
-          setMetrics((prev: SurveillanceFeedMessage | null) => (prev && prev.timestamp === metricsData.timestamp) ? prev : (metricsData ?? null));
+          metricsRef.current = data.metrics;
         }
         lastStateUpdateRef.current = now;
       }
@@ -396,8 +398,8 @@ const unsubscribeFromFeed = useCallback(() => {
 
   return { 
     lastFrameRef, 
-    metrics, 
-    vehicles, 
+    metrics: metricsRef, 
+    vehicles: vehiclesRef, 
     isConnected, 
     error, 
     drawFrame, 
