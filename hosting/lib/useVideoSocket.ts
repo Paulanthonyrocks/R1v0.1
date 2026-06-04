@@ -250,6 +250,7 @@ const unsubscribeFromFeed = useCallback(() => {
   useEffect(() => {
     if (!streamId) return;
 
+    lastProcessedIndexRef.current = -1;
     const currentCount = _feedHookCounts.get(streamId) ?? 0;
     _feedHookCounts.set(streamId, currentCount + 1);
 
