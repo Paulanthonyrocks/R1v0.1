@@ -80,12 +80,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     // automatically update the selection to follow the new tracker ID.
     // Also promotes vehicle_id–based selections to global_vehicle_id when one appears.
     useEffect(() => {
-        if (!vehicles || vehicles.length === 0) return;
+        const currentVehicles = vehicles?.current;
+        if (!currentVehicles || currentVehicles.length === 0) return;
 
         setSelectedVehicleIds(prev => {
             let next: Set<string> | null = null; // lazy copy – avoid re-render if nothing changed
 
-            for (const v of vehicles) {
+            for (const v of currentVehicles) {
                 const gid = v.global_vehicle_id;
                 if (!gid) continue;
 
@@ -756,3 +757,4 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';
 export default SurveillanceFeed;
+eillanceFeed;
