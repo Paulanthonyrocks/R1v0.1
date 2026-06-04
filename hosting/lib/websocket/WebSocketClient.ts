@@ -1,6 +1,5 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
-import { decode } from '@msgpack/msgpack';
 
 interface WebSocketErrorEvent extends Event {
     message?: string;
@@ -716,45 +715,22 @@ export class WebSocketClient implements IWebSocketClient {
             }
         } else if (event.data instanceof ArrayBuffer) {
             try {
-                // Decode Msgpack binary data
-                const decoded = decode(new Uint8Array(event.data)) as any;
-
-                // Map compact keys back to human-readable ones for the system
-                // t: type, f: feed_id, i: frame_index, ts: timestamp, 
-                // v: vehicles, m: metrics, bg: background, rois: patches, frame: fallback
-                const message: WebSocketMessage<any> = {
-                    type: decoded.t as WebSocketMessageType,
-                    data: {
-                        feed_id: decoded.f,
-                        frame_index: decoded.i,
-                        timestamp: decoded.ts,
-                        vehicles: decoded.v,
-                        metrics: decoded.m,
-                        background: decoded.bg, // Binary JPEG
-                        rois: decoded.rois,     // List of binary patches
-                        frame: decoded.frame    // Fallback raw binary frame
-                    }
-                };
-
-                if (message.type === WebSocketMessageType.VIDEO_FRAME) {
-                    const feedId = message.data.feed_id || message.data.f;
-                    if (this.videoWorker) {
-                        console.debug(`[WebSocketClient] Incoming binary frame for feed: ${feedId}`);
-                        this.videoWorker.postMessage({
-                            binaryFrame: decoded,
-                            feed_id: feedId
-                        });
-                    } else {
-                        this.notifyListeners(message.type, message.data, feedId);
-                    }
-                    return;
+                // Transfer the raw ArrayBuffer directly to the worker.
+                // This removes the Msgpack decoding overhead from the main thread.
+                if (this.videoWorker) {
+                    // We use a temporary wrapper to keep the worker's onmessage signature consistent
+                    // while sending the raw binary data.
+                    this.videoWorker.postMessage({
+                        rawBinary: event.data,
+                    }, [event.data]);
                 } else {
-                    this.notifyListeners(message.type, message.data);
+                    console.warn(`[WebSocketClient ${this.instanceId}] No video worker available for binary frame.`);
                 }
             } catch (error) {
-                console.error(`[WebSocketClient ${this.instanceId}] Error decoding binary msgpack:`, error);
+                console.error(`[WebSocketClient ${this.instanceId}] Error posting binary data to worker:`, error);
             }
         }
+    }
     }
 
     private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
