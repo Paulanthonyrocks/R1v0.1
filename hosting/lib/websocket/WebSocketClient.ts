@@ -758,41 +758,71 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     private notifyListeners<T>(type: WebSocketMessageType, data: T, scope?: string): void {
-     // 1. Handle Scoped Listeners
-     if (scope) {
-         const scopedMap = this.scopedListeners.get(type);
-         if (scopedMap) {
-             const listenersSet = scopedMap.get(scope);
-             if (listenersSet) {
-                 console.debug(`[WebSocketClient ${this.instanceId}] Routing ${type} to scope ${scope} (${listenersSet.size} listeners)`);
-                 listenersSet.forEach(listener => {
-                     try {
-                         listener(data);
-                     } catch (error) {
-                         console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
-                     }
-                 });
-             } else {
-                 console.debug(`[WebSocketClient ${this.instanceId}] No listeners for scope ${scope} of type ${type}`);
-             }
-         }
-     } else {
-         console.debug(`[WebSocketClient ${this.instanceId}] No scope provided for ${type} message`);
-     }
+        // Special handling for high-frequency video frames to ensure strict routing and performance
+        if (type === WebSocketMessageType.VIDEO_FRAME) {
+            if (!scope) {
+                console.debug(`[WebSocketClient ${this.instanceId}] DROPPING unscoped VIDEO_FRAME: scope is missing`);
+                return;
+            }
 
-     // 2. Handle Unscoped Listeners
-     const unscopedListeners = this.listeners.get(type);
-     if (unscopedListeners && type !== WebSocketMessageType.VIDEO_FRAME) {
-         console.debug(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
-         unscopedListeners.forEach((listener) => {
-             try {
-                 (listener as MessageListener<T>)(data);
-             } catch (error) {
-                 console.error(`[WebSocketClient ${this.instanceId}] Error in unscoped listener for ${type}:`, error);
-             }
-         });
-     }
- }
+            const scopedMap = this.scopedListeners.get(type);
+            if (!scopedMap) {
+                console.debug(`[WebSocketClient ${this.instanceId}] No scoped listeners registered for VIDEO_FRAME`);
+                return;
+            }
+
+            const listenersSet = scopedMap.get(scope);
+            if (!listenersSet) {
+                console.debug(`[WebSocketClient ${this.instanceId}] No listeners for VIDEO_FRAME scope: ${scope}`);
+                return;
+            }
+
+            listenersSet.forEach(listener => {
+                try {
+                    console.debug(`[WebSocketClient ${this.instanceId}] ROUTING VIDEO_FRAME to scope ${scope} (${listenersSet.size} listeners)`);
+                    listener(data);
+                } catch (error) {
+                    console.error(`[WebSocketClient ${this.instanceId}] Error in VIDEO_FRAME scoped listener for ${scope}:`, error);
+                }
+            });
+            return; // Exit early for video frames to prevent any fall-through
+        }
+
+        // Standard routing for all other message types
+        if (scope) {
+            const scopedMap = this.scopedListeners.get(type);
+            if (scopedMap) {
+                const listenersSet = scopedMap.get(scope);
+                if (listenersSet) {
+                    console.debug(`[WebSocketClient ${this.instanceId}] Routing ${type} to scope ${scope} (${listenersSet.size} listeners)`);
+                    listenersSet.forEach(listener => {
+                        try {
+                            listener(data);
+                        } catch (error) {
+                            console.error(`[WebSocketClient ${this.instanceId}] Error in scoped listener for ${type} (scope: ${scope}):`, error);
+                        }
+                    });
+                } else {
+                    console.debug(`[WebSocketClient ${this.instanceId}] No listeners for scope ${scope} of type ${type}`);
+                }
+            }
+        } else {
+            console.debug(`[WebSocketClient ${this.instanceId}] No scope provided for ${type} message`);
+        }
+
+        // Handle Unscoped Listeners (except for VIDEO_FRAME, handled above)
+        const unscopedListeners = this.listeners.get(type);
+        if (unscopedListeners) {
+            console.debug(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
+            unscopedListeners.forEach((listener) => {
+                try {
+                    (listener as MessageListener<T>)(data);
+                } catch (error) {
+                    console.error(`[WebSocketClient ${this.instanceId}] Error in unscoped listener for ${type}:`, error);
+                }
+            });
+        }
+    }
 
     public subscribe<T>(messageType: WebSocketMessageType, listener: MessageListener<T>, scope?: string): () => void {
         if (scope) {
