@@ -1,5 +1,5 @@
 
-import { VideoFrameMessage, VehicleFrontendData, SurveillanceFeedMessage } from '../types';
+import { VideoFrameMessage, VehicleFrontendData, SurveillanceFeedMessage } from './types';
 
 interface RegistryState {
     vehicles: Map<string, VehicleFrontendData>;

@@ -74,13 +74,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
     const stickyMapRef = useRef<Map<string, string>>(new Map());
 
-    // Sticky Selection Logic:
+    // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
     // When a tracked vehicle's tracker ID changes (e.g. due to frame-skip recovery
     // or ReID-only re-acquisition), but its global_vehicle_id remains the same,
     // automatically update the selection to follow the new tracker ID.
     // Also promotes vehicle_id–based selections to global_vehicle_id when one appears.
     useEffect(() => {
-        const currentVehicles = vehicles?.current;
+        const currentVehicles = vehicles;
         if (!currentVehicles || currentVehicles.length === 0) return;
 
         setSelectedVehicleIds(prev => {
@@ -757,4 +757,3 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
 SurveillanceFeed.displayName = 'SurveillanceFeed';
 export default SurveillanceFeed;
-eillanceFeed;
