@@ -23,7 +23,7 @@ import IdentityGallery from '../feature/IdentityGallery';
 const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed_id, minimalControls = false }, ref) => {
   const instanceId = useRef(Math.random().toString(36).substring(2, 9));
   const { feeds, startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
-  const feed = feeds.find(f => f.feed_id === feed_id);
+  const feed = React.useMemo(() => feeds.find(f => f.feed_id === feed_id), [feeds, feed_id]);
 
   if (!feed) {
     return (
@@ -57,6 +57,26 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
     const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
 
+    // Refs for the render loop to avoid effect restarts
+    const renderOptionsRef = useRef({
+        showOverlays,
+        showBoundingBoxes,
+        showVehicleDetails,
+        showTrajectories,
+        showROI,
+        showExclusionZones,
+        showLaneOverlays,
+        showAllDetections,
+        selectedVehicleIds,
+    });
+
+    const roiStateRef = useRef({
+        roiPoints: [] as { x: number, y: number }[],
+        roiMode: null as 'roi' | 'exclusion' | null,
+        exclusionZones: [] as { x: number, y: number }[][],
+        currentExclusionPoints: [] as { x: number, y: number }[],
+    });
+
     // Sync selections to Backend
     useEffect(() => {
         if (feed_id && wsClient) {
@@ -71,26 +91,44 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    // Keep refs in sync with state
+    useEffect(() => {
+        renderOptionsRef.current = {
+            showOverlays,
+            showBoundingBoxes,
+            showVehicleDetails,
+            showTrajectories,
+            showROI,
+            showExclusionZones,
+            showLaneOverlays,
+            showAllDetections,
+            selectedVehicleIds,
+        };
+    }, [showOverlays, showBoundingBoxes, showVehicleDetails, showTrajectories, showROI, showExclusionZones, showLaneOverlays, showAllDetections, selectedVehicleIds]);
+
+    useEffect(() => {
+        roiStateRef.current = {
+            roiPoints,
+            roiMode,
+            exclusionZones,
+            currentExclusionPoints,
+        };
+    }, [roiPoints, roiMode, exclusionZones, currentExclusionPoints]);
+
     // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
     const stickyMapRef = useRef<Map<string, string>>(new Map());
 
-    // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
-    // When a tracked vehicle's tracker ID changes (e.g. due to frame-skip recovery
-    // or ReID-only re-acquisition), but its global_vehicle_id remains the same,
-    // automatically update the selection to follow the new tracker ID.
-    // Also promotes vehicle_id–based selections to global_vehicle_id when one appears.
     useEffect(() => {
         const currentVehicles = vehicles;
         if (!currentVehicles || currentVehicles.length === 0) return;
 
         setSelectedVehicleIds(prev => {
-            let next: Set<string> | null = null; // lazy copy – avoid re-render if nothing changed
+            let next: Set<string> | null = null;
 
             for (const v of currentVehicles) {
                 const gid = v.global_vehicle_id;
                 if (!gid) continue;
 
-                // Case 1: global_vehicle_id is already selected → clean up any stale tracker ID
                 if (prev.has(gid)) {
                     const lastKnown = stickyMapRef.current.get(gid);
                     if (lastKnown && lastKnown !== v.vehicle_id && prev.has(lastKnown)) {
@@ -101,8 +139,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     continue;
                 }
 
-                // Case 2: vehicle was selected by its vehicle_id before a global_vehicle_id
-                // was assigned. Promote the selection to the global_vehicle_id for stickiness.
                 if (prev.has(v.vehicle_id)) {
                     if (!next) next = new Set(prev);
                     next.delete(v.vehicle_id);
@@ -125,7 +161,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     const component_name = formatFeedName(feedName, feed_id);
 
-    // Load existing ROI and filter settings if available
     useEffect(() => {
         if (feed && feed.config) {
             if (!roiMode && feed.config.roi) {
@@ -193,13 +228,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
 
-        // Get intrinsic dimensions of the video content
         const contentWidth = canvas.width;
         const contentHeight = canvas.height;
 
         if (contentWidth === 0 || contentHeight === 0) return;
 
-        // Get displayed dimensions of the canvas element
         const containerWidth = rect.width;
         const containerHeight = rect.height;
 
@@ -208,26 +241,21 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
         let actualWidth, actualHeight, offsetX, offsetY;
 
-        // Calculate the actual dimensions and offsets of the "contained" video
         if (containerRatio > contentRatio) {
-            // Pillarbox (black bars on left/right)
             actualHeight = containerHeight;
             actualWidth = containerHeight * contentRatio;
             offsetX = (containerWidth - actualWidth) / 2;
             offsetY = 0;
         } else {
-            // Letterbox (black bars on top/bottom)
             actualWidth = containerWidth;
             actualHeight = containerWidth / contentRatio;
             offsetX = 0;
             offsetY = (containerHeight - actualHeight) / 2;
         }
 
-        // Calculate normalized coordinates relative to the actual video content
         const xNormalized = (e.clientX - rect.left - offsetX) / actualWidth;
         const yNormalized = (e.clientY - rect.top - offsetY) / actualHeight;
 
-        // Clamp to [0, 1] to ensure we stay within video bounds
         const xClamped = Math.max(0, Math.min(1, xNormalized));
         const yClamped = Math.max(0, Math.min(1, yNormalized));
 
@@ -243,8 +271,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             return;
         }
 
-        // Vehicle Selection Logic (only if not in ROI mode)
-        // Find vehicle under cursor using normalized coordinates
         const clickedVehicle = vehicles?.find(v => {
             if (!v.bbox || !Array.isArray(v.bbox)) return false;
             const [x1, y1, x2, y2] = v.bbox;
@@ -267,10 +293,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 return newSet;
             });
 
-            // Update gallery panel & sticky map
             if (gid) {
                 if (isDeselecting) {
-                    // Clear gallery only if this was the displayed global ID
                     setSelectedGlobalId(null);
                 } else {
                     setSelectedGlobalId(gid);
@@ -279,8 +303,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             } else {
                 setSelectedGlobalId(null);
             }
-        } else {
-            // Click on empty area — no-op (preserve multi-selection)
         }
     };
 
@@ -289,7 +311,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         try {
             updateFeedConfig({ roi: roiPoints });
             setRoiMode(null);
-            console.log("ROI Save command sent via WebSocket");
         } catch (error) {
             console.error("Error sending ROI update:", error);
         }
@@ -319,67 +340,72 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     useEffect(() => {
         let animationFrameId: number;
+        let lastDrawnIndex = -1;
 
         const render = () => {
             if (canvasRef.current) {
                 const canvas = canvasRef.current;
                 const ctx = canvas.getContext('2d', { alpha: false });
+                
                 if (ctx && lastFrameRef.current) {
                     const frame = lastFrameRef.current;
+                    
+                    if (frame.index === lastDrawnIndex) {
+                        animationFrameId = requestAnimationFrame(render);
+                        return;
+                    }
+
                     const frameWidth = frame.image?.width || 640;
                     const frameHeight = frame.image?.height || 480;
 
-                    // Debug: Log every 100th frame to avoid flooding, but verify the feed association
                     if (frame.index % 100 === 0) {
                         console.debug(`[SurveillanceFeed Render] Component for ${feed_id} is drawing frame ${frame.index} from feed ${feed_id}`);
                     }
 
-                    // Set internal resolution to match video source
                     if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
                         canvas.width = frameWidth;
                         canvas.height = frameHeight;
                     }
 
-                    // Draw Video and AI Overlays
+                    const opts = renderOptionsRef.current;
+                    const roi = roiStateRef.current;
+
                     drawFrame(ctx, frame, {
-                        showBoundingBoxes: showBoundingBoxes,
-                        showVehicleDetails: showVehicleDetails,
-                        showTrajectories: showTrajectories,
-                        showLaneOverlays: showLaneOverlays,
-                        selectedVehicleIds: selectedVehicleIds,
-                        showAllDetections: showAllDetections
+                        showBoundingBoxes: opts.showBoundingBoxes,
+                        showVehicleDetails: opts.showVehicleDetails,
+                        showTrajectories: opts.showTrajectories,
+                        showLaneOverlays: opts.showLaneOverlays,
+                        selectedVehicleIds: opts.selectedVehicleIds,
+                        showAllDetections: opts.showAllDetections
                     });
 
-                    // Draw ROI - p.x and p.y are normalized [0, 1]
-                    if (roiMode === 'roi' || (showOverlays && showROI && roiPoints.length > 0)) {
+                    if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0)) {
                         ctx.save();
-                        ctx.strokeStyle = roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
-                        ctx.lineWidth = 2; // Fixed width for better visibility
+                        ctx.strokeStyle = roi.roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
+                        ctx.lineWidth = 2;
                         ctx.beginPath();
-                        roiPoints.forEach((p, i) => {
+                        roi.roiPoints.forEach((p, i) => {
                             const px = p.x * canvas.width;
                             const py = p.y * canvas.height;
                             if (i === 0) ctx.moveTo(px, py);
                             else ctx.lineTo(px, py);
-                            if (roiMode === 'roi') {
+                            if (roi.roiMode === 'roi') {
                                 ctx.fillStyle = '#00ff00';
-                                ctx.fillRect(px - 4, py - 4, 8, 8); // Slightly larger handles
+                                ctx.fillRect(px - 4, py - 4, 8, 8);
                             }
                         });
-                        if (roiPoints.length > 2) ctx.closePath();
+                        if (roi.roiPoints.length > 2) ctx.closePath();
                         ctx.stroke();
-                        if (roiPoints.length > 2) {
+                        if (roi.roiPoints.length > 2) {
                             ctx.fillStyle = 'rgba(0, 255, 0, 0.05)';
                             ctx.fill();
                         }
                         ctx.restore();
                     }
 
-                    // Draw Exclusion Zones
-                    if (showOverlays && showExclusionZones) {
+                    if (opts.showOverlays && opts.showExclusionZones) {
                         ctx.save();
 
-                        // Draw established zones
                         exclusionZones.forEach(zone => {
                             ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
                             ctx.lineWidth = 2;
@@ -398,12 +424,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                             ctx.stroke();
                         });
 
-                        // Draw current being edited zone
-                        if (roiMode === 'exclusion') {
+                        if (roi.roiMode === 'exclusion') {
                             ctx.strokeStyle = '#ff0000';
                             ctx.lineWidth = 3;
                             ctx.beginPath();
-                            currentExclusionPoints.forEach((p, i) => {
+                            roi.currentExclusionPoints.forEach((p, i) => {
                                 const px = p.x * canvas.width;
                                 const py = p.y * canvas.height;
                                 if (i === 0) ctx.moveTo(px, py);
@@ -415,8 +440,9 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         }
                         ctx.restore();
                     }
+                    
+                    lastDrawnIndex = frame.index;
                 } else if (ctx) {
-                    // Clear canvas if not live
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             }
@@ -430,43 +456,30 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isConnected, drawFrame, showOverlays, showBoundingBoxes, showVehicleDetails, showTrajectories, showROI, showExclusionZones, feed_id, roiPoints, roiMode, exclusionZones, currentExclusionPoints, lastFrameRef, showAllDetections, selectedVehicleIds]);
+    }, [isConnected, drawFrame, feed_id]);
 
     const handleStartFeed = () => {
         if (isToggling) return;
-        if (!feed_id) {
-            console.warn('Cannot start feed: feed ID is missing.');
-            return;
-        }
+        if (!feed_id) return;
         setIsToggling(true);
         startFeed(feed_id);
-
         if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
         toggleTimeoutRef.current = setTimeout(() => setIsToggling(false), 5000);
     };
 
     const handleStopFeed = () => {
         if (isToggling) return;
-        if (!feed_id) {
-            console.warn('Cannot stop feed: feed ID is missing.');
-            return;
-        }
+        if (!feed_id) return;
         setIsToggling(true);
         stopFeed(feed_id);
-
         if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
         toggleTimeoutRef.current = setTimeout(() => setIsToggling(false), 5000);
     };
 
     const handleRestartFeed = () => {
-        if (!feed_id) {
-            console.warn('Cannot restart feed: feed ID is missing.');
-            return;
-        }
+        if (!feed_id) return;
         setIsToggling(true);
-        console.log(`Sending restart_feed for ${feed_id}`);
         restartFeed(feed_id);
-
         if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
         toggleTimeoutRef.current = setTimeout(() => setIsToggling(false), 5000);
     };
@@ -475,7 +488,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (containerRef.current) {
             if (!document.fullscreenElement) {
                 containerRef.current.requestFullscreen().catch(err => {
-                    console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+                    console.error(`Error attempting to enable full-screen mode: ${err.message}`);
                 });
             } else {
                 document.exitFullscreen();
@@ -485,12 +498,10 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            // Only handle click outside for the custom inline panel (when in fullscreen)
             if (isFullscreen && showControlsPanel && containerRef.current && !containerRef.current.contains(event.target as Node)) {
                 setShowControlsPanel(false);
             }
         };
-
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showControlsPanel, containerRef, isFullscreen]);
@@ -558,7 +569,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {/* ROI/Exclusion Controls */}
                 {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">
@@ -700,7 +710,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                                     <button
                                         className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"
                                         title="Overlay Controls"
-                                        onClick={(e) => e.stopPropagation()} // Prevent trigger from bubbling
+                                        onClick={(e) => e.stopPropagation()}
                                     >
                                         <Settings className="h-4 w-4" />
                                     </button>
@@ -731,7 +741,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {/* Identity Gallery Side Panel */}
                 {selectedGlobalId && (
                     <div className="absolute top-4 right-4 bottom-4 w-72 z-50 pointer-events-auto">
                         <IdentityGallery

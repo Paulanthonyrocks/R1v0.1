@@ -23,9 +23,11 @@ const useVideoSocket = (streamId: string) => {
   
   // Consolidate vehicles and metrics to reduce re-render count
   const [feedState, setFeedState] = useState<{
+    index: number,
     vehicles: VehicleFrontendData[] | null,
     metrics: SurveillanceFeedMessage | null
   }>({
+    index: -1,
     vehicles: null,
     metrics: null
   });
@@ -89,21 +91,18 @@ const useVideoSocket = (streamId: string) => {
         videoStreamManager.updateVehicles(streamId, frameVehicles);
         vehiclesRef.current = frameVehicles;
         metricsRef.current = frameMetrics;
-        setError(null);
 
-        // Robust throttled state update
+        // Robust throttled state update for UI panels
         if (!throttleTimerRef.current) {
           throttleTimerRef.current = setTimeout(() => {
             throttleTimerRef.current = null;
-            const currentVehicles = videoStreamManager.getVehicles(streamId);
-            const currentMetrics = metricsRef.current;
             
-            const stateSnapshot = JSON.stringify({ v: currentVehicles, m: currentMetrics });
-            if (stateSnapshot !== lastStateJsonRef.current) {
-              lastStateJsonRef.current = stateSnapshot;
+            // Only trigger a re-render if a new frame has actually arrived
+            if (index !== feedState.index) {
               setFeedState({
-                vehicles: currentVehicles,
-                metrics: currentMetrics
+                index,
+                vehicles: frameVehicles,
+                metrics: frameMetrics
               });
             }
           }, UPDATE_INTERVAL_MS);
@@ -121,8 +120,13 @@ const useVideoSocket = (streamId: string) => {
       if (lastFrameTimeRef.current > 0) {
         const frameTime = now - lastFrameTimeRef.current;
         smoothedFrameTimeRef.current = (FPS_EMA_ALPHA * frameTime) + ((1 - FPS_EMA_ALPHA) * smoothedFrameTimeRef.current || frameTime);
-        if (now - lastFpsUpdateRef.current > 500) {
-          setFrameRate(1000 / smoothedFrameTimeRef.current);
+        
+        // Throttle FPS updates to every 2 seconds and only if the integer part changes
+        if (now - lastFpsUpdateRef.current > 2000) {
+          const currentFps = 1000 / smoothedFrameTimeRef.current;
+          if (Math.round(currentFps) !== Math.round(frameRate)) {
+            setFrameRate(currentFps);
+          }
           lastFpsUpdateRef.current = now;
         }
       }

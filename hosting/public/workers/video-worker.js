@@ -9,7 +9,7 @@
  *  4. Priority: Use binary msgpack path as primary, base64 as fallback.
  */
 
-importScripts('https://cdn.jsdelivr.net/npm/@msgpack/msgpack@3.0.0-beta.2/dist/msgpack.min.js');
+importScripts('msgpack.min.js');
 
 // State tracking per feed
 const processingState = new Map(); // feed_id → { isProcessing: boolean, latestPayload: null | object }
@@ -33,7 +33,9 @@ async function processFeedQueue(feed_id) {
             let jpegBytes = null;
 
             if (binaryFrame) {
-                jpegBytes = binaryFrame.bg;
+                // binaryFrame is the decoded MessagePack object.
+                // Based on backend convention, the image is usually in the 'bg' field.
+                jpegBytes = binaryFrame.bg || binaryFrame;
             } else if (frameData) {
                 jpegBytes = frameData;
             }

@@ -159,6 +159,9 @@ export class WebSocketClient implements IWebSocketClient {
     private networkChangeHandler: (() => void) | null = null;
     private networkOfflineHandler: (() => void) | null = null;
 
+    private pendingFrames: Map<string, number> = new Map();
+    private readonly MAX_PENDING_FRAMES = 5;
+
     private workerUrl: string;
 
     constructor(baseUrl: string, requiresClientId = true, workerUrl = '/workers/video-worker.js') {
@@ -433,7 +436,7 @@ export class WebSocketClient implements IWebSocketClient {
                         this.ws.close();
                         reject(new Error('Connection timeout'));
                     }
-                }, 10000);
+                }, 30000);
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
@@ -644,18 +647,26 @@ export class WebSocketClient implements IWebSocketClient {
 
                 if (message.type === WebSocketMessageType.VIDEO_FRAME) {
                     const frameData = message.data as { feed_id?: string, frame?: string };
+                    const f_id = frameData?.feed_id;
 
-                    // If we have a worker and frame is a string (base64), use the worker
+                    if (!f_id) return;
+
+                    // Frame dropping mechanism to prevent worker congestion
+                    const pending = this.pendingFrames.get(f_id) ?? 0;
+                    if (pending >= this.MAX_PENDING_FRAMES) {
+                        return; // Drop frame
+                    }
+
                     if (this.videoWorker && typeof frameData?.frame === 'string') {
+                        this.pendingFrames.set(f_id, pending + 1);
                         this.videoWorker.postMessage({
                             frameData: frameData.frame,
-                            feed_id: frameData.feed_id,
-                            originalData: message.data // Pass through other metrics/vehicles
+                            feed_id: f_id,
+                            originalData: message.data
                         });
                         return;
                     } else if (!this.videoWorker) {
-                        // Fallback to direct notification if no worker
-                        this.notifyListeners(message.type, message.data, frameData?.feed_id);
+                        this.notifyListeners(message.type, message.data, f_id);
                     }
                     return;
                 }
@@ -715,11 +726,7 @@ export class WebSocketClient implements IWebSocketClient {
             }
         } else if (event.data instanceof ArrayBuffer) {
             try {
-                // Transfer the raw ArrayBuffer directly to the worker.
-                // This removes the Msgpack decoding overhead from the main thread.
                 if (this.videoWorker) {
-                    // We use a temporary wrapper to keep the worker's onmessage signature consistent
-                    // while sending the raw binary data.
                     this.videoWorker.postMessage({
                         rawBinary: event.data,
                     }, [event.data]);
