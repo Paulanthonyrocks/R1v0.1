@@ -238,6 +238,14 @@ export interface VehicleFrontendData {
   last_update_time?: number;
 }
 
+export interface VideoFrameSnapshot {
+    image: ImageBitmap | HTMLImageElement | null;
+    index: number;
+    vehicles: VehicleFrontendData[] | null;
+    metrics: SurveillanceFeedMessage | null;
+    timestamp: number;
+}
+
 export interface SurveillanceFeedMessage {
   total_vehicles?: number;
   average_speed_kmh?: number;

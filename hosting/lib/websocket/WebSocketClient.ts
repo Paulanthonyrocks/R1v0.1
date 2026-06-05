@@ -1,5 +1,6 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
+import { decode as msgpackDecode } from '@msgpack/msgpack';
 
 interface WebSocketErrorEvent extends Event {
     message?: string;
@@ -727,6 +728,18 @@ export class WebSocketClient implements IWebSocketClient {
         } else if (event.data instanceof ArrayBuffer) {
             try {
                 if (this.videoWorker) {
+                    // Decode header to get feed_id for congestion control
+                    const decoded = MessagePack.decode(new Uint8Array(event.data));
+                    const f_id = decoded.f;
+                    
+                    if (f_id) {
+                        const pending = this.pendingBinaryFrames.get(f_id) ?? 0;
+                        if (pending >= this.MAX_PENDING_FRAMES) {
+                            return; // Drop frame
+                        }
+                        this.pendingBinaryFrames.set(f_id, pending + 1);
+                    }
+
                     this.videoWorker.postMessage({
                         rawBinary: event.data,
                     }, [event.data]);

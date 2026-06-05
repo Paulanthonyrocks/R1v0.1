@@ -357,10 +357,10 @@ const unsubscribeFromFeed = useCallback(() => {
 
   const drawFrame = useCallback((
     ctx: CanvasRenderingContext2D,
-    frameDataObj: { image: ImageBitmap | HTMLImageElement | null, index: number, vehicles: VehicleFrontendData[] | null, metrics: SurveillanceFeedMessage | null },
+    frame: VideoFrameSnapshot,
     options: any = {}
   ) => {
-    const { image, vehicles, metrics } = frameDataObj;
+    const { image, vehicles, metrics } = frame;
     const {
       showBoundingBoxes = true,
       showVehicleDetails = true,
