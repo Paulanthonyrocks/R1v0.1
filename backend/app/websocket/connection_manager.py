@@ -291,8 +291,15 @@ class ConnectionManager:
                 # Wait for a signal that new data is available
                 await signal_queue.get()
                 
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    logger.info(f"[Sender {client_id}] WebSocket state is {websocket.client_state}. Exiting sender task.")
+                    return
+
                 # Process queues until both are empty
                 while not high_priority_queue.empty() or low_priority_queue:
+                    if websocket.client_state != WebSocketState.CONNECTED:
+                        logger.info(f"[Sender {client_id}] WebSocket state is {websocket.client_state}. Stopping sender loop.")
+                        return
                     sent_something = False
                     
                     # 1. High-priority send logic
@@ -317,6 +324,9 @@ class ConnectionManager:
                             except asyncio.QueueEmpty:
                                 pass
                             except (asyncio.TimeoutError, Exception) as e:
+                                if "close message has been sent" in str(e):
+                                    logger.info(f"[Sender {client_id}] Connection closed (detected during send). Exiting task.")
+                                    return
                                 logger.warning(f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. Dropping message.")
                                 high_priority_queue.task_done()
 
@@ -338,6 +348,9 @@ class ConnectionManager:
                         except IndexError:
                             pass
                         except (asyncio.TimeoutError, Exception) as e:
+                            if "close message has been sent" in str(e):
+                                logger.info(f"[Sender {client_id}] Connection closed (detected during send). Exiting task.")
+                                return
                             logger.warning(f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. Dropping message.")
                     
                     # If we hit the streak limit but the low-priority queue was empty,
