@@ -42,18 +42,32 @@ class ResultProcessor:
 
     def _process_single_result(self, item):
         """CPU-bound processing of a single result item (SHM read -> bytes)."""
+        if not item or not isinstance(item, (tuple, list)) or len(item) < 3:
+            logger.error(f"Invalid result item format: {item}")
+            return None
+
+        shm_ref = item[2]
         try:
-            feed_id, frame_idx, shm_ref, metrics, vehicles, extra = item
+            feed_id, frame_idx, _, metrics, vehicles, extra = item
             try:
                 frame_bytes, dims = self.frame_buffer.read(shm_ref)
-            finally:
-                self.frame_buffer.release(shm_ref)
+            except Exception as e:
+                logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
+                frame_bytes = None
+                dims = None
+            
+            if frame_bytes is None:
+                return None
 
             return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
         except Exception as e:
-            # Simple error suppression for stale SHM refs
-            logger.error(f"Error processing result for {item[0] if item else 'unknown'}: {e}")
+            logger.error(f"Error processing result for {item[0] if isinstance(item, (tuple, list)) else 'unknown'}: {e}")
             return None
+        finally:
+            try:
+                self.frame_buffer.release(shm_ref)
+            except Exception as e:
+                logger.debug(f"Error releasing SHM ref {shm_ref}: {e}")
 
     async def process_results_loop(self, handle_periodic_tasks_callback):
         """

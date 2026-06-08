@@ -201,6 +201,14 @@ def inference_worker(
                 shared_reid_embedder = ReIDEmbedder(config)
                 logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
 
+            # Signal readiness to FeedManager
+            try:
+                redis_client.set(f"worker:{worker_id}:ready", "1")
+                redis_client.set(f"worker:{worker_id}:status", "ready")
+                logger.info(f"[Worker {worker_id}] Readiness signal sent to Redis.")
+            except Exception as e:
+                logger.warning(f"[Worker {worker_id}] Failed to send readiness signal: {e}")
+
         except Exception as e:
             logger.error(f"[Worker {worker_id}] Shared model load exception: {e}")
             logger.critical(f"[Worker {worker_id}] Shared model load failed. Exiting.")

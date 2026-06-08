@@ -288,38 +288,30 @@ async def lifespan(app: FastAPI):
                 if vf.is_file() and watcher.event_handler._is_video_file(vf):
                     on_new_video(str(vf))
 
-        # 5.3 Post Startup Processing (Sample Feeds) - Registration
-        psp_cfg = cfg_dict.get("post_startup_processing", {})
-        psp_enabled = psp_cfg.get("enabled", False)
-        sample_feeds = psp_cfg.get("sample_feeds", [])
-        
-        if sample_feeds:
-            async def _register_sample_feeds():
-                logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
-                for feed in sample_feeds:
-                    f_path = feed.get("path")
-                    try:
-                        await fm.add_and_start_feed(
-                            source=f_path,
-                            is_looped=feed.get("is_looped", True),
-                            latitude=feed.get("latitude"),
-                            longitude=feed.get("longitude"),
-                            name_hint=feed.get("name", Path(f_path).name),
-                            is_sample_feed=True,
-                            start=psp_enabled
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to register sample feed {f_path}: {e}")
-                logger.info("Sample feeds registration complete.")
-
-            await create_background_task(_register_sample_feeds())
-
-        # Start processing if configured, as it launches the inference pool
-        # This is moved AFTER sample feed registration to avoid duplicate starts
+        # Start processing first to launch inference pool and WAIT for readiness
         auto_start = cfg_dict.get("auto_start_processing", False)
         if auto_start:
-            await create_background_task(fm.start_processing())
-            logger.info("Feed Manager started processing automatically (background task).")
+            await fm.start_processing()
+            logger.info("Feed Manager started processing and workers are ready.")
+
+        # Now register sample feeds ONLY after workers are ready
+        if sample_feeds:
+            logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
+            for feed in sample_feeds:
+                f_path = feed.get("path")
+                try:
+                    await fm.add_and_start_feed(
+                        source=f_path,
+                        is_looped=feed.get("is_looped", True),
+                        latitude=feed.get("latitude"),
+                        longitude=feed.get("longitude"),
+                        name_hint=feed.get("name", Path(f_path).name),
+                        is_sample_feed=True,
+                        start=psp_enabled
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to register sample feed {f_path}: {e}")
+            logger.info("Sample feeds registration complete.")
 
         if p_enabled:
             # Prediction scheduler is started inside fm.start_processing()

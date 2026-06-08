@@ -61,6 +61,7 @@ from app.services.constants import FeedManagerConstants
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.logger = logger
 
         # Emergency SHM cleanup before initializing anything to prevent restart failures
         SharedFrameBuffer.force_cleanup()
@@ -81,7 +82,9 @@ class FeedManager:
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
         self._reid_manager = GlobalReIDManager(config)
-        self.frame_buffer = SharedFrameBuffer(pool_size=100, owner=True)
+        shm_pool_size = self.config.get('performance', {}).get('shm_pool_size', 100)
+        self.logger.info(f"Initializing SharedFrameBuffer with pool_size={shm_pool_size}")
+        self.frame_buffer = SharedFrameBuffer(pool_size=shm_pool_size, owner=True)
         self.pipeline_pressure = RedisValue('f', 0.0, 'pipeline_pressure')
         self._is_processing_active: bool = False
 
@@ -94,7 +97,6 @@ class FeedManager:
         self._kpi_broadcast_interval = self.config.get("kpi_broadcast_interval", FeedManagerConstants.KPI_BROADCAST_INTERVAL_DEFAULT)
         self._sample_feed_ids: List[str] = []
         self._feed_running_events: Dict[str, asyncio.Event] = {}
-        self.logger = logger
 
         # Adaptive delay settings
         self._min_read_delay = self.config.get("min_frame_read_delay_ms", FeedManagerConstants.MIN_READ_DELAY_MS_DEFAULT) / 1000.0
@@ -117,6 +119,7 @@ class FeedManager:
         self._db_queue: Optional[RedisQueue] = RedisQueue('db_writes', maxsize=FeedManagerConstants.DB_QUEUE_MAXSIZE)
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
+        self._last_scale_time = 0.0
 
         # Virtual Slot Architecture for Dynamic Scaling
         self.slot_count = FeedManagerConstants.SLOT_COUNT
@@ -155,6 +158,7 @@ class FeedManager:
             self._central_output_queue = RedisQueue('central_output', maxsize=FeedManagerConstants.QUEUE_MAX_SIZE)
 
         self._inference_stop_event = RedisEvent('inference_stop')
+        self._startup_ready = asyncio.Event()
         
         # Initialize Worker Pool Manager now that queues and slot_count are available
         self.pool_manager = InferencePoolManager(
@@ -358,11 +362,17 @@ class FeedManager:
                 )
 
                 if avg_depth > FeedManagerConstants.SCALE_UP_THRESHOLD and current_size < FeedManagerConstants.MAX_WORKERS:
-                    logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
-                    self.pool_manager.scale_pool(current_size + 1)
+                    now = time.time()
+                    if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
+                        logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
+                        self.pool_manager.scale_pool(current_size + 1)
+                        self._last_scale_time = now
                 elif avg_depth < FeedManagerConstants.SCALE_DOWN_THRESHOLD and current_size > FeedManagerConstants.MIN_WORKERS:
-                    logger.info(f"Low load detected (avg depth {avg_depth:.1f}). Scaling down...")
-                    self.pool_manager.scale_pool(current_size - 1)
+                    now = time.time()
+                    if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
+                        logger.info(f"Low load detected (avg depth {avg_depth:.1f}). Scaling down...")
+                        self.pool_manager.scale_pool(current_size - 1)
+                        self._last_scale_time = now
 
                 await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
             except Exception as e:
@@ -550,6 +560,32 @@ class FeedManager:
                 except Exception:
                     pass
 
+    async def _wait_for_workers_ready(self, expected_count: int, timeout: float = 30.0):
+        """Wait until all expected inference workers have signaled readiness in Redis."""
+        if expected_count <= 0:
+            return
+
+        self.logger.info(f"Waiting for {expected_count} inference workers to signal readiness (timeout={timeout}s)...")
+        start_time = time.time()
+        try:
+            rc = get_redis_client()
+            while time.time() - start_time < timeout:
+                ready_count = 0
+                for i in range(expected_count):
+                    if rc.get(f"worker:{i}:ready") == b"1":
+                        ready_count += 1
+                
+                if ready_count >= expected_count:
+                    self.logger.info(f"All {expected_count} workers are ready. Proceeding to start feeds.")
+                    return
+                
+                self.logger.debug(f"Workers ready: {ready_count}/{expected_count}. Waiting...")
+                await asyncio.sleep(1.0)
+        except Exception as e:
+            self.logger.warning(f"Error while waiting for worker readiness: {e}")
+
+        self.logger.warning(f"Timed out waiting for workers. Only {ready_count if 'ready_count' in locals() else 0}/{expected_count} ready. Starting feeds anyway.")
+
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
         if self._is_processing_active:
@@ -558,6 +594,8 @@ class FeedManager:
         self.logger.info("Starting overall video processing.")
         await self.initialize()
         self._is_processing_active = True
+
+        self._startup_ready.clear() # Pause scaling monitor during startup
 
         # Clear stale stop signals so workers don't exit immediately on startup
         try:
@@ -655,7 +693,11 @@ class FeedManager:
         pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
         self.scale_pool(pool_size)
 
+        # Wait for workers to finish loading models before starting feeds
+        await self._wait_for_workers_ready(pool_size)
+
         await self._check_and_manage_sample_feed()
+        self._startup_ready.set() # Allow scaling monitor to resume
 
         if self._prediction_scheduler:
             if self.config.get("prediction_scheduler", {}).get("enabled", True):
@@ -949,6 +991,7 @@ class FeedManager:
                 }
 
                 feed_result = await self.add_and_start_feed(**kwargs)
+                await asyncio.sleep(0.5) # Stagger startups to prevent SHM bursts
 
                 if feed_result.get("status") == "error":
                     results["failed"].append({"config": feed_config, "error": feed_result.get("error")})
