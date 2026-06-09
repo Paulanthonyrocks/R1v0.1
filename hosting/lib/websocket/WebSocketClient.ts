@@ -729,7 +729,7 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 if (this.videoWorker) {
                     // Decode header to get feed_id for congestion control
-                    const decoded = MessagePack.decode(new Uint8Array(event.data));
+                    const decoded = msgpackDecode(new Uint8Array(event.data));
                     const f_id = decoded.f;
                     
                     if (f_id) {
