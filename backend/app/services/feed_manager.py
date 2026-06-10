@@ -355,6 +355,11 @@ class FeedManager:
                 avg_depth = total_depth / self.slot_count
                 current_size = self.pool_manager.pool_size
 
+                if current_size >= 4:
+                    self.logger.warning(f"[ScalingMonitor] Hard worker cap (4) reached. Skipping scale-up.")
+                    await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
+                    continue
+
                 self.logger.debug(
                     f"[ScalingMonitor] avg_depth={avg_depth:.1f}, current_workers={current_size}, "
                     f"up_threshold={FeedManagerConstants.SCALE_UP_THRESHOLD}, "
@@ -364,9 +369,15 @@ class FeedManager:
                 if avg_depth > FeedManagerConstants.SCALE_UP_THRESHOLD and current_size < FeedManagerConstants.MAX_WORKERS:
                     now = time.time()
                     if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
-                        logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
-                        self.pool_manager.scale_pool(current_size + 1)
-                        self._last_scale_time = now
+                        # Memory-based guard: do not scale up if memory usage is already high
+                        cpu, mem = check_system_resources()
+                        mem_limit = self.config.get("performance", {}).get("memory_limit_percent", 80)
+                        if mem < mem_limit:
+                            logger.info(f"High load detected (avg depth {avg_depth:.1f}). Scaling up...")
+                            self.pool_manager.scale_pool(current_size + 1)
+                            self._last_scale_time = now
+                        else:
+                            logger.warning(f"High load detected but memory limit reached ({mem:.1f}% >= {mem_limit}%). Skipping scale-up.")
                 elif avg_depth < FeedManagerConstants.SCALE_DOWN_THRESHOLD and current_size > FeedManagerConstants.MIN_WORKERS:
                     now = time.time()
                     if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
@@ -560,7 +571,7 @@ class FeedManager:
                 except Exception:
                     pass
 
-    async def _wait_for_workers_ready(self, expected_count: int, timeout: float = 30.0):
+    async def _wait_for_workers_ready(self, expected_count: int, timeout: float = 60.0):
         """Wait until all expected inference workers have signaled readiness in Redis."""
         if expected_count <= 0:
             return
@@ -690,7 +701,7 @@ class FeedManager:
                             self.logger.warning(f"Fallback purge failed: {fb_err}")
         except Exception as e:
             self.logger.warning(f"Could not purge stale central_output messages: {e}")
-        pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+        pool_size = self.config.get("inference", {}).get("num_workers", 2)
         self.scale_pool(pool_size)
 
         # Wait for workers to finish loading models before starting feeds
@@ -1054,7 +1065,7 @@ class FeedManager:
 
             # Auto-initialize inference pool if not running
             if not self.pool_manager._inference_pool:
-                pool_size = self.config.get("performance", {}).get("inference_pool_size", 2)
+                pool_size = self.config.get("inference", {}).get("num_workers", 2)
                 logger.warning(
                     f"Inference pool is empty — auto-scaling to {pool_size} worker(s) before starting feed."
                 )
@@ -1489,64 +1500,6 @@ class FeedManager:
         logger.info(f"[BROADCAST_KPI] Broadcasting KPI: feeds={active_feeds_count}, avg_speed={global_avg_speed:.1f}, congestion={global_congestion_index:.1f}")
 
         await self.broadcaster.broadcast_kpi_update(kpi_data)
-
-    async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
-        for fid in feeds_to_update:
-            await self._broadcast_feed_update(fid)
-
-        now = time.time()
-        if kpi_needed or (now - self._last_kpi_broadcast_time >= self._kpi_broadcast_interval):
-            await self._broadcast_kpi_update()
-            self._last_kpi_broadcast_time = now
-
-        if sample_needed:
-            await self._check_and_manage_sample_feed()
-
-    # --- Frame Subscriptions ---
-
-    async def subscribe_to_frames(self, feed_id: str) -> asyncio.Queue:
-        async with self._lock:
-            if feed_id not in self.frame_subscriber_queues:
-                self.frame_subscriber_queues[feed_id] = []
-            q: asyncio.Queue = asyncio.Queue(maxsize=30)
-            self.frame_subscriber_queues[feed_id].append(q)
-            return q
-
-    async def unsubscribe_from_frames(self, feed_id: str, q: asyncio.Queue):
-        async with self._lock:
-            if feed_id in self.frame_subscriber_queues:
-                if q in self.frame_subscriber_queues[feed_id]:
-                    self.frame_subscriber_queues[feed_id].remove(q)
-                if not self.frame_subscriber_queues[feed_id]:
-                    del self.frame_subscriber_queues[feed_id]
-
-    # --- Shutdown ---
-
-    async def shutdown(self):
-        logger.info("Shutdown initiated.")
-        self._stop_reader_flag = True
-
-        await self.stop_processing()
-        await self.stop_all_feeds()
-        await self._stop_inference_pool()
-
-        if self._reid_manager:
-            await asyncio.to_thread(self._reid_manager.save_state)
-            logger.info("ReID state saved during shutdown.")
-
-        tasks = [
-            t for t in (
-                self._result_reader_task,
-                self._watchdog_task,
-                self._db_reader_task,
-            )
-            if t is not None
-        ]
-
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info("Shutdown complete.")
 
     async def _perform_broadcasts(self, feeds_to_update, kpi_needed, sample_needed):
         for fid in feeds_to_update:

@@ -62,7 +62,8 @@ inference:
   batch_size: 1
   detection_model: models/yolov8n.engine
   device: cpu
-  num_workers: 3
+  num_workers: 2
+  worker_ready_timeout: 60
   use_tensorrt: false
 ingestion:
   shared_memory_ipc: false
@@ -440,11 +441,11 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: false
   image_gpu_acceleration: false
-  inference_pool_size: 3
+  inference_pool_size: 2
   inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
-  memory_limit_percent: 95
+  memory_limit_percent: 85
   min_global_skip_factor: 1.0
   queue_fullness_threshold_for_skip_increase: 0.8
   queue_max_size: 500
@@ -453,7 +454,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 200
+  shm_pool_size: 500
   video_gpu_acceleration: false
 personalized_routing:
   enabled: false
@@ -573,7 +574,7 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 2
+  skip_frames: 4
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -582,7 +583,7 @@ vehicle_detection:
     enabled: true
   traffic_predictor:
     model_path: models/traffic_predictor_model.h5
-  use_openvino: false
+  use_openvino: true
   vehicle_class_ids:
   - 2
   - 3
@@ -599,16 +600,16 @@ video_output:
   enabled: false
   fps: 10
   frame_resolution:
-  - 640
-  - 480
+  - 320
+  - 240
   output_directory: backend/data/processed_videos
   processing_enabled: true
   stream_resolution:
-  - 640
-  - 480
+  - 320
+  - 240
 video_processing:
   adaptive_streaming: false
-  target_fps: 2
+  target_fps: 1
 vis_options_default:
 - Grid Overlay
 - Lane Lines
@@ -619,3 +620,4 @@ websocket:
   ping_interval: 30
   pong_timeout: 120
   token_refresh_interval: 300
+

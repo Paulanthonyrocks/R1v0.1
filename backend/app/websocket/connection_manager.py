@@ -121,11 +121,13 @@ class ConnectionManager:
 
             # Handle reconnection: Close existing connection if present
             old_ws = None
+            old_task = None
             if client_id in self.active_connections:
                 old_user_id = self.client_id_to_user_id.get(client_id, "unknown")
                 old_role = self.client_id_to_user_role.get(client_id, "unknown")
                 logger.warning(f"Collision detected for {client_id} (user: {old_user_id}, role: {old_role}). Replacing old connection.")
                 old_ws = self.active_connections[client_id]
+                old_task = self.client_tasks.get(client_id)
 
             # 1. Establish NEW connection first to minimize broadcast gaps
             self.active_connections[client_id] = websocket
@@ -155,7 +157,7 @@ class ConnectionManager:
             if old_ws:
                 # We use a background task to avoid blocking the new connection's setup
                 # and to prevent deadlock if the old task is still hanging.
-                asyncio.create_task(self._disconnect_old_connection(client_id, old_ws))
+                asyncio.create_task(self._disconnect_old_connection(client_id, old_ws, old_task))
 
             logger.info(
                 f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
@@ -221,13 +223,12 @@ class ConnectionManager:
                 if not self.feed_subscriptions[feed_id]:
                     del self.feed_subscriptions[feed_id]
 
-        # Lock cleanup: we keep the lock object itself in _client_locks 
-        # to avoid race conditions where a connect() call creates a new lock 
-        # while a disconnect() is still finishing.
+        # Lock cleanup: remove the lock to prevent memory growth
+        self._client_locks.pop(client_id, None)
         
         logger.info(f"Client {client_id} successfully disconnected. Total active: {len(self.active_connections)}")
 
-    async def _disconnect_old_connection(self, client_id: str, old_ws: WebSocket):
+    async def _disconnect_old_connection(self, client_id: str, old_ws: WebSocket, old_task: Optional[asyncio.Task] = None):
         """Safely clean up a replaced connection without risking deadlocks.
         This is called in the background after a new connection has taken over.
         """
@@ -238,16 +239,10 @@ class ConnectionManager:
             except Exception as e:
                 logger.debug(f"Error closing old WebSocket for {client_id}: {e}")
 
-            # 2. Handle the sender task cancellation.
-            # We do NOT acquire the client lock here to avoid deadlocks if the 
-            # sender task is blocked on that same lock.
-            # Instead, we only cancel the task if it's still the one associated 
-            # with the old connection. However, the new connection has already 
-            # overwritten self.client_tasks[client_id]. 
-            # To fix this, we would have needed to capture the task reference 
-            # in the connect() method. 
-            # Since we only have the WebSocket, we rely on the fact that the 
-            # old task will likely fail on its next send attempt to the closed socket.
+            # 2. Explicitly cancel the old sender task to avoid "WebSocketDisconnect" log spam.
+            if old_task and not old_task.done():
+                old_task.cancel()
+                asyncio.create_task(self._await_task_safely(old_task))
             
             logger.debug(f"Old connection resources for {client_id} processed.")
         except Exception as e:
@@ -668,25 +663,6 @@ class ConnectionManager:
                 logger.error(f"Error in ping task: {e}", exc_info=True)
                 await asyncio.sleep(1) # Prevent tight error loop
 
-    async def shutdown(self):
-        logger.info("Shutting down ConnectionManager...")
-        self._shutdown_event.set()
-        
-        # Cancel all sender tasks
-        tasks = list(self.client_tasks.values())
-        for task in tasks:
-            task.cancel()
-        
-        if tasks:
-            # Wait for all tasks to cancel to avoid "Task destroyed but pending"
-            await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for ws in self.active_connections.values():
-            try:
-                await ws.close()
-            except Exception:
-                pass
-                
     async def shutdown(self):
         logger.info("Shutting down ConnectionManager...")
         self._shutdown_event.set()

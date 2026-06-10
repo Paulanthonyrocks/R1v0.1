@@ -32,6 +32,10 @@ class FeedWatchdog:
         restart_attempts: Dict[str, int] = {}
         next_restart_time: Dict[str, float] = {}
 
+        # Track restart attempts and next allowed restart time per worker
+        worker_restart_attempts: Dict[int, int] = {}
+        worker_next_restart_time: Dict[int, float] = {}
+
         while not self._stop_flag:
             try:
                 await asyncio.sleep(FeedManagerConstants.WATCHDOG_INTERVAL)
@@ -85,11 +89,37 @@ class FeedWatchdog:
                 # Check inference pool workers
                 dead_workers = self.pool_manager.get_dead_workers()
                 if dead_workers:
-                    # Logic to clear stop signals and respawn
-                    # This part might need a specialized method in pool_manager
-                    await self.pool_manager.respawn_dead_workers(dead_workers)
+                    now = time.time()
+                    workers_to_respawn = []
+                    for wid in dead_workers:
+                        if now >= worker_next_restart_time.get(wid, 0):
+                            workers_to_respawn.append(wid)
+                            # Increment attempt count for the next failure detection
+                            attempts = worker_restart_attempts.get(wid, 0) + 1
+                            worker_restart_attempts[wid] = attempts
+                            # Set a provisional backoff in case it dies again immediately
+                            delay = min(5 * (2 ** (attempts - 1)), 3600)
+                            worker_next_restart_time[wid] = now + delay
+                        else:
+                            logger.debug(f"Watchdog: Worker {wid} is in backoff until {worker_next_restart_time[wid]}")
+
+                    if workers_to_respawn:
+                        try:
+                            logger.info(f"Watchdog: Respawning dead inference workers: {workers_to_respawn}")
+                            await self.pool_manager.respawn_dead_workers(workers_to_respawn)
+                        except Exception as e:
+                            logger.error(f"Watchdog: Failed to respawn dead workers {workers_to_respawn}: {e}")
+
+                # Reset backoff for workers that are now healthy
+                for wid in list(worker_restart_attempts.keys()):
+                    if wid in self.pool_manager._inference_pool:
+                        p = self.pool_manager._inference_pool[wid]
+                        if p and p.is_alive():
+                            worker_restart_attempts.pop(wid, None)
+                            worker_next_restart_time.pop(wid, None)
 
             except asyncio.CancelledError:
+
                 break
             except Exception as e:
                 logger.error(f"Error in watchdog loop: {e}", exc_info=True)

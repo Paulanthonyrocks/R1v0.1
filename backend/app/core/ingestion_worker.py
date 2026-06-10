@@ -230,12 +230,8 @@ def ingestion_worker(
         snapshot_bytes = last_frame_bytes
         snapshot_format = last_frame_format
 
-        def save_snapshot_async(bytes_data: bytes, fmt: Optional[str]):
+        def save_snapshot_async(bytes_data: bytes, fmt: Optional[str], snap_dir: Path):
             try:
-                from app.config import get_current_config
-
-                cfg = get_current_config()
-                snap_dir = Path(cfg.snapshots_dir)
                 snap_dir.mkdir(parents=True, exist_ok=True)
 
                 ext = ".png" if fmt == "png" else ".jpg"
@@ -262,8 +258,11 @@ def ingestion_worker(
             except Exception as e:
                 logger.error(f"[{feed_id}] Async snapshot save failed: {e}")
         
-        # Offload disk I/O to a background thread, passing the captured frame data
-        threading.Thread(target=save_snapshot_async, args=(snapshot_bytes, snapshot_format), daemon=True).start()
+        # Offload disk I/O to a background thread, passing the captured frame data and destination
+        from app.config import get_current_config
+        cfg = get_current_config()
+        snap_dir = Path(cfg.snapshots_dir)
+        threading.Thread(target=save_snapshot_async, args=(snapshot_bytes, snapshot_format, snap_dir), daemon=True).start()
 
     try:
         while True:
