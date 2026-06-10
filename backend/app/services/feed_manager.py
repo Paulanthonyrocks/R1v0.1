@@ -347,7 +347,12 @@ class FeedManager:
 
     async def _scaling_monitor(self):
         """Monitors queue depth and scales the worker pool dynamically."""
+        # Wait until startup is complete before starting to scale
+        await self._startup_ready.wait()
+        
         while not self._stop_reader_flag:
+            if self._is_shutting_down:
+                break
             try:
                 total_depth = sum(
                     q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize')
@@ -581,13 +586,12 @@ class FeedManager:
         try:
             rc = get_redis_client()
             while time.time() - start_time < timeout:
-                ready_count = 0
-                for i in range(expected_count):
-                    if rc.get(f"worker:{i}:ready") == b"1":
-                        ready_count += 1
+                # Use a SET to track ready workers for more robust counting
+                ready_workers = rc.smembers("workers:ready_set")
+                ready_count = len(ready_workers) if ready_workers else 0
                 
                 if ready_count >= expected_count:
-                    self.logger.info(f"All {expected_count} workers are ready. Proceeding to start feeds.")
+                    self.logger.info(f"All {expected_count} workers are ready (found {ready_count}). Proceeding to start feeds.")
                     return
                 
                 self.logger.debug(f"Workers ready: {ready_count}/{expected_count}. Waiting...")
@@ -621,9 +625,11 @@ class FeedManager:
         # before loading models.
         try:
             self._inference_stop_event.clear()
-            self.logger.info("Cleared stale inference stop event from Redis.")
+            rc = get_redis_client()
+            rc.delete("workers:ready_set")
+            self.logger.info("Cleared stale inference stop event and ready set from Redis.")
         except Exception as e:
-            self.logger.warning(f"Could not clear inference stop event: {e}")
+            self.logger.warning(f"Could not clear inference stop event/ready set: {e}")
 
         # Purge stale pending messages from central_output stream
         try:
@@ -1536,6 +1542,17 @@ class FeedManager:
     async def shutdown(self):
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
+        self._is_shutting_down = True
+        
+        # Immediately prevent any new workers from being spawned
+        if self.pool_manager:
+            self.pool_manager._is_shutting_down = True
+
+        # Stop and cancel watchdog immediately to prevent respawning workers
+        if self.watchdog:
+            self.watchdog.stop()
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
 
         await self.stop_processing()
         await self.stop_all_feeds()

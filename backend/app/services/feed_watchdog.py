@@ -38,6 +38,8 @@ class FeedWatchdog:
 
         while not self._stop_flag:
             try:
+                if self._stop_flag:
+                    break
                 await asyncio.sleep(FeedManagerConstants.WATCHDOG_INTERVAL)
 
                 feeds_to_restart = []

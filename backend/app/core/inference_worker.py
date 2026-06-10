@@ -205,6 +205,8 @@ def inference_worker(
             try:
                 redis_client.set(f"worker:{worker_id}:ready", "1")
                 redis_client.set(f"worker:{worker_id}:status", "ready")
+                # Add to ready set for robust counting by FeedManager
+                redis_client.sadd("workers:ready_set", worker_id)
                 logger.info(f"[Worker {worker_id}] Readiness signal sent to Redis.")
             except Exception as e:
                 logger.warning(f"[Worker {worker_id}] Failed to send readiness signal: {e}")
@@ -355,7 +357,7 @@ def inference_worker(
                     # Read frame from shared memory
                     if frame_buffer:
                         try:
-                            res = frame_buffer.read(shm_ref)
+                            res = frame_buffer.read(shm_ref, expected_feed_id=feed_id)
                         except Exception as e:
                             logger.error(f"[Worker {worker_id}] SHM read failed for ref {shm_ref}: {e}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
@@ -368,10 +370,9 @@ def inference_worker(
                             continue
 
                         if res is None:
-                            logger.error(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
+                            logger.warning(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
-                                acked_msgs.add(msg_id)
                             try:
                                 frame_buffer.release(shm_ref)
                             except Exception:

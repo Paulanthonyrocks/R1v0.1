@@ -23,12 +23,17 @@ class InferencePoolManager:
         self._db_queue = db_queue
         self._inference_stop_event = stop_event
         
+        self._is_shutting_down = False
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
 
     def spawn_worker(self, worker_id: int):
         """Spawns a single inference worker assigned to specific slots."""
+        if self._is_shutting_down:
+            logger.warning(f"Shutdown in progress. Refusing to spawn worker {worker_id}.")
+            return
+
         # Clear any stale stop signal from a terminated predecessor to prevent immediate exit
         if self._inference_stop_event and hasattr(self._inference_stop_event, "clear"):
             try:

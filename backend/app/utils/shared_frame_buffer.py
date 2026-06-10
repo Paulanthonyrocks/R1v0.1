@@ -7,7 +7,9 @@ import queue
 import os
 import time
 import threading
+import zlib
 from app.utils.distributed_queue import RedisQueue
+from app.utils.redis_client import get_redis_client
 
 logger = logging.getLogger('app.utils.shared_frame_buffer')
 
@@ -16,9 +18,9 @@ class SharedFrameBuffer:
     Manages a pool of shared memory segments for high-frequency frame transmission.
     Supports resolution-agnostic reads and orphan/stale segment pruning.
     """
-    # Header: [version(i4), size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
-    # 5*4 + 8 = 28 bytes
-    HEADER_SIZE = 28 
+    # Header: [version(i4), size(i4), width(i4), height(i4), channels(i4), feed_hash(i4), last_used(f8)]
+    # 6*4 + 8 = 32 bytes
+    HEADER_SIZE = 32 
     
     def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 120.0):
         self.pool_size = pool_size
@@ -30,6 +32,7 @@ class SharedFrameBuffer:
         self._segments: dict[str, shared_memory.SharedMemory] = {}
         
         self._free_pool = None
+        self._acquired_set_key = 'shm_acquired_pool'
         
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
@@ -40,6 +43,7 @@ class SharedFrameBuffer:
                 # This handles crash restarts where Redis has stale entries
                 # but /dev/shm segments are gone.
                 self._free_pool.clear()
+                get_redis_client().delete(self._acquired_set_key)
                 self.prune_orphans()
                 
                 for i in range(pool_size):
@@ -123,8 +127,8 @@ class SharedFrameBuffer:
             try:
                 buf = shm.buf
                 import struct as _struct
-                # Read version and last_used
-                version, last_used = _struct.unpack_from('<i', buf, 0)[0], _struct.unpack_from('<d', buf, 20)[0]
+                # Read version and last_used (offset 24)
+                version, last_used = _struct.unpack_from('<I', buf, 0)[0], _struct.unpack_from('<d', buf, 24)[0]
                 
                 # Reclaim if:
                 # 1. Version is EVEN and it's just old.
@@ -133,6 +137,8 @@ class SharedFrameBuffer:
                 is_stale_odd = (version % 2 != 0 and (now - last_used > odd_timeout))
                 
                 if is_stale_even or is_stale_odd:
+                    logger.info(f"[SHM-LIFECYCLE] PID {os.getpid()} PRUNE {name} (stale, version {version}, age {now - last_used:.2f}s)")
+                    get_redis_client().srem(self._acquired_set_key, name)
                     self._free_pool.put_nowait(name)
                     stale_count += 1
             except Exception as e:
@@ -143,13 +149,15 @@ class SharedFrameBuffer:
 
     def acquire(self, timeout: float = 0.2) -> Optional[str]:
         try:
-            return self._free_pool.get(timeout=timeout)
+            name = self._free_pool.get(timeout=timeout)
+            get_redis_client().sadd(self._acquired_set_key, name)
+            return name
         except queue.Empty:
             logger.warning("SHM free pool empty – frame will be dropped")
             return None
 
-    def write(self, name: str, data: Union[bytes, np.ndarray]):
-        """Write data and dimensions into the segment."""
+    def write(self, name: str, data: Union[bytes, np.ndarray], feed_id: str = "unknown"):
+        """Write data, dimensions, and feed identity into the segment."""
         import struct
         
         if name not in self._segments:
@@ -166,12 +174,15 @@ class SharedFrameBuffer:
         if size > self.max_frame_size - self.HEADER_SIZE:
             raise ValueError(f'Data size {size} exceeds buffer limit.')
         
+        # Identity hash to prevent juggling
+        feed_hash = zlib.adler32(feed_id.encode())
+        
         shm = self._segments[name]
         buf = shm.buf
         
         # 1. Signal start of write by setting version to ODD
         try:
-            current_version = struct.unpack_from('<i', buf, 0)[0]
+            current_version = struct.unpack_from('<I', buf, 0)[0]
         except Exception:
             current_version = 0
         
@@ -180,21 +191,21 @@ class SharedFrameBuffer:
             current_version += 1
             
         # Version becomes odd -> Writer is active
-        buf[0:4] = struct.pack('<i', current_version + 1)
+        buf[0:4] = struct.pack('<I', current_version + 1)
         
         # 2. Write payload
         buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
         
         # 3. Finalize header: Write everything including EVEN version
         now = time.time()
-        # Layout: [version(i4), size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
-        # Write metadata first while version is still ODD
-        buf[4:28] = struct.pack('<iiiid', size, w, h, c, now)
+        # Layout: [version(i4), size(i4), width(i4), height(i4), channels(i4), feed_hash(i4), last_used(f8)]
+        buf[4:24] = struct.pack('<iiiiI', size, w, h, c, feed_hash)
+        buf[24:32] = struct.pack('<d', now)
         # Finally, update version to EVEN to signal completion
-        buf[0:4] = struct.pack('<i', current_version + 2)
+        buf[0:4] = struct.pack('<I', current_version + 2)
 
-    def read(self, name: Union[str, bytes]) -> Optional[Tuple[bytes, Tuple[int, int, int]]]:
-        """Returns (data_view, (w, h, c)) or None if a stable frame could not be read."""
+    def read(self, name: Union[str, bytes], expected_feed_id: Optional[str] = None) -> Optional[Tuple[bytes, Tuple[int, int, int]]]:
+        """Returns (data_view, (w, h, c)) or None if a stable frame could not be read or feed ID mismatch."""
         if isinstance(name, bytes):
             try:
                 name = name.decode('utf-8')
@@ -223,8 +234,8 @@ class SharedFrameBuffer:
         # Retry loop to handle race conditions and version mismatches
         for attempt in range(40):
             try:
-                # Header: [version(i4), size(i4), width(i4), height(i4), channels(i4), last_used(f8)]
-                version, size, w, h, c = struct.unpack_from('<iiiii', buf, 0)
+                # Header: [version(I4), size(i4), width(i4), height(i4), channels(i4), feed_hash(I4), last_used(f8)]
+                version, size, w, h, c, feed_hash = struct.unpack_from('<I iiii I', buf, 0)
 
                 # If version is odd, writer is currently updating the segment.
                 if version % 2 != 0:
@@ -234,17 +245,27 @@ class SharedFrameBuffer:
                     else:
                         break
 
+                # Feed Identity Verification
+                if expected_feed_id is not None:
+                    actual_hash = feed_hash
+                    expected_hash = zlib.adler32(expected_feed_id.encode())
+                    if actual_hash != expected_hash:
+                        # Segment has been recycled and now belongs to another feed.
+                        # Drop this frame and return None.
+                        logger.debug(f"SHM segment {name} feed mismatch! Expected {expected_feed_id} (hash {expected_hash}), found hash {actual_hash}. Frame is stale/recycled.")
+                        return None
+
                 # Valid frame found (even version, size > 0)
                 if size > 0 and size <= self.max_frame_size:
                     # Read the data
                     data = bytes(buf[self.HEADER_SIZE : self.HEADER_SIZE + size])
 
                     # Re-verify version to ensure we didn't read while it was being overwritten
-                    final_version = struct.unpack_from('<i', buf, 0)[0]
+                    final_version = struct.unpack_from('<I', buf, 0)[0]
                     if final_version == version:
                         # Successfully read a stable frame. Update heartbeat and return.
                         try:
-                            buf[20:28] = struct.pack('<d', time.time())
+                            buf[24:32] = struct.pack('<d', time.time())
                         except Exception:
                             pass
                         return data, (w, h, c)
@@ -273,9 +294,14 @@ class SharedFrameBuffer:
         if self._free_pool is None:
             return
         try:
-            self._free_pool.put(name, block=False)
-        except queue.Full:
-            pass
+            # Only release if it was actually acquired (prevents double-release spam)
+            if get_redis_client().srem(self._acquired_set_key, name):
+                logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
+                self._free_pool.put(name, block=False)
+            else:
+                logger.debug(f"Ignored redundant release of {name} from PID {os.getpid()}")
+        except Exception as e:
+            logger.error(f"Error releasing {name}: {e}")
 
     def cleanup(self):
         """Closes and unlinks all managed segments."""
@@ -284,7 +310,8 @@ class SharedFrameBuffer:
             if self._owner and self._free_pool is not None:
                 try:
                     self._free_pool.clear()
-                    logger.debug("Cleared SHM free pool RedisQueue.")
+                    get_redis_client().delete(self._acquired_set_key)
+                    logger.debug("Cleared SHM free pool and acquired set.")
                 except Exception as e:
                     logger.error(f"Failed to clear SHM free pool: {e}")
 
@@ -332,4 +359,3 @@ class SharedFrameBuffer:
                             pass
         except Exception as e:
             logger.error(f"Emergency SHM cleanup failed: {e}")
-

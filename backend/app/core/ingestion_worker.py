@@ -379,7 +379,7 @@ def ingestion_worker(
                         metrics.frames_dropped += 1
                         continue
 
-                    frame_buffer.write(shm_ref, last_frame_bytes)
+                    frame_buffer.write(shm_ref, last_frame_bytes, feed_id=feed_id)
 
                     try:
                         if not safe_put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1):

@@ -50,7 +50,7 @@ class ResultProcessor:
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
             try:
-                frame_bytes, dims = self.frame_buffer.read(shm_ref)
+                frame_bytes, dims = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
             except Exception as e:
                 logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
                 frame_bytes = None
