@@ -489,13 +489,12 @@ export class WebSocketClient implements IWebSocketClient {
 
                 this.ws.onerror = (event: Event) => {
                     clearTimeout(connectionTimeout);
-                    const error = event as WebSocketErrorEvent;
-                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error:`, {
-                        message: error?.message,
+                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error occurred. (Note: WebSocket onerror events typically do not contain detailed error information for security reasons)`, {
                         readyState: this.ws?.readyState,
                         url: this.ws?.url,
+                        event: event
                     });
-                    const errorMessage = error?.message || 'Unknown WebSocket Error';
+                    const errorMessage = 'WebSocket error occurred';
                     this.setState(ConnectionState.ERROR, errorMessage);
                     this.notifyError('connection_error', errorMessage);
                     if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
