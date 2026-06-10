@@ -10,8 +10,8 @@ class FeedManagerConstants:
     # Scaling & Slots
     SLOT_COUNT = 16
     MIN_WORKERS = 1
-    MAX_WORKERS = 4
-    SCALE_UP_THRESHOLD = 2
+    MAX_WORKERS = 3
+    SCALE_UP_THRESHOLD = 10
     SCALE_DOWN_THRESHOLD = 1
     SCALE_COOLDOWN = 30
 

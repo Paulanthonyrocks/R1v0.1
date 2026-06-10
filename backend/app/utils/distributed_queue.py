@@ -434,12 +434,29 @@ class RedisStreamQueue:
         self.__dict__.update(state)
 
     def qsize(self) -> int:
-        """Returns the total number of messages currently in the stream."""
+        """
+        Returns the approximate number of messages that need to be processed.
+        This includes messages that have not yet been delivered to any consumer in the group (lag)
+        and messages that have been delivered but not yet acknowledged (pending).
+        """
         try:
+            groups = self.redis.xinfo_groups(self.key)
+            for group in groups:
+                if group['name'] == self.group_name:
+                    # 'lag' is available in Redis 7.0+. It represents messages not yet delivered to the group.
+                    # 'pending' represents messages delivered but not yet acknowledged.
+                    lag = group.get('lag', 0)
+                    pending = group.get('pending', 0)
+                    return lag + pending
+            # If the group isn't found, fall back to total stream length as a coarse estimate.
             return self.redis.xlen(self.key)
         except Exception as e:
-            logger.error(f"Error getting stream length: {e}")
-            return 0
+            logger.error(f"Error getting stream group info for {self.key}: {e}")
+            # Fallback to xlen if xinfo_groups fails (e.g. older Redis version)
+            try:
+                return self.redis.xlen(self.key)
+            except:
+                return 0
 
     def empty(self) -> bool:
         return self.qsize() == 0
