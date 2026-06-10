@@ -733,11 +733,11 @@ export class WebSocketClient implements IWebSocketClient {
                     const f_id = decoded.f;
                     
                     if (f_id) {
-                        const pending = this.pendingBinaryFrames.get(f_id) ?? 0;
+                        const pending = this.pendingFrames.get(f_id) ?? 0;
                         if (pending >= this.MAX_PENDING_FRAMES) {
                             return; // Drop frame
                         }
-                        this.pendingBinaryFrames.set(f_id, pending + 1);
+                        this.pendingFrames.set(f_id, pending + 1);
                     }
 
                     this.videoWorker.postMessage({
