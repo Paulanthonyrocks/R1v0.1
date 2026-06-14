@@ -27,6 +27,10 @@ filterpy>=1.4.5
 numpy<2.0
 scikit-learn>=1.0.0
 joblib>=1.3.2
+onnxruntime-gpu>=1.16.0
+nvidia-tensorrt>=8.6.1
+pycuda>=2022.1
+easyocr>=1.7.0
 
 # TensorFlow (with GPU support)
 tensorflow>=2.16.1
