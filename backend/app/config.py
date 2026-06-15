@@ -191,6 +191,18 @@ def _resolve_paths(config: AppConfig) -> None:
         snap_dir.mkdir(parents=True, exist_ok=True)
         config.snapshots_dir = str(snap_dir)
 
+    # Resolve sample feed paths in post_startup_processing
+    post_startup = config.post_startup_processing
+    if isinstance(post_startup, dict) and "sample_feeds" in post_startup:
+        feeds = post_startup["sample_feeds"]
+        if isinstance(feeds, list):
+            for feed in feeds:
+                if isinstance(feed, dict) and "path" in feed:
+                    feed_path = Path(feed["path"])
+                    if not feed_path.is_absolute():
+                        feed["path"] = str((root_dir / feed_path).resolve())
+
+
 _config_lock = threading.Lock()
 _config_instance: Optional[AppConfig] = None
 
