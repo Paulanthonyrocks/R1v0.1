@@ -288,8 +288,15 @@ async def lifespan(app: FastAPI):
                 if vf.is_file() and watcher.event_handler._is_video_file(vf):
                     on_new_video(str(vf))
 
-        # Start processing first to launch inference pool and WAIT for readiness
-        auto_start = cfg_dict.get("auto_start_processing", False)
+        # Start processing first to launch inference pool and WAIT for readiness.
+        # Default to True: backend/configs/config.yaml ships with
+        # auto_start_processing: true, but if the cfg_dict lookup fails for
+        # any reason the previous False fallback silently disabled feed
+        # initialization on boot, forcing operators to POST /api/v1/feeds/start
+        # by hand. Aligning the fallback with the YAML intent removes that
+        # footgun. start_processing() is still idempotent via the
+        # _is_processing_active guard inside FeedManager, so re-entry is safe.
+        auto_start = cfg_dict.get("auto_start_processing", True)
         if auto_start:
             await fm.start_processing()
             logger.info("Feed Manager started processing and workers are ready.")

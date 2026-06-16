@@ -1361,9 +1361,30 @@ class FeedManager:
             self._last_queue_log_time = now
             try:
                 self._check_resources()
-                self.frame_buffer.prune_stale_segments(timeout_seconds=300)
+                # Skip SHM prune when no feeds are running: every free-pool
+                # segment is uninitialised at rest, and even after the
+                # epoch-zero guard in prune_stale_segments() there's no
+                # reason to scan 100 SHM headers every 30s when nothing
+                # could have legitimately gone stale. This is exactly the
+                # "delay the prune loop if no feeds are active" path from
+                # the design brief.
+                if self._has_active_feeds():
+                    self.frame_buffer.prune_stale_segments(timeout_seconds=300)
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
+
+    def _has_active_feeds(self) -> bool:
+        """Cheap check: is any feed currently in a running-lifecycle state?"""
+        try:
+            target = FeedOperationalStatusEnum.RUNNING
+            for entry in self.process_registry.values():
+                if entry.get("status") == target:
+                    return True
+            return False
+        except Exception:
+            # If registry isn't accessible for any reason, fall back to
+            # the safer "yes, prune" so we don't silently leak segments.
+            return True
 
     async def _compute_vehicle_deltas(
         self, feed_id: str, vehicles: List[Dict], frame_idx: int

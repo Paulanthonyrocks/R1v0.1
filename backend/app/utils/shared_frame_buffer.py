@@ -121,7 +121,18 @@ class SharedFrameBuffer:
 
         now = time.time()
         stale_count = 0
-        
+        skipped_uninitialised = 0
+
+        # Zero-Corruption Protocol note: SHM segments created via
+        # ``shared_memory.SharedMemory(create=True, ...)`` are zero-initialised,
+        # so a freshly-allocated, never-written segment has ``version == 0`` and
+        # ``last_used == 0`` (the Unix epoch). Subtracting ``now - 0.0`` yields
+        # ~1.7e9 seconds, which trivially exceeds any sane timeout and would
+        # otherwise cause every free-pool segment to be "pruned" and re-added
+        # to the pool on every tick. Treat epoch timestamps as "uninitialised"
+        # and skip both the counter bump and the log line.
+        UNINITIALISED_EPOCH = 1.0  # anything < 1.0s after epoch = never written
+
         # We'll check all segments in our registry.
         for name, shm in self._segments.items():
             try:
@@ -129,15 +140,27 @@ class SharedFrameBuffer:
                 import struct as _struct
                 # Read version and last_used (offset 24)
                 version, last_used = _struct.unpack_from('<I', buf, 0)[0], _struct.unpack_from('<d', buf, 24)[0]
-                
+
+                # Skip segments that have never been written to. They are
+                # not actually "stale" - they are simply sitting in the
+                # free pool waiting for their first writer.
+                if last_used < UNINITIALISED_EPOCH:
+                    skipped_uninitialised += 1
+                    continue
+
                 # Reclaim if:
                 # 1. Version is EVEN and it's just old.
                 # 2. Version is ODD but it's been stuck for a long time (crashed writer).
                 is_stale_even = (version % 2 == 0 and (now - last_used > timeout_seconds))
                 is_stale_odd = (version % 2 != 0 and (now - last_used > odd_timeout))
-                
+
                 if is_stale_even or is_stale_odd:
-                    logger.info(f"[SHM-LIFECYCLE] PID {os.getpid()} PRUNE {name} (stale, version {version}, age {now - last_used:.2f}s)")
+                    # Demoted from INFO -> DEBUG: with a 100-segment pool and
+                    # no active feeds, every segment would otherwise log here
+                    # every prune tick (every 30s by default). The summary
+                    # line below preserves visibility when something is
+                    # actually being recovered.
+                    logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} PRUNE {name} (stale, version {version}, age {now - last_used:.2f}s)")
                     get_redis_client().srem(self._acquired_set_key, name)
                     self._free_pool.put_nowait(name)
                     stale_count += 1
@@ -145,7 +168,7 @@ class SharedFrameBuffer:
                 logger.debug(f"Could not read header for {name}, might be stale: {e}")
 
         if stale_count > 0:
-            logger.info(f"Recovered {stale_count} stale SHM segments.")
+            logger.info(f"Recovered {stale_count} stale SHM segments (skipped {skipped_uninitialised} uninitialised).")
 
     def acquire(self, timeout: float = 0.2) -> Optional[str]:
         try:
