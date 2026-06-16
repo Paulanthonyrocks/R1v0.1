@@ -66,7 +66,7 @@ inference:
   worker_ready_timeout: 60
   use_tensorrt: true
 ingestion:
-  shared_memory_ipc: false
+  shared_memory_ipc: true
 interface:
   camera_warmup_time: 0.5
 kalman_filter_params:
