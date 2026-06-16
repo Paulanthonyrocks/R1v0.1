@@ -47,22 +47,27 @@ class ResultProcessor:
             return None
 
         shm_ref = item[2]
+        frame_bytes = None
+        dims = None
+        feed_id = None
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
-            try:
-                frame_bytes, dims = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
-            except Exception as e:
-                logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
-                frame_bytes = None
-                dims = None
-            
-            if frame_bytes is None:
-                return None
-
-            return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
+            read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
+            if read_result is not None:
+                frame_bytes, dims = read_result
         except Exception as e:
-            logger.error(f"Error processing result for {item[0] if isinstance(item, (tuple, list)) else 'unknown'}: {e}")
+            logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
+        
+        if frame_bytes is None:
+            # Release SHM reference even on read failure
+            try:
+                self.frame_buffer.release(shm_ref)
+            except Exception:
+                pass
             return None
+
+        try:
+            return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
         finally:
             try:
                 self.frame_buffer.release(shm_ref)
