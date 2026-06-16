@@ -260,6 +260,14 @@ async def lifespan(app: FastAPI):
     # 5. Optional Services
     try:
         sample_feeds = []
+        # 5.0 Post-Startup Processing (sample feed registration)
+        psp_enabled = False
+        psp_cfg = cfg_dict.get("post_startup_processing", {})
+        if psp_cfg.get("enabled", False):
+            psp_enabled = True
+            sample_feeds = psp_cfg.get("sample_feeds", [])
+            if sample_feeds:
+                logger.info(f"Post-startup processing: {len(sample_feeds)} sample feed(s) configured.")
         # 5.1 Health Service
         health_service = SystemHealthService(cfg_dict, fm, connection_manager)
         health_service.start()
