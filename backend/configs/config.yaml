@@ -609,7 +609,7 @@ video_output:
   - 240
 video_processing:
   adaptive_streaming: false
-  target_fps: 10
+  target_fps: 5
 vis_options_default:
 - Grid Overlay
 - Lane Lines
