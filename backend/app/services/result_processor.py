@@ -52,9 +52,13 @@ class ResultProcessor:
         feed_id = None
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
+            logger.info(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
             read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
             if read_result is not None:
                 frame_bytes, dims = read_result
+                logger.info(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            else:
+                logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
         except Exception as e:
             logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
         
@@ -195,6 +199,8 @@ class ResultProcessor:
         Updates metrics and broadcasts the frame to subscribers using Msgpack for binary efficiency.
         """
         try:
+            logger.info(f"[RESULT_PROC] Processing frame data: feed={feed_id}, frame_idx={frame_idx}, frame_bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            
             # 1. Update registry metrics
             entry = self.registry.get_entry(feed_id)
             if entry:
@@ -212,7 +218,8 @@ class ResultProcessor:
                 "bg": frame_bytes
             }
             binary_data = msgpack.packb(compact_message, use_bin_type=True)
-
+            logger.info(f"[RESULT_PROC] Msgpack packed: feed={feed_id}, frame_idx={frame_idx}, binary_size={len(binary_data)}, vehicles_count={len(vehicles) if vehicles else 0}")
+            
             # 3. Broadcast via broadcaster
             if self.broadcaster:
                 await self.broadcaster.broadcast_to_feed_realtime_bytes(
@@ -220,8 +227,9 @@ class ResultProcessor:
                     data=binary_data,
                     frame_index=frame_idx
                 )
+                logger.info(f"[RESULT_PROC] Broadcast sent: feed={feed_id}, frame_idx={frame_idx}")
             else:
-                logger.warning(f"Broadcaster is None; cannot broadcast frame for {feed_id}")
+                logger.warning(f"[RESULT_PROC] Broadcaster is None; cannot broadcast frame for {feed_id}")
 
         except Exception as e:
             logger.error(f"Error broadcasting frame data for {feed_id}: {e}", exc_info=True)

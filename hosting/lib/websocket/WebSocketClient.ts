@@ -162,6 +162,12 @@ export class WebSocketClient implements IWebSocketClient {
 
     private pendingFrames: Map<string, number> = new Map();
     private readonly MAX_PENDING_FRAMES = 5;
+    
+    // Frame buffer to handle subscription race conditions
+    private frameBufferByFeed: Map<string, Array<any>> = new Map();
+    private readonly MAX_BUFFERED_FRAMES_PER_FEED = 3;
+    private bufferExpirationTimers: Map<string, NodeJS.Timeout> = new Map();
+    private activeListeningFeeds: Set<string> = new Set();
 
     private workerUrl: string;
 
@@ -728,7 +734,7 @@ export class WebSocketClient implements IWebSocketClient {
             try {
                 if (this.videoWorker) {
                     // Decode header to get feed_id for congestion control
-                    const decoded = msgpackDecode(new Uint8Array(event.data));
+                    const decoded: any = msgpackDecode(new Uint8Array(event.data));
                     const f_id = decoded.f;
                     
                     if (f_id) {
@@ -761,19 +767,23 @@ export class WebSocketClient implements IWebSocketClient {
 
             const scopedMap = this.scopedListeners.get(type);
             if (!scopedMap) {
-                console.debug(`[WebSocketClient ${this.instanceId}] No scoped listeners registered for VIDEO_FRAME`);
+                // Buffer the frame for late subscribers (handles race condition)
+                this.bufferFrameForFeed(scope, data);
                 return;
             }
 
             const listenersSet = scopedMap.get(scope);
-            if (!listenersSet) {
-                console.debug(`[WebSocketClient ${this.instanceId}] No listeners for VIDEO_FRAME scope: ${scope}`);
+            if (!listenersSet || listenersSet.size === 0) {
+                // Buffer the frame for late subscribers (handles race condition)
+                this.bufferFrameForFeed(scope, data);
                 return;
             }
 
+            // Track listening feeds for cleanup
+            this.activeListeningFeeds.add(scope);
+            
             listenersSet.forEach(listener => {
                 try {
-                    console.debug(`[WebSocketClient ${this.instanceId}] ROUTING VIDEO_FRAME to scope ${scope} (${listenersSet.size} listeners)`);
                     listener(data);
                 } catch (error) {
                     console.error(`[WebSocketClient ${this.instanceId}] Error in VIDEO_FRAME scoped listener for ${scope}:`, error);
@@ -829,6 +839,12 @@ export class WebSocketClient implements IWebSocketClient {
                 scopedMap.set(scope, new Set());
             }
             scopedMap.get(scope)!.add(listener as unknown as MessageListener<unknown>);
+            
+            // If subscribing to VIDEO_FRAME, flush any buffered frames
+            if (messageType === WebSocketMessageType.VIDEO_FRAME) {
+                this.activeListeningFeeds.add(scope);
+                setTimeout(() => this.flushBufferedFramesForFeed(scope), 0);
+            }
         } else {
             if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
                 console.log(`[WebSocketClient ${this.instanceId}] SUBSCRIBING to ${messageType} (unscoped)`);
@@ -852,6 +868,10 @@ export class WebSocketClient implements IWebSocketClient {
                     listenersSet.delete(listener as unknown as MessageListener<unknown>);
                     if (listenersSet.size === 0) {
                         scopedMap.delete(scope);
+                        // Remove from active listening feeds when no more listeners
+                        if (messageType === WebSocketMessageType.VIDEO_FRAME) {
+                            this.activeListeningFeeds.delete(scope);
+                        }
                     }
                 }
             }
@@ -973,6 +993,81 @@ export class WebSocketClient implements IWebSocketClient {
                 feed_id: feed_id
             });
             console.log(`[WebSocketClient ${this.instanceId}] Cleanup command sent for feed ${feed_id}`);
+        }
+        // Clear any buffered frames for this feed
+        this.frameBufferByFeed.delete(feed_id);
+        const timer = this.bufferExpirationTimers.get(feed_id);
+        if (timer) {
+            clearTimeout(timer);
+            this.bufferExpirationTimers.delete(feed_id);
+        }
+        this.activeListeningFeeds.delete(feed_id);
+    }
+    
+    /**
+     * Buffer a frame for a feed that has no listeners yet.
+     * This handles the race condition where frames arrive before subscriptions are established.
+     */
+    private bufferFrameForFeed(feedId: string, frameData: any): void {
+        let buffer = this.frameBufferByFeed.get(feedId);
+        if (!buffer) {
+            buffer = [];
+            this.frameBufferByFeed.set(feedId, buffer);
+        }
+        
+        // Only buffer if we don't have a listener (avoid memory bloat)
+        if (!this.activeListeningFeeds.has(feedId)) {
+            buffer.push(frameData);
+            // Keep only the latest N frames to prevent memory issues
+            while (buffer.length > this.MAX_BUFFERED_FRAMES_PER_FEED) {
+                buffer.shift();
+            }
+            
+            // Set expiration timer to clear old buffered frames (10 seconds)
+            if (!this.bufferExpirationTimers.has(feedId)) {
+                const timer = setTimeout(() => {
+                    this.frameBufferByFeed.delete(feedId);
+                    this.bufferExpirationTimers.delete(feedId);
+                }, 10000);
+                this.bufferExpirationTimers.set(feedId, timer);
+            }
+        }
+    }
+    
+    /**
+     * Flush any buffered frames for a feed to the newly-registered listener.
+     * Called when a subscription is established for a feed.
+     */
+    private flushBufferedFramesForFeed(feedId: string): void {
+        const buffer = this.frameBufferByFeed.get(feedId);
+        if (!buffer || buffer.length === 0) return;
+        
+        const scopedMap = this.scopedListeners.get(WebSocketMessageType.VIDEO_FRAME);
+        if (!scopedMap) return;
+        
+        const listenersSet = scopedMap.get(feedId);
+        if (!listenersSet || listenersSet.size === 0) return;
+        
+        console.log(`[WebSocketClient ${this.instanceId}] Flushing ${buffer.length} buffered frames for ${feedId}`);
+        
+        // Deliver buffered frames (just the latest one to avoid flooding)
+        const latestFrame = buffer[buffer.length - 1];
+        try {
+            listenersSet.forEach(listener => {
+                try {
+                    listener(latestFrame);
+                } catch (error) {
+                    console.error(`[WebSocketClient ${this.instanceId}] Error flushing buffered frame:`, error);
+                }
+            });
+        } finally {
+            // Clear the buffer after flushing
+            this.frameBufferByFeed.delete(feedId);
+            const timer = this.bufferExpirationTimers.get(feedId);
+            if (timer) {
+                clearTimeout(timer);
+                this.bufferExpirationTimers.delete(feedId);
+            }
         }
     }
 
