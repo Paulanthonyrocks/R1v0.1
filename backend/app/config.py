@@ -47,7 +47,7 @@ class PerformanceConfig(BaseModel):
     gpu_acceleration: bool = True
     video_gpu_acceleration: bool = False  # For HW accelerated decoding/encoding
     image_gpu_acceleration: bool = False  # For GPU-based image ops (resizing, etc.)
-    inference_pool_size: int = 2
+    inference_pool_size: int = 4
     memory_limit_percent: int = 80
     max_concurrent_feeds: int = 10
     auto_optimize: bool = True
