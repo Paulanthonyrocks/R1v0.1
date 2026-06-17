@@ -136,14 +136,18 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
                     const index = prevFeeds.findIndex((feed: FeedStatusData) => feed.feed_id === statusData.feed_id);
                     if (index !== -1) {
                         const existing = prevFeeds[index];
+                        // Deep compare to avoid unnecessary re-renders
                         if (existing.status === statusData.status && JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
                             return prevFeeds;
                         }
+                        // Update in place without re-sorting if order unchanged
                         const newFeeds = [...prevFeeds];
                         newFeeds[index] = statusData;
-                        return newFeeds.sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+                        return newFeeds;
                     } else {
-                        return [...prevFeeds, statusData].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
+                        // New feed - need to insert in sorted position
+                        const newFeeds = [...prevFeeds, statusData].toSorted((a, b) => a.feed_id.localeCompare(b.feed_id));
+                        return newFeeds;
                     }
                 });
             }) 

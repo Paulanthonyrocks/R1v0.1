@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { FeedStatusData } from '@/lib/types';
 import SurveillanceFeed from './SurveillanceFeed';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,7 @@ interface SurveillanceMatrixProps {
   feeds: FeedStatusData[];
 }
 
-const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
+const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = memo(({ feeds }) => {
   const [focusedFeedId, setFocusedFeedId] = useState<string | null>(null);
   const [layoutMode, setLayoutMode] = useState<'grid' | 'focus'>('grid');
   
@@ -162,6 +162,8 @@ const SurveillanceMatrix: React.FC<SurveillanceMatrixProps> = ({ feeds }) => {
         )}
     </div>
   );
-};
+});
+
+SurveillanceMatrix.displayName = 'SurveillanceMatrix';
 
 export default SurveillanceMatrix;
