@@ -606,10 +606,30 @@ video_output:
   processing_enabled: true
   stream_resolution:
   - 320
-  - 240
+  # Performance & Hardware Optimization
+  # ====================================
+  # You have: 12.7GB CPU + 15GB GPU headroom
+  # Current utilization: ~0.5/15GB GPU (3%), ~4.8/12.7GB CPU (38%)
+  # Target: Maximize throughput without dropping frames
+fps: 30                              # Increased from 15 - your hardware can handle it
+
 video_processing:
+  target_fps: 15                     # Increased from 5 - was severely bottlenecking
   adaptive_streaming: false
-  target_fps: 5
+
+inference:
+  batch_size: 8                      # Increased from 1 - batch processing is 5-8x faster
+  detection_model: models/yolov8n.pt
+  device: cuda                       # CHANGED from cpu - USE YOUR GPU!
+  num_workers: 8                     # Increased from 4 - more parallel processing
+  worker_ready_timeout: 60
+  use_tensorrt: false                # Keep false unless you have TensorRT installed
+  
+feed_manager:
+  max_concurrent_feeds: 10           # Already good
+  db_write_interval: 0.5
+  error_check_interval: 5.0
+
 vis_options_default:
 - Grid Overlay
 - Lane Lines
