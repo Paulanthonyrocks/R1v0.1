@@ -202,10 +202,32 @@ export class WebSocketClient implements IWebSocketClient {
         if (this.requiresClientId && !this.videoWorker) {
             this.videoWorker = new Worker(this.workerUrl);
             this.videoWorker.onmessage = (e) => {
+                const feedId = e.data.feed_id;
+                
                 if (e.data.error) {
                     console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
+                    // Decrement pending frames counter even on error to prevent permanent blocking
+                    if (feedId) {
+                        const pending = this.pendingFrames.get(feedId) ?? 1;
+                        if (pending > 1) {
+                            this.pendingFrames.set(feedId, pending - 1);
+                        } else {
+                            this.pendingFrames.delete(feedId);
+                        }
+                    }
                 } else {
-                    console.log(`[WebSocketClient] Worker returned frame for feed: ${e.data.feed_id}`);
+                    console.log(`[WebSocketClient] Worker returned frame for feed: ${feedId}`);
+                    
+                    // Decrement pending frames counter
+                    if (feedId) {
+                        const pending = this.pendingFrames.get(feedId) ?? 1;
+                        if (pending > 1) {
+                            this.pendingFrames.set(feedId, pending - 1);
+                        } else {
+                            this.pendingFrames.delete(feedId);
+                        }
+                    }
+                    
                     // e.data contains feed_id, frame (ArrayBuffer), metrics, vehicles, etc.
                     this.notifyListeners(WebSocketMessageType.VIDEO_FRAME, e.data, e.data.feed_id);
                 }
@@ -1001,6 +1023,9 @@ export class WebSocketClient implements IWebSocketClient {
             clearTimeout(timer);
             this.bufferExpirationTimers.delete(feed_id);
         }
+        // Clear pending frames counter
+        this.pendingFrames.delete(feed_id);
+        console.log(`[WebSocketClient ${this.instanceId}] Pending frames counter cleared for feed ${feed_id}`);
         this.activeListeningFeeds.delete(feed_id);
     }
     
