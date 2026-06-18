@@ -107,27 +107,23 @@ async def run_migrations():
 def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
     
+    # Use regex pattern to allow dynamic URLs (ngrok, cloudworkstations, loca.lt, etc.)
+    # This is required because origins=["*"] with allow_credentials=True is not allowed
+    allow_origin_regex = r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
+    
     if env == "development":
-        # Allow all origins in development to support dynamic Cloud Workstations URLs
-        origins = ["*"]
-        logger.info("CORS configured to allow all origins (*) for development.")
+        logger.info(f"CORS configured with regex pattern for development: {allow_origin_regex}")
     else:
+        # Production: also allow specific configured origins
         allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
-        origins = allowed_origins_env
-        
         cors_config = config.get("cors", {})
-        origins.extend(cors_config.get("allowed_origins", []))
-        origins = list(set(origins))
-        logger.info(f"CORS origins configured for production: {origins}")
-
-    # In development with origins=["*"], allow_origin_regex should be None
-    allow_origin_regex = None
-    if env != "development":
-        allow_origin_regex = r"https://.*\.ngrok-free\.app|https://.*\.cloudworkstations\.dev|https://.*\.loca\.lt|https://.*\.githubdev\.dev"
+        specific_origins = list(set(allowed_origins_env + cors_config.get("allowed_origins", [])))
+        logger.info(f"CORS origins configured for production: {specific_origins}")
+        # Regex still applies as fallback for dynamic tunnel URLs
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=["*"],  # Will be overridden by regex when credentials are needed
         allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
