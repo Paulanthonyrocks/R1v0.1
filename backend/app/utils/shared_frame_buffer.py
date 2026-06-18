@@ -255,15 +255,18 @@ class SharedFrameBuffer:
         import time
 
         # Retry loop to handle race conditions and version mismatches
-        for attempt in range(40):
+        # Reduced from 40 to 12 retries to prevent SHM pool exhaustion
+        # Total max wait: ~24ms with exponential backoff
+        for attempt in range(12):
             try:
                 # Header: [version(I4), size(i4), width(i4), height(i4), channels(i4), feed_hash(I4), last_used(f8)]
                 version, size, w, h, c, feed_hash = struct.unpack_from('<I iiii I', buf, 0)
 
                 # If version is odd, writer is currently updating the segment.
                 if version % 2 != 0:
-                    if attempt < 39:
-                        time.sleep(0.001 * (1 + attempt // 10))
+                    if attempt < 11:
+                        # Faster backoff: max 3ms total wait
+                        time.sleep(0.0005 * (1 + attempt // 4))
                         continue
                     else:
                         break
@@ -293,25 +296,25 @@ class SharedFrameBuffer:
                             pass
                         return data, (w, h, c)
                     else:
-                        if attempt < 39:
-                            time.sleep(0.001 * (1 + attempt // 10))
+                        if attempt < 11:
+                            time.sleep(0.0005 * (1 + attempt // 4))
                             continue
                         else:
                             break
                 else:
-                    if attempt < 39:
-                        time.sleep(0.001 * (1 + attempt // 10))
+                    if attempt < 11:
+                        time.sleep(0.0005 * (1 + attempt // 4))
                         continue
                     else:
                         break
             except (struct.error, Exception):
-                if attempt < 39:
-                    time.sleep(0.001 * (1 + attempt // 10))
+                if attempt < 11:
+                    time.sleep(0.0005 * (1 + attempt // 4))
                     continue
                 else:
                     break
 
-        logger.warning(f'Unable to read stable frame from segment {name} after 40 retries.')
+        logger.warning(f'Unable to read stable frame from segment {name} after 12 retries.')
         return None
     def release(self, name: str):
         if self._free_pool is None:

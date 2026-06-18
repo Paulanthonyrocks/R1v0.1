@@ -167,14 +167,21 @@ class CoreModule:
 
     def _check_gpu_availability(self) -> str:
         """
-        Checks for GPU availability for YOLO and engines.
+        Checks for GPU availability for YOLO and engines, respecting the config.
 
         Returns:
             A string representing the device to use ('cuda:0' or 'cpu').
         """
-        if torch.cuda.is_available():
-            logger.info(f"[{self.feed_id}] GPU detected. Using CUDA.")
+        use_gpu = self.config.get("performance", {}).get("gpu_acceleration", True)
+        if use_gpu and torch.cuda.is_available():
+            logger.info(f"[{self.feed_id}] GPU detected and enabled. Using CUDA.")
             return "cuda:0"
+        
+        if use_gpu:
+            logger.info(f"[{self.feed_id}] GPU acceleration enabled but CUDA not available. Falling back to CPU.")
+        else:
+            logger.info(f"[{self.feed_id}] GPU acceleration disabled in config. Using CPU.")
+            
         return "cpu"
 
     def _initialize_roi_mask(self, resolution: List[int]):

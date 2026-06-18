@@ -60,11 +60,11 @@ incident_detection:
   density_threshold: 10
 inference:
   batch_size: 1
-  detection_model: models/yolov8n.engine
-  device: cuda
+  detection_model: models/yolov8n.pt
+  device: cpu
   num_workers: 4
   worker_ready_timeout: 60
-  use_tensorrt: true
+  use_tensorrt: false
 ingestion:
   shared_memory_ipc: true
 interface:
@@ -439,10 +439,10 @@ performance:
   batch_size: 1
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
-  gpu_acceleration: true
-  image_gpu_acceleration: true
-  inference_pool_size: 2
-  inference_timeout: 0.05
+  gpu_acceleration: false
+  image_gpu_acceleration: false
+  inference_pool_size: 4
+  inference_timeout: 0.1
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
   memory_limit_percent: 85
@@ -455,7 +455,7 @@ performance:
   use_shared_memory: true
   use_shm: true
   shm_pool_size: 500
-  video_gpu_acceleration: true
+  video_gpu_acceleration: false
 personalized_routing:
   enabled: false
 perspective_calibration:
