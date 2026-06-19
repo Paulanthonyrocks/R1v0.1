@@ -86,12 +86,20 @@ class ResultProcessor:
         logger.info("Result processor loop started.")
         last_heartbeat = time.time()
         _feed_last_processed_ts: Dict[str, float] = {}
+        last_shm_stats_log = 0.0
 
         while not self._stop_flag:
             try:
-                if time.time() - last_heartbeat > 10.0:
+                now_loop = time.time()
+                if now_loop - last_heartbeat > 10.0:
                     logger.debug("Result processor heartbeat: loop is active")
-                    last_heartbeat = time.time()
+                    last_heartbeat = now_loop
+                
+                # Log SHM buffer stats every 60 seconds
+                if now_loop - last_shm_stats_log > 60.0:
+                    stats = self.frame_buffer.get_stats()
+                    logger.info(f"[SHM-STATS] acquires={stats['acquired_count']}, releases={stats['release_count']}, drops={stats['drop_count']}, free={stats['free_pool_size']}/{stats['pool_size']}")
+                    last_shm_stats_log = now_loop
 
                 items_buffer = []
                 try:
@@ -100,6 +108,13 @@ class ResultProcessor:
                         if isinstance(res, tuple) and len(res) == 2:
                             msg_id, item = res
                             items_buffer.append((msg_id, item))
+                            # ACK immediately to prevent re-delivery storm
+                            # Real-time video: prefer dropping frames over re-processing
+                            if msg_id:
+                                try:
+                                    self._central_output_queue.ack(msg_id)
+                                except Exception as e:
+                                    logger.error(f"Failed to ack message {msg_id}: {e}")
                         else:
                             items_buffer.append((None, res))
                 except queue.Empty:
@@ -127,15 +142,6 @@ class ResultProcessor:
                     latest_per_feed[result[0]] = i
 
                 latest_indices = set(latest_per_feed.values())
-
-                # ACK all
-                for i, result in enumerate(processed_items):
-                    msg_id, _ = items_buffer[i]
-                    if msg_id:
-                        try:
-                            self._central_output_queue.ack(msg_id)
-                        except Exception as e:
-                            logger.error(f"Failed to ack message {msg_id}: {e}")
 
                 # Prune dedup
                 active_feeds = self.registry.process_registry.keys()

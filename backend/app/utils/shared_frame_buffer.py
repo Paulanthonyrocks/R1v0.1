@@ -34,6 +34,13 @@ class SharedFrameBuffer:
         self._free_pool = None
         self._acquired_set_key = 'shm_acquired_pool'
         
+        # Buffer tracking for diagnostics
+        self._acquired_count = 0
+        self._release_count = 0
+        self._drop_count = 0
+        self._last_acquire_time = 0.0
+        self._last_release_time = 0.0
+        
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
             self._free_pool = RedisQueue('shm_free_pool', maxsize=pool_size)
@@ -174,9 +181,12 @@ class SharedFrameBuffer:
         try:
             name = self._free_pool.get(timeout=timeout)
             get_redis_client().sadd(self._acquired_set_key, name)
+            self._acquired_count += 1
+            self._last_acquire_time = time.time()
             return name
         except queue.Empty:
-            logger.warning("SHM free pool empty – frame will be dropped")
+            self._drop_count += 1
+            logger.warning(f"SHM free pool empty – frame will be dropped (total_drops={self._drop_count})")
             return None
 
     def write(self, name: str, data: Union[bytes, np.ndarray], feed_id: str = "unknown"):
@@ -324,10 +334,24 @@ class SharedFrameBuffer:
             if get_redis_client().srem(self._acquired_set_key, name):
                 logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
                 self._free_pool.put(name, block=False)
+                self._release_count += 1
+                self._last_release_time = time.time()
             else:
                 logger.debug(f"Ignored redundant release of {name} from PID {os.getpid()}")
         except Exception as e:
             logger.error(f"Error releasing {name}: {e}")
+
+    def get_stats(self) -> dict:
+        """Return buffer statistics for diagnostics."""
+        return {
+            'pool_size': self.pool_size,
+            'acquired_count': self._acquired_count,
+            'release_count': self._release_count,
+            'drop_count': self._drop_count,
+            'free_pool_size': self._free_pool.qsize() if self._free_pool else 0,
+            'last_acquire_ago': time.time() - self._last_acquire_time if self._last_acquire_time > 0 else None,
+            'last_release_ago': time.time() - self._last_release_time if self._last_release_time > 0 else None,
+        }
 
     def cleanup(self):
         """Closes and unlinks all managed segments."""

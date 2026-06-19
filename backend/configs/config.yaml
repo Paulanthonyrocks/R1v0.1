@@ -454,7 +454,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 500
+  shm_pool_size: 2000
   video_gpu_acceleration: false
 personalized_routing:
   enabled: false

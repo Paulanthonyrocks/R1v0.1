@@ -65,7 +65,7 @@ class PerformanceConfig(BaseModel):
     skip_factor_increase_step: float = 0.1
     use_shared_memory: bool = True
     use_shm: bool = True
-    shm_pool_size: int = 500
+    shm_pool_size: int = 2000
 
 
 class WebSocketRateLimitConfig(BaseModel):
