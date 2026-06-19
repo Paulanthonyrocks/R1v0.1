@@ -57,6 +57,7 @@ const useVideoSocket = (streamId: string) => {
   const lastDrawnIndexRef = useRef<number>(-1);
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
   const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const consecutiveStaleCountRef = useRef<number>(0);
 
   // Log only on actual mount/unmount to stop the console flood
   useEffect(() => {
@@ -66,7 +67,7 @@ const useVideoSocket = (streamId: string) => {
 
   // Constants
   const STATE_UPDATE_INTERVAL = 500; 
-  const FRAME_STALENESS_THRESHOLD = 60000;
+  const FRAME_STALENESS_THRESHOLD = 15000; // 15 seconds - reduced from 60s to catch issues faster but avoid false positives
   const FPS_EMA_ALPHA = 0.1;
 
   // --- Sub-Hooks Implementation ---
@@ -291,16 +292,28 @@ const unsubscribeFromFeed = useCallback(() => {
 
     const stalenessInterval = setInterval(() => {
       const now = performance.now();
+      const timeSinceLastFrame = now - lastSuccessfulFrameTimeRef.current;
+      
       if (lastSuccessfulFrameTimeRef.current > 0 && 
-          now - lastSuccessfulFrameTimeRef.current > FRAME_STALENESS_THRESHOLD) {
-        if (lastFrameRef.current?.image instanceof ImageBitmap) {
-          lastFrameRef.current.image.close();
+          timeSinceLastFrame > FRAME_STALENESS_THRESHOLD) {
+        // Require 3 consecutive stale checks before showing error (prevents flicker on brief hiccups)
+        consecutiveStaleCountRef.current += 1;
+        
+        if (consecutiveStaleCountRef.current >= 3) {
+          // Only show error after sustained outage
+          if (lastFrameRef.current?.image instanceof ImageBitmap) {
+            lastFrameRef.current.image.close();
+          }
+          lastFrameRef.current = null;
+          setFrameRate(0);
+          setError('Video stream timed out.');
         }
-        lastFrameRef.current = null;
-        setFrameRate(0);
-        setError('Video stream timed out.');
+      } else {
+        // Reset counter if we get a fresh frame
+        consecutiveStaleCountRef.current = 0;
+        if (error) setError(null); // Clear error automatically when frames resume
       }
-    }, 1000);
+    }, 5000); // Check every 5 seconds instead of every second
 
     const unsubscribeStatus = client?.onStatusChange((status: string) => {
       setIsConnected(status === 'connected' || status === 'authenticated');

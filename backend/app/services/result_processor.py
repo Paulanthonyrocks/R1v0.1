@@ -97,6 +97,8 @@ class ResultProcessor:
         last_heartbeat = time.time()
         _feed_last_processed_ts: Dict[str, float] = {}
         last_shm_stats_log = 0.0
+        last_shm_prune = 0.0
+        SHM_PRUNE_INTERVAL = 5.0  # Prune stale SHM segments every 5 seconds
 
         while not self._stop_flag:
             try:
@@ -104,6 +106,11 @@ class ResultProcessor:
                 if now_loop - last_heartbeat > 10.0:
                     logger.debug("Result processor heartbeat: loop is active")
                     last_heartbeat = now_loop
+                
+                # Aggressive SHM pruning every 5 seconds to prevent pool exhaustion
+                if now_loop - last_shm_prune > SHM_PRUNE_INTERVAL:
+                    self.frame_buffer.prune_stale_segments(timeout_seconds=2.0, odd_timeout=5.0)
+                    last_shm_prune = now_loop
                 
                 # Log SHM buffer stats every 60 seconds
                 if now_loop - last_shm_stats_log > 60.0:

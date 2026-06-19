@@ -22,7 +22,7 @@ class SharedFrameBuffer:
     # 6*4 + 8 = 32 bytes
     HEADER_SIZE = 32 
     
-    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 120.0):
+    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 10.0):
         self.pool_size = pool_size
         self.max_frame_size = max_frame_size
         self.read_only = read_only
