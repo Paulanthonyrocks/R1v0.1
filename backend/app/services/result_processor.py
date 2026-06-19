@@ -47,9 +47,14 @@ class ResultProcessor:
             return None
 
         shm_ref = item[2]
+        feed_id = None
+        frame_idx = None
+        metrics = None
+        vehicles = None
+        extra = None
         frame_bytes = None
         dims = None
-        feed_id = None
+        
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
             logger.info(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
@@ -57,26 +62,31 @@ class ResultProcessor:
             if read_result is not None:
                 frame_bytes, dims = read_result
                 logger.info(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
+                # CRITICAL FIX: Release SHM immediately after successful read
+                # This prevents pool exhaustion when processing is slower than ingestion
+                try:
+                    self.frame_buffer.release(shm_ref)
+                except Exception as e:
+                    logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
             else:
                 logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
+                # Release on read failure
+                try:
+                    self.frame_buffer.release(shm_ref)
+                except Exception:
+                    pass
+                return None
         except Exception as e:
             logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
-        
-        if frame_bytes is None:
-            # Release SHM reference even on read failure
+            # Release on exception
             try:
                 self.frame_buffer.release(shm_ref)
             except Exception:
                 pass
             return None
 
-        try:
-            return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
-        finally:
-            try:
-                self.frame_buffer.release(shm_ref)
-            except Exception as e:
-                logger.debug(f"Error releasing SHM ref {shm_ref}: {e}")
+        # Return frame data - SHM already released, we're working with copied bytes
+        return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
 
     async def process_results_loop(self, handle_periodic_tasks_callback):
         """

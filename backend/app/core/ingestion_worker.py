@@ -377,7 +377,30 @@ def ingestion_worker(
                     shm_ref = frame_buffer.acquire()
                     if not shm_ref:
                         metrics.frames_dropped += 1
+                        # SHM pool exhausted - apply backpressure by slowing down ingestion
+                        # This prevents the pool from being completely drained
+                        sleep_time = 0.05  # 50ms backoff when pool is empty
+                        time.sleep(sleep_time)
                         continue
+                    
+                    # Get free pool size to apply graduated backpressure
+                    free_pool_size = frame_buffer._free_pool.qsize() if frame_buffer._free_pool else 0
+                    pool_size = frame_buffer.pool_size
+                    
+                    # Graduated backpressure based on free pool percentage
+                    free_percent = (free_pool_size / pool_size) * 100 if pool_size > 0 else 0
+                    
+                    if free_percent < 10:
+                        # Critical: < 10% free - aggressive slowdown
+                        time.sleep(0.03)
+                        logger.debug(f"[{feed_id}] SHM pool critical: {free_pool_size}/{pool_size} free")
+                    elif free_percent < 25:
+                        # Warning: < 25% free - moderate slowdown
+                        time.sleep(0.01)
+                        logger.debug(f"[{feed_id}] SHM pool low: {free_pool_size}/{pool_size} free")
+                    elif free_percent < 40:
+                        # Caution: < 40% free - slight slowdown
+                        time.sleep(0.005)
 
                     frame_buffer.write(shm_ref, last_frame_bytes, feed_id=feed_id)
 
