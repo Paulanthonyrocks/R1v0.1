@@ -182,7 +182,16 @@ def inference_worker(
 
             import torch
 
-            device = "cuda:0" if use_gpu and torch.cuda.is_available() else "cpu"
+            # Multi-GPU support: distribute workers across available GPUs
+            use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
+            if use_gpu and torch.cuda.is_available():
+                num_gpus = torch.cuda.device_count()
+                # Assign worker to GPU in round-robin fashion
+                gpu_id = worker_id % num_gpus
+                device = f"cuda:{gpu_id}"
+                logger.info(f"[Worker {worker_id}] Multi-GPU: using GPU {gpu_id}/{num_gpus} ({torch.cuda.get_device_name(gpu_id)})")
+            else:
+                device = "cpu"
             engine_path = Path(full_model_path).with_suffix(".engine")
 
             if engine_path.exists():

@@ -59,10 +59,10 @@ incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
 inference:
-  batch_size: 1
+  batch_size: 8
   detection_model: models/yolov8n.pt
-  device: cpu
-  num_workers: 4
+  device: cuda:0
+  num_workers: 8
   worker_ready_timeout: 60
   use_tensorrt: false
 ingestion:
@@ -454,7 +454,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 2000
+  shm_pool_size: 5000
   video_gpu_acceleration: true
 personalized_routing:
   enabled: false
