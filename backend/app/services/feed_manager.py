@@ -1528,7 +1528,7 @@ class FeedManager:
         kpi_data = GlobalRealtimeMetrics(
             timestamp=datetime.now(timezone.utc).isoformat(),
             metrics_source="aggregated_feeds",
-            total_flow=total_vehicles_cumulative,
+            total_flow=int(total_vehicles_cumulative),
             average_speed_kmh=round(global_avg_speed, 1),
             congestion_index=round(global_congestion_index, 1),
             active_incidents_count=0,

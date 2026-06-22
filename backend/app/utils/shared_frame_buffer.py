@@ -330,14 +330,17 @@ class SharedFrameBuffer:
         if self._free_pool is None:
             return
         try:
-            # Only release if it was actually acquired (prevents double-release spam)
-            if get_redis_client().srem(self._acquired_set_key, name):
-                logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
+            # Remove from acquired set (best-effort tracking, not a gate)
+            get_redis_client().srem(self._acquired_set_key, name)
+            # Always return to free pool - don't let tracking failures cause exhaustion
+            logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
+            try:
                 self._free_pool.put(name, block=False)
-                self._release_count += 1
-                self._last_release_time = time.time()
-            else:
-                logger.debug(f"Ignored redundant release of {name} from PID {os.getpid()}")
+            except queue.Full:
+                # Pool is full (segment already returned twice) - safe to drop
+                logger.debug(f"SHM free pool full, dropping duplicate release of {name}")
+            self._release_count += 1
+            self._last_release_time = time.time()
         except Exception as e:
             logger.error(f"Error releasing {name}: {e}")
 
