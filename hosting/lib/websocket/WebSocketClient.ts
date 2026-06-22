@@ -759,6 +759,11 @@ export class WebSocketClient implements IWebSocketClient {
                     const decoded: any = msgpackDecode(new Uint8Array(event.data));
                     const f_id = decoded.f;
                     
+                    if (!f_id) {
+                        console.warn(`[WebSocketClient ${this.instanceId}] Binary frame missing feed_id, dropping`);
+                        return;
+                    }
+
                     if (f_id) {
                         const pending = this.pendingFrames.get(f_id) ?? 0;
                         if (pending >= this.MAX_PENDING_FRAMES) {
@@ -865,7 +870,7 @@ export class WebSocketClient implements IWebSocketClient {
             // If subscribing to VIDEO_FRAME, flush any buffered frames
             if (messageType === WebSocketMessageType.VIDEO_FRAME) {
                 this.activeListeningFeeds.add(scope);
-                setTimeout(() => this.flushBufferedFramesForFeed(scope), 0);
+                this.flushBufferedFramesForFeed(scope);
             }
         } else {
             if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
@@ -1009,6 +1014,9 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     public cleanupWorkerResources(feed_id: string): void {
+        this.cleanupCounter++;
+        console.log(`[WebSocketClient ${this.instanceId}] Cleanup #${this.cleanupCounter} for feed ${feed_id}`);
+
         if (this.videoWorker) {
             this.videoWorker.postMessage({
                 command: 'CLEANUP_FEED',

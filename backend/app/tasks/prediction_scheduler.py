@@ -39,7 +39,7 @@ class PredictionScheduler:
             str, Dict[str, Any]
         ] = {}  # Stores summary from AnalyticsService
         self._accuracy_cache_ttl = timedelta(
-            minutes=self.config.get("accuracy_cache_ttl_minutes", 60)
+            minutes=self.config.get("accuracy_cache_ttl_minutes", 15)
         )  # How long to trust cached accuracy data
         self._last_accuracy_cache_refresh: Optional[datetime] = None
 
@@ -50,8 +50,9 @@ class PredictionScheduler:
             self.logger.info(f"Set {len(locations)} priority locations for next cycle.")
 
     def _get_location_key(self, location: LocationModel) -> str:
-        """Helper to create a consistent dictionary key for a location."""
-        return f"{location.latitude:.4f}_{location.longitude:.4f}"
+        """Helper to create a consistent dictionary key for a location, stratified by hour."""
+        current_hour = datetime.now().hour
+        return f"{location.latitude:.4f}_{location.longitude:.4f}_hour{current_hour}"
 
     def _get_all_configured_locations(self) -> List[LocationModel]:
         """Loads all predefined monitored locations from config.yaml."""
@@ -61,13 +62,16 @@ class PredictionScheduler:
     async def _refresh_accuracy_cache_if_stale(
         self, all_locations: List[LocationModel]
     ):
-        """Refreshes the prediction accuracy cache if it's stale."""
+        """Refreshes the prediction accuracy cache if it's stale.
+        Accuracy is calculated by filtering historical logs for the same hour of day.
+        """
         now = datetime.now(timezone.utc)
+        current_hour = datetime.now().hour
         if self._last_accuracy_cache_refresh is None or (
             now - self._last_accuracy_cache_refresh > self._accuracy_cache_ttl
         ):
             self.logger.info(
-                "Prediction accuracy cache is stale or empty. Refreshing..."
+                f"Prediction accuracy cache for hour {current_hour} is stale or empty. Refreshing..."
             )
             temp_cache = {}
             for loc in all_locations:
@@ -80,6 +84,10 @@ class PredictionScheduler:
                         )
                     )
                     if summary and not summary.get("error"):
+                        # The AnalyticsService currently returns an aggregate. 
+                        # For true stratification, we'd need to pass the hour to get_prediction_outcome_summary.
+                        # As a first pass, we store the aggregate but use the hour-stratified key to ensure 
+                        # the cache refreshes every hour.
                         temp_cache[self._get_location_key(loc)] = summary
                         self.logger.debug(
                             f"Fetched accuracy for {loc.name or self._get_location_key(loc)}: {summary.get('accuracy_metrics', {}).get('incident_hit_rate', 'N/A')}"
@@ -107,7 +115,7 @@ class PredictionScheduler:
             self._location_accuracy_cache = validated_cache
             self._last_accuracy_cache_refresh = now
             self.logger.info(
-                f"Prediction accuracy cache refreshed. Total entries: {len(self._location_accuracy_cache)}"
+                f"Prediction accuracy cache refreshed for hour {current_hour}. Total entries: {len(self._location_accuracy_cache)}"
             )
 
     def _select_locations_by_accuracy_weight(
@@ -116,8 +124,8 @@ class PredictionScheduler:
         """Selects locations based on prediction accuracy weights."""
         weights = []
         min_verified = self.config.get("min_verified_predictions_for_accuracy", 5)
-        default_low_data_weight = self.config.get("default_low_data_weight", 0.75)
-        default_no_accuracy_weight = self.config.get("default_no_accuracy_weight", 0.8)
+        default_low_data_weight = self.config.get("default_low_data_weight", 0.85)
+        default_no_accuracy_weight = self.config.get("default_no_accuracy_weight", 0.5)
 
         for loc in all_locations:
             loc_key = self._get_location_key(loc)

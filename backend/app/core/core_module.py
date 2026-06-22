@@ -7,9 +7,11 @@ import numpy as np
 import torch
 import queue
 import threading
+from collections import deque
 from typing import Dict, List, Tuple, Optional, Any, TypedDict
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+
 
 # Modular components
 from .detection import DetectionEngine
@@ -155,6 +157,11 @@ class CoreModule:
         self.speed_limit = b_cfg.get("speed_limit_kmh", 60)
         self.accel_threshold_mps2 = b_cfg.get("acceleration_threshold_mps2", 2.0)
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
+
+        # Session Metrics
+        self.speed_history: deque = deque(maxlen=300)  # 300 frames @ 1 FPS = 5 min
+        self.congestion_history: deque = deque(maxlen=300)
+        self._homography_fallback_warned = False
 
         self.preprocessor = None
         self.local_ocr = None
@@ -326,6 +333,61 @@ class CoreModule:
         vy = track.get("vy", 0.0)
         pixel_speed = math.sqrt(vx ** 2 + vy ** 2)
         return (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
+
+    def _compute_congestion_score(self, vehicles: List[Dict], avg_speed: float) -> float:
+        """
+        Computes congestion score [0-1] from vehicle density and speed.
+        0 = free flow, 1 = jammed.
+        """
+        # Speed component (assuming free_flow = speed_limit)
+        free_flow_speed = self.speed_limit
+        speed_component = max(0.0, 1.0 - (avg_speed / max(free_flow_speed, 1.0)))
+        
+        # Density component (vehicles per hypothetical road segment)
+        # Assume ROI represents ~100m of road
+        density_per_100m = len(vehicles) / 100.0
+        jam_density = 0.15  # vehicles/meter (15m spacing at standstill)
+        density_component = min(1.0, density_per_100m / jam_density)
+        
+        # Weighted average
+        congestion = 0.5 * speed_component + 0.5 * density_component
+        return round(congestion, 3)
+
+    def _compute_feed_metrics(self, vis_tracks: Dict[str, TrackData]) -> Dict[str, Any]:
+        """
+        Aggregate per-vehicle data into feed-level metrics.
+        """
+        active_vehicles = [
+            t for t in vis_tracks.values() 
+            if t.get("status") == "active" and t.get("speed", 0) > 0
+        ]
+        
+        if not active_vehicles:
+            return {
+                "average_speed_kmh": 0.0,
+                "congestion_score": 0.0,
+                "vehicle_count": len(vis_tracks),
+            }
+        
+        speeds = [t["speed"] for t in active_vehicles]
+        avg_speed = float(np.median(speeds))  # Robust to outliers
+        congestion = self._compute_congestion_score(active_vehicles, avg_speed)
+        
+        # Update session histories
+        self.speed_history.append(avg_speed)
+        self.congestion_history.append(congestion)
+        
+        session_avg_speed = float(np.mean(self.speed_history)) if self.speed_history else 0.0
+        session_avg_congestion = float(np.mean(self.congestion_history)) if self.congestion_history else 0.0
+        
+        return {
+            "average_speed_kmh": round(avg_speed, 1),
+            "session_average_speed_kmh": round(session_avg_speed, 1),
+            "congestion_score": congestion,
+            "session_average_congestion_score": round(session_avg_congestion, 3),
+            "vehicle_count": len(active_vehicles),
+            "total_vehicles_cumulative": 0, # This is typically tracked in a separate counter
+        }
 
     def _should_update_reid(self, tid: str, track: TrackData, frame_index: int) -> bool:
         """
@@ -524,7 +586,13 @@ class CoreModule:
                     track["prev_t"] = current_time
                 else:
                     # Transformer unavailable — fall back to pixel velocity
+                    if not self._homography_fallback_warned:
+                        logger.warning(f"[{self.feed_id}] Homography unavailable, using pixel-based speed (calibration recommended)")
+                        self._homography_fallback_warned = True
                     track["speed"] = self._pixel_based_speed(track)
+
+                # Physical speed cap to prevent anomalies (e.g., 180 km/h)
+                track["speed"] = min(track["speed"], 180.0)
 
                 # Filtering for visualisation
                 if track["status"] == "active":
@@ -543,7 +611,9 @@ class CoreModule:
                     if (current_time - track["last_seen"]) < self.predict_timeout:
                         vis_tracks[tid] = track
 
-        self._save_vehicle_data(vis_tracks)
+        # Compute feed-level metrics (average speed, congestion)
+        feed_metrics = self._compute_feed_metrics(vis_tracks)
+        self._save_vehicle_data(vis_tracks, feed_metrics)
         self._process_ocr_results(vehicle_data)
 
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
@@ -568,18 +638,35 @@ class CoreModule:
         except Exception as e:
             logger.error(f"OCR processing failed for {tid}: {e}")
 
-    def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData]):
+    def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData], feed_metrics: Optional[Dict[str, Any]] = None):
         """
         Throttled write of vehicle state to the DB queue (max 1 Hz per vehicle).
         Filters for valid bbox and centroid before sending.
 
         Args:
             tracked_vehicles: Dictionary of currently tracked vehicles and their metadata.
+            feed_metrics: Feed-level aggregated metrics (speed, congestion).
         """
         if not self.db_queue:
             return
 
         now = time.time()
+        
+        # 1. Save Feed-Level Metrics (once per frame/cycle)
+        if feed_metrics:
+            try:
+                self.db_queue.put_nowait({
+                    "type": "feed_metrics",
+                    "feed_id": self.feed_id,
+                    "timestamp": float(now),
+                    **feed_metrics
+                })
+            except queue.Full:
+                if now - self._last_queue_warn_time > 1.0:
+                    logger.warning(f"[{self.feed_id}] DB queue full. Dropping feed metrics.")
+                    self._last_queue_warn_time = now
+
+        # 2. Save Individual Vehicle Data (throttled)
         for vehicle_id, data in tracked_vehicles.items():
             # Use persistent storage for last save time to ensure throttling works across frames
             if now - self._last_db_save_times.get(vehicle_id, 0) < 1.0:

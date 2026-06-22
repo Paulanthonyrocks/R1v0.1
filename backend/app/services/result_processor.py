@@ -118,13 +118,16 @@ class ResultProcessor:
                         if isinstance(res, tuple) and len(res) == 2:
                             msg_id, item = res
                             items_buffer.append((msg_id, item))
-                            # ACK immediately to prevent re-delivery storm
-                            # Real-time video: prefer dropping frames over re-processing
-                            if msg_id:
-                                try:
-                                    self._central_output_queue.ack(msg_id)
-                                except Exception as e:
-                                    logger.error(f"Failed to ack message {msg_id}: {e}")
+                        # ACK immediately to prevent re-delivery storm.
+                        # DESIGN TRADE-OFF: We ACK before SHM read because in a real-time video pipeline,
+                        # a failed SHM read means the frame is already stale. It is better to drop 
+                        # the frame and move to the next one than to let Redis redeliver it, 
+                        # which would introduce latency and potentially cause a backlog.
+                        if msg_id:
+                            try:
+                                self._central_output_queue.ack(msg_id)
+                            except Exception as e:
+                                logger.error(f"Failed to ack message {msg_id}: {e}")
                         else:
                             items_buffer.append((None, res))
                 except queue.Empty:
@@ -217,10 +220,20 @@ class ResultProcessor:
         try:
             logger.info(f"[RESULT_PROC] Processing frame data: feed={feed_id}, frame_idx={frame_idx}, frame_bytes_size={len(frame_bytes) if frame_bytes else 0}")
             
-            # 1. Update registry metrics
+            # 1. Update registry metrics with Exponential Moving Average (EMA) to smooth spikes
             entry = self.registry.get_entry(feed_id)
-            if entry:
-                entry["latest_metrics"] = metrics
+            if entry and metrics:
+                alpha = 1.0 / self.config.get("metrics_averaging_window_seconds", 300)
+                
+                if "ema_metrics" not in entry or entry["ema_metrics"] is None:
+                    entry["ema_metrics"] = metrics.copy()
+                else:
+                    ema = entry["ema_metrics"]
+                    for k, v in metrics.items():
+                        if isinstance(v, (int, float)):
+                            ema[k] = (1 - alpha) * ema.get(k, 0) + alpha * v
+                
+                entry["latest_metrics"] = entry["ema_metrics"].copy()
 
             # 2. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background

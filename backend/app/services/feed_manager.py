@@ -1507,7 +1507,19 @@ class FeedManager:
                     active_feeds_count += 1
 
         if active_feeds_count == 0:
-            logger.debug(f"[BROADCAST_KPI] No active feeds (active={active_feeds_count}, total={len(self.process_registry)}). Skipping KPI broadcast.")
+            logger.debug(f"[BROADCAST_KPI] No active feeds (active={active_feeds_count}, total={len(self.process_registry)}). Broadcasting zeros.")
+            
+            kpi_data = GlobalRealtimeMetrics(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                metrics_source="aggregated_feeds",
+                total_flow=0,
+                average_speed_kmh=0.0,
+                congestion_index=0.0,
+                active_incidents_count=0,
+                feed_statuses={"active": 0, "total": len(self.process_registry)},
+                custom_metrics={"active_vehicles": 0},
+            )
+            await self.broadcaster.broadcast_kpi_update(kpi_data)
             return
 
         global_avg_speed = (total_speed_sum / total_speed_count) if total_speed_count > 0 else 0.0

@@ -431,7 +431,7 @@ class ConnectionManager:
                 await asyncio.wait_for(queue.put(wrapped_msg), timeout=timeout)
             
             # Signal the sender task
-            if client_id in self.signal_queues:
+            if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
                 self.signal_queues[client_id].put_nowait(True)
         except asyncio.TimeoutError:
             logger.info(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout.")
@@ -451,7 +451,7 @@ class ConnectionManager:
                 self.low_priority_queues[client_id].append(message)
                 
                 # Signal the sender task
-                if client_id in self.signal_queues:
+                if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
                     self.signal_queues[client_id].put_nowait(True)
             except Exception as e:
                 logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
@@ -477,7 +477,7 @@ class ConnectionManager:
                 try:
                     # Use the deque for binary frames
                     self.low_priority_queues[client_id].append(data)
-                    if client_id in self.signal_queues:
+                    if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
                         self.signal_queues[client_id].put_nowait(True)
                 except Exception as e:
                     logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
