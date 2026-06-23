@@ -10,7 +10,8 @@ class FeedManagerConstants:
     # Scaling & Slots
     SLOT_COUNT = 16
     MIN_WORKERS = 1
-    MAX_WORKERS = 3
+    MAX_WORKERS = 8
+    IDEAL_WORKERS = 4  # Balanced for 2-GPU systems
     SCALE_UP_THRESHOLD = 10
     SCALE_DOWN_THRESHOLD = 1
     SCALE_COOLDOWN = 30
