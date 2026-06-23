@@ -590,7 +590,19 @@ class FeedManager:
                 # Clean up stale worker PIDs that are no longer alive
                 ready_workers = rc.smembers("workers:ready_set")
                 if ready_workers:
-                    for wid in list(ready_workers):
+                    for wid_raw in ready_workers:
+                        # Convert bytes to string/int safely
+                        try:
+                            if isinstance(wid_raw, bytes):
+                                wid_str = wid_raw.decode('utf-8')
+                            else:
+                                wid_str = str(wid_raw)
+                            wid = int(wid_str)
+                        except (ValueError, UnicodeDecodeError) as e:
+                            self.logger.warning(f"Invalid worker ID in ready_set: {wid_raw} - {e}")
+                            rc.srem("workers:ready_set", wid_raw)
+                            continue
+                            
                         pid_key = f"worker:{wid}:pid"
                         pid = rc.get(pid_key)
                         if pid:
@@ -599,7 +611,7 @@ class FeedManager:
                                 os.kill(int(pid), 0)  # Check if process exists
                             except (OSError, ValueError):
                                 # Process doesn't exist, remove from ready set
-                                rc.srem("workers:ready_set", wid)
+                                rc.srem("workers:ready_set", wid_raw)
                                 self.logger.debug(f"Removed stale worker {wid} (PID {pid}) from ready set")
                     
                     # Re-fetch after cleanup
@@ -614,7 +626,7 @@ class FeedManager:
                 self.logger.debug(f"Workers ready: {ready_count}/{expected_count}. Waiting...")
                 await asyncio.sleep(1.0)
         except Exception as e:
-            self.logger.warning(f"Error while waiting for worker readiness: {e}")
+            self.logger.warning(f"Error while waiting for worker readiness: {e}", exc_info=True)
 
         self.logger.warning(f"Timed out waiting for workers. Only {ready_count}/{expected_count} ready. Starting feeds anyway.")
         

@@ -215,7 +215,8 @@ def inference_worker(
                 redis_client.set(f"worker:{worker_id}:ready", "1")
                 redis_client.set(f"worker:{worker_id}:status", "ready")
                 # Add to ready set for robust counting by FeedManager
-                redis_client.sadd("workers:ready_set", worker_id)
+                # Store as string to ensure consistent deserialization
+                redis_client.sadd("workers:ready_set", str(worker_id))
                 logger.info(f"[Worker {worker_id}] Readiness signal sent to Redis.")
             except Exception as e:
                 logger.warning(f"[Worker {worker_id}] Failed to send readiness signal: {e}")
@@ -379,7 +380,11 @@ def inference_worker(
                             continue
 
                         if res is None:
-                            logger.warning(f"[Worker {worker_id}] SHM read returned None for ref {shm_ref}")
+                            # SHM read returns None when segment was recycled (feed mismatch) or stale.
+                            # This is normal under high load - frame is dropped to keep pipeline moving.
+                            # Increment drop counter for metrics tracking.
+                            if feed_id in metrics_map:
+                                metrics_map[feed_id].frames_dropped += 1
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                             try:
