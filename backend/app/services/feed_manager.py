@@ -583,11 +583,28 @@ class FeedManager:
 
         self.logger.info(f"Waiting for {expected_count} inference workers to signal readiness (timeout={timeout}s)...")
         start_time = time.time()
+        ready_count = 0
         try:
             rc = get_redis_client()
             while time.time() - start_time < timeout:
-                # Use a SET to track ready workers for more robust counting
+                # Clean up stale worker PIDs that are no longer alive
                 ready_workers = rc.smembers("workers:ready_set")
+                if ready_workers:
+                    for wid in list(ready_workers):
+                        pid_key = f"worker:{wid}:pid"
+                        pid = rc.get(pid_key)
+                        if pid:
+                            try:
+                                import os
+                                os.kill(int(pid), 0)  # Check if process exists
+                            except (OSError, ValueError):
+                                # Process doesn't exist, remove from ready set
+                                rc.srem("workers:ready_set", wid)
+                                self.logger.debug(f"Removed stale worker {wid} (PID {pid}) from ready set")
+                    
+                    # Re-fetch after cleanup
+                    ready_workers = rc.smembers("workers:ready_set")
+                
                 ready_count = len(ready_workers) if ready_workers else 0
                 
                 if ready_count >= expected_count:
@@ -599,7 +616,15 @@ class FeedManager:
         except Exception as e:
             self.logger.warning(f"Error while waiting for worker readiness: {e}")
 
-        self.logger.warning(f"Timed out waiting for workers. Only {ready_count if 'ready_count' in locals() else 0}/{expected_count} ready. Starting feeds anyway.")
+        self.logger.warning(f"Timed out waiting for workers. Only {ready_count}/{expected_count} ready. Starting feeds anyway.")
+        
+        # Warn if we have less than 50% of expected workers
+        if ready_count < expected_count * 0.5:
+            self.logger.error(
+                f"[CRITICAL] Severe worker shortage: {ready_count}/{expected_count}. "
+                f"Expected inference throughput will be severely degraded. "
+                f"Check: 1) GPU memory, 2) Model paths, 3) Worker logs for errors."
+            )
 
     async def start_processing(self):
         """Starts the overall video processing and prediction scheduling."""
@@ -1361,15 +1386,25 @@ class FeedManager:
             self._last_queue_log_time = now
             try:
                 self._check_resources()
-                # Skip SHM prune when no feeds are running: every free-pool
-                # segment is uninitialised at rest, and even after the
-                # epoch-zero guard in prune_stale_segments() there's no
-                # reason to scan 100 SHM headers every 30s when nothing
-                # could have legitimately gone stale. This is exactly the
-                # "delay the prune loop if no feeds are active" path from
-                # the design brief.
                 if self._has_active_feeds():
-                    self.frame_buffer.prune_stale_segments(timeout_seconds=300)
+                    # Aggressive SHM maintenance during active processing
+                    # Reduce timeout from 300s to 30s to reclaim frames faster
+                    # when inference falls behind ingestion
+                    self.frame_buffer.prune_stale_segments(timeout_seconds=30, odd_timeout=10.0)
+                    
+                    # Log SHM stats to detect throughput issues early
+                    stats = self.frame_buffer.get_stats()
+                    free_pct = (stats['free_pool_size'] / stats['pool_size'] * 100) if stats['pool_size'] > 0 else 0
+                    drop_rate = stats['drop_count'] / max(1, stats['acquired_count'])
+                    self.logger.info(
+                        f"[SHM-STATS] free={stats['free_pool_size']}/{stats['pool_size']} ({free_pct:.1f}%), "
+                        f"acq={stats['acquired_count']}, rel={stats['release_count']}, "
+                        f"drops={stats['drop_count']} ({drop_rate:.1%})"
+                    )
+                    
+                    # Apply backpressure if pool is running low
+                    if free_pct < 20:
+                        self.logger.warning(f"[SHM-PRESSURE] Pool at {free_pct:.1f}% free - inference cannot keep up with ingestion")
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 
