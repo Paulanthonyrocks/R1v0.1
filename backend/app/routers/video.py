@@ -2,8 +2,8 @@ import datetime
 import collections.abc
 import os
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import logging
 
@@ -49,33 +49,21 @@ def convert_datetime_to_iso(obj):
 
 @router.get("/stream/{stream_id:path}")
 async def stream_video(stream_id: str, current_user: dict = Depends(get_current_active_user)):
-    """Stream sample traffic video with real-time processing"""
-
+    """
+    DEPRECATED. Live frames are delivered via the WebSocket VIDEO_FRAME
+    subscription. The legacy MJPEG generator now returns 501 so any stale
+    clients fail fast instead of silently hanging on an unreachable queue.
+    """
     logger.info(
-        f"GET /video/stream/{stream_id} endpoint called by user: {current_user.get('email')}"
+        f"GET /video/stream/{stream_id} endpoint called by user: {current_user.get('email')} "
+        f"(deprecated path)"
     )
-    
-    config = get_current_config()
-    output_directory = config.get("video_output", {}).get("output_directory")
-    video_manager = VideoManager.get_instance(output_directory=output_directory)
-
-    feed_manager = get_feed_manager()
-    processor = video_manager.get_processor(stream_id, feed_manager)
-
-    async def generate_frames():
-        try:
-            async for data in processor.get_frame_generator():
-                frame_bytes = data["frame"]
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-                )
-        except Exception as e:
-            logger.error(f"Error during video stream for {stream_id}: {e}", exc_info=True)
-
-
-    return StreamingResponse(
-        generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame"
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "MJPEG streaming is no longer supported. "
+            "Subscribe to VIDEO_FRAME messages over the WebSocket API instead."
+        ),
     )
 
 
@@ -85,6 +73,24 @@ async def start_video_recording(
     video_manager: VideoManager = Depends(VideoManager.get_instance),
     feed_manager=Depends(get_feed_manager),
 ):
+    """
+    Start a recording for the given stream.
+
+    Recording writes decoded frames to disk via VideoProcessor.
+    The pipeline is enabled per-feed in config (video_output.enabled=true)
+    and per-stream via the live_feed_manager when the stream actually has
+    a running pipeline.
+    """
+    config = get_current_config()
+    if not config.get("video_output", {}).get("enabled", False):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Recording is disabled in config (video_output.enabled=false). "
+                "Set it to true to enable. The recording pipeline is wired but opt-in."
+            ),
+        )
+
     processor = video_manager.get_processor(request.stream_id, feed_manager)
     success = await processor.start_recording(
         request.output_filename,
@@ -108,6 +114,12 @@ async def stop_video_recording(
     stream_id: str, video_manager: VideoManager = Depends(VideoManager.get_instance),
     feed_manager=Depends(get_feed_manager)
 ):
+    config = get_current_config()
+    if not config.get("video_output", {}).get("enabled", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Recording is disabled in config (video_output.enabled=false).",
+        )
     processor = video_manager.get_processor(stream_id, feed_manager)
     success = await processor.stop_recording()
     if success:

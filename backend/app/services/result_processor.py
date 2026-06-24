@@ -31,6 +31,8 @@ class ResultProcessor:
         self.registry = registry
         self.broadcaster = broadcaster
         self._stop_flag = False
+        # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
+        self._subscriber_pump: Optional[Any] = None
 
     def stop(self):
         self._stop_flag = True
@@ -39,6 +41,18 @@ class ResultProcessor:
         """Updates the broadcaster instance used for streaming updates."""
         self.broadcaster = broadcaster
         logger.info("ResultProcessor broadcaster updated.")
+
+    def set_subscriber_pump(self, pump_callable):
+        """
+        Wire the in-process subscriber pump.
+
+        The callable is FeedManager.deliver_to_subscribers; it is invoked
+        once per deduped decoded frame so internal consumers (e.g. the
+        recording VideoProcessor) receive the same payloads as WebSocket
+        clients. Passing None disables the pump.
+        """
+        self._subscriber_pump = pump_callable
+        logger.info("ResultProcessor subscriber pump updated.")
 
     def _process_single_result(self, item):
         """CPU-bound processing of a single result item (SHM read -> bytes)."""
@@ -259,6 +273,21 @@ class ResultProcessor:
                 logger.info(f"[RESULT_PROC] Broadcast sent: feed={feed_id}, frame_idx={frame_idx}")
             else:
                 logger.warning(f"[RESULT_PROC] Broadcaster is None; cannot broadcast frame for {feed_id}")
+
+            # 4. Pump a copy into in-process subscribers (recording, etc.).
+            # Opt-in: only runs when something has subscribed. Cheap no-op
+            # when the subscriber map is empty (common case).
+            if self._subscriber_pump is not None and frame_bytes:
+                try:
+                    await self._subscriber_pump(
+                        feed_id=feed_id,
+                        frame_idx=frame_idx,
+                        frame_bytes=frame_bytes,
+                        metrics=metrics,
+                        vehicles=vehicles,
+                    )
+                except Exception as e:
+                    logger.debug(f"Subscriber pump error for {feed_id}: {e}")
 
         except Exception as e:
             logger.error(f"Error broadcasting frame data for {feed_id}: {e}", exc_info=True)

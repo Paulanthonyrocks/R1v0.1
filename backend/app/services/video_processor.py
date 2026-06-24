@@ -53,6 +53,10 @@ class VideoProcessor:
 
         logger.info(f"VideoProcessor initialized for stream_id: {self.stream_id}")
 
+    # Background task that pulls from get_frame_generator (recording consumer).
+    # Set by start_recording(), cancelled by stop_recording().
+    _record_task: Optional[asyncio.Task] = None
+
     async def start_recording(self, output_filename: str, frame_rate: float):
         if self._is_recording:
             logger.warning(f"Recording already in progress for stream {self.stream_id}")
@@ -76,8 +80,29 @@ class VideoProcessor:
         self._frame_rate = frame_rate
         self._is_recording = True
         self._recording_start_time = time.time()
+        # Spin up the frame consumer task. It leases the FeedManager subscriber
+        # queue and routes decoded bytes through _process_frame_sync, which
+        # calls _handle_recording when self._is_recording is true.
+        self._record_task = asyncio.create_task(self._drain_frames())
         logger.info(f"Started recording for {self.stream_id} to {self._output_path}")
         return True
+
+    async def _drain_frames(self):
+        """
+        Consume frames from the FeedManager subscriber queue while active.
+        Runs until cancelled or until _is_active flips to False.
+        """
+        try:
+            async for _ in self.get_frame_generator():
+                # All work happens inside get_frame_generator; we only need to
+                # iterate to keep the generator producing.
+                pass
+        except asyncio.CancelledError:
+            logger.debug(f"[{self.stream_id}] _drain_frames cancelled")
+        except Exception as e:
+            logger.error(f"[{self.stream_id}] _drain_frames error: {e}", exc_info=True)
+        finally:
+            self._is_recording = False
 
     async def stop_recording(self):
         if not self._is_recording:
@@ -85,6 +110,16 @@ class VideoProcessor:
 
         logger.info(f"Stopping recording for {self.stream_id}...")
         self._is_recording = False  # Flag stop immediately to prevent new frames entering writer
+
+        # Cancel the frame consumer task; the generator's `finally` will
+        # release the FeedManager subscriber queue.
+        if self._record_task and not self._record_task.done():
+            self._record_task.cancel()
+            try:
+                await self._record_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._record_task = None
 
         # Release writer in executor to ensure buffers are flushed without blocking loop
         if self._video_writer:
@@ -255,41 +290,74 @@ class VideoProcessor:
 
     async def get_frame_generator(self) -> AsyncGenerator[Dict, None]:
         """
-        Yields frames to the API for streaming.
-        Uses a dedicated thread for image processing to avoid blocking the Event Loop.
+        Async generator that yields per-frame data while this processor is recording.
+
+        Source: the FeedManager subscriber queue (one slot leased at startup).
+        Frames arrive post-dedup and post-broadcast, matching what WebSocket
+        clients see. We run `_process_frame_sync` on the executor to overlay
+        KPIs and (when `_is_recording` is set) write to disk via
+        `_handle_recording`.
+
+        If the operator calls this generator without first calling
+        `start_recording`, no frames are written -- the generator stays
+        alive doing nothing so callers can attach/detach cleanly.
         """
-        frame_queue = await self.feed_manager.subscribe_to_frames(self.stream_id)
-        loop = asyncio.get_running_loop()
+        # Lease a private subscriber queue from FeedManager. We do this here
+        # (rather than at processor construction) so a sibling processor for
+        # a different feed is isolated.
+        if self.feed_manager is None or not hasattr(self.feed_manager, "subscribe_to_frames"):
+            raise RuntimeError(
+                "VideoProcessor requires a FeedManager with the in-process subscriber API."
+            )
+        frame_queue: asyncio.Queue = await self.feed_manager.subscribe_to_frames(
+            self.stream_id, maxsize=30
+        )
+        logger.info(f"[{self.stream_id}] Subscribed to feed_manager frames for recording")
 
         try:
-            # Fix 2A: Use _is_active flag instead of bare while True
             while self._is_active:
-                data = await frame_queue.get()
-                raw_frame_bytes = data.get("frame")
+                try:
+                    payload = await asyncio.wait_for(frame_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    break
+
+                raw_frame_bytes = payload.get("frame")
                 if not raw_frame_bytes:
                     continue
 
-                kpis = data.get("metrics", {})
+                # If recording isn't active, drain the queue to keep memory bounded
+                # but skip the expensive encode/write pipeline.
+                if not self._is_recording:
+                    continue
 
-                # Offload CPU-heavy decoding/drawing to thread
+                kpis = payload.get("metrics", {}) or {}
+
+                loop = asyncio.get_running_loop()
                 processed_jpeg_bytes = await loop.run_in_executor(
                     self._executor,
                     self._process_frame_sync,
                     raw_frame_bytes,
                     kpis,
                 )
-
                 if processed_jpeg_bytes:
-                    yield {"frame": processed_jpeg_bytes, "kpis": kpis}
+                    yield {
+                        "frame": processed_jpeg_bytes,
+                        "kpis": kpis,
+                        "frame_index": payload.get("frame_index"),
+                    }
 
         except asyncio.CancelledError:
             logger.debug(f"Frame generator cancelled for {self.stream_id}")
         except Exception as e:
             logger.error(f"Error in generator: {e}", exc_info=True)
         finally:
-            await self.feed_manager.unsubscribe_from_frames(
-                self.stream_id, frame_queue
-            )
+            try:
+                await self.feed_manager.unsubscribe_from_frames(self.stream_id, frame_queue)
+            except Exception:
+                pass
+            logger.info(f"[{self.stream_id}] Unsubscribed from feed_manager frames")
 
     def shutdown_executor(self):
         """Shut down the thread pool executor. Safe to call after all async work is done."""

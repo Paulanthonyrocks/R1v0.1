@@ -75,8 +75,18 @@ class FeedManager:
         self._result_reader_task: Optional[asyncio.Task] = None
 
         # Communication
-        self.frame_subscriber_queues: Dict[str, List[asyncio.Queue]] = {}
-        self._active_broadcast_tasks: Dict[str, asyncio.Task] = {}
+        # NOTE: Frames are delivered to clients via FeedBroadcaster ->
+        # ConnectionManager (WebSocket). For in-process consumers that
+        # need decoded frame bytes (e.g. VideoProcessor for recording),
+        # we expose a minimal per-feed subscriber mechanism below. Each
+        # subscriber owns its own bounded queue. The result_processor
+        # pumps a copy of every decoded frame into each active subscriber.
+        # This is intentionally opt-in: no default subscriber exists,
+        # so empty subscriber maps cost nothing.
+
+        # Map: feed_id -> list of asyncio.Queue subscribed for in-process consumers
+        self._frame_subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self._frame_subscribers_lock = asyncio.Lock()
 
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
@@ -343,6 +353,11 @@ class FeedManager:
         self.broadcaster = FeedBroadcaster(manager)
         if self.result_processor:
             self.result_processor.set_broadcaster(self.broadcaster)
+            # Wire the in-process subscriber pump once both sides exist.
+            # Recording (VideoProcessor) and any future in-process frame
+            # consumer uses this hook; trivial no-op when nothing is
+            # subscribed.
+            self.result_processor.set_subscriber_pump(self.deliver_to_subscribers)
         logger.info("WebSocket ConnectionManager set in FeedManager. Broadcaster initialized and pushed to ResultProcessor.")
 
     async def _scaling_monitor(self):
@@ -847,14 +862,6 @@ class FeedManager:
 
             # Cleanup locks and tasks
             self._feed_locks.pop(feed_id, None)
-            
-            broadcast_task = self._active_broadcast_tasks.pop(feed_id, None)
-            if broadcast_task and not broadcast_task.done():
-                broadcast_task.cancel()
-
-            # Purge subscriber queues to prevent memory leaks
-            if feed_id in self.frame_subscriber_queues:
-                self.frame_subscriber_queues.pop(feed_id)
 
             self.registry.remove_entry(feed_id)
             self._save_persisted_feeds()
@@ -1599,23 +1606,69 @@ class FeedManager:
         if sample_needed:
             await self._check_and_manage_sample_feed()
 
-    # --- Frame Subscriptions ---
+    # --- Frame Subscriptions (in-process consumers: VideoProcessor for recording) ---
 
-    async def subscribe_to_frames(self, feed_id: str) -> asyncio.Queue:
-        async with self._lock:
-            if feed_id not in self.frame_subscriber_queues:
-                self.frame_subscriber_queues[feed_id] = []
-            q: asyncio.Queue = asyncio.Queue(maxsize=30)
-            self.frame_subscriber_queues[feed_id].append(q)
-            return q
+    async def subscribe_to_frames(self, feed_id: str, maxsize: int = 30) -> asyncio.Queue:
+        """
+        Subscribe to decoded frames for a specific feed.
 
-    async def unsubscribe_from_frames(self, feed_id: str, q: asyncio.Queue):
-        async with self._lock:
-            if feed_id in self.frame_subscriber_queues:
-                if q in self.frame_subscriber_queues[feed_id]:
-                    self.frame_subscriber_queues[feed_id].remove(q)
-                if not self.frame_subscriber_queues[feed_id]:
-                    del self.frame_subscriber_queues[feed_id]
+        Each subscriber receives a private bounded asyncio.Queue. The
+        ResultProcessor pumps a copy of every deduped decoded frame into
+        each queue. Backpressure: if a subscriber's queue is full, the
+        oldest frame is dropped (we never block the main pipeline).
+
+        Returns the queue the caller must read from and later pass to
+        unsubscribe_from_frames() to release the slot.
+        """
+        q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        async with self._frame_subscribers_lock:
+            self._frame_subscribers.setdefault(feed_id, []).append(q)
+        return q
+
+    async def unsubscribe_from_frames(self, feed_id: str, q: asyncio.Queue) -> None:
+        """Release a previously-acquired frame subscriber queue."""
+        async with self._frame_subscribers_lock:
+            subs = self._frame_subscribers.get(feed_id)
+            if subs and q in subs:
+                subs.remove(q)
+                if not subs:
+                    del self._frame_subscribers[feed_id]
+
+    async def deliver_to_subscribers(
+        self, feed_id: str, frame_idx: int, frame_bytes: bytes, metrics: Dict, vehicles: list
+    ) -> None:
+        """
+        Push a copy of one decoded frame into every active subscriber's queue.
+        Called by ResultProcessor after broadcast. Drops oldest frame on overflow
+        so the pipeline never blocks.
+        """
+        subs = self._frame_subscribers.get(feed_id)
+        if not subs:
+            return
+        payload = {
+            "feed_id": feed_id,
+            "frame_index": frame_idx,
+            "frame": frame_bytes,
+            "metrics": metrics,
+            "vehicles": vehicles,
+        }
+        for q in list(subs):  # copy because we may modify
+            try:
+                if q.full():
+                    # Drop the oldest frame to keep the consumer close to real-time.
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                q.put_nowait(payload)
+            except asyncio.QueueFull:
+                # Race: queue filled between full() check and put_nowait().
+                # Skip this frame for this consumer rather than blocking.
+                pass
+            except Exception as e:
+                self.logger.debug(
+                    f"Subscriber delivery failed for {feed_id}: {e}"
+                )
 
     # --- Shutdown ---
 

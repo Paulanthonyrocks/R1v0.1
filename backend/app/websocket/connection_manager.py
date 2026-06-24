@@ -65,6 +65,15 @@ class ConnectionManager:
         self.low_priority_queues: Dict[str, deque] = {}           # For LOW priority (video, etc.)
         self.signal_queues: Dict[str, asyncio.Queue] = {}         # Signals sender task
         self.client_tasks: Dict[str, asyncio.Task] = {}
+
+        # Per-feed "first frames" tracking. When the first 10 incoming frames for
+        # a given feed arrive, they are boosted to HIGH priority so the frontend
+        # transitions from 'starting' to 'running'. After that, all frames take
+        # the LOW priority path through the bounded deque. Sample videos loop
+        # forever, so feeding by absolute frame_index < 10 caused constant
+        # reboosting that overrode backpressure and surfaced as out-of-order
+        # delivery on slow networks.
+        self._sent_first_frames: set = set()
         
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
@@ -495,12 +504,18 @@ class ConnectionManager:
             logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
             return
         
-        # Determine priority: Boost the first 10 frames to HIGH to ensure the frontend
-        # transitions from 'starting' to 'running' immediately.
+        # Determine priority: Boost the FIRST 10 frames per session, not every time
+        # the absolute frame_index dips below 10. Sample videos loop indefinitely and
+        # will repeatedly return frame_index 0..9, which previously pushed every loop
+        # iteration back to the HIGH priority path. That collides with the goal of
+        # the LOW priority deque (drop stale frames under backpressure) and was the
+        # root cause of the "DROPPING stale frame" warnings seen on the frontend
+        # when network latency is high and the deque shrinks to 30 frames.
         priority = MessagePriority.LOW
-        if frame_index < 10:
+        if feed_id not in self._sent_first_frames and frame_index < 10:
             priority = MessagePriority.HIGH
-            logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority")
+            self._sent_first_frames.add(feed_id)
+            logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority (first frames for {feed_id})")
 
         for client_id in subscribed_clients:
             if priority == MessagePriority.HIGH:
