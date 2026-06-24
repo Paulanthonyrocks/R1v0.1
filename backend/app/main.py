@@ -200,10 +200,11 @@ async def lifespan(app: FastAPI):
         if fb_cfg.get("auth_enabled", False):
             key_path = Path(fb_cfg.get("service_account_key_path", ""))
             if not key_path.is_absolute():
-                # Handle paths relative to project root (e.g., starting with 'backend/')
+                # Handle paths relative to the backend directory (e.g., 'configs/...' or 'backend/configs/...')
                 if str(key_path).startswith("backend/"):
                     key_path = BASE_DIR.parent / key_path
                 else:
+                    # Path is already relative to backend dir (e.g., 'configs/...')
                     key_path = BASE_DIR / key_path
             
             if key_path.exists():
