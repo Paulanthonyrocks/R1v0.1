@@ -529,8 +529,25 @@ export class WebSocketClient implements IWebSocketClient {
                 };
 
                 this.ws.onmessage = (event) => {
-                    console.log(`[WebSocketClient ${this.instanceId}] RAW message received:`, event.data);
-                    this.handleMessage(event);
+                    // onmessage must NEVER throw — if it does, browsers stop
+                    // dispatching further messages on this socket (silent
+                    // pipeline death). Downstream parsers have historically
+                    // crashed on circular AUTH_FAILURE payloads.
+                    try {
+                        this.handleMessage(event);
+                    } catch (e) {
+                        console.error(
+                            `[WebSocketClient ${this.instanceId}] handleMessage crashed:`,
+                            e
+                        );
+                        // Drop the socket so the watchdog can reconnect
+                        // instead of us silently missing every subsequent frame.
+                        try {
+                            this.ws?.close();
+                        } catch (_) {
+                            // best-effort
+                        }
+                    }
                 };
 
             } catch (error) {
@@ -726,9 +743,35 @@ export class WebSocketClient implements IWebSocketClient {
                     console.warn(`[WebSocketClient ${this.instanceId}] Authentication failed:`, message.data);
                     this.authenticated = false;
                     this.currentToken = null;
-                    
+
                     if (this.rejectConnection) {
-                        this.rejectConnection(new Error(`Authentication failed: ${JSON.stringify(message.data)}`));
+                        // JSON.stringify throws on circular structures and BigInts.
+                        // Backend AUTH_FAILURE data is expected to be a small dict,
+                        // but in practice it has carried server tracebacks, gql
+                        // errors, and request objects that can stringify-throw.
+                        // Truncate to a 500-char summary so the rejection value
+                        // never blows up the WebSocket onmessage path itself.
+                        let detail: string;
+                        try {
+                            detail = JSON.stringify(message.data) ?? '';
+                        } catch (_) {
+                            try {
+                                detail = String(message.data);
+                            } catch (_) {
+                                detail = '<unserializable>';
+                            }
+                        }
+                        if (detail.length > 500) {
+                            detail = detail.slice(0, 500) + '…';
+                        }
+                        try {
+                            this.rejectConnection(new Error(`Authentication failed: ${detail}`));
+                        } catch (rejectionErr) {
+                            console.error(
+                                `[WebSocketClient ${this.instanceId}] rejectConnection threw:`,
+                                rejectionErr
+                            );
+                        }
                         this.rejectConnection = null;
                     }
 
