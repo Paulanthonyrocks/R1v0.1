@@ -7,12 +7,38 @@
  *  2. Strict feed isolation: Each feed has its own processing state to prevent "juggling".
  *  3. Memory efficiency: Use ImageBitmap and transfer ownership to the main thread.
  *  4. Priority: Use binary msgpack path as primary, base64 as fallback.
+ *  5. Monotonic decode: track the highest frame_index accepted per feed so
+ *     out-of-order arrivals (rare, but observed during HMR remount of the
+ *     WebSocketClient) cannot bypass coalescence with an older frame_index.
  */
 
 importScripts('msgpack.min.js');
 
 // State tracking per feed
-const processingState = new Map(); // feed_id → { isProcessing: boolean, latestPayload: null | object }
+const processingState = new Map(); // feed_id → { isProcessing: boolean, latestPayload: null | object, highestAcceptedIndex: number }
+
+/**
+ * Accept-or-reject an incoming payload based on monotonic frame_index.
+ * Older indexes are silently dropped to prevent stale-frame surfacing on
+ * the main thread. When the gap implies a loop/restart we reset the
+ * watermark so the new sequence can flow through.
+ */
+function shouldAccept(feed_id, frame_index) {
+    if (typeof frame_index !== 'number' || frame_index < 0) return true;
+    const state = processingState.get(feed_id);
+    if (!state) return true;
+
+    if (frame_index + 256 < state.highestAcceptedIndex) {
+        // Loop / restart detected: reset and accept anything.
+        state.highestAcceptedIndex = frame_index;
+        return true;
+    }
+    if (frame_index <= state.highestAcceptedIndex) {
+        return false; // Older (or duplicate) frame — drop.
+    }
+    state.highestAcceptedIndex = frame_index;
+    return true;
+}
 
 /**
  * The core decode loop for a specific feed.
@@ -111,11 +137,16 @@ self.onmessage = async function (e) {
                 timestamp: decoded.ts
             };
 
-            if (!processingState.has(f_id)) {
-                processingState.set(f_id, { isProcessing: false, latestPayload: null });
+            let state = processingState.get(f_id);
+            if (!state) {
+                state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1 };
+                processingState.set(f_id, state);
+            }
+
+            if (!shouldAccept(f_id, metadata.frame_index)) {
+                return;
             }
             
-            const state = processingState.get(f_id);
             state.latestPayload = {
                 binaryFrame: decoded,
                 frameData: null,
@@ -152,11 +183,16 @@ self.onmessage = async function (e) {
             };
         }
 
-        if (!processingState.has(feed_id)) {
-            processingState.set(feed_id, { isProcessing: false, latestPayload: null });
+        let state = processingState.get(feed_id);
+        if (!state) {
+            state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1 };
+            processingState.set(feed_id, state);
+        }
+
+        if (!shouldAccept(feed_id, metadata.frame_index)) {
+            return;
         }
         
-        const state = processingState.get(feed_id);
         state.latestPayload = {
             binaryFrame,
             frameData,

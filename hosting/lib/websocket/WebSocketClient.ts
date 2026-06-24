@@ -685,15 +685,23 @@ export class WebSocketClient implements IWebSocketClient {
                         return; // Drop frame
                     }
 
-                    if (this.videoWorker && typeof frameData?.frame === 'string') {
+                    // CRITICAL FIX: always route VIDEO_FRAME through exactly ONE path.
+                    // Previously, if the worker existed but `frameData.frame` was not
+                    // a base64 string (e.g. an ImageBitmap already, or an ArrayBuffer
+                    // payload), the JSON branch above fell through and was dropped —
+                    // while the binary branch kept streaming the same feed. The user
+                    // observed a flood of "DROPPING stale frame" warnings exactly
+                    // because the two paths interleaved. We now route both binary and
+                    // JSON into the worker when available; falling back to direct
+                    // notification only when the worker has been terminated.
+                    if (this.videoWorker) {
                         this.pendingFrames.set(f_id, pending + 1);
                         this.videoWorker.postMessage({
-                            frameData: frameData.frame,
+                            frameData: typeof frameData.frame === 'string' ? frameData.frame : null,
                             feed_id: f_id,
                             originalData: message.data
                         });
-                        return;
-                    } else if (!this.videoWorker) {
+                    } else {
                         this.notifyListeners(message.type, message.data, f_id);
                     }
                     return;

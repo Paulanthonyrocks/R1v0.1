@@ -191,14 +191,39 @@ const unsubscribeFromFeed = useCallback(() => {
     }
   }, [client]);
 
+  // Track recently processed frame_indexes per streamId to make handleFrame
+  // idempotent. The same (feed_id, frame_index) tuple can reach this hook
+  // multiple times during StrictMode double-mounts, HMR remounts, or when
+  // the Web Worker emits the same decode twice (e.g. WebSocketClient.reconnect
+  // flushes buffered frames while the worker still holds pending work).
+  // Treating duplicate delivery as a no-op removes the visible
+  // "DROPPING stale frame X < Y" flood that resurfaced when both the
+  // pre-reconnect listener and the post-reconnect listener fired for the
+  // same streamed frame.
+  const recentlyProcessedRef = useRef<Set<number>>(new Set<number>());
+
   const handleFrame = useCallback(async (data: VideoFrameMessage) => {
       const currentStreamId = streamIdRef.current;
 
       if (data.frame_index !== undefined) {
+        const seen = recentlyProcessedRef.current;
+        if (seen.has(data.frame_index)) {
+          // Same payload slipped in from two listeners; ignore the duplicate.
+          return;
+        }
+        seen.add(data.frame_index);
+        // Keep the dedup set bounded so it doesn't grow forever.
+        if (seen.size > 128) {
+          const arr = Array.from(seen).sort((a, b) => a - b);
+          const drop = arr.slice(0, arr.length - 64);
+          for (const idx of drop) seen.delete(idx);
+        }
+
         // Detect feed restart/loop: if index drops significantly, reset the tracker
         if (lastProcessedIndexRef.current > 100 && data.frame_index < 10) {
           console.warn(`[useVideoSocket ${hookId.current}] Detected feed restart for ${currentStreamId}, resetting frame index tracker`);
           lastProcessedIndexRef.current = -1;
+          seen.clear();
         }
 
         if (data.frame_index < lastProcessedIndexRef.current) {
