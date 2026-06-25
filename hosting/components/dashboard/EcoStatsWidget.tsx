@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Leaf, Wind, Activity } from 'lucide-react';
+import { Leaf, Wind, Activity, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from "@/lib/utils";
 
 interface EcoStatsWidgetProps {
@@ -17,6 +17,7 @@ const EMISSION_FACTORS: Record<string, number> = {
 };
 
 const EcoStatsWidget: React.FC<EcoStatsWidgetProps> = ({ vehicles, className }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
     
     const stats = useMemo(() => {
         let totalCO2Rate = 0; // kg/km for the local fleet
@@ -42,11 +43,21 @@ const EcoStatsWidget: React.FC<EcoStatsWidgetProps> = ({ vehicles, className }) 
     return (
         <Card className={cn("matrix-glow-card font-lcd matrix-glow", className)}>
             <CardHeader className="p-3 pb-0">
-                <CardTitle className="text-sm flex items-center gap-2 text-primary">
-                    <Leaf className="h-4 w-4" />
-                    ENVIRONMENTAL IMPACT
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm flex items-center gap-2 text-primary">
+                        <Leaf className="h-4 w-4" />
+                        ENVIRONMENTAL IMPACT
+                    </CardTitle>
+                    <button
+                        onClick={() => setIsExpanded(!isExpanded)}
+                        className="text-[8px] text-muted-foreground hover:text-primary flex items-center gap-1 uppercase"
+                    >
+                        {isExpanded ? 'Collapse' : 'Expand'}
+                        {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    </button>
+                </div>
             </CardHeader>
+            {isExpanded && (
             <CardContent className="p-3 pt-2">
                 <div className="space-y-3">
                     <div className="flex justify-between items-end border-b border-primary/20 pb-2">
@@ -98,6 +109,7 @@ const EcoStatsWidget: React.FC<EcoStatsWidgetProps> = ({ vehicles, className }) 
                     </div>
                 </div>
             </CardContent>
+            )}
         </Card>
     );
 };

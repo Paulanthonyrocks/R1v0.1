@@ -41,7 +41,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
   // Only subscribe if the feed is in an active state
   const shouldSubscribe = status === 'running' || status === 'starting';
   const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
-    shouldSubscribe ? feed_id : ""
+    shouldSubscribe ? feed_id : "",
+    minimalControls  // Skip vehicle data in minimal mode to reduce memory/GC pressure
   );
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
@@ -223,7 +224,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     };
 
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!canvasRef.current) return;
+        if (!canvasRef.current || minimalControls) return;
 
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
@@ -376,10 +377,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         showTrajectories: opts.showTrajectories,
                         showLaneOverlays: opts.showLaneOverlays,
                         selectedVehicleIds: opts.selectedVehicleIds,
-                        showAllDetections: opts.showAllDetections
+                        showAllDetections: opts.showAllDetections,
+                        minimal: minimalControls  // Dashboard grid: skip per-vehicle canvas overlays
                     });
 
-                    if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0)) {
+                    if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0 && !minimalControls)) {
                         ctx.save();
                         ctx.strokeStyle = roi.roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
                         ctx.lineWidth = 2;
@@ -403,7 +405,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         ctx.restore();
                     }
 
-                    if (opts.showOverlays && opts.showExclusionZones) {
+                    if (opts.showOverlays && opts.showExclusionZones && !minimalControls) {
                         ctx.save();
 
                         exclusionZones.forEach(zone => {
@@ -569,7 +571,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {isAdmin && roiMode && (
+                {isAdmin && roiMode && !minimalControls && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">
                             {roiMode === 'roi' ? 'Set Inclusion ROI' : 'Add Exclusion Zone'}
@@ -673,7 +675,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                             </button>
                         </div>
 
-                        {isAdmin && (
+                        {isAdmin && !minimalControls && (
                             <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm ml-1">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'roi' ? null : 'roi'); }}
@@ -741,7 +743,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {selectedGlobalId && (
+                {!minimalControls && selectedGlobalId && (
                     <div className="absolute top-4 right-4 bottom-4 w-72 z-50 pointer-events-auto">
                         <IdentityGallery
                             globalId={selectedGlobalId}

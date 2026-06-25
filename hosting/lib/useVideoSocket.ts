@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WebSocketMessageType, WebSocketMessage } from './websocket/WebSocketClient';
 import { useWebSocket } from './websocket/WebSocketProvider';
-import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData } from './types';
+import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData, VideoFrameSnapshot } from './types';
 import { useVideoDecoder } from './hooks/useVideoDecoder';
 import videoStreamManager from './videoStreamManager';
 import {
@@ -12,7 +12,7 @@ import {
  UNSUBSCRIBE_DEBOUNCE_MS,
 } from './websocket/feedSubscriptionState';
 
-const useVideoSocket = (streamId: string) => {
+const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const hookId = useRef(Math.random().toString(36).substring(2, 7));
   const client = useWebSocket();
   
@@ -74,6 +74,9 @@ const useVideoSocket = (streamId: string) => {
   const { decode } = useVideoDecoder({
     onFrame: (decodedData) => {
       const { image, index, metrics: frameMetrics, vehicles: frameVehicles, timestamp } = decodedData;
+      // Skip vehicle data in minimal mode to reduce memory/GC pressure
+      const vehiclesToStore = minimal ? null : frameVehicles;
+      
       if (index < (lastFrameRef.current?.index ?? -1)) {
         if (image instanceof ImageBitmap) image.close();
         return;
@@ -89,8 +92,10 @@ const useVideoSocket = (streamId: string) => {
       }
 
       if (streamId) {
-        videoStreamManager.updateVehicles(streamId, frameVehicles);
-        vehiclesRef.current = frameVehicles;
+        if (!minimal) {
+          videoStreamManager.updateVehicles(streamId, frameVehicles);
+        }
+        vehiclesRef.current = vehiclesToStore;
         metricsRef.current = frameMetrics;
 
         // Robust throttled state update for UI panels
@@ -102,7 +107,7 @@ const useVideoSocket = (streamId: string) => {
             if (index !== feedState.index) {
               setFeedState({
                 index,
-                vehicles: frameVehicles,
+                vehicles: vehiclesToStore,
                 metrics: frameMetrics
               });
             }
@@ -113,7 +118,7 @@ const useVideoSocket = (streamId: string) => {
       lastFrameRef.current = {
         image,
         index,
-        vehicles: frameVehicles,
+        vehicles: vehiclesToStore,
         metrics: frameMetrics
       };
 
@@ -395,7 +400,12 @@ const unsubscribeFromFeed = useCallback(() => {
 
   const drawFrame = useCallback((
     ctx: CanvasRenderingContext2D,
-    frame: VideoFrameSnapshot,
+    frame: {
+      image: ImageBitmap | HTMLImageElement | null;
+      index: number;
+      vehicles: VehicleFrontendData[] | null;
+      metrics: SurveillanceFeedMessage | null;
+    },
     options: any = {}
   ) => {
     const { image, vehicles, metrics } = frame;
@@ -404,7 +414,8 @@ const unsubscribeFromFeed = useCallback(() => {
       showVehicleDetails = true,
       showTrajectories = false,
       selectedVehicleIds = new Set(),
-      showAllDetections = false
+      showAllDetections = false,
+      minimal = false,  // Dashboard thumbnails: skip per-vehicle bboxes/metrics canvas text
     } = options;
 
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -416,6 +427,9 @@ const unsubscribeFromFeed = useCallback(() => {
         console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image likely detached`, e);
       }
     }
+
+    // Skip expensive per-vehicle drawing on dashboard thumbnails
+    if (minimal) return;
 
     if (vehicles && showBoundingBoxes && vehicles.length > 0) {
       const vehiclesToShow = showAllDetections ? vehicles : vehicles.filter(v => selectedVehicleIds.has(v.global_vehicle_id || v.vehicle_id));

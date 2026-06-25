@@ -22,7 +22,6 @@ import { TrendDataPoint, AlertData } from '@/lib/types';
 import LaneAnalysisWidget from '@/components/dashboard/LaneAnalysisWidget';
 import { analyticsService } from '@/lib/services/analyticsService';
 import EcoStatsWidget from '@/components/dashboard/EcoStatsWidget';
-import AIInsightsPanel from '@/components/dashboard/AIInsightsPanel';
 import IncidentCommandCenter from '@/components/dashboard/IncidentCommandCenter';
 
 const DashboardPage: React.FC = () => {
@@ -33,6 +32,7 @@ const DashboardPage: React.FC = () => {
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [showLazyWidgets, setShowLazyWidgets] = useState(false);
   const hasAttemptedHistoryLoad = useRef(false);
   const feedRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -75,7 +75,7 @@ const DashboardPage: React.FC = () => {
         };
 
         const updated = [...prev, newPoint];
-        const limit = prev.length > 60 ? 1000 : 60;
+        const limit = 120;  // Fixed cap: 2 min at 60 update/sec, enough for visible trend
         if (updated.length > limit) {
           return updated.slice(updated.length - limit);
         }
@@ -117,6 +117,15 @@ const DashboardPage: React.FC = () => {
       loadHistory();
     }
   }, [isReady, feeds, kpiHistory.length]);
+
+  // Lazy-load non-critical widgets after dashboard is ready
+  useEffect(() => {
+    if (isReady && activeTab === 'overview') {
+      const timer = setTimeout(() => setShowLazyWidgets(true), 500);
+      return () => clearTimeout(timer);
+    }
+    if (activeTab !== 'overview') setShowLazyWidgets(false);
+  }, [isReady, activeTab]);
 
   const calculateTrend = (history: TrendDataPoint[], key: keyof TrendDataPoint) => {
     if (history.length < 5) return { change: 'N/A', text: 'Insufficient data' };
@@ -367,18 +376,14 @@ const DashboardPage: React.FC = () => {
                   )}
                 </div>
 
-                {/* Side Panel: AI Insights, Eco Stats, Alerts */}
+                {/* Side Panel: Eco Stats, Alerts */}
                 <div className="flex flex-col gap-8">
-                    {/* AI Insights */}
-                    <AIInsightsPanel
-                        metrics={kpis}
-                        feedName={feeds.length > 0 ? (feeds[0].name ?? "Feed " + feeds[0].feed_id) : "System"}
-                    />
-
-                    {/* Eco Stats */}
-                    <EcoStatsWidget
-                        vehicles={feeds.length > 0 ? (feeds[0].latest_vehicles || []) : []}
-                    />
+                    {/* Eco Stats - collapsible */}
+                    {showLazyWidgets && (
+                      <EcoStatsWidget
+                          vehicles={feeds.length > 0 ? (feeds[0].latest_vehicles || []) : []}
+                      />
+                  )}
 
                     {/* Alerts / Anomalies */}
                     <div className="matrix-card flex flex-col min-h-[400px]">
@@ -463,7 +468,7 @@ const DashboardPage: React.FC = () => {
                             <span>NODE_{feed.feed_id.slice(-4)}</span>
                             <span>{feed.status.toUpperCase()}</span>
                         </div>
-                        <SurveillanceFeed feed_id={feed.feed_id} />
+                        <SurveillanceFeed feed_id={feed.feed_id} minimalControls={true} />
                       </div>
                     ))
                   ) : (

@@ -35,7 +35,7 @@ class VideoProcessor:
 
         # State
         self._is_recording: bool = False
-        self._draw_overlays_enabled: bool = True  # Configuration default
+        self._draw_overlays_enabled: bool = False  # Disabled: frontend draws overlays from WS data; re-encoding is redundant CPU cost
         self._is_active: bool = True  # Fix 2A: Graceful generator shutdown flag
 
         # Recording internals

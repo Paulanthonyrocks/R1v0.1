@@ -154,6 +154,7 @@ export class WebSocketClient implements IWebSocketClient {
     private requiresClientId: boolean;
     private clientId: string | null = null;
     private latencyHistory: number[] = [];
+    private cleanupCounter = 0;
     private maxLatencyHistory = 10;
     private sentPingTimestamps: Map<string, number> = new Map();
     private qualityListeners: Set<(quality: ConnectionQuality) => void> = new Set();
