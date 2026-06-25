@@ -33,6 +33,10 @@ class ResultProcessor:
         self._stop_flag = False
         # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
         self._subscriber_pump: Optional[Any] = None
+        # SHM read failure tracking
+        self._shm_read_attempts = 0
+        self._shm_read_failures = 0
+        self._last_failure_alert = 0.0
 
     def stop(self):
         self._stop_flag = True
@@ -71,6 +75,7 @@ class ResultProcessor:
         
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
+            self._shm_read_attempts += 1
             logger.info(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
             read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
             if read_result is not None:
@@ -83,7 +88,14 @@ class ResultProcessor:
                 except Exception as e:
                     logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
             else:
-                logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
+                self._shm_read_failures += 1
+                failure_rate = self._shm_read_failures / max(1, self._shm_read_attempts)
+                logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref} (failure_rate={failure_rate:.1%})")
+                # Alert when failure rate exceeds 5% (indicates pool exhaustion or race condition)
+                now = time.time()
+                if failure_rate > 0.05 and now - self._last_failure_alert > 10.0:
+                    logger.error(f"[RESULT_PROC] HIGH SHM FAILURE RATE: {failure_rate:.1%} over {self._shm_read_attempts} attempts. Pool exhaustion or feed recycling detected.")
+                    self._last_failure_alert = now
                 # Release on read failure
                 try:
                     self.frame_buffer.release(shm_ref)
@@ -122,7 +134,8 @@ class ResultProcessor:
                 # Log SHM buffer stats every 60 seconds
                 if now_loop - last_shm_stats_log > 60.0:
                     stats = self.frame_buffer.get_stats()
-                    logger.info(f"[SHM-STATS] acquires={stats['acquired_count']}, releases={stats['release_count']}, drops={stats['drop_count']}, free={stats['free_pool_size']}/{stats['pool_size']}")
+                    failure_rate = self._shm_read_failures / max(1, self._shm_read_attempts) * 100
+                    logger.info(f"[SHM-STATS] acquires={stats['acquired_count']}, releases={stats['release_count']}, drops={stats['drop_count']}, free={stats['free_pool_size']}/{stats['pool_size']}, read_failures={self._shm_read_failures}/{self._shm_read_attempts} ({failure_rate:.1f}%)")
                     last_shm_stats_log = now_loop
 
                 items_buffer = []

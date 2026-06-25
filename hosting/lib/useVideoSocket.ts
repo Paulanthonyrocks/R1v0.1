@@ -421,10 +421,15 @@ const unsubscribeFromFeed = useCallback(() => {
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     if (image) {
-      try {
-        ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
-      } catch (e) {
-        console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image likely detached`, e);
+      // ImageBitmap can be closed/detached after decoder reuses memory
+      const isDetached = image instanceof ImageBitmap && !image.width && !image.height;
+      if (!isDetached) {
+        try {
+          ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+        } catch (e) {
+          // Fallback for race conditions where bitmap detaches mid-check
+          console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image detached`);
+        }
       }
     }
 

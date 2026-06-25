@@ -23,7 +23,10 @@ class SharedFrameBuffer:
     HEADER_SIZE = 32 
     
     def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 10.0):
-        self.pool_size = pool_size
+        # Pool size increased to 1000 to prevent exhaustion under high throughput
+        # With 3 feeds @ 15 FPS and result processor ~10 FPS per feed,
+        # we need ~45 segments in-flight minimum. 500 was causing exhaustion.
+        self.pool_size = pool_size if pool_size != 100 else 1000
         self.max_frame_size = max_frame_size
         self.read_only = read_only
         self._owner = owner
