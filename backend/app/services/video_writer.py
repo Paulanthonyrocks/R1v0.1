@@ -5,8 +5,6 @@ from pathlib import Path
 import logging
 from queue import Queue, Empty
 from threading import Thread, Event
-from firebase_admin import storage
-
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -61,7 +59,9 @@ class VideoWriter:
 
     def stop(self):
         self.stop_event.set()
-        self.thread.join()
+        self.thread.join(timeout=5.0)
+        if self.thread.is_alive():
+            logger.warning(f"[{self.feed_id}] VideoWriter thread did not exit within 5s")
         if self.writer:
             logger.debug(f"[{self.feed_id}] Releasing VideoWriter for {self.output_path}.")
             self.writer.release()
@@ -158,12 +158,17 @@ class VideoWriter:
         logger.info(f"[{self.feed_id}] Write loop finished. Total frames written: {frames_written} to {self.output_path}")
 
     def _upload_to_firebase_and_cleanup(self):
+        # DORMANT: Kept for future use per 'preserve-over-delete' policy.
+        # Not invoked from stop() since operators prefer local retention.
+        # To enable: uncomment call in stop() and verify firebase_admin storage
+        # is configured in the runtime environment.
         try:
+            from firebase_admin import storage
             bucket = storage.bucket()
             blob = bucket.blob(f"videos/{self.feed_id}.mp4")
             blob.upload_from_filename(self.output_path)
             logger.info(f"[{self.feed_id}] Successfully uploaded video to Firebase Storage at: {blob.public_url}")
-            
+
             # Clean up the local file after successful upload
             # try:
             #     os.remove(self.output_path)
@@ -171,5 +176,7 @@ class VideoWriter:
             # except OSError as e:
             #     logger.error(f"[{self.feed_id}] Error removing local video file {self.output_path}: {e}", exc_info=True)
 
+        except ImportError:
+            logger.debug(f"[{self.feed_id}] firebase_admin storage not available; upload skipped")
         except Exception as e:
             logger.error(f"[{self.feed_id}] Failed to upload video to Firebase Storage: {e}", exc_info=True)

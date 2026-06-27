@@ -97,9 +97,19 @@ class FrameReader:
                 logger.error(f"FrameReader '{self.source_name}': Failed to open source.")
                 self.started_event.set() # Unblock init
                 return
-            
-            # Test read to ensure the backend is actually working (GPU delegates can crash here)
-            ret, _ = cap.read()
+
+            # Test read to ensure the backend is actually working. GPU delegates
+            # and odd FFmpeg builds can segfault here rather than raise, so
+            # we wrap only the call site and rely on the started_event timeout
+            # (set in _start_thread) to bound how long initialization can hang.
+            try:
+                ret, _ = cap.read()
+            except Exception as e:
+                logger.warning(
+                    f"FrameReader '{self.source_name}': initial read raised ({e}); "
+                    "falling back to CPU decoding."
+                )
+                ret = False
             if not ret:
                 logger.warning(f"FrameReader '{self.source_name}': Initial read failed. GPU acceleration might be unstable.")
                 if self.gpu_acceleration:
@@ -232,6 +242,20 @@ class FrameReader:
             self.frames_queue.queue.clear()
             
     def __del__(self):
+        # CPython's __del__ timing is non-deterministic. Only attempt cleanup
+        # if the interpreter is still finalizing and our own state exists.
+        # Swallow everything — destructors must not raise.
+        try:
+            if not getattr(self, "_finalized", False):
+                self.stop()
+                self._finalized = True
+        except Exception:
+            pass
+
+    def __enter__(self) -> "FrameReader":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
         self.stop()
 
     def get_stats(self) -> Dict[str, Any]:

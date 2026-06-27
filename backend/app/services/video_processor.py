@@ -3,6 +3,7 @@ import asyncio
 import cv2
 import numpy as np
 import os
+import threading
 import time
 from typing import Dict, AsyncGenerator, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
@@ -34,6 +35,18 @@ class VideoProcessor:
         self.output_directory = output_directory
 
         # State
+        # _recording_event is the single source of truth for "is this processor
+        # currently writing frames to disk?". ``Event.set()``/``.is_set()`` is
+        # atomic across the asyncio task and the executor thread, which removes
+        # the previous race where stop_recording() could flip a plain bool while
+        # the executor had already passed the bool check in _process_frame_sync
+        # and would then push one extra frame to disk.
+        self._recording_event: threading.Event = threading.Event()
+        self._recording_event.clear()
+        # Legacy bool accessor for read-only sites (the prior shape of this
+        # code was ``self._is_recording``). Mutated to stay in sync with the
+        # event on every start/stop so externally-set external callers and the
+        # back-compat shim see a consistent value.
         self._is_recording: bool = False
         self._draw_overlays_enabled: bool = False  # Disabled: frontend draws overlays from WS data; re-encoding is redundant CPU cost
         self._is_active: bool = True  # Fix 2A: Graceful generator shutdown flag
@@ -58,7 +71,7 @@ class VideoProcessor:
     _record_task: Optional[asyncio.Task] = None
 
     async def start_recording(self, output_filename: str, frame_rate: float):
-        if self._is_recording:
+        if self._recording_event.is_set():
             logger.warning(f"Recording already in progress for stream {self.stream_id}")
             return False
 
@@ -78,6 +91,11 @@ class VideoProcessor:
             return False
 
         self._frame_rate = frame_rate
+        # Atomic flip — the executor will see both the event and the bool
+        # immediately consistent. Setting the event first ensures any racing
+        # reader in the executor that hasn't yet entered _process_frame_sync
+        # observes the new state when it reaches its check.
+        self._recording_event.set()
         self._is_recording = True
         self._recording_start_time = time.time()
         # Spin up the frame consumer task. It leases the FeedManager subscriber
@@ -102,14 +120,19 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"[{self.stream_id}] _drain_frames error: {e}", exc_info=True)
         finally:
+            self._recording_event.clear()
             self._is_recording = False
 
     async def stop_recording(self):
-        if not self._is_recording:
+        if not self._recording_event.is_set():
             return False
 
         logger.info(f"Stopping recording for {self.stream_id}...")
-        self._is_recording = False  # Flag stop immediately to prevent new frames entering writer
+        # Atomic clear before cancelling the consumer task. A frame mid-flight
+        # in the executor will see the event already cleared on its next
+        # _is_recording check, even if cancel arrives a few microseconds later.
+        self._recording_event.clear()
+        self._is_recording = False  # Legacy mirror; keep the bool in sync.
 
         # Cancel the frame consumer task; the generator's `finally` will
         # release the FeedManager subscriber queue.
@@ -181,7 +204,7 @@ class VideoProcessor:
         # Check if we need to process at all.
         # We process if: 1. Recording OR 2. Overlays are enabled and there is data to draw
         has_detections = bool(kpis.get("detections"))
-        should_process = self._is_recording or (
+        should_process = self._recording_event.is_set() or (
             self._draw_overlays_enabled and has_detections
         )
 
@@ -207,7 +230,7 @@ class VideoProcessor:
                 self._draw_overlays(frame, kpis)
 
             # Write to disk (if recording)
-            if self._is_recording:
+            if self._recording_event.is_set():
                 self._handle_recording(frame)
 
             # Re-encode for Streaming
@@ -323,13 +346,14 @@ class VideoProcessor:
                 except asyncio.CancelledError:
                     break
 
+                # Fast drain: only do any work when at least one consumer is
+                # interested. Without this guard, the recorder keeps pulling
+                # from the FeedManager subscriber queue even when no recording
+                # is in progress, just to discard each frame.
+                if not self._recording_event.is_set():
+                    continue
                 raw_frame_bytes = payload.get("frame")
                 if not raw_frame_bytes:
-                    continue
-
-                # If recording isn't active, drain the queue to keep memory bounded
-                # but skip the expensive encode/write pipeline.
-                if not self._is_recording:
                     continue
 
                 kpis = payload.get("metrics", {}) or {}
@@ -364,6 +388,23 @@ class VideoProcessor:
         if self._executor:
             self._executor.shutdown(wait=False)
             self._executor = None
+
+    def __del__(self):
+        # Safety net: if a VideoProcessor was abandoned (e.g. test fixture,
+        # uncaught except path) without going through remove_processor() the
+        # single-thread executor would otherwise leak. Swallow everything --
+        # destructors must not raise -- and signal the generator to exit first.
+        try:
+            if getattr(self, "_is_active", False):
+                self._is_active = False
+            if getattr(self, "_recording_event", None) is not None and self._recording_event.is_set():
+                # Best-effort sync clear; caller didn't wait for stop_recording.
+                self._recording_event.clear()
+            if getattr(self, "_executor", None) is not None:
+                self._executor.shutdown(wait=False)
+                self._executor = None
+        except Exception:
+            pass
 
 
 class VideoManager:
@@ -401,7 +442,7 @@ class VideoManager:
             proc = self.video_processors.pop(stream_id)
             # Fix 2A: Signal the generator to exit before killing the executor
             proc._is_active = False
-            if proc._is_recording:
+            if proc._recording_event.is_set():
                 await proc.stop_recording()
             # Shut down executor AFTER all async work completes
             proc.shutdown_executor()
@@ -415,10 +456,39 @@ class VideoManager:
         for pid, processor in list(self.video_processors.items()):
             # Fix 2A: Signal generators to stop
             processor._is_active = False
-            if processor._is_recording:
+            if processor._recording_event.is_set():
                 tasks.append(processor.stop_recording())
             # Collect executors -- will shut down AFTER gather completes
             processors_to_shutdown.append(processor)
+
+        # Sweep stale *.tmp.<vid_ext> files from previous aborted recordings.
+        # We use a 1-hour freshness threshold so a live in-progress recording
+        # (whose tmp file is still being written) is never clobbered, and we
+        # also avoid touching files that don't look like our own recordings.
+        if self.output_directory and os.path.isdir(self.output_directory):
+            try:
+                now_ts = time.time()
+                for entry in os.listdir(self.output_directory):
+                    if ".tmp." not in entry:
+                        continue
+                    path = os.path.join(self.output_directory, entry)
+                    try:
+                        mtime = os.path.getmtime(path)
+                    except OSError:
+                        continue
+                    age_hours = (now_ts - mtime) / 3600.0
+                    if age_hours < 1.0:
+                        # Active recording — leave it alone.
+                        continue
+                    try:
+                        os.remove(path)
+                        logger.info(
+                            f"Removed stale tmp recording ({age_hours:.1f}h old): {path}"
+                        )
+                    except OSError as e:
+                        logger.warning(f"Could not remove stale tmp {path}: {e}")
+            except Exception as e:
+                logger.warning(f"tmp-sweep failed: {e}")
 
         if tasks:
             await asyncio.gather(*tasks)

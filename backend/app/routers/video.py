@@ -153,6 +153,30 @@ async def download_processed_video(
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video file not found on server")
 
+    # Path traversal guard: file must resolve (following symlinks) into one of
+    # the configured output directories. ``realpath`` catches symlinks pointing
+    # outside the allowed dir, which ``abspath`` alone would miss.
+    resolved_file = os.path.realpath(video_entry.file_path)
+    allowed_dirs = [
+        os.path.realpath(d)
+        for d in (
+            get_current_config().get("video_output", {}).get("output_directory"),
+            get_current_config().get("video_processing", {}).get("output_directory"),
+        )
+        if d
+    ]
+    # Fallback if no dir from config
+    if not allowed_dirs:
+        allowed_dirs = [os.path.realpath("backend/data/processed_videos")]
+    if not any(
+        resolved_file == d or resolved_file.startswith(d + os.sep)
+        for d in allowed_dirs
+    ):
+        logger.warning(
+            f"download_processed_video blocked: '{resolved_file}' not in {allowed_dirs}"
+        )
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return FileResponse(
         path=file_path, filename=os.path.basename(file_path), media_type="video/mp4"
     )

@@ -1305,6 +1305,9 @@ class FeedManager:
             None,   # command_queue — handled via Redis
             None,   # frame_buffer — worker initialises its own handle
             None,   # pipeline_pressure — worker reads from Redis
+            entry.get("video_writer_queue").name
+                if entry.get("video_writer_queue") is not None
+                else None,
         )
 
         process = Process(

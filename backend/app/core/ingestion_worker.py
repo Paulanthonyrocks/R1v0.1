@@ -28,9 +28,16 @@ def ingestion_worker(
     command_queue: Any = None,
     frame_buffer: Any = None,
     pipeline_pressure: Any = None,
+    video_writer_queue_name: Optional[str] = None,
 ):
     """
     Lightweight process that captures frames and pushes them to a central queue.
+
+    When ``video_writer_queue_name`` is provided (i.e., the feed has
+    ``video_output.enabled=true``), an opt-in secondary producer fans JPEG bytes
+    out to the named RedisQueue so the feed-side ``VideoWriter`` can persist them.
+    Closes to ``None`` by default so feeds that don't need local persistence pay no
+    cost.
     """
     import logging.config as logging_config
 
@@ -87,6 +94,23 @@ def ingestion_worker(
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+
+    # Opt-in secondary producer for the per-feed VideoWriter (local persistence).
+    # When ``video_output.enabled=true``, FeedManager passes the RedisQueue name
+    # so we can re-attach to the existing list from this process without forcing
+    # a RedisQueue handle through ``multiprocessing.Process``.
+    video_writer_queue = None
+    if video_writer_queue_name:
+        try:
+            from app.utils.distributed_queue import RedisQueue
+            video_writer_queue = RedisQueue(
+                video_writer_queue_name,
+                maxsize=config.get("video_input", {}).get("max_queue_size", 500),
+            )
+            logger.info(f"[{feed_id}] VideoWriter producer wired to queue '{video_writer_queue_name}'")
+        except Exception as e:
+            logger.warning(f"[{feed_id}] Failed to wire VideoWriter producer: {e}")
+            video_writer_queue = None
 
     # Config validation
     if not isinstance(target_fps, (int, float)) or target_fps <= 0 or target_fps > 120:
@@ -366,6 +390,18 @@ def ingestion_worker(
                         )
                         metrics.frames_dropped += 1
                         continue
+
+                    # Secondary producer: fan JPEG bytes to the per-feed
+                    # VideoWriter if recording is enabled. Non-blocking drop
+                    # on queue overflow so we never stall the main pipeline.
+                    if video_writer_queue is not None:
+                        try:
+                            video_writer_queue.put_nowait(last_frame_bytes)
+                        except queue.Full:
+                            # Drop oldest by skipping this frame silently.
+                            pass
+                        except Exception as e:
+                            logger.debug(f"[{feed_id}] VideoWriter put failed: {e}")
 
                     if not frame_buffer:
                         logger.error(
