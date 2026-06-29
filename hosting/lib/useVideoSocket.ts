@@ -78,7 +78,14 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
       const vehiclesToStore = minimal ? null : frameVehicles;
       
       if (index < (lastFrameRef.current?.index ?? -1)) {
-        if (image instanceof ImageBitmap) image.close();
+        if (image instanceof ImageBitmap) {
+          try { image.close(); } catch (e) {}
+        }
+        return;
+      }
+
+      // Skip redundant decoding if same frame received (reconnect race)
+      if (image === lastFrameRef.current?.image) {
         return;
       }
 
