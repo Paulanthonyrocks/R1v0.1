@@ -21,6 +21,7 @@ from app.services.notification_service import NotificationService
 from app.services.incident_manager import IncidentManager
 from app.services.node_manager import NodeManager
 from app.ml.traffic_predictor import TrafficPredictor
+from app.services.video_processor import VideoProcessor, VideoManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class ServiceRegistry:
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
         self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
+        self._video_manager: Optional[VideoManager] = None
         self._init_lock = asyncio.Lock()
         self._initialized = False
 
@@ -122,6 +124,12 @@ class ServiceRegistry:
         if self._node_manager is None:
             raise RuntimeError("NodeManager not initialized.")
         return self._node_manager
+
+    @property
+    def video_manager(self) -> VideoManager:
+        if self._video_manager is None:
+            raise RuntimeError("VideoManager not initialized.")
+        return self._video_manager
 
     async def initialize(
         self, 
@@ -230,6 +238,14 @@ class ServiceRegistry:
             # Link Feed Manager to Incident Manager
             self._incident_manager.set_feed_manager(self._feed_manager)
             logger.info("FeedManager initialized and linked to IncidentManager.")
+
+            # Video Manager (manages per-stream VideoProcessors for recording)
+            # Uses the same output_directory as video_output config.
+            video_out_cfg = config.get("video_output", {})
+            self._video_manager = VideoManager.get_instance(
+                output_directory=video_out_cfg.get("output_directory", "backend/data/recordings")
+            )
+            logger.info("VideoManager initialized.")
         except Exception as e:
             logger.error(f"Error during core service initialization: {e}")
             raise
@@ -342,6 +358,7 @@ class ServiceRegistry:
             ("WeatherService", self._shutdown_weather_service),
             ("NodeManager", self._shutdown_node_manager),
             ("EventService", self._shutdown_event_service),
+            ("VideoManager", self._shutdown_video_manager),
         ]
 
         for service_name, shutdown_func in shutdown_tasks:
@@ -400,6 +417,11 @@ class ServiceRegistry:
             await self._node_manager.stop()
             logger.info("NodeManager shutdown completed.")
 
+    async def _shutdown_video_manager(self) -> None:
+        if self._video_manager:
+            await self._video_manager.cleanup()
+            logger.info("VideoManager shutdown completed.")
+
     def _reset_services(self) -> None:
         """Reset all service references to None."""
         self._feed_manager = None
@@ -414,6 +436,7 @@ class ServiceRegistry:
         self._advanced_analytics_service = None
         self._incident_manager = None
         self._node_manager = None
+        self._video_manager = None
         self._connection_manager = None
 
     async def health_check(self) -> Dict[str, Any]:
@@ -586,3 +609,8 @@ def get_retention_service() -> RetentionService:
 
 def get_incident_manager() -> IncidentManager:
     return get_service_registry().incident_manager
+
+
+def get_video_manager() -> VideoManager:
+    """Get the VideoManager singleton. Raises if not yet initialized."""
+    return get_service_registry().video_manager

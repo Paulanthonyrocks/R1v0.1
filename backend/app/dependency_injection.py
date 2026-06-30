@@ -10,6 +10,7 @@ from app.database import get_database_manager
 from app.utils.database import DatabaseManager
 from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
+from app.services.video_processor import VideoManager
 from app.core.feature_flags import FeatureFlags
 from app.utils.auth_utils import verify_firebase_token
 from app.models.user import User, UserRole
@@ -141,6 +142,10 @@ async def get_analytics_service() -> AnalyticsService:
 
 async def get_advanced_analytics_service() -> AdvancedAnalyticsService:
     return await container.get_advanced_analytics_service()
+
+async def get_video_manager() -> VideoManager:
+    from app.services import get_video_manager as _get_vm
+    return _get_vm()
 
 def get_config() -> Dict[str, Any]:
     return copy.deepcopy(container._config)

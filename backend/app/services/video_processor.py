@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from app.database import get_database_manager
 from app.models.processed_video import ProcessedVideo
+from app.services.video_writer import get_encoder_profile
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,10 @@ class VideoProcessor:
         self._draw_overlays_enabled: bool = self._read_overlay_default(feed_manager)
         self._is_active: bool = True  # Fix 2A: Graceful generator shutdown flag
 
+        # Background task that pulls from get_frame_generator (recording consumer).
+        # Set by start_recording(), cancelled by stop_recording().
+        self._record_task: Optional[asyncio.Task] = None
+
         # Recording internals
         self._video_writer: Optional[cv2.VideoWriter] = None
         self._output_path: Optional[str] = None
@@ -62,6 +67,17 @@ class VideoProcessor:
         self._recording_start_time: Optional[float] = None
         self._frame_rate: float = 10.0
         self._frame_size: Optional[tuple] = None
+
+        # Pull GPU accel + codec from config so both VideoProcessor and
+        # VideoWriter use the same encoder profile when recording.
+        _cfg = getattr(feed_manager, "config", {}) or {}
+        _perf = _cfg.get("performance", {})
+        _gpu = _perf.get("video_gpu_acceleration", False)
+        _video_out = _cfg.get("video_output", {})
+        _requested_codec = _video_out.get("codec", "mp4v")
+        self._codec_candidates, _ext = get_encoder_profile(
+            requested_codec=_requested_codec, gpu_acceleration=_gpu
+        )
 
         # Executor for CPU-bound OpenCV tasks (Decoding/Encoding/Writing)
         self._executor = ThreadPoolExecutor(
@@ -100,10 +116,6 @@ class VideoProcessor:
         logger.info(
             f"[{self.stream_id}] draw_overlays_enabled -> {self._draw_overlays_enabled}"
         )
-
-    # Background task that pulls from get_frame_generator (recording consumer).
-    # Set by start_recording(), cancelled by stop_recording().
-    _record_task: Optional[asyncio.Task] = None
 
     async def start_recording(self, output_filename: str, frame_rate: float):
         if self._recording_event.is_set():
@@ -309,11 +321,30 @@ class VideoProcessor:
                     )
                     return
                 self._frame_size = (w, h)
-                # mp4v is generally safe for filesystem recording
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                self._video_writer = cv2.VideoWriter(
-                    self._tmp_output_path, fourcc, self._frame_rate, self._frame_size
-                )
+                # Try codecs in priority order (nvenc → H264 → mp4v → …).
+                opened = False
+                for c in self._codec_candidates:
+                    fourcc = cv2.VideoWriter_fourcc(*c)
+                    writer = cv2.VideoWriter(
+                        self._tmp_output_path, fourcc, self._frame_rate, self._frame_size
+                    )
+                    if writer.isOpened():
+                        self._video_writer = writer
+                        logger.info(
+                            f"[{self.stream_id}] VideoProcessor opened with codec '{c}', "
+                            f"fps={self._frame_rate}, res={self._frame_size}"
+                        )
+                        opened = True
+                        break
+                    try:
+                        writer.release()
+                    except Exception:
+                        pass
+                if not opened:
+                    logger.error(
+                        f"[{self.stream_id}] Could not open any VideoWriter codec from "
+                        f"{self._codec_candidates}. Recording will not be saved."
+                    )
 
             if self._video_writer.isOpened():
                 # Safety resize if resolution changes mid-stream. Guarded

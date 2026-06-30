@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import logging
 
 from app.config import get_current_config
-from app.dependency_injection import get_current_active_user, get_feed_manager
+from app.dependency_injection import get_current_active_user, get_feed_manager, get_video_manager
 from app.services.video_processor import VideoManager
 from app.database import get_database_manager
 
@@ -70,7 +70,7 @@ async def stream_video(stream_id: str, current_user: dict = Depends(get_current_
 @router.post("/record/start")
 async def start_video_recording(
     request: StartRecordingRequest,
-    video_manager: VideoManager = Depends(VideoManager.get_instance),
+    video_manager: VideoManager = Depends(get_video_manager),
     feed_manager=Depends(get_feed_manager),
 ):
     """
@@ -111,7 +111,7 @@ async def start_video_recording(
 
 @router.post("/record/stop")
 async def stop_video_recording(
-    stream_id: str, video_manager: VideoManager = Depends(VideoManager.get_instance),
+    stream_id: str, video_manager: VideoManager = Depends(get_video_manager),
     feed_manager=Depends(get_feed_manager)
 ):
     config = get_current_config()

@@ -9,35 +9,58 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+def get_encoder_profile(
+    requested_codec: str = "mp4v",
+    gpu_acceleration: bool = False,
+) -> tuple[list[str], str]:
+    """
+    Build an ordered list of fourcc codec names to try and the appropriate
+    file extension.  Shares the same logic between VideoWriter (per-feed,
+    cross-process) and VideoProcessor (API-side recording, in-process).
+
+    Returns
+    -------
+    (codec_candidates, extension)
+        codec_candidates : ordered list of fourcc strings to attempt
+        extension        : ".mp4" for H.264/avc1/mp4v, ".avi" for others
+    """
+    candidates = []
+    seen = set()
+
+    if gpu_acceleration:
+        candidates.extend(["h264_nvenc", "hevc_nvenc"])
+        seen.update(candidates)
+
+    for c in [requested_codec, "avc1", "H264", "mp4v", "XVID", "MJPG"]:
+        if c and c not in seen:
+            candidates.append(c)
+            seen.add(c)
+
+    ext = ".mp4" if requested_codec in ("avc1", "mp4v", "H264") else ".avi"
+    return candidates, ext
+
 class VideoWriter:
     def __init__(self, feed_id: str, output_dir: str, fps: int, frame_queue: Queue, codec: str = 'avc1'):
         self.feed_id = feed_id
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        
+
+        # Check for GPU config first (needed for get_encoder_profile)
+        from app.config import get_current_config
+        self.perf_cfg = get_current_config().performance
+
         # Use .mp4 for H.264/avc1 and mp4v, fallback to .avi for others if needed
-        ext = ".mp4" if codec in ['avc1', 'mp4v', 'H264'] else ".avi"
+        self._codec_candidates, ext = get_encoder_profile(
+            requested_codec=codec,
+            gpu_acceleration=self.perf_cfg.video_gpu_acceleration,
+        )
         self.output_path = os.path.join(output_dir, f"{feed_id}_{timestamp}{ext}")
         self._tmp_output_path = f"{os.path.splitext(self.output_path)[0]}.tmp{ext}"
-        
+
         self.fps = fps
         self.resolution = None
         self.frame_queue = frame_queue
 
-        # Check for GPU config
-        from app.config import get_current_config
-        self.perf_cfg = get_current_config().performance
-        
-        # Prepare codec preference list
-        self._codec_candidates = []
-        if self.perf_cfg.video_gpu_acceleration:
-            # NVIDIA hardware acceleration candidates
-            self._codec_candidates.extend(['h264_nvenc', 'hevc_nvenc'])
-
-        seen = set(self._codec_candidates)
-        for c in [codec, 'avc1', 'H264', 'mp4v', 'XVID', 'MJPG']:
-            if c and c not in seen:
-                self._codec_candidates.append(c)
-                seen.add(c)
         self.fourcc = None
         
         self.writer = None
