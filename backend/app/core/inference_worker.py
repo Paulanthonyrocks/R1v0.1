@@ -163,6 +163,7 @@ def inference_worker(
 
     # --- Shared model loading ---
     shared_reid_embedder = None
+    device = "cpu"  # Default; overridden below if GPU is available
 
     if model_path:
         # Worker always loads models on boot. should_stop() is checked in the
@@ -206,8 +207,8 @@ def inference_worker(
             if vehicle_det_cfg.get("reid_enabled", True):
                 from app.ml.reid_model import ReIDEmbedder
 
-                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder...")
-                shared_reid_embedder = ReIDEmbedder(config)
+                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder on {device}...")
+                shared_reid_embedder = ReIDEmbedder(config, device=device)
                 logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
 
             # Signal readiness to FeedManager
@@ -649,5 +650,3 @@ def inference_worker(
                 cm.cleanup()
             except Exception as e:
                 logger.error(f"[Worker {worker_id}] Error cleaning up CoreModule for {feed_id}: {e}")
-
-        logger.info(f"Inference process {os.getpid()} terminated.")

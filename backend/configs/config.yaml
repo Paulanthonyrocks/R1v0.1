@@ -62,7 +62,7 @@ inference:
   batch_size: 8
   detection_model: models/yolov8n.pt
   device: cuda:0
-  num_workers: 8
+  num_workers: 4
   worker_ready_timeout: 60
   use_tensorrt: false
 ingestion:
@@ -442,7 +442,7 @@ performance:
   gpu_acceleration: true
   image_gpu_acceleration: true
   inference_pool_size: 8
-  inference_timeout: 0.1
+  inference_timeout: 0.2
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
   memory_limit_percent: 85
@@ -454,7 +454,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 500
+  shm_pool_size: 1000
   shm_stale_timeout: 5.0
   video_gpu_acceleration: true
 personalized_routing:

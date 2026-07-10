@@ -9,10 +9,23 @@ import logging
 logger = logging.getLogger("app.ml.reid")
 
 class ReIDEmbedder:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, device: Optional[str] = None):
+        """
+        Args:
+            config: Application configuration dict.
+            device: Optional device override (e.g. 'cuda:1'). When provided, it
+                    takes precedence over the config-level gpu_acceleration flag.
+                    This allows per-worker GPU assignment in multi-GPU setups.
+        """
         self.config = config
         self.reid_cfg = config.get("vehicle_detection", {}).get("reid", {})
-        self.device = "cuda" if config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available() else "cpu"
+
+        if device is not None:
+            self.device = device
+        elif config.get("performance", {}).get("gpu_acceleration", False) and torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
         
         # Configuration options
         self.backbone_name = self.reid_cfg.get("backbone", "mobilenet_v3_small")
