@@ -1418,15 +1418,23 @@ class FeedManager:
                     stats = self.frame_buffer.get_stats()
                     free_pct = (stats['free_pool_size'] / stats['pool_size'] * 100) if stats['pool_size'] > 0 else 0
                     drop_rate = stats['drop_count'] / max(1, stats['acquired_count'])
+                    in_flight = stats.get('in_flight', 0)
+                    orphan = stats.get('orphan_count', max(0, stats['acquired_count'] - stats['release_count'] - in_flight))
                     self.logger.info(
                         f"[SHM-STATS] free={stats['free_pool_size']}/{stats['pool_size']} ({free_pct:.1f}%), "
                         f"acq={stats['acquired_count']}, rel={stats['release_count']}, "
+                        f"in_flight={in_flight}, orphan={orphan}, "
                         f"drops={stats['drop_count']} ({drop_rate:.1%})"
                     )
-                    
+
                     # Apply backpressure if pool is running low
                     if free_pct < 20:
                         self.logger.warning(f"[SHM-PRESSURE] Pool at {free_pct:.1f}% free - inference cannot keep up with ingestion")
+                    elif orphan > stats['pool_size'] * 0.1:
+                        self.logger.warning(
+                            f"[SHM-PRESSURE] Orphan segment count {orphan} > 10% of pool. SHM recycling is leaking; "
+                            f"check that release() is being called for every acquire()."
+                        )
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
 

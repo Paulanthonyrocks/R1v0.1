@@ -3,8 +3,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 interface HeatmapProps {
     feed_id?: string;

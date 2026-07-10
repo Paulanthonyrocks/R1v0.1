@@ -1,4 +1,5 @@
 import { APIClient } from '../api/APIClient';
+import { getBackendBaseURL } from '../api/backendBaseUrl';
 import { AlertData } from '../types';
 
 export class IncidentService {
@@ -6,7 +7,7 @@ export class IncidentService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || '' });
+        this.apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
     }
 
     public static getInstance(): IncidentService {

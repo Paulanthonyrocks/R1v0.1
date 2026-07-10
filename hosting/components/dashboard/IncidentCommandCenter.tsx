@@ -26,6 +26,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+
+const API_BASE_URL = getBackendBaseURL();
 
 interface IncidentCommandCenterProps {
   alerts: AlertData[];
@@ -283,7 +286,7 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
 
                       {selectedIncident.details?.snapshot_path ? (
                         <img
-                          src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/snapshots/${selectedIncident.details.snapshot_path}`}
+                          src={`${API_BASE_URL}/api/v1/snapshots/${selectedIncident.details.snapshot_path}`}
                           alt="Incident Snapshot"
                           className="w-full h-full object-contain filter grayscale contrast-125"
                         />

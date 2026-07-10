@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 export default function PredictivePage() {
     const { feeds } = useRealtimeUpdates();

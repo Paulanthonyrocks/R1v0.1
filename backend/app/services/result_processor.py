@@ -72,22 +72,21 @@ class ResultProcessor:
         extra = None
         frame_bytes = None
         dims = None
-        
+
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
             self._shm_read_attempts += 1
             logger.info(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
             read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
-            if read_result is not None:
-                frame_bytes, dims = read_result
-                logger.info(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
-                # CRITICAL FIX: Release SHM immediately after successful read
-                # This prevents pool exhaustion when processing is slower than ingestion
-                try:
-                    self.frame_buffer.release(shm_ref)
-                except Exception as e:
-                    logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
-            else:
+            # Always release, success-or-fail. SharedFrameBuffer.release()
+            # is now idempotent (it ignores names not in its in-flight set),
+            # so doing this here unconditionally is safe even if pruning or
+            # the watchdog already returned the segment.
+            try:
+                self.frame_buffer.release(shm_ref)
+            except Exception as e:
+                logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
+            if read_result is None:
                 self._shm_read_failures += 1
                 failure_rate = self._shm_read_failures / max(1, self._shm_read_attempts)
                 logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref} (failure_rate={failure_rate:.1%})")
@@ -96,15 +95,11 @@ class ResultProcessor:
                 if failure_rate > 0.05 and now - self._last_failure_alert > 10.0:
                     logger.error(f"[RESULT_PROC] HIGH SHM FAILURE RATE: {failure_rate:.1%} over {self._shm_read_attempts} attempts. Pool exhaustion or feed recycling detected.")
                     self._last_failure_alert = now
-                # Release on read failure
-                try:
-                    self.frame_buffer.release(shm_ref)
-                except Exception:
-                    pass
                 return None
+            frame_bytes, dims = read_result
+            logger.info(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
         except Exception as e:
             logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
-            # Release on exception
             try:
                 self.frame_buffer.release(shm_ref)
             except Exception:

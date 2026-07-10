@@ -5,49 +5,25 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { WebSocketClient } from './WebSocketClient';
 import { useAuth } from '../auth/AuthProvider';
 import { getOrCreateWebSocketClient } from './websocketSingleton';
+import { getBackendWsURL } from '../api/backendBaseUrl';
 
 const WebSocketContext = createContext<WebSocketClient | null | undefined>(undefined);
 
 export const useWebSocket = () => {
  const context = useContext(WebSocketContext);
  if (context === undefined) {
- throw new Error('useWebSocket must be used within a WebSocketProvider');
+  throw new Error('useWebSocket must be used within a WebSocketProvider');
  }
  return context;
 };
 
-const getWsUrl = (path: string) => {
-  const wsEnvUrl = process.env.NEXT_PUBLIC_WS_URL;
-  if (wsEnvUrl) {
-    const baseUrl = wsEnvUrl.replace(/\/$/, '');
-    return `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
-  }
+// Backwards-compatible shim. New callers should use getBackendWsURL from
+// lib/api/backendBaseUrl.ts directly — see ../api/backendBaseUrl.ts.
+function legacyGetWsUrl(path: string): string {
+  return getBackendWsURL(path);
+}
 
-  let httpBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (!httpBaseUrl && typeof window !== 'undefined') {
-    httpBaseUrl = window.location.origin;
-  }
-  httpBaseUrl = httpBaseUrl || 'http://localhost:8000';
-
-  let baseUrlObj: URL;
-  try {
-    baseUrlObj = new URL(httpBaseUrl);
-  } catch {
-    if (httpBaseUrl.endsWith(':')) {
-      httpBaseUrl += '//localhost';
-    } else {
-      httpBaseUrl = 'http://localhost:8000';
-    }
-    baseUrlObj = new URL(httpBaseUrl);
-  }
-
-  const wsProtocol = baseUrlObj.protocol === 'https:' ? 'wss:' : 'ws:';
-  baseUrlObj.protocol = wsProtocol;
-  const cleanPath = path.startsWith('/') ? path : '/' + path;
-  return `${baseUrlObj.origin}${cleanPath}`;
-};
-
-const WS_BASE_URL = getWsUrl('/api/v1/ws');
+const WS_BASE_URL = legacyGetWsUrl('/api/v1/ws');
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
  const { token, loading } = useAuth();

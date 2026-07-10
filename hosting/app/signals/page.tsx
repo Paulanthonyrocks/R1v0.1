@@ -17,12 +17,13 @@ import {
 } from "@/components/ui/select";
 import { Label } from '@/components/ui/label';
 import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface Signal {
   id: string;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 const SignalsPage = () => {
   const [signals, setSignals] = useState<Signal[]>([]);

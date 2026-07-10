@@ -22,27 +22,35 @@ class SharedFrameBuffer:
     # 6*4 + 8 = 32 bytes
     HEADER_SIZE = 32 
     
-    def __init__(self, pool_size: int = 100, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 10.0):
-        # Pool size increased to 1000 to prevent exhaustion under high throughput
-        # With 3 feeds @ 15 FPS and result processor ~10 FPS per feed,
-        # we need ~45 segments in-flight minimum. 500 was causing exhaustion.
-        self.pool_size = pool_size if pool_size != 100 else 1000
+    def __init__(self, pool_size: int = 1000, max_frame_size: int = 10 * 1024 * 1024, read_only: bool = False, owner: bool = False, odd_timeout: float = 10.0):
+        # Pool size is sourced exclusively from config (see
+        # configs/config.yaml -> performance.shm_pool_size). The previous
+        # behaviour auto-bumped a literal-100 default to 1000, which made the
+        # value inconvenient to override at any other size. Choose 1000 here
+        # because, per SHM_POOL_FIX.md, 3 feeds @ 15 FPS need at least 1000
+        # segments to keep ingestion ahead of the result-processor's recycling
+        # window while leaving headroom for reader bursts.
+        self.pool_size = int(pool_size) if pool_size is not None else 1000
         self.max_frame_size = max_frame_size
         self.read_only = read_only
         self._owner = owner
         self._odd_timeout = odd_timeout
         self._lock = threading.Lock()
         self._segments: dict[str, shared_memory.SharedMemory] = {}
-        
+
         self._free_pool = None
         self._acquired_set_key = 'shm_acquired_pool'
-        
+
         # Buffer tracking for diagnostics
         self._acquired_count = 0
         self._release_count = 0
         self._drop_count = 0
         self._last_acquire_time = 0.0
         self._last_release_time = 0.0
+        # Track the names of segments currently held (acquired but not yet
+        # released). ``release()`` consults this set so double-release is a
+        # fast no-op and so the orphan count can be reported accurately.
+        self._in_flight: set[str] = set()
         
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
@@ -186,6 +194,8 @@ class SharedFrameBuffer:
             get_redis_client().sadd(self._acquired_set_key, name)
             self._acquired_count += 1
             self._last_acquire_time = time.time()
+            with self._lock:
+                self._in_flight.add(name)
             return name
         except queue.Empty:
             self._drop_count += 1
@@ -332,6 +342,25 @@ class SharedFrameBuffer:
     def release(self, name: str):
         if self._free_pool is None:
             return
+        # Double-release guard: if this segment was already returned to the
+        # free pool (e.g. by the prune_stale_segments loop, or by a redundant
+        # call from the result-processor after we already released on read),
+        # we silently drop it instead of pushing twice. This protects the
+        # free pool from growing phantom entries that mask real pool pressure.
+        with self._lock:
+            if name in self._in_flight:
+                self._in_flight.discard(name)
+            else:
+                # Not in flight — either already released or never acquired
+                # via this SharedFrameBuffer instance (workers attach read-only
+                # style to existing segments). Safe to drop silently.
+                if self._acquired_count > 0 and self._release_count == 0:
+                    # bootstrap state, allow first call
+                    pass
+                else:
+                    logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name} ignored (not in flight)")
+                    get_redis_client().srem(self._acquired_set_key, name)
+                    return
         try:
             # Remove from acquired set (best-effort tracking, not a gate)
             get_redis_client().srem(self._acquired_set_key, name)
@@ -349,11 +378,19 @@ class SharedFrameBuffer:
 
     def get_stats(self) -> dict:
         """Return buffer statistics for diagnostics."""
+        with self._lock:
+            in_flight = len(self._in_flight)
         return {
             'pool_size': self.pool_size,
             'acquired_count': self._acquired_count,
             'release_count': self._release_count,
             'drop_count': self._drop_count,
+            'in_flight': in_flight,
+            # Acquired minus Released is the orphan count. The free pool's
+            # ``qsize`` can lie if segments were leaked by a crash (Redis
+            # still holds the name but no /dev/shm backing exists), so this
+            # delta is the trustworthy indicator.
+            'orphan_count': max(0, self._acquired_count - self._release_count - in_flight),
             'free_pool_size': self._free_pool.qsize() if self._free_pool else 0,
             'last_acquire_ago': time.time() - self._last_acquire_time if self._last_acquire_time > 0 else None,
             'last_release_ago': time.time() - self._last_release_time if self._last_release_time > 0 else None,

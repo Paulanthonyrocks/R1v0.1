@@ -16,8 +16,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 interface GlobalVehicle {
     global_vehicle_id: string;

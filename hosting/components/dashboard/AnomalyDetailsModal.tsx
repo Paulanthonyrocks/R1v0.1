@@ -13,6 +13,9 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { AnomalyDetailsModalProps, SeverityLevel } from '@/lib/types';
 import { incidentService } from '@/lib/services/incidentService';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+
+const API_BASE_URL = getBackendBaseURL();
 import {
   AlertTriangle,
   Bomb,
@@ -164,7 +167,7 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
                 Incident Snapshot // High-Res Capture
               </div>
               <img
-                src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/v1/snapshots/${snapshotPath}`}
+                src={`${API_BASE_URL}/api/v1/snapshots/${snapshotPath}`}
                 alt="Incident Snapshot"
                 className="w-full h-auto object-contain max-h-[300px]"
                 onError={(e) => {

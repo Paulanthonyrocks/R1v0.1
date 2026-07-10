@@ -1,6 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
+import { getBackendBaseURL } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -22,7 +23,10 @@ export class APIClient {
     private tokenManager: TokenManager;
 
     private constructor(options: APIOptions) {
-        this.baseURL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'; // Always connect to the backend directly
+        // Always connect to the backend directly. Base URL resolution
+        // (env var, same-origin, dev default) is centralized in
+        // lib/api/backendBaseUrl.ts.
+        this.baseURL = options.baseURL || getBackendBaseURL();
         this.timeout = options.timeout || 30000;
         this.headers = {
             'Content-Type': 'application/json',

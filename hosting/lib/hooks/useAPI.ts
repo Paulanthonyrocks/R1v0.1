@@ -1,12 +1,13 @@
 import { useEffect, useMemo } from 'react';
 import { APIClient } from '../api/APIClient';
 import { useUser } from '../auth/UserContext';
+import { getBackendBaseURL } from '../api/backendBaseUrl';
 
 export function useAPI() {
     const { token } = useUser();
-    
+
     const api = useMemo(() => APIClient.getInstance({
-        baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || '/'
+        baseURL: getBackendBaseURL()
     }), []);
 
     useEffect(() => {

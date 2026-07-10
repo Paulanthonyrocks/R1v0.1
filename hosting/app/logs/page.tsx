@@ -8,6 +8,7 @@ import { Search, Terminal, ShieldAlert, Info, X } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface LogEntry {
     id: number;
@@ -19,7 +20,7 @@ interface LogEntry {
     source: string;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 const SystemLogsPage = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);

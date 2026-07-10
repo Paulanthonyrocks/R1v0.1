@@ -24,8 +24,9 @@ import {
 } from "@/components/ui/select";
 import { incidentService } from '@/lib/services/incidentService';
 import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE_URL = getBackendBaseURL();
 
 export default function IncidentsPage() {
     const [incidents, setIncidents] = useState<Incident[]>([]);
