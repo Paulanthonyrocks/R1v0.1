@@ -76,14 +76,13 @@ class ResultProcessor:
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
             self._shm_read_attempts += 1
-            logger.info(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
+            logger.debug(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
             read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
-            # Always release, success-or-fail. SharedFrameBuffer.release()
-            # is now idempotent (it ignores names not in its in-flight set),
-            # so doing this here unconditionally is safe even if pruning or
-            # the watchdog already returned the segment.
+            # CRITICAL FIX: Release SHM immediately after read, before any expensive operations.
+            # This prevents pool exhaustion when broadcast/subscriber pump is slow.
             try:
                 self.frame_buffer.release(shm_ref)
+                logger.debug(f"[RESULT_PROC] SHM released: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
             except Exception as e:
                 logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
             if read_result is None:
@@ -97,7 +96,7 @@ class ResultProcessor:
                     self._last_failure_alert = now
                 return None
             frame_bytes, dims = read_result
-            logger.info(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            logger.debug(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
         except Exception as e:
             logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
             try:
@@ -106,7 +105,7 @@ class ResultProcessor:
                 pass
             return None
 
-        # Return frame data - SHM already released, we're working with copied bytes
+        # Return frame data with SHM already released - broadcast happens downstream
         return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
 
     async def process_results_loop(self, handle_periodic_tasks_callback):
@@ -278,7 +277,7 @@ class ResultProcessor:
                     data=binary_data,
                     frame_index=frame_idx
                 )
-                logger.info(f"[RESULT_PROC] Broadcast sent: feed={feed_id}, frame_idx={frame_idx}")
+                logger.debug(f"[RESULT_PROC] Broadcast sent: feed={feed_id}, frame_idx={frame_idx}")
             else:
                 logger.warning(f"[RESULT_PROC] Broadcaster is None; cannot broadcast frame for {feed_id}")
 

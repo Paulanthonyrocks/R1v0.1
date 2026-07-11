@@ -454,7 +454,7 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 1000
+  shm_pool_size: 2000
   shm_stale_timeout: 5.0
   video_gpu_acceleration: true
 personalized_routing:

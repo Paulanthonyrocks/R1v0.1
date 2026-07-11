@@ -353,17 +353,10 @@ class SharedFrameBuffer:
             else:
                 # Not in flight — either already released or never acquired
                 # via this SharedFrameBuffer instance (workers attach read-only
-                # style to existing segments). Safe to drop silently.
-                if self._acquired_count > 0 and self._release_count == 0:
-                    # bootstrap state, allow first call
-                    pass
-                else:
-                    logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name} ignored (not in flight)")
-                    get_redis_client().srem(self._acquired_set_key, name)
-                    return
+                # style to existing segments). Safe to drop without logging
+                # to avoid spam during normal operation.
+                pass
         try:
-            # Remove from acquired set (best-effort tracking, not a gate)
-            get_redis_client().srem(self._acquired_set_key, name)
             # Always return to free pool - don't let tracking failures cause exhaustion
             logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
             try:
