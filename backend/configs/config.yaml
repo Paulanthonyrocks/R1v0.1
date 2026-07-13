@@ -458,10 +458,14 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 500
+  shm_pool_size: 2000
   # How long a segment may sit unwritten/abandoned before prune_stale_segments
   # reclaims it. Raised well above worst-case reader lag so an in-flight frame
   # is never reclaimed (which previously caused feed_hash mismatches + drops).
+  # NOTE: pool_size was briefly dropped to 500 during tuning; that starved the
+  # free pool (1158 'free pool empty' drops) because a segment is checked out
+  # from ingestion all the way through result_processor read. 2000 is the
+  # original headroom and never exhausted (free=2000/2000 in baseline logs).
   shm_stale_timeout: 60.0
   video_gpu_acceleration: true
 personalized_routing:
