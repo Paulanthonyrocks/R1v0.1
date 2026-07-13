@@ -544,6 +544,15 @@ def inference_worker(
                     if vehicle_det_cfg.get("reid_enabled", True):
                         for vid, track in vis_tracks.items():
                             vehicle_map = core.vehicle_type_map
+                            # global_vehicle_id persists in the tracker's
+                            # vehicle_data across frames. Re-running
+                            # match_or_register for an already-identified track
+                            # every frame causes a Redis round-trip storm
+                            # (hget/incr/set/rpush/publish per call) that pins
+                            # the worker to ~1 fps/feed. Only match/register
+                            # tracks that have not yet been assigned an id.
+                            if track.get("global_vehicle_id"):
+                                continue
                             emb = track.get("embedding")
                             if emb is not None:
                                 global_id = local_reid_manager.match_or_register(
@@ -558,7 +567,7 @@ def inference_worker(
                                     confidence=track.get("confidence", 1.0),
                                 )
                                 track["global_vehicle_id"] = global_id
-                            elif not track.get("global_vehicle_id"):
+                            else:
                                 mapped_id = local_reid_manager.get_global_id(meta["feed_id"], str(vid))
                                 if mapped_id:
                                     track["global_vehicle_id"] = mapped_id
