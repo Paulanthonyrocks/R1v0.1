@@ -21,6 +21,13 @@ export class APIClient {
     private timeout: number;
     private headers: Record<string, string>;
     private tokenManager: TokenManager;
+    // loca.lt (and some tunnel providers) gate unauthenticated HTTP requests
+    // behind a password interstitial that returns 503/Tunnel Unavailable. The
+    // only way to bypass it from a programmatic client is the `?password=`
+    // query param. Read once at construction; appended idempotently per request.
+    // The ngrok-skip-browser-warning header above is for ngrok only and is
+    // inert for loca.lt.
+    private localtunnelPassword: string | null;
 
     private constructor(options: APIOptions) {
         // Always connect to the backend directly. Base URL resolution
@@ -32,10 +39,31 @@ export class APIClient {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': '69420'
         };
+        const ltPw = process.env.NEXT_PUBLIC_LOCALTUNNEL_PASSWORD;
+        this.localtunnelPassword = ltPw && ltPw.trim().length > 0 ? ltPw.trim() : null;
         this.tokenManager = TokenManager.getInstance();
 
         // Subscribe to token updates
         this.tokenManager.onTokenRefresh(this.handleTokenRefresh.bind(this));
+    }
+
+    /**
+     * Idempotently append the loca.lt tunnel password as a query param so the
+     * request bypasses the tunnel's 503 password gate. No-op when no password is
+     * configured or the URL already carries one (e.g. on the 401-retry path
+     * where response.url already has it).
+     */
+    private withTunnelPassword(url: string): string {
+        if (!this.localtunnelPassword) return url;
+        try {
+            const urlObj = new URL(url);
+            if (!urlObj.searchParams.has('password')) {
+                urlObj.searchParams.set('password', this.localtunnelPassword);
+            }
+            return urlObj.toString();
+        } catch {
+            return url;
+        }
     }
 
     static getInstance(options: APIOptions): APIClient {
@@ -125,7 +153,7 @@ export class APIClient {
     }
 
     async request<T>(path: string, options: RequestInit & { timeout?: number } = {}): Promise<T> {
-        const url = new URL(path, this.baseURL).toString();
+        const url = this.withTunnelPassword(new URL(path, this.baseURL).toString());
         const token = this.tokenManager.getCurrentToken();
         
         if (token) {
