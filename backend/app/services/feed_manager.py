@@ -4,6 +4,7 @@ import base64
 import asyncio
 import logging
 import multiprocessing
+import threading
 import time
 import re
 import atexit
@@ -134,8 +135,11 @@ class FeedManager:
         self.slot_count = FeedManagerConstants.SLOT_COUNT
         # Counters used by _launch_worker to co-locate feeds onto the same
         # worker's slots so inference batches actually fill (see comment there).
+        # _launch_worker is synchronous, so a threading.Lock guards the
+        # counters (self._lock is the async lock used elsewhere).
         self._feed_launch_seq = 0
         self._per_worker_feed_count: Dict[int, int] = {}
+        self._route_lock = threading.Lock()
         self.use_redis = self.config.get("redis", {}).get("enabled", False)
 
         if self.use_redis:
@@ -1308,7 +1312,7 @@ class FeedManager:
         # successive feeds on that worker are spread across that worker's
         # distinct slot indices. Consecutive feeds therefore share a worker
         # and get batched together -> real GPU utilisation.
-        with self._lock:
+        with self._route_lock:
             configured_pool = self.config.get("inference", {}).get("num_workers", 2)
             pool_size = max(1, self.pool_manager.pool_size or configured_pool or 1)
             wid = self._feed_launch_seq % pool_size
