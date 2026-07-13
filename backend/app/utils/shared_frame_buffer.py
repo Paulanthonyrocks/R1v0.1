@@ -140,6 +140,20 @@ class SharedFrameBuffer:
         now = time.time()
         stale_count = 0
         skipped_uninitialised = 0
+        skipped_in_flight = 0
+
+        # Segments still logically in flight (acquired but not yet released)
+        # must NOT be reclaimed. The acquired set is now kept accurate by
+        # release() (it srems the name), so any name still present here is a
+        # segment genuinely pending in the pipeline. Reclaiming it would let
+        # ingestion recycle it under the result reader, producing feed_hash
+        # mismatches and dropped frames (the previous ~14% failure mode).
+        # On a crash the acquired set is the source of truth for what is
+        # still referenced; we only prune what is NOT in it.
+        try:
+            acquired_set = get_redis_client().smembers(self._acquired_set_key) or set()
+        except Exception:
+            acquired_set = set()
 
         # Zero-Corruption Protocol note: SHM segments created via
         # ``shared_memory.SharedMemory(create=True, ...)`` are zero-initialised,
@@ -166,6 +180,12 @@ class SharedFrameBuffer:
                     skipped_uninitialised += 1
                     continue
 
+                # Skip segments still logically in flight. Compare both str
+                # and bytes forms because the Redis set may hold either.
+                if name in acquired_set or name.encode() in acquired_set:
+                    skipped_in_flight += 1
+                    continue
+
                 # Reclaim if:
                 # 1. Version is EVEN and it's just old.
                 # 2. Version is ODD but it's been stuck for a long time (crashed writer).
@@ -186,7 +206,7 @@ class SharedFrameBuffer:
                 logger.debug(f"Could not read header for {name}, might be stale: {e}")
 
         if stale_count > 0:
-            logger.info(f"Recovered {stale_count} stale SHM segments (skipped {skipped_uninitialised} uninitialised).")
+            logger.info(f"Recovered {stale_count} stale SHM segments (skipped {skipped_uninitialised} uninitialised, {skipped_in_flight} in-flight).")
 
     def acquire(self, timeout: float = 0.2) -> Optional[str]:
         try:
@@ -364,6 +384,19 @@ class SharedFrameBuffer:
             except queue.Full:
                 # Pool is full (segment already returned twice) - safe to drop
                 logger.debug(f"SHM free pool full, dropping duplicate release of {name}")
+            # CRITICAL FIX: clear the segment from the acquired set so the
+            # stale-segment reclaimer (prune_stale_segments) no longer treats
+            # an in-flight segment as "leaked". Previously the acquired set was
+            # only ever grown on acquire() and never shrunk, so every segment
+            # ever touched stayed in it forever and prune() would reclaim
+            # segments that were still pending in central_output -> the result
+            # reader then read a recycled frame (wrong feed_hash) and dropped
+            # it. That was the ~14% SHM read-failure rate and the constant
+            # "Recovered N stale SHM segments" / SHM-leak chatter on shutdown.
+            try:
+                get_redis_client().srem(self._acquired_set_key, name)
+            except Exception:
+                pass
             self._release_count += 1
             self._last_release_time = time.time()
         except Exception as e:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import asyncio
-import hashlib
 import logging
 import multiprocessing
 import time
@@ -133,6 +132,10 @@ class FeedManager:
 
         # Virtual Slot Architecture for Dynamic Scaling
         self.slot_count = FeedManagerConstants.SLOT_COUNT
+        # Counters used by _launch_worker to co-locate feeds onto the same
+        # worker's slots so inference batches actually fill (see comment there).
+        self._feed_launch_seq = 0
+        self._per_worker_feed_count: Dict[int, int] = {}
         self.use_redis = self.config.get("redis", {}).get("enabled", False)
 
         if self.use_redis:
@@ -1291,9 +1294,34 @@ class FeedManager:
         if not entry:
             return
 
-        slot_id = int(hashlib.md5(feed_id.encode()).hexdigest(), 16) % self.slot_count
+        # Slot routing for batched inference.
+        #
+        # Workers batch frames pulled from the slots they own. A worker owns
+        # slot `s` when `s % pool_size == worker_id` (see InferencePoolManager.
+        # scale_pool / _spawn_worker). A naive hash routes each feed to a
+        # distinct slot, so a worker almost always sees exactly one feed per
+        # slot and the configured batch_size (8) degenerates to a batch of 1.
+        # That keeps the GPU at <50% util while the CPU pre/post work dominates.
+        #
+        # To let batches actually fill, we co-locate feeds onto the SAME
+        # worker's slot set: feed N is placed on worker (N % pool_size), and
+        # successive feeds on that worker are spread across that worker's
+        # distinct slot indices. Consecutive feeds therefore share a worker
+        # and get batched together -> real GPU utilisation.
+        with self._lock:
+            configured_pool = self.config.get("inference", {}).get("num_workers", 2)
+            pool_size = max(1, self.pool_manager.pool_size or configured_pool or 1)
+            wid = self._feed_launch_seq % pool_size
+            sub = self._per_worker_feed_count.get(wid, 0)
+            # Worker `wid` owns slots { wid, wid + pool_size, wid + 2*pool_size, ... }.
+            slot_id = (wid + sub * pool_size) % self.slot_count
+            self._per_worker_feed_count[wid] = sub + 1
+            self._feed_launch_seq += 1
+
         target_queue = self._inference_input_queues[slot_id]
-        logger.info(f"Routing feed {feed_id} to slot {slot_id}")
+        logger.info(
+            f"Routing feed {feed_id} to slot {slot_id} (worker {wid}, pool_size {pool_size})"
+        )
 
         worker_args = (
             source,
@@ -1409,10 +1437,19 @@ class FeedManager:
             try:
                 self._check_resources()
                 if self._has_active_feeds():
-                    # Aggressive SHM maintenance during active processing
-                    # Reduce timeout from 300s to 30s to reclaim frames faster
-                    # when inference falls behind ingestion
-                    self.frame_buffer.prune_stale_segments(timeout_seconds=30, odd_timeout=10.0)
+                    # Reclaim segments that are genuinely stale (abandoned by a
+                    # crashed writer) but NOT ones still in flight. The timeout
+                    # now comes from config (performance.shm_stale_timeout) so
+                    # it always exceeds worst-case reader lag; reclaiming an
+                    # in-flight segment would let ingestion recycle it under
+                    # the result reader and produce feed_hash mismatches (the
+                    # old ~14% drop + shutdown SHM-leak noise).
+                    stale_timeout = float(
+                        self.config.get("performance", {}).get("shm_stale_timeout", 60.0)
+                    )
+                    self.frame_buffer.prune_stale_segments(
+                        timeout_seconds=stale_timeout, odd_timeout=stale_timeout / 6.0
+                    )
                     
                     # Log SHM stats to detect throughput issues early
                     stats = self.frame_buffer.get_stats()

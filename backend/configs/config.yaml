@@ -62,7 +62,11 @@ inference:
   batch_size: 8
   detection_model: models/yolov8n.pt
   device: cuda:0
-  num_workers: 4
+  # 2 T4 GPUs: 2 inference workers (one per GPU) is plenty. More workers each
+  # load a full yolov8n + ReID model into VRAM but rarely get fed, since feeds
+  # are now co-located onto fewer workers' slots so batches fill. 2 also keeps
+  # a single worker owning enough slots that its batch_size (8) is actually hit.
+  num_workers: 2
   worker_ready_timeout: 60
   use_tensorrt: false
 ingestion:
@@ -454,8 +458,11 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 2000
-  shm_stale_timeout: 5.0
+  shm_pool_size: 500
+  # How long a segment may sit unwritten/abandoned before prune_stale_segments
+  # reclaims it. Raised well above worst-case reader lag so an in-flight frame
+  # is never reclaimed (which previously caused feed_hash mismatches + drops).
+  shm_stale_timeout: 60.0
   video_gpu_acceleration: true
 personalized_routing:
   enabled: false

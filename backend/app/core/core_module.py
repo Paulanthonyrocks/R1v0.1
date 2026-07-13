@@ -386,7 +386,9 @@ class CoreModule:
             "congestion_score": congestion,
             "session_average_congestion_score": round(session_avg_congestion, 3),
             "vehicle_count": len(active_vehicles),
-            "total_vehicles_cumulative": 0, # This is typically tracked in a separate counter
+            # total_vehicles_cumulative is tracked by TrafficMonitor.seen_vehicle_ids;
+            # _compute_feed_metrics only writes to DB. Use monitor.get_metrics() for
+            # the authoritative cumulative count (broadcast via VIDEO_FRAME).
         }
 
     def _should_update_reid(self, tid: str, track: TrackData, frame_index: int) -> bool:

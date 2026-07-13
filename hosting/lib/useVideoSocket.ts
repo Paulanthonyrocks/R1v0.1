@@ -58,6 +58,10 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
   const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const consecutiveStaleCountRef = useRef<number>(0);
+  // Holds the previous ImageBitmap waiting to be closed. The renderer's rAF
+  // loop notifies us via this ref once the new frame has been painted so we
+  // don't close a bitmap the canvas is actively showing.
+  const pendingClosureRef = useRef<ImageBitmap | null>(null);
 
   // Log only on actual mount/unmount to stop the console flood
   useEffect(() => {
@@ -89,13 +93,20 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
         return;
       }
 
-      if (lastFrameRef.current?.image instanceof ImageBitmap && lastFrameRef.current.image !== image) {
-        const oldImage = lastFrameRef.current.image;
-        setTimeout(() => {
-          try {
-            oldImage.close();
-          } catch (e) {}
-        }, 100);
+      // Defer closing the previous bitmap until the rAF render loop has had a
+      // chance to paint the NEW frame at least once. Without this, a burst of
+      // frames during a "Significant frame gap" recovery can race close the
+      // currently-displayed bitmap in the 100ms window before the canvas
+      // redraws, leaving a black/blank canvas for one or more paint cycles.
+      const previousImage = lastFrameRef.current?.image instanceof ImageBitmap &&
+        lastFrameRef.current.image !== image
+        ? lastFrameRef.current.image
+        : null;
+      if (previousImage) {
+        // Mark the new image so we know to close the *previous* one once the
+        // renderer has drawn it. The rAF loop watches lastDrawnIndex and
+        // signals settle via pendingClosureRef.
+        pendingClosureRef.current = previousImage;
       }
 
       if (streamId) {
@@ -425,18 +436,25 @@ const unsubscribeFromFeed = useCallback(() => {
       minimal = false,  // Dashboard thumbnails: skip per-vehicle bboxes/metrics canvas text
     } = options;
 
+    // ImageBitmap can be closed/detached after decoder reuses memory. If we
+    // detect a detached image, DO NOT clear the canvas — that would blank out
+    // the previously painted frame for one or more paint cycles during a frame
+    // burst (the original "blank before rerender" symptom). Instead, skip the
+    // wipe entirely; the next successful non-detached frame will draw normally
+    // (drawImage already overwrites the prior content if needed).
+    const isDetached = image instanceof ImageBitmap && !image.width && !image.height;
+    if (isDetached) {
+      return;
+    }
+
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     if (image) {
-      // ImageBitmap can be closed/detached after decoder reuses memory
-      const isDetached = image instanceof ImageBitmap && !image.width && !image.height;
-      if (!isDetached) {
-        try {
-          ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
-        } catch (e) {
-          // Fallback for race conditions where bitmap detaches mid-check
-          console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image detached`);
-        }
+      try {
+        ctx.drawImage(image, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      } catch (e) {
+        // Fallback for race conditions where bitmap detaches mid-draw
+        console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image detached`);
       }
     }
 
@@ -496,16 +514,38 @@ const unsubscribeFromFeed = useCallback(() => {
         ctx.fillText(`Speed: ${metrics.average_speed_kmh} km/h`, 10, 40);
       }
     }
-  }, []); 
+  }, []);
 
-  return { 
-    lastFrameRef, 
-    metrics: feedState.metrics, 
-    vehicles: feedState.vehicles, 
-    isConnected, 
-    error, 
-    drawFrame, 
-    frameRate, 
+  // Called by the rAF render loop after it has drawn the current frame to
+  // the canvas. We close the queued "previous" ImageBitmap now so it can be
+  // GC'd without leaving the canvas pointing at a detached bitmap.
+  const notifyFrameRendered = useCallback((drawnIndex: number) => {
+    if (
+      pendingClosureRef.current &&
+      lastDrawnIndexRef.current === drawnIndex
+    ) {
+      const toClose = pendingClosureRef.current;
+      pendingClosureRef.current = null;
+      // Defer close by a microtask so the drawImage call has fully completed
+      // on the GPU side before memory is released.
+      setTimeout(() => {
+        try {
+          toClose.close();
+        } catch (e) {}
+      }, 0);
+    }
+    lastDrawnIndexRef.current = drawnIndex;
+  }, []);
+
+  return {
+    lastFrameRef,
+    metrics: feedState.metrics,
+    vehicles: feedState.vehicles,
+    isConnected,
+    error,
+    drawFrame,
+    frameRate,
+    notifyFrameRendered,
     updateFeedConfig: (config: any) => client?.send({ type: WebSocketMessageType.UPDATE_FEED_CONFIG, data: { feed_id: streamId, updates: config } })
   };
 };

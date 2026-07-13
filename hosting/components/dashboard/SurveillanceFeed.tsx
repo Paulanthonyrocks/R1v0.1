@@ -40,7 +40,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
   // Only subscribe if the feed is in an active state
   const shouldSubscribe = status === 'running' || status === 'starting';
-  const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig } = useVideoSocket(
+  const { lastFrameRef, metrics, isConnected, error, drawFrame, frameRate: fps, vehicles, updateFeedConfig, notifyFrameRendered } = useVideoSocket(
     shouldSubscribe ? feed_id : "",
     minimalControls  // Skip vehicle data in minimal mode to reduce memory/GC pressure
   );
@@ -381,6 +381,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         minimal: minimalControls  // Dashboard grid: skip per-vehicle canvas overlays
                     });
 
+                    // Signal the hook so it can release the previous frame's
+                    // ImageBitmap safely now that the canvas has been painted.
+                    notifyFrameRendered(frame.index);
+                    lastDrawnIndex = frame.index;
+
                     if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0 && !minimalControls)) {
                         ctx.save();
                         ctx.strokeStyle = roi.roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
@@ -442,8 +447,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         }
                         ctx.restore();
                     }
-                    
-                    lastDrawnIndex = frame.index;
+
+                    // (lastDrawnIndex is now set immediately above notifyFrameRendered)
                 } else if (ctx) {
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
@@ -458,7 +463,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 cancelAnimationFrame(animationFrameId);
             }
         };
-    }, [isConnected, drawFrame, feed_id]);
+    }, [isConnected, drawFrame, feed_id, notifyFrameRendered]);
 
     const handleStartFeed = () => {
         if (isToggling) return;

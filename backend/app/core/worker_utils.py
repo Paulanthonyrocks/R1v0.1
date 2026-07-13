@@ -129,6 +129,7 @@ def serialize_tracked_vehicles(
 
             serialized_list.append({
                 "vehicle_id": str(vehicle_id),
+                "global_vehicle_id": str(data.get("global_vehicle_id", "")),
                 "bbox": [make_serializable(x) for x in scaled_bbox] if scaled_bbox else [],
                 "speed": make_serializable(data.get("speed", 0.0)),
                 "license_plate": str(data.get("license_plate", "Unknown")),
@@ -137,6 +138,8 @@ def serialize_tracked_vehicles(
                 "behavior": str(data.get("behavior", "unknown")),
                 "confidence": make_serializable(data.get("confidence", 0.0)),
                 "is_occluded": bool(data.get("is_occluded", False)),
+                "is_wrong_way": bool(data.get("is_wrong_way", False)),
+                "is_stopped": bool(data.get("is_stopped", False)),
                 "lane": int(data.get("lane", -1)),
                 "status": str(data.get("status", "unknown")),
                 "vx": make_serializable(data.get("vx", 0.0)),
