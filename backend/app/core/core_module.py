@@ -336,22 +336,23 @@ class CoreModule:
 
     def _compute_congestion_score(self, vehicles: List[Dict], avg_speed: float) -> float:
         """
-        Computes congestion score [0-1] from vehicle density and speed.
-        0 = free flow, 1 = jammed.
+        Computes congestion score on a 0-100 scale.
+        0 = free flow, 100 = jammed.
+
+        NOTE: This must stay in sync with TrafficMonitor.get_metrics()
+        (app/utils/monitoring.py) — same weights and scale — so the DB
+        feed_metrics record and the live WebSocket/predictor feature agree
+        (audit C4). Canonical: 0.7 * speed_factor + 0.3 * density_factor, x100.
         """
-        # Speed component (assuming free_flow = speed_limit)
         free_flow_speed = self.speed_limit
-        speed_component = max(0.0, 1.0 - (avg_speed / max(free_flow_speed, 1.0)))
-        
-        # Density component (vehicles per hypothetical road segment)
-        # Assume ROI represents ~100m of road
-        density_per_100m = len(vehicles) / 100.0
-        jam_density = 0.15  # vehicles/meter (15m spacing at standstill)
-        density_component = min(1.0, density_per_100m / jam_density)
-        
-        # Weighted average
-        congestion = 0.5 * speed_component + 0.5 * density_component
-        return round(congestion, 3)
+        speed_factor = 1.0 - (avg_speed / free_flow_speed) if free_flow_speed > 0 else 0.0
+        speed_factor = max(0.0, min(1.0, speed_factor))
+
+        density_factor = len(vehicles) / 100.0
+        density_factor = max(0.0, min(1.0, density_factor))
+
+        congestion = (speed_factor * 0.7 + density_factor * 0.3) * 100.0
+        return round(congestion, 1)
 
     def _compute_feed_metrics(self, vis_tracks: Dict[str, TrackData]) -> Dict[str, Any]:
         """
@@ -488,9 +489,49 @@ class CoreModule:
             thresh = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
             detections = self.detector.detect(frame, thresh)
 
-        # 3. Tracking (pass detections without embeddings first)
-        dets_for_tracker = [(d[0], d[1], d[2], None) for d in detections]
-        
+        # 3. Compute detection embeddings BEFORE association so the tracker's
+        # appearance-weighted matching (ReID) actually contributes. Previously
+        # embeddings were only computed after update(), leaving det embeddings
+        # None and making the tracker's ReID branch dead code (audit T1). Gated
+        # by config flag and a per-frame budget to bound GPU cost.
+        use_reid_assoc = (
+            self.reid_embedder is not None
+            and self.config.get("tracking", {}).get("use_appearance_in_tracking", True)
+        )
+        dets_for_tracker = []
+        if use_reid_assoc and detections:
+            h, w = frame.shape[:2]
+            assoc_budget = self.config.get("performance", {}).get("reid_assoc_budget_per_frame", 20)
+            crops = []
+            crop_det_idx = []
+            for di, d in enumerate(detections):
+                if len(crops) >= assoc_budget:
+                    break
+                # Only embed high-confidence detections (association-relevant)
+                if d[2] < self.confidence_threshold:
+                    continue
+                x1, y1, x2, y2 = map(int, d[0])
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                if x2 > x1 and y2 > y1:
+                    crops.append(frame[y1:y2, x1:x2])
+                    crop_det_idx.append(di)
+
+            det_embs: Dict[int, Any] = {}
+            if crops:
+                try:
+                    embs = self.reid_embedder.get_batch_embeddings(crops)
+                    for di, emb in zip(crop_det_idx, embs):
+                        if emb is not None:
+                            det_embs[di] = emb
+                except Exception as e:
+                    logger.warning(f"[{self.feed_id}] Detection embedding failed: {e}")
+
+            dets_for_tracker = [(d[0], d[1], d[2], det_embs.get(di)) for di, d in enumerate(detections)]
+        else:
+            # Pass detections without embeddings (motion-only association)
+            dets_for_tracker = [(d[0], d[1], d[2], None) for d in detections]
+
         # Capture current statuses as 'previous' before updating the tracker
         # We use a copy of the tracker's data or our own persistent mapping
         current_statuses = {tid: track.get("status", "unknown") 
@@ -595,6 +636,32 @@ class CoreModule:
 
                 # Physical speed cap to prevent anomalies (e.g., 180 km/h)
                 track["speed"] = min(track["speed"], 180.0)
+
+                # --- Acceleration (m/s^2) & direction ---
+                # Consumed by TrafficMonitor._detect_anomalies (hard_braking /
+                # wrong_way). Previously never computed, making those anomaly
+                # branches permanent no-ops (audit C2).
+                prev_speed_accel = track.get("prev_speed_for_accel")
+                prev_speed_t = track.get("prev_speed_t")
+                if prev_speed_accel is not None and prev_speed_t is not None:
+                    a_dt = current_time - prev_speed_t
+                    if a_dt > 1e-3:
+                        # km/h -> m/s delta over dt
+                        track["acceleration"] = (
+                            (track["speed"] - prev_speed_accel) / 3.6
+                        ) / a_dt
+                track["prev_speed_for_accel"] = track["speed"]
+                track["prev_speed_t"] = current_time
+
+                # Compass-style direction from Kalman velocity (image coords:
+                # +y is down, so North = moving up = negative vy).
+                vx = track.get("vx", 0.0)
+                vy = track.get("vy", 0.0)
+                if abs(vx) > 1e-3 or abs(vy) > 1e-3:
+                    if abs(vy) >= abs(vx):
+                        track["direction"] = "North" if vy < 0 else "South"
+                    else:
+                        track["direction"] = "East" if vx > 0 else "West"
 
                 # Filtering for visualisation
                 if track["status"] == "active":

@@ -131,16 +131,11 @@ class TrafficMonitor:
                     "details": f"Sudden deceleration detected: {accel:.1f} m/s²",
                     "location": data.get("centroid")
                 })
-            direction = data.get("direction")
-            if direction == "North" and data.get("vy", 0) > 2.0:
-                 self.anomalies.append({
-                    "type": "wrong_way",
-                    "vehicle_id": v_id,
-                    "timestamp": now,
-                    "severity": "Critical",
-                    "details": "Vehicle traveling against lane flow",
-                    "location": data.get("centroid")
-                })
+            # Wrong-way detection is handled authoritatively by SafetyMonitor
+            # (velocity vs. learned/static lane flow vector). The previous
+            # heuristic here read a 'direction' field against a hardcoded
+            # compass value and was both incoherent and redundant, so it has
+            # been removed (audit C2).
 
     def get_metrics(self) -> Dict[str, Any]:
         current_vehicle_count = len(self.tracked_vehicles)

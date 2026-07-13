@@ -33,6 +33,11 @@ class ResultProcessor:
         self._stop_flag = False
         # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
         self._subscriber_pump: Optional[Any] = None
+        # Optional hook for analytics ingestion (safety/incidents/history);
+        # assigned via set_analytics_hook. Invoked once per deduped frame with
+        # (feed_id, metrics, vehicles). Without it, SafetyMonitor and per-frame
+        # metric history are inert (audit C1).
+        self._analytics_hook: Optional[Any] = None
         # SHM read failure tracking
         self._shm_read_attempts = 0
         self._shm_read_failures = 0
@@ -57,6 +62,19 @@ class ResultProcessor:
         """
         self._subscriber_pump = pump_callable
         logger.info("ResultProcessor subscriber pump updated.")
+
+    def set_analytics_hook(self, hook_callable):
+        """
+        Wire the analytics ingestion hook.
+
+        The callable is invoked once per deduped frame as
+        ``await hook(feed_id, metrics, vehicles)``. It routes tracked-vehicle
+        data into AnalyticsService (SafetyMonitor wrong-way/stopped detection,
+        incident creation, and per-frame metric history for the predictor).
+        Passing None disables analytics ingestion.
+        """
+        self._analytics_hook = hook_callable
+        logger.info("ResultProcessor analytics hook updated.")
 
     def _process_single_result(self, item):
         """CPU-bound processing of a single result item (SHM read -> bytes)."""
@@ -295,6 +313,15 @@ class ResultProcessor:
                     )
                 except Exception as e:
                     logger.debug(f"Subscriber pump error for {feed_id}: {e}")
+
+            # 5. Route into analytics (SafetyMonitor, incidents, metric history).
+            # This is the bridge that was previously missing: without it the
+            # entire safety/incident/history path was dead code (audit C1).
+            if self._analytics_hook is not None:
+                try:
+                    await self._analytics_hook(feed_id, metrics, vehicles)
+                except Exception as e:
+                    logger.debug(f"Analytics hook error for {feed_id}: {e}")
 
         except Exception as e:
             logger.error(f"Error broadcasting frame data for {feed_id}: {e}", exc_info=True)

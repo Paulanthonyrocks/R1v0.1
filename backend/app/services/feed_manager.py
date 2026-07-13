@@ -348,6 +348,12 @@ class FeedManager:
         self._analytics_service = service
         self.logger.info("AnalyticsService set in FeedManager.")
 
+        # Wire the analytics ingestion hook so tracked-vehicle data reaches
+        # SafetyMonitor / incident creation / metric history (audit C1).
+        if self.result_processor:
+            self.result_processor.set_analytics_hook(service.process_feed_metrics)
+            self.logger.info("Analytics ingestion hook wired into ResultProcessor.")
+
         if self._reid_manager and hasattr(service, "_db_manager"):
             self._reid_manager.set_db_manager(service._db_manager)
             self.logger.info("ReIDManager connected to DatabaseManager.")

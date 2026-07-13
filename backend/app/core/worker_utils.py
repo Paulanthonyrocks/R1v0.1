@@ -7,6 +7,7 @@ to ensure consistency and reduce code duplication.
 
 import time
 import logging
+import cv2
 import numpy as np
 from typing import Dict, List, Any, Optional
 
@@ -135,9 +136,7 @@ def serialize_tracked_vehicles(
                 "license_plate": str(data.get("license_plate", "Unknown")),
                 "class_id": int(c_id),
                 "class_name": c_name,
-                "behavior": str(data.get("behavior", "unknown")),
                 "confidence": make_serializable(data.get("confidence", 0.0)),
-                "is_occluded": bool(data.get("is_occluded", False)),
                 "is_wrong_way": bool(data.get("is_wrong_way", False)),
                 "is_stopped": bool(data.get("is_stopped", False)),
                 "lane": int(data.get("lane", -1)),
@@ -145,9 +144,6 @@ def serialize_tracked_vehicles(
                 "vx": make_serializable(data.get("vx", 0.0)),
                 "vy": make_serializable(data.get("vy", 0.0)),
                 "ground_coordinates": [make_serializable(x) for x in data.get("ground_coordinates")] if "ground_coordinates" in data else None,
-                "car_model": data.get("car_model"),
-                "car_model_confidence": make_serializable(data.get("car_model_confidence", 0.0)),
-                "gallery_size": make_serializable(data.get("gallery_size", 0)),
                 "embedding": make_serializable(data.get("embedding")),
             })
         except Exception as e:

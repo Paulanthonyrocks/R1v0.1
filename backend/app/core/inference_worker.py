@@ -161,6 +161,13 @@ def inference_worker(
     skip_frames = vehicle_det_cfg.get("skip_frames", 2)
     model_path = vehicle_det_cfg.get("model_path")
 
+    # Detection filtering params (applied in the batched inference path so it
+    # matches DetectionEngine.detect(): honor the configured low-confidence
+    # floor for ByteTrack's second association stage, and restrict to vehicle
+    # classes. ROI filtering is applied per-feed via core.detector.is_in_roi().
+    vehicle_class_ids = set(vehicle_det_cfg.get("vehicle_class_ids", [2, 3, 5, 7]))
+    batch_conf_floor = vehicle_det_cfg.get("low_confidence_threshold", 0.1)
+
     # --- Shared model loading ---
     shared_reid_embedder = None
     device = "cpu"  # Default; overridden below if GPU is available
@@ -505,18 +512,24 @@ def inference_worker(
                 batch_detections_map: Dict[int, List] = {}
                 if frames_to_infer and shared_model is not None:
                     try:
-                        results = shared_model(frames_to_infer, verbose=False, stream=False)
+                        results = shared_model(frames_to_infer, conf=batch_conf_floor, verbose=False, stream=False)
                         for i, result in enumerate(results):
                             meta_idx = inference_indices[i]
                             meta = batch_meta[meta_idx]
                             boxes_data = result.boxes.data.cpu().numpy()
                             x_off, y_off = meta.get("crop_offsets", (0, 0))
+                            detector = meta["core"].detector
                             formatted_dets = []
                             for row in boxes_data:
                                 rx1, ry1, rx2, ry2, conf, cls_id = row
-                                formatted_dets.append(
-                                    ((rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off), cls_id, conf)
-                                )
+                                # Restrict to vehicle classes (parity with DetectionEngine.detect)
+                                if int(cls_id) not in vehicle_class_ids:
+                                    continue
+                                bbox = (rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off)
+                                # ROI filtering (parity with DetectionEngine.detect)
+                                if not detector.is_in_roi(np.array(bbox)):
+                                    continue
+                                formatted_dets.append((bbox, cls_id, conf))
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
