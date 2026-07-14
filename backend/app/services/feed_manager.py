@@ -390,8 +390,8 @@ class FeedManager:
                 # tripping SCALE_UP_THRESHOLD). Dividing by live worker count makes
                 # the metric rise as soon as any worker's feeds back up, so scale-up
                 # actually fires under real load.
-                avg_depth = total_depth / max(1, current_size)
                 current_size = self.pool_manager.pool_size
+                avg_depth = total_depth / max(1, current_size)
 
                 # Cap at the configured inference pool size (was a hard '4', which
                 # ignored inference_pool_size: 8 and MAX_WORKERS: 8, so the
@@ -444,6 +444,7 @@ class FeedManager:
                 # tripping SCALE_UP_THRESHOLD). Dividing by live worker count makes
                 # the metric rise as soon as any worker's feeds back up, so scale-up
                 # actually fires under real load.
+                current_size = self.pool_manager.pool_size
                 avg_depth = total_depth / max(1, current_size)
                 
                 # Normalize pressure relative to a reasonable backlog (e.g., 10 frames per slot)

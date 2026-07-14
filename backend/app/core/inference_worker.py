@@ -340,7 +340,6 @@ def inference_worker(
                 time.sleep(0.0005)
 
             # --- Process batch ---
-            sent_shm_refs: set = set()
             acked_msgs: set = set()
             batch_meta: List[Dict] = []
             frames_to_infer: List[np.ndarray] = []
@@ -489,6 +488,7 @@ def inference_worker(
                         "msg_id": msg_id,
                         "slot_q": slot_q_ref,
                         "shm_ref": shm_ref,
+                        "frame_bytes": frame_bytes,
                         "feed_id": feed_id,
                         "frame_index": frame_index,
                         "frame": frame,
@@ -611,11 +611,17 @@ def inference_worker(
 
                     try:
                         # RedisStreamQueue uses put(), not put_nowait()
+                        # Option A (zero-SHM-race): forward the decoded frame
+                        # bytes instead of the SHM segment ref. The frame data
+                        # is copied out of shared memory here, so the segment
+                        # is released immediately (see finally block) and the
+                        # result processor never touches SHM. This eliminates
+                        # the ~14% read-failure race where a segment could be
+                        # recycled under the async result reader.
                         central_output_queue.put(
-                            (meta["feed_id"], f_idx, meta["shm_ref"], combined_metrics, serialized_v, extra),
+                            (meta["feed_id"], f_idx, meta["frame_bytes"], combined_metrics, serialized_v, extra),
                             timeout=0.05
                         )
-                        sent_shm_refs.add(meta["shm_ref"])
                         logger.debug(
                             f"[Worker {worker_id}] Pushed result for {meta['feed_id']} "
                             f"frame {f_idx} to central_output"
@@ -633,7 +639,14 @@ def inference_worker(
                 logger.error(f"[Worker {worker_id}] Error processing batch: {e}", exc_info=True)
 
             finally:
-                # ACK all messages and release SHM segments not forwarded to output
+                # ACK all messages and release SHM segments.
+                # Option A: the frame bytes were copied out and forwarded to
+                # central_output, so every segment we touched is now safe to
+                # release back to the pool here -- including forwarded refs.
+                # The result processor consumes the copied bytes and never
+                # reads SHM, so there is no longer any reason to hold a
+                # forwarded segment in-flight (that hold was the source of the
+                # ~14% read-failure race).
                 for meta_item in batch_meta:
                     msg_id = meta_item.get("msg_id")
                     slot_q_ref = meta_item.get("slot_q")
@@ -644,7 +657,7 @@ def inference_worker(
                             pass
 
                     shm_ref = meta_item.get("shm_ref")
-                    if shm_ref and frame_buffer and shm_ref not in sent_shm_refs:
+                    if shm_ref and frame_buffer:
                         try:
                             frame_buffer.release(shm_ref)
                         except Exception:

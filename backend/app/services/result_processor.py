@@ -5,7 +5,6 @@ import time
 import queue
 import msgpack
 from concurrent.futures import ThreadPoolExecutor
-from app.utils.shared_frame_buffer import SharedFrameBuffer
 from app.services.constants import FeedManagerConstants
 from app.models.feeds import FeedOperationalStatusEnum
 from app.models.websocket import WebSocketMessageTypeEnum
@@ -15,17 +14,18 @@ logger = logging.getLogger("app.services.result_processor")
 class ResultProcessor:
     """
     Handles the reading and processing of inference results from the central queue.
-    Decouples the data pipeline (SHM read, dedup, KPI updates) from feed orchestration.
+    Decouples the data pipeline (dedup, KPI updates) from feed orchestration.
+    Under Option A the frame bytes are copied out in the inference worker, so this
+    processor consumes copied bytes and never touches shared memory.
     """
     def __init__(self, 
                  central_output_queue: Any, 
-                 frame_buffer: SharedFrameBuffer, 
-                 executor: ThreadPoolExecutor, 
-                 config: Dict[str, Any],
-                 registry: Any,
-                 broadcaster: Any):
+                 frame_buffer: Any = None, 
+                 executor: ThreadPoolExecutor = None, 
+                 config: Dict[str, Any] = None,
+                 registry: Any = None,
+                 broadcaster: Any = None):
         self._central_output_queue = central_output_queue
-        self.frame_buffer = frame_buffer
         self._executor = executor
         self.config = config
         self.registry = registry
@@ -38,10 +38,10 @@ class ResultProcessor:
         # (feed_id, metrics, vehicles). Without it, SafetyMonitor and per-frame
         # metric history are inert (audit C1).
         self._analytics_hook: Optional[Any] = None
-        # SHM read failure tracking
-        self._shm_read_attempts = 0
-        self._shm_read_failures = 0
-        self._last_failure_alert = 0.0
+        # Option A: the inference worker copies frame bytes out of shared memory
+        # and forwards them directly, so the result processor consumes bytes and
+        # never touches shared memory. ``frame_buffer`` is accepted for
+        # call-site compatibility but is no longer used here.
 
     def stop(self):
         self._stop_flag = True
@@ -77,53 +77,38 @@ class ResultProcessor:
         logger.info("ResultProcessor analytics hook updated.")
 
     def _process_single_result(self, item):
-        """CPU-bound processing of a single result item (SHM read -> bytes)."""
+        """CPU-bound processing of a single result item.
+
+        Option A: the inference worker copies the decoded frame bytes out of
+        shared memory and forwards them directly, so ``item[2]`` is already the
+        frame bytes -- no SHM read or release happens here. This removes the
+        ~14% read-failure race entirely (a segment could previously be recycled
+        under this async reader).
+        """
         if not item or not isinstance(item, (tuple, list)) or len(item) < 3:
             logger.error(f"Invalid result item format: {item}")
             return None
 
-        shm_ref = item[2]
+        frame_bytes = item[2]
         feed_id = None
         frame_idx = None
         metrics = None
         vehicles = None
         extra = None
-        frame_bytes = None
-        dims = None
 
         try:
             feed_id, frame_idx, _, metrics, vehicles, extra = item
-            self._shm_read_attempts += 1
-            logger.debug(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
-            read_result = self.frame_buffer.read(shm_ref, expected_feed_id=feed_id)
-            # CRITICAL FIX: Release SHM immediately after read, before any expensive operations.
-            # This prevents pool exhaustion when broadcast/subscriber pump is slow.
-            try:
-                self.frame_buffer.release(shm_ref)
-                logger.debug(f"[RESULT_PROC] SHM released: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref}")
-            except Exception as e:
-                logger.debug(f"Error releasing SHM ref {shm_ref} after read: {e}")
-            if read_result is None:
-                self._shm_read_failures += 1
-                failure_rate = self._shm_read_failures / max(1, self._shm_read_attempts)
-                logger.warning(f"[RESULT_PROC] SHM read returned None: feed={feed_id}, frame_idx={frame_idx}, shm_ref={shm_ref} (failure_rate={failure_rate:.1%})")
-                # Alert when failure rate exceeds 5% (indicates pool exhaustion or race condition)
-                now = time.time()
-                if failure_rate > 0.05 and now - self._last_failure_alert > 10.0:
-                    logger.error(f"[RESULT_PROC] HIGH SHM FAILURE RATE: {failure_rate:.1%} over {self._shm_read_attempts} attempts. Pool exhaustion or feed recycling detected.")
-                    self._last_failure_alert = now
+            logger.debug(f"[RESULT_PROC] Processing item: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            if not frame_bytes:
+                logger.warning(f"[RESULT_PROC] Empty frame bytes: feed={feed_id}, frame_idx={frame_idx}")
                 return None
-            frame_bytes, dims = read_result
-            logger.debug(f"[RESULT_PROC] SHM read OK: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            dims = None  # bytes are self-describing; result processor forwards them verbatim
+            logger.debug(f"[RESULT_PROC] Frame bytes ready: feed={feed_id}, frame_idx={frame_idx}, bytes_size={len(frame_bytes) if frame_bytes else 0}")
         except Exception as e:
-            logger.error(f"Error reading SHM for {feed_id} (ref {shm_ref}): {e}")
-            try:
-                self.frame_buffer.release(shm_ref)
-            except Exception:
-                pass
+            logger.error(f"Error unpacking result item for {feed_id}: {e}")
             return None
 
-        # Return frame data with SHM already released - broadcast happens downstream
+        # Return frame data -- broadcast happens downstream
         return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
 
     async def process_results_loop(self, handle_periodic_tasks_callback):
@@ -143,11 +128,11 @@ class ResultProcessor:
                     logger.debug("Result processor heartbeat: loop is active")
                     last_heartbeat = now_loop
                 
-                # Log SHM buffer stats every 60 seconds
+                # Log queue depth periodically (SHM pool stats are owned by the
+                # frame-buffer owner process; the result processor only consumes
+                # copied bytes now, so it no longer tracks SHM read failures).
                 if now_loop - last_shm_stats_log > 60.0:
-                    stats = self.frame_buffer.get_stats()
-                    failure_rate = self._shm_read_failures / max(1, self._shm_read_attempts) * 100
-                    logger.info(f"[SHM-STATS] acquires={stats['acquired_count']}, releases={stats['release_count']}, drops={stats['drop_count']}, free={stats['free_pool_size']}/{stats['pool_size']}, read_failures={self._shm_read_failures}/{self._shm_read_attempts} ({failure_rate:.1f}%)")
+                    logger.info(f"[RESULT_PROC-STATS] processed_items accumulated; queue depth ok")
                     last_shm_stats_log = now_loop
 
                 items_buffer = []

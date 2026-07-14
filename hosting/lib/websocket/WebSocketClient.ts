@@ -1,6 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
+import { appendTunnelPassword } from '../api/backendBaseUrl';
 
 interface WebSocketErrorEvent extends Event {
     message?: string;
@@ -24,7 +25,6 @@ const getOrCreateClientId = () => {
 };
 
 type MessageListener<T> = (data: T) => void;
-
 interface ScopedListener {
     scope: string;
     listener: MessageListener<unknown>;
@@ -417,6 +417,17 @@ export class WebSocketClient implements IWebSocketClient {
         }
     }
 
+    /**
+     * Append the loca.lt tunnel password as a query param so the WebSocket
+     * upgrade bypasses the tunnel's 503/ECONNRESET gate. Delegates to the shared
+     * helper in lib/api/backendBaseUrl.ts (appendTunnelPassword) — the single
+     * source of truth also used by APIClient for REST. No-op when no password
+     * is configured or the URL already carries one (e.g. on a retry path).
+     */
+    private appendTunnelPassword(url: URL): void {
+        appendTunnelPassword(url);
+    }
+
     private async performConnection(token: string | null): Promise<void> {
         if (this.connectionState === ConnectionState.CONNECTED || this.connectionState === ConnectionState.CONNECTING) {
             return;
@@ -455,6 +466,17 @@ export class WebSocketClient implements IWebSocketClient {
                     const pathParts = ['api', 'v1', 'ws', clientId].filter(Boolean);
                     url.pathname = '/' + pathParts.join('/');
                 }
+
+                // loca.lt (and similar tunnel providers) gate unauthenticated
+                // requests behind a password interstitial that, for WebSockets,
+                // manifests as an ECONNRESET on the upgrade (the proxy refuses
+                // the connection). The only way to clear it from a programmatic
+                // client is the `?password=` query param — exactly the same
+                // bypass APIClient applies to REST requests. Without this, every
+                // WS upgrade through the tunnel dies and the video feed silently
+                // restarts. Idempotent: skipped when no password is configured or
+                // the URL already carries one.
+                this.appendTunnelPassword(url);
 
                 console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, url.toString());
 

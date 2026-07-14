@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
-import { getBackendBaseURL } from './backendBaseUrl';
+import { getBackendBaseURL, withTunnelPassword } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -21,13 +21,8 @@ export class APIClient {
     private timeout: number;
     private headers: Record<string, string>;
     private tokenManager: TokenManager;
-    // loca.lt (and some tunnel providers) gate unauthenticated HTTP requests
-    // behind a password interstitial that returns 503/Tunnel Unavailable. The
-    // only way to bypass it from a programmatic client is the `?password=`
-    // query param. Read once at construction; appended idempotently per request.
-    // The ngrok-skip-browser-warning header above is for ngrok only and is
-    // inert for loca.lt.
-    private localtunnelPassword: string | null;
+    // loca.lt tunnel password bypass is centralized in lib/api/backendBaseUrl.ts
+    // (getTunnelPassword / withTunnelPassword) and shared with WebSocketClient.
 
     private constructor(options: APIOptions) {
         // Always connect to the backend directly. Base URL resolution
@@ -39,8 +34,6 @@ export class APIClient {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': '69420'
         };
-        const ltPw = process.env.NEXT_PUBLIC_LOCALTUNNEL_PASSWORD;
-        this.localtunnelPassword = ltPw && ltPw.trim().length > 0 ? ltPw.trim() : null;
         this.tokenManager = TokenManager.getInstance();
 
         // Subscribe to token updates
@@ -53,19 +46,6 @@ export class APIClient {
      * configured or the URL already carries one (e.g. on the 401-retry path
      * where response.url already has it).
      */
-    private withTunnelPassword(url: string): string {
-        if (!this.localtunnelPassword) return url;
-        try {
-            const urlObj = new URL(url);
-            if (!urlObj.searchParams.has('password')) {
-                urlObj.searchParams.set('password', this.localtunnelPassword);
-            }
-            return urlObj.toString();
-        } catch {
-            return url;
-        }
-    }
-
     static getInstance(options: APIOptions): APIClient {
         if (!APIClient.instance) {
             APIClient.instance = new APIClient(options);
@@ -153,7 +133,7 @@ export class APIClient {
     }
 
     async request<T>(path: string, options: RequestInit & { timeout?: number } = {}): Promise<T> {
-        const url = this.withTunnelPassword(new URL(path, this.baseURL).toString());
+        const url = withTunnelPassword(new URL(path, this.baseURL).toString());
         const token = this.tokenManager.getCurrentToken();
         
         if (token) {

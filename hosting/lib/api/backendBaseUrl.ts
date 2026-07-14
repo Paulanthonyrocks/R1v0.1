@@ -38,6 +38,50 @@ function normalize(value: string | undefined): string {
   return value.replace(/\/$/, '');
 }
 
+// --- loca.lt tunnel password (shared by REST + WebSocket) ---
+//
+// loca.lt (and similar tunnel providers) gate unauthenticated requests behind
+// a password interstitial. For REST that's an HTTP 503; for WebSockets the
+// proxy refuses the upgrade with ECONNRESET. The only programmatic bypass is
+// the `?password=` query param. Both APIClient (REST) and WebSocketClient (WS)
+// must apply it identically, so the value + bypass logic live here as the
+// single source of truth — otherwise the two paths drift and the WS upgrade
+// silently dies while REST keeps working.
+const ENV_TUNNEL_PASSWORD = 'NEXT_PUBLIC_LOCALTUNNEL_PASSWORD';
+
+let _cachedTunnelPassword: string | null | undefined;
+
+export function getTunnelPassword(): string | null {
+  if (_cachedTunnelPassword !== undefined) return _cachedTunnelPassword;
+  const pw = process.env[ENV_TUNNEL_PASSWORD];
+  _cachedTunnelPassword = pw && pw.trim().length > 0 ? pw.trim() : null;
+  return _cachedTunnelPassword;
+}
+
+/** REST helper: append `?password=` to a URL string. Idempotent. */
+export function withTunnelPassword(url: string): string {
+  const pw = getTunnelPassword();
+  if (!pw) return url;
+  try {
+    const urlObj = new URL(url);
+    if (!urlObj.searchParams.has('password')) {
+      urlObj.searchParams.set('password', pw);
+    }
+    return urlObj.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** WebSocket helper: append `?password=` to a URL object in place. Idempotent. */
+export function appendTunnelPassword(url: URL): void {
+  const pw = getTunnelPassword();
+  if (!pw) return;
+  if (!url.searchParams.has('password')) {
+    url.searchParams.set('password', pw);
+  }
+}
+
 /**
  * HTTP base URL used for REST + snapshot asset URLs.
  *
