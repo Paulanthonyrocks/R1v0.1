@@ -62,11 +62,11 @@ inference:
   batch_size: 8
   detection_model: models/yolov8n.pt
   device: cuda:0
-  # 2 T4 GPUs: 2 inference workers (one per GPU) is plenty. More workers each
-  # load a full yolov8n + ReID model into VRAM but rarely get fed, since feeds
-  # are now co-located onto fewer workers' slots so batches fill. 2 also keeps
-  # a single worker owning enough slots that its batch_size (8) is actually hit.
-  num_workers: 2
+  # 2 T4 GPUs: start with 4 workers (2 per GPU) so the pool has
+  # headroom immediately; the per-worker scale metric + raised cap let it
+  # grow toward inference_pool_size (8) under real load. Feeds are
+  # co-located onto the reduced SLOT_COUNT (4) so batches fill.
+  num_workers: 4
   worker_ready_timeout: 60
   use_tensorrt: false
 ingestion:
@@ -440,13 +440,13 @@ pavement_analysis:
 auto_start_processing: true
 performance:
   auto_optimize: true
-  batch_size: 8
+  batch_size: 16
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
   image_gpu_acceleration: true
   inference_pool_size: 8
-  inference_timeout: 0.2
+  inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
   memory_limit_percent: 85
@@ -586,7 +586,7 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 2
+  skip_frames: 0
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20

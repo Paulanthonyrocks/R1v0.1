@@ -385,11 +385,20 @@ class FeedManager:
                 total_depth = sum(
                     q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize')
                 )
-                avg_depth = total_depth / self.slot_count
+                # Per-WORKER backlog, not per-slot. Dividing by slot_count (was 16)
+                # diluted the signal ~8x (3 feeds over 16 slots -> avg ~0.2, never
+                # tripping SCALE_UP_THRESHOLD). Dividing by live worker count makes
+                # the metric rise as soon as any worker's feeds back up, so scale-up
+                # actually fires under real load.
+                avg_depth = total_depth / max(1, current_size)
                 current_size = self.pool_manager.pool_size
 
-                if current_size >= 4:
-                    self.logger.warning(f"[ScalingMonitor] Hard worker cap (4) reached. Skipping scale-up.")
+                # Cap at the configured inference pool size (was a hard '4', which
+                # ignored inference_pool_size: 8 and MAX_WORKERS: 8, so the
+                # pool could never scale past 4 even under heavy load).
+                pool_cap = int(self.config.get("performance", {}).get("inference_pool_size", FeedManagerConstants.MAX_WORKERS))
+                if current_size >= pool_cap:
+                    self.logger.warning(f"[ScalingMonitor] Worker cap ({pool_cap}) reached. Skipping scale-up.")
                     await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
                     continue
 
@@ -430,7 +439,12 @@ class FeedManager:
                 total_depth = sum(
                     q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize')
                 )
-                avg_depth = total_depth / self.slot_count
+                # Per-WORKER backlog, not per-slot. Dividing by slot_count (was 16)
+                # diluted the signal ~8x (3 feeds over 16 slots -> avg ~0.2, never
+                # tripping SCALE_UP_THRESHOLD). Dividing by live worker count makes
+                # the metric rise as soon as any worker's feeds back up, so scale-up
+                # actually fires under real load.
+                avg_depth = total_depth / max(1, current_size)
                 
                 # Normalize pressure relative to a reasonable backlog (e.g., 10 frames per slot)
                 # This provides a 0.0 to 1.0 signal to ingestion workers
