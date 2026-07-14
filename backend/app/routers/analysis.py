@@ -492,8 +492,21 @@ async def get_forecast_vs_actual(
 async def get_feed_history_endpoint(
     feed_id: str,
     hours: int = Query(24, ge=1, le=168),
-    db: DatabaseManager = Depends(get_db_manager)
 ):
+    # NOTE: Previously this endpoint hard-depended on `get_db_manager`, which
+    # raises HTTP 503 whenever the DatabaseManager isn't initialised (e.g. a
+    # fresh boot, a transient DB hiccup, or TimescaleDB disabled). That turned
+    # a routine "no history yet" state into a hard 503 that broke the dashboard
+    # history widget. History is optional/eventually-consistent, so degrade
+    # gracefully: return an empty list instead of 503ing. The DB layer's own
+    # internal fallbacks (TimescaleDB -> SQLite vehicle_tracks) still apply.
+    try:
+        from app.database import get_database_manager
+        db = get_database_manager()
+    except RuntimeError as e:
+        logger.warning(f"History requested for {feed_id} but DB unavailable: {e}")
+        return []
+
     try:
         return await db.get_history_stats(feed_id, hours=hours)
     except Exception as e:
