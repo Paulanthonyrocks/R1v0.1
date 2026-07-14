@@ -152,7 +152,28 @@ class GlobalReIDManager:
         embedding = self._normalize(embedding)
         now = time.time()
 
-        # 1. Redis Cache Check (Outside Lock)
+        # 0. In-memory local->global check FIRST (zero network).
+        # This process already mapped this local_id this session, so we must
+        # return from memory before any Redis round-trip. The previous ordering
+        # did a Redis hget on EVERY call -- even for known tracks -- which, under
+        # traffic load (many vehicles re-detected each frame), became a synchronous
+        # Redis storm that pinned each inference worker to ~1-2 fps/feed and capped
+        # the whole pipeline's detectable-frame rate well below ingestion. Known
+        # tracks now resolve in-process; only genuinely new local_ids fall through
+        # to Redis (step 1) for cross-worker sharing.
+        with self._lock:
+            if feed_id in self.local_to_global and local_id in self.local_to_global[feed_id]:
+                global_id = self.local_to_global[feed_id][local_id]
+                if global_id in self.metadata_store:
+                    self.metadata_store[global_id]["last_seen"] = now
+                    if self.gallery_matrix is not None and global_id in self.gallery_ids:
+                        idx = self.gallery_ids.index(global_id)
+                        self.gallery_matrix[idx] = self._normalize(
+                            (1.0 - self.alpha) * self.gallery_matrix[idx] + self.alpha * embedding
+                        )
+                return global_id
+
+        # 1. Redis Cache Check (fallback for tracks mapped in another worker)
         if self.redis:
             try:
                 mapping_key = f"reid:map:{feed_id}"
@@ -170,6 +191,10 @@ class GlobalReIDManager:
                                 self.gallery_matrix[idx] = self._normalize(
                                     (1.0 - self.alpha) * self.gallery_matrix[idx] + self.alpha * embedding
                                 )
+                        # Mirror into in-memory map so subsequent frames skip Redis
+                        if feed_id not in self.local_to_global:
+                            self.local_to_global[feed_id] = {}
+                        self.local_to_global[feed_id][local_id] = gid
                     return gid
             except Exception as e:
                 logger.error(f"Redis ReID cache error: {e}")
