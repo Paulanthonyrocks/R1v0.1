@@ -11,6 +11,26 @@ from app.models.websocket import WebSocketMessageTypeEnum
 
 logger = logging.getLogger("app.services.result_processor")
 
+# Fields the frontend actually renders from each vehicle on a video frame
+# (see hosting/lib/useVideoSocket.ts drawBoundingBoxes). Everything else in
+# serialize_tracked_vehicles (embedding, ground_coordinates, vx/vy, lane,
+# confidence, class_id, status) is only used server-side (recording, DB) and
+# was being re-sent on every frame -- an embedding alone is ~1-2KB/vehicle, so
+# 47 vehicles added ~50-90KB of pure waste per frame, which is what forced the
+# ~2fps over a tunnel. Trim at the wire boundary; the full record is still
+# available to the opt-in subscriber pump via the `vehicles` arg.
+_WIRE_VEHICLE_KEYS = (
+    "vehicle_id", "global_vehicle_id", "bbox", "speed",
+    "license_plate", "class_name", "is_wrong_way", "is_stopped",
+)
+
+def _wire_vehicles(vehicles: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Project each vehicle down to the subset the frontend renders on a frame."""
+    if not vehicles:
+        return []
+    return [{k: v.get(k) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
+
+
 class ResultProcessor:
     """
     Handles the reading and processing of inference results from the central queue.
@@ -288,7 +308,7 @@ class ResultProcessor:
                 "f": feed_id,
                 "i": frame_idx,
                 "ts": time.time() * 1000,
-                "v": vehicles,
+                "v": _wire_vehicles(vehicles),
                 "m": metrics,
                 "bg": frame_bytes
             }

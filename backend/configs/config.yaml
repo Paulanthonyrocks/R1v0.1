@@ -610,7 +610,7 @@ video_input:
 video_output:
   codec: mp4v
   enabled: false
-  fps: 10
+  fps: 15
   frame_resolution:
   - 320
   - 240

@@ -392,13 +392,18 @@ class ConnectionManager:
         """Calculate adaptive queue size for low-priority messages (video).
         For video, we want to avoid large buffers that cause stale frames.
         Higher latency clients should have SMALLER buffers to force real-time updates.
+        The original sizing (30/60/120) was tuned for LAN latency and shredded
+        video down to ~2fps over high-latency tunnels (loca.lt / cloudflare /
+        ngrok), since the bounded deque auto-drops the oldest frame under
+        backpressure. Bumped ~3x so the sender can catch up instead of shedding,
+        while remaining bounded to avoid unbounded memory growth per client.
         """
         latency_ms = self.client_latencies.get(client_id, 50)
         if latency_ms > 200:
-            return 30   # Very aggressive dropping for high latency
+            return 90    # was 30
         elif latency_ms > 100:
-            return 60
-        return 120      # ~2 seconds of 60fps total across feeds (simplified)
+            return 180   # was 60
+        return 360       # was 120; ~2.5s of 3-feed video at 15fps per client
     
     def update_client_latency(self, client_id: str, rtt_ms: float):
         """Update tracked latency for adaptive behavior."""
