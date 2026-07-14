@@ -132,7 +132,7 @@ export class APIClient {
         return response.json();
     }
 
-    async request<T>(path: string, options: RequestInit & { timeout?: number } = {}): Promise<T> {
+    async request<T>(path: string, options: RequestInit & { timeout?: number } = {}, retryAttempt: number = 0): Promise<T> {
         const url = withTunnelPassword(new URL(path, this.baseURL).toString());
         const token = this.tokenManager.getCurrentToken();
         
@@ -152,6 +152,16 @@ export class APIClient {
             const response = await this.fetchWithTimeout(url, fetchOptions);
             return this.handleResponse<T>(response, fetchOptions);
         } catch (error: unknown) {
+            // Transient upstream/tunnel blips (e.g. loca.lt 503ing a single REST
+            // call, or a gateway hiccup) should not hard-fail the caller. Retry a
+            // bounded number of times with linear backoff before surfacing the
+            // error. 401 refresh has its own retry path inside handleResponse and
+            // is intentionally not retried here to avoid double-refresh loops.
+            const status = (error as APIError)?.status;
+            if ((status === 502 || status === 503 || status === 504) && retryAttempt < 2) {
+                await new Promise((resolve) => setTimeout(resolve, 400 * (retryAttempt + 1)));
+                return this.request<T>(path, options, retryAttempt + 1);
+            }
             if (error instanceof Error && error.name === 'AbortError') {
                 const errorMessage = 'Request timed out. Please check your internet connection or try again later.';
                 errorNotifier.error(errorMessage);

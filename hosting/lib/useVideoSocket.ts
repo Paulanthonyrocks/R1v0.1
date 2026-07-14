@@ -248,9 +248,23 @@ const unsubscribeFromFeed = useCallback(() => {
           for (const idx of drop) seen.delete(idx);
         }
 
-        // Detect feed restart/loop: if index drops significantly, reset the tracker
+        // Detect feed restart/loop: if index drops significantly, reset the tracker.
+        //
+        // IMPORTANT: a *seamless* loop on a looped source file also wraps
+        // frame_index back to 0 with NO gap in frame delivery (the backend
+        // keeps streaming; only the index resets). A *genuine* backend restart
+        // (crash/respawn) leaves the feed SILENT for seconds first. We use that
+        // delivery gap to tell the two apart so a normal video loop is not
+        // misreported as a feed crash -- which previously spammed the console
+        // and made a real restart indistinguishable from a loop.
         if (lastProcessedIndexRef.current > 100 && data.frame_index < 10) {
-          console.warn(`[useVideoSocket ${hookId.current}] Detected feed restart for ${currentStreamId}, resetting frame index tracker`);
+          const timeSinceLastFrame = performance.now() - lastSuccessfulFrameTimeRef.current;
+          const isGenuineRestart = timeSinceLastFrame > 2000;
+          if (isGenuineRestart) {
+            console.warn(`[useVideoSocket ${hookId.current}] Detected feed restart for ${currentStreamId} (silent for ${Math.round(timeSinceLastFrame)}ms), resetting frame index tracker`);
+          } else {
+            console.debug(`[useVideoSocket ${hookId.current}] Loop detected for ${currentStreamId} (frame_index wrapped to ${data.frame_index}), resetting tracker without restart alert`);
+          }
           lastProcessedIndexRef.current = -1;
           seen.clear();
         }
