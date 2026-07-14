@@ -128,6 +128,32 @@ class ResultProcessor:
             logger.error(f"Error unpacking result item for {feed_id}: {e}")
             return None
 
+        # Adaptive streaming: produce a smaller background JPEG to ship over the
+        # wire when enabled. This runs inside the executor (CPU-bound, off the
+        # event loop) so it never stalls frame delivery. The full-res
+        # ``frame_bytes`` is preserved downstream for the recording pump; only
+        # the WebSocket payload uses the downscaled copy. Detect/lane gating is
+        # intentionally NOT applied here -- every frame gets the small bg so
+        # tunnel-bound clients see a consistent bitrate instead of alternating
+        # full/low res.
+        if extra is None:
+            extra = {}
+        if self.config.get("video_processing", {}).get("adaptive_streaming", False):
+            try:
+                import cv2
+                import numpy as np
+                stream_res = tuple(self.config.get("video_output", {}).get("stream_resolution", (320, 240)))
+                bg_scale = float(self.config.get("video_processing", {}).get("roi_scale", 0.5))
+                arr = np.frombuffer(frame_bytes, dtype=np.uint8)
+                dec = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if dec is not None:
+                    small = cv2.resize(dec, (0, 0), fx=bg_scale, fy=bg_scale)
+                    ok, buf = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                    if ok:
+                        extra["bg"] = buf.tobytes()
+            except Exception as e:
+                logger.debug(f"[RESULT_PROC] adaptive bg encode skipped for {feed_id}: {e}")
+
         # Return frame data -- broadcast happens downstream
         return feed_id, frame_idx, frame_bytes, metrics, vehicles, extra
 
@@ -303,6 +329,13 @@ class ResultProcessor:
 
             # 2. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
+            # When adaptive streaming is on, ``extra`` carries a downscaled ``bg``
+            # JPEG; prefer it for the wire payload to slash tunnel bandwidth.
+            # The full-res ``frame_bytes`` is still forwarded to the recording
+            # pump below, so adaptive mode only affects the live WebSocket view.
+            wire_bg = frame_bytes
+            if extra and isinstance(extra, dict) and extra.get("bg"):
+                wire_bg = extra["bg"]
             compact_message = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
                 "f": feed_id,
@@ -310,7 +343,7 @@ class ResultProcessor:
                 "ts": time.time() * 1000,
                 "v": _wire_vehicles(vehicles),
                 "m": metrics,
-                "bg": frame_bytes
+                "bg": wire_bg
             }
             binary_data = msgpack.packb(compact_message, use_bin_type=True)
             logger.info(f"[RESULT_PROC] Msgpack packed: feed={feed_id}, frame_idx={frame_idx}, binary_size={len(binary_data)}, vehicles_count={len(vehicles) if vehicles else 0}")

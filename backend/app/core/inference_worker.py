@@ -17,7 +17,7 @@ from app.config import initialize_config
 from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
 from app.utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, _extract_rois
+from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
 
 logger = logging.getLogger("Inference")
 
@@ -598,16 +598,6 @@ def inference_worker(
                     )
 
                     extra = {}
-                    v_proc_cfg = config.get("video_processing", {})
-                    if v_proc_cfg.get("adaptive_streaming", False) and meta["should_detect"]:
-                        bg_scale = v_proc_cfg.get("roi_scale", 0.5)
-                        bg_frame = cv2.resize(frame, (0, 0), fx=bg_scale, fy=bg_scale)
-                        _, bg_bytes = cv2.imencode(
-                            ".jpg", bg_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50]
-                        )
-                        extra["bg"] = bg_bytes.tobytes()
-                        roi_scale = stream_res[0] / 640.0 if stream_res[0] != 0 else 1.0
-                        extra["rois"] = _extract_rois(frame, serialized_v, scale=roi_scale)
 
                     try:
                         # RedisStreamQueue uses put(), not put_nowait()
