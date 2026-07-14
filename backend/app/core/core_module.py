@@ -628,9 +628,13 @@ class CoreModule:
                     track["prev_ground_pos"] = (curr_gx, curr_gy)
                     track["prev_t"] = current_time
                 else:
-                    # Transformer unavailable — fall back to pixel velocity
+                    # Transformer/homography unavailable — fall back to pixel velocity.
+                    # This is expected and correct for feeds without a calibration
+                    # matrix (e.g. sample feeds, freshly added uncalibrated cameras).
+                    # It is a one-time informational note, not an error condition, so
+                    # downgrade from WARNING to INFO to avoid alarm in normal operation.
                     if not self._homography_fallback_warned:
-                        logger.warning(f"[{self.feed_id}] Homography unavailable, using pixel-based speed (calibration recommended)")
+                        logger.info(f"[{self.feed_id}] Homography unavailable, using pixel-based speed (calibration recommended)")
                         self._homography_fallback_warned = True
                     track["speed"] = self._pixel_based_speed(track)
 

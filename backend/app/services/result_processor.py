@@ -258,9 +258,31 @@ class ResultProcessor:
         """
         try:
             logger.info(f"[RESULT_PROC] Processing frame data: feed={feed_id}, frame_idx={frame_idx}, frame_bytes_size={len(frame_bytes) if frame_bytes else 0}")
+
+            # 0. Resolve feed geo-coordinates. The inference worker does not
+            # embed latitude/longitude into the per-frame metrics dict, but the
+            # FeedManager registry stores them on the feed's FeedConfigInfo when
+            # the feed is registered (e.g. from config.yaml sample_feeds or the
+            # add-feed API). AnalyticsService.process_feed_metrics reads
+            # metrics["latitude"/"longitude"] to key the TrafficDataCache, so we
+            # backfill them here from the registry when absent. Without this,
+            # every feed logs "missing latitude or longitude" and never lands in
+            # the data cache. Only backfill when truly missing so a feed that
+            # legitimately supplies its own coords (e.g. live API with coords)
+            # is never overwritten.
+            entry = self.registry.get_entry(feed_id)
+            if entry and metrics:
+                cfg = entry.get("config_info")
+                if cfg is not None:
+                    lat = getattr(cfg, "latitude", None)
+                    lon = getattr(cfg, "longitude", None)
+                    if lat is not None and lon is not None:
+                        if metrics.get("latitude") is None:
+                            metrics["latitude"] = lat
+                        if metrics.get("longitude") is None:
+                            metrics["longitude"] = lon
             
             # 1. Update registry metrics with Exponential Moving Average (EMA) to smooth spikes
-            entry = self.registry.get_entry(feed_id)
             if entry and metrics:
                 alpha = 1.0 / self.config.get("metrics_averaging_window_seconds", 300)
                 

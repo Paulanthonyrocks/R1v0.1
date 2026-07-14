@@ -1734,7 +1734,20 @@ class FeedManager:
         logger.info("Shutdown initiated.")
         self._stop_reader_flag = True
         self._is_shutting_down = True
-        
+
+        # Publish the global stop signal so every ingestion worker (which is
+        # launched with stop_event=None and only checks this Redis key on
+        # shutdown) breaks its produce loop promptly instead of draining the
+        # SHM free pool after its consumers have exited. Consumers (inference
+        # workers, result processor) honour this key too, so it guarantees a
+        # coordinated, fast drain.
+        try:
+            rc = get_redis_client()
+            rc.set("signal:pipeline_stop", "1")
+            logger.info("Published global 'signal:pipeline_stop' for connected workers.")
+        except Exception as e:
+            logger.warning(f"Could not publish pipeline stop signal: {e}")
+
         # Immediately prevent any new workers from being spawned
         if self.pool_manager:
             self.pool_manager._is_shutting_down = True
