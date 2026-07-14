@@ -53,10 +53,32 @@ def ingestion_worker(
 
     redis_client = get_redis_client()
 
-    # Per-feed SIGTERM only sets the local stop event — never publishes a global
-    # Redis signal, so a single feed crash doesn't tear down the whole pipeline.
+    # Mirror the inference worker's stop semantics: a local flag set by the
+    # signal handler, the (possibly None) stop_event, and the global Redis
+    # "signal:pipeline_stop" key that FeedManager publishes on shutdown.
+    # NOTE: stop_event is always None for ingestion workers (FeedManager passes
+    # None and relies on the Redis key / signals), so a bare `stop_event.is_set()`
+    # check would never break the loop — this helper closes that hole.
+    signal_stop = {"flag": False}
+
+    def should_stop() -> bool:
+        if signal_stop["flag"]:
+            return True
+        if stop_event and getattr(stop_event, "is_set", lambda: False)():
+            return True
+        try:
+            if redis_client and redis_client.exists("signal:pipeline_stop"):
+                return True
+        except Exception:
+            pass
+        return False
+
+    # Per-feed SIGTERM/SIGINT sets the local stop flag — never publishes a
+    # global Redis signal, so a single feed crash doesn't tear down the whole
+    # pipeline.
     def signal_handler(signum, frame):
         logger.info(f"[{feed_id}] Received signal {signum}, setting local stop event")
+        signal_stop["flag"] = True
         if stop_event:
             stop_event.set()
 
@@ -290,8 +312,8 @@ def ingestion_worker(
 
     try:
         while True:
-            if stop_event and stop_event.is_set():
-                logger.info(f"[{feed_id}] Received stop signal via event. Terminating...")
+            if should_stop():
+                logger.info(f"[{feed_id}] Received stop signal. Terminating...")
                 break
 
             if command_queue:
