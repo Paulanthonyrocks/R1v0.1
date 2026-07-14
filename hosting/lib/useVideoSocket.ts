@@ -71,7 +71,13 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
 
   // Constants
   const STATE_UPDATE_INTERVAL = 500; 
-  const FRAME_STALENESS_THRESHOLD = 15000; // 15 seconds - reduced from 60s to catch issues faster but avoid false positives
+  // A frame GAP (backend backpressure / per-batch dedup) is normal and does NOT
+  // mean the stream died. We must NOT blank the canvas or show "unavailable"
+  // just because decoding stalled for a few seconds -- the last good frame should
+  // stay painted (paused) and resume when frames return. Only a *sustained*
+  // outage (no decoded frame for 30s) warrants the unavailable overlay.
+  const FRAME_STALENESS_THRESHOLD = 30000; // 30s of total silence before flagging stale
+  const STALE_ERROR_AFTER = 3; // require 3 consecutive stale ticks (>=30s) to show error
   const FPS_EMA_ALPHA = 0.1;
 
   // --- Sub-Hooks Implementation ---
@@ -344,22 +350,25 @@ const unsubscribeFromFeed = useCallback(() => {
       
       if (lastSuccessfulFrameTimeRef.current > 0 && 
           timeSinceLastFrame > FRAME_STALENESS_THRESHOLD) {
-        // Require 3 consecutive stale checks before showing error (prevents flicker on brief hiccups)
+        // Require N consecutive stale checks before showing error (prevents flicker
+        // on brief hiccups AND on the routine frame gaps the backend produces
+        // under load). Until then we simply leave the last good frame painted.
         consecutiveStaleCountRef.current += 1;
         
-        if (consecutiveStaleCountRef.current >= 3) {
-          // Only show error after sustained outage
-          if (lastFrameRef.current?.image instanceof ImageBitmap) {
-            lastFrameRef.current.image.close();
-          }
-          lastFrameRef.current = null;
+        if (consecutiveStaleCountRef.current >= STALE_ERROR_AFTER) {
+          // Only show error after a *sustained* outage. NOTE: we intentionally do
+          // NOT null lastFrameRef or close its bitmap here -- the canvas should
+          // keep showing the last frame (paused) rather than going blank, and a
+          // gap does not mean the stream is gone.
           setFrameRate(0);
           setError('Video stream timed out.');
         }
       } else {
-        // Reset counter if we get a fresh frame
+        // Fresh frame arrived: reset the stale counter and clear any stale error
+        // immediately. A received frame means the stream is alive, so the
+        // "unavailable" overlay must not linger after a gap recovers.
         consecutiveStaleCountRef.current = 0;
-        if (error) setError(null); // Clear error automatically when frames resume
+        if (error) setError(null);
       }
     }, 5000); // Check every 5 seconds instead of every second
 
