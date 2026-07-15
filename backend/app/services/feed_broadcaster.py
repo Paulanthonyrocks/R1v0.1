@@ -79,3 +79,21 @@ class FeedBroadcaster:
         except Exception as e:
             logger.error(f"Error broadcasting realtime bytes for {feed_id}: {e}", exc_info=True)
 
+    async def broadcast_to_feed_realtime_bytes_adaptive(
+        self, feed_id: str, full_data: bytes, small_data: bytes, frame_index: int = 0, latency_threshold_ms: float = 120
+    ):
+        """
+        Latency-aware broadcast: full-res to low-RTT clients, downscaled to
+        high-RTT (tunnel) clients. Delegates to ConnectionManager.
+        """
+        if not self._connection_manager:
+            logger.warning("ConnectionManager is None; cannot broadcast adaptive realtime bytes.")
+            return
+
+        try:
+            await self._connection_manager.broadcast_to_feed_realtime_bytes_adaptive(
+                feed_id, full_data, small_data, frame_index, latency_threshold_ms
+            )
+        except Exception as e:
+            logger.error(f"Error broadcasting adaptive realtime bytes for {feed_id}: {e}", exc_info=True)
+

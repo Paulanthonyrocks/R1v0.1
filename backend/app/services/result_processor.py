@@ -330,31 +330,54 @@ class ResultProcessor:
             # 2. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
             # When adaptive streaming is on, ``extra`` carries a downscaled ``bg``
-            # JPEG; prefer it for the wire payload to slash tunnel bandwidth.
-            # The full-res ``frame_bytes`` is still forwarded to the recording
-            # pump below, so adaptive mode only affects the live WebSocket view.
-            wire_bg = frame_bytes
-            if extra and isinstance(extra, dict) and extra.get("bg"):
-                wire_bg = extra["bg"]
-            compact_message = {
+            # JPEG. We pack TWO payloads -- full-res (crisp, for low-RTT links)
+            # and small (bandwidth-light, for high-RTT tunnels) -- and let the
+            # broadcaster pick per client by tracked RTT. Both share the same
+            # vehicle/metrics payload; only the background JPEG differs, so the
+            # frontend (which reads bg/v/m/t) handles either transparently.
+            adaptive = bool(self.config.get("video_processing", {}).get("adaptive_streaming", False))
+            small_bg = extra.get("bg") if (extra and isinstance(extra, dict)) else None
+
+            compact_full = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
                 "f": feed_id,
                 "i": frame_idx,
                 "ts": time.time() * 1000,
                 "v": _wire_vehicles(vehicles),
                 "m": metrics,
-                "bg": wire_bg
+                "bg": frame_bytes,  # full-res; recording pump also uses this
             }
-            binary_data = msgpack.packb(compact_message, use_bin_type=True)
-            logger.info(f"[RESULT_PROC] Msgpack packed: feed={feed_id}, frame_idx={frame_idx}, binary_size={len(binary_data)}, vehicles_count={len(vehicles) if vehicles else 0}")
-            
-            # 3. Broadcast via broadcaster
+            full_data = msgpack.packb(compact_full, use_bin_type=True)
+
+            if adaptive and small_bg:
+                compact_small = dict(compact_full)
+                compact_small["bg"] = small_bg
+                small_data = msgpack.packb(compact_small, use_bin_type=True)
+            else:
+                small_data = full_data
+
+            logger.info(
+                f"[RESULT_PROC] Msgpack packed: feed={feed_id}, frame_idx={frame_idx}, "
+                f"full={len(full_data)}, small={len(small_data)}, vehicles_count={len(vehicles) if vehicles else 0}"
+            )
+
+            # 3. Broadcast via broadcaster (latency-aware when adaptive)
             if self.broadcaster:
-                await self.broadcaster.broadcast_to_feed_realtime_bytes(
-                    feed_id=feed_id,
-                    data=binary_data,
-                    frame_index=frame_idx
-                )
+                if adaptive and small_data is not full_data:
+                    threshold = float(self.config.get("video_processing", {}).get("adaptive_latency_threshold_ms", 120))
+                    await self.broadcaster.broadcast_to_feed_realtime_bytes_adaptive(
+                        feed_id=feed_id,
+                        full_data=full_data,
+                        small_data=small_data,
+                        frame_index=frame_idx,
+                        latency_threshold_ms=threshold,
+                    )
+                else:
+                    await self.broadcaster.broadcast_to_feed_realtime_bytes(
+                        feed_id=feed_id,
+                        data=full_data,
+                        frame_index=frame_idx,
+                    )
                 logger.debug(f"[RESULT_PROC] Broadcast sent: feed={feed_id}, frame_idx={frame_idx}")
             else:
                 logger.warning(f"[RESULT_PROC] Broadcaster is None; cannot broadcast frame for {feed_id}")

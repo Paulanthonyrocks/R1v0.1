@@ -496,6 +496,40 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
 
+    def _enqueue_frame(self, client_id: str, data: bytes, priority: MessagePriority):
+        """Append a binary frame to the right per-client queue and wake the sender."""
+        if priority == MessagePriority.HIGH:
+            # High-priority (initial) frames go to the PriorityQueue
+            if client_id in self.client_queues:
+                try:
+                    wrapped_msg = PrioritizedMessage(priority, data)
+                    self.client_queues[client_id].put_nowait(wrapped_msg)
+                    if client_id in self.signal_queues:
+                        self.signal_queues[client_id].put_nowait(True)
+                except asyncio.QueueFull:
+                    logger.warning(f"[CONN_MGR] High-priority queue full for client {client_id}, dropping frame")
+                except Exception as e:
+                    logger.error(f"[CONN_MGR] Failed to enqueue high-priority frame for {client_id}: {e}")
+        else:
+            # LOW priority frames go to the deque for automatic dropping (via maxlen)
+            if client_id in self.low_priority_queues:
+                try:
+                    self.low_priority_queues[client_id].append(data)
+                    if client_id in self.signal_queues:
+                        self.signal_queues[client_id].put_nowait(True)
+                except Exception as e:
+                    logger.error(f"[CONN_MGR] Failed to enqueue low-priority frame for {client_id}: {e}")
+            else:
+                logger.warning(f"[CONN_MGR] Client {client_id} has no low_priority_queue, skipping")
+
+    def _frame_priority(self, feed_id: str, frame_index: int) -> MessagePriority:
+        """Boost the first 10 frames per feed so the frontend transitions
+        'starting' -> 'running' quickly; afterwards frames take LOW path."""
+        if feed_id not in self._sent_first_frames and frame_index < 10:
+            self._sent_first_frames.add(feed_id)
+            return MessagePriority.HIGH
+        return MessagePriority.LOW
+
     async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
         """
         Broadcast binary frame to subscribers.
@@ -503,51 +537,40 @@ class ConnectionManager:
         High priority (initial frames) go to the client_queue.
         """
         logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes feed={feed_id} frame={frame_index} data_size={len(data)}")
-        
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
             logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
             return
-        
-        # Determine priority: Boost the FIRST 10 frames per session, not every time
-        # the absolute frame_index dips below 10. Sample videos loop indefinitely and
-        # will repeatedly return frame_index 0..9, which previously pushed every loop
-        # iteration back to the HIGH priority path. That collides with the goal of
-        # the LOW priority deque (drop stale frames under backpressure) and was the
-        # root cause of the "DROPPING stale frame" warnings seen on the frontend
-        # when network latency is high and the deque shrinks to 30 frames.
-        priority = MessagePriority.LOW
-        if feed_id not in self._sent_first_frames and frame_index < 10:
-            priority = MessagePriority.HIGH
-            self._sent_first_frames.add(feed_id)
+        priority = self._frame_priority(feed_id, frame_index)
+        if priority == MessagePriority.HIGH:
             logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority (first frames for {feed_id})")
-
         for client_id in subscribed_clients:
-            if priority == MessagePriority.HIGH:
-                # High priority frames go to the PriorityQueue
-                if client_id in self.client_queues:
-                    try:
-                        wrapped_msg = PrioritizedMessage(priority, data)
-                        self.client_queues[client_id].put_nowait(wrapped_msg)
-                        if client_id in self.signal_queues:
-                            self.signal_queues[client_id].put_nowait(True)
-                    except asyncio.QueueFull:
-                        logger.warning(f"[CONN_MGR] High-priority queue full for client {client_id}, dropping frame {frame_index}")
-                    except Exception as e:
-                        logger.error(f"[CONN_MGR] Failed to enqueue high-priority frame for {client_id}: {e}")
-            else:
-                # LOW priority frames go to the deque for automatic dropping (via maxlen)
-                if client_id in self.low_priority_queues:
-                    try:
-                        self.low_priority_queues[client_id].append(data)
-                        if client_id in self.signal_queues:
-                            self.signal_queues[client_id].put_nowait(True)
-                    except Exception as e:
-                        logger.error(f"[CONN_MGR] Failed to enqueue low-priority frame for {client_id}: {e}")
-                else:
-                    logger.warning(f"[CONN_MGR] Client {client_id} has no low_priority_queue, skipping")
-        
+            self._enqueue_frame(client_id, data, priority)
         logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes completed for feed={feed_id} frame={frame_index}")
+
+    async def broadcast_to_feed_realtime_bytes_adaptive(
+        self, feed_id: str, full_data: bytes, small_data: bytes, frame_index: int = 0, latency_threshold_ms: float = 120
+    ):
+        """
+        Latency-aware frame fan-out. Each subscribed client receives the
+        full-resolution payload if its tracked RTT is at or below
+        ``latency_threshold_ms`` (LAN / good links -> crisp video), otherwise
+        the downscaled payload (high-latency tunnels like loca.lt / cloudflare /
+        ngrok -> bandwidth saved). RTT comes from the ping/pong loop
+        (``record_pong``); clients with no latency sample default to the small
+        payload to stay safe under unknown network conditions.
+        """
+        logger.debug(f"[CONN_MGR] adaptive broadcast feed={feed_id} frame={frame_index} thr={latency_threshold_ms}ms")
+        subscribed_clients = self.get_clients_for_feed(feed_id)
+        if not subscribed_clients:
+            logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping adaptive broadcast.")
+            return
+        priority = self._frame_priority(feed_id, frame_index)
+        for client_id in subscribed_clients:
+            rtt = self.client_latencies.get(client_id, 50)
+            data = full_data if rtt <= latency_threshold_ms else small_data
+            self._enqueue_frame(client_id, data, priority)
+        logger.debug(f"[CONN_MGR] adaptive broadcast completed for feed={feed_id} frame={frame_index}")
 
     def get_user_role(self, client_id: str) -> str:
         """Retrieve the role associated with a specific client connection."""

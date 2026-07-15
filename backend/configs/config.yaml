@@ -623,6 +623,7 @@ video_processing:
   target_fps: 15
   adaptive_streaming: true
   roi_scale: 0.5
+  adaptive_latency_threshold_ms: 120
 feed_manager:
   max_concurrent_feeds: 10
   db_write_interval: 0.5
