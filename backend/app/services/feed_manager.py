@@ -72,6 +72,7 @@ class FeedManager:
 
         self._global_fps = None
         self._stop_reader_flag = False
+        self._is_shutting_down = False
         self._result_reader_task: Optional[asyncio.Task] = None
 
         # Communication
