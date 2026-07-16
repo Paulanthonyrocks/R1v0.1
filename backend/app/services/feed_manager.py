@@ -394,6 +394,20 @@ class FeedManager:
                 current_size = self.pool_manager.pool_size
                 avg_depth = total_depth / max(1, current_size)
 
+                # Scale thresholds are config-overridable; without explicit
+                # keys the constant defaults (SCALE_UP_THRESHOLD=10 etc.)
+                # still apply, matching the previous behaviour.
+                up_threshold = float(
+                    self.config.get("performance", {}).get(
+                        "scale_up_threshold", FeedManagerConstants.SCALE_UP_THRESHOLD
+                    )
+                )
+                down_threshold = float(
+                    self.config.get("performance", {}).get(
+                        "scale_down_threshold", FeedManagerConstants.SCALE_DOWN_THRESHOLD
+                    )
+                )
+
                 # Cap at the configured inference pool size (was a hard '4', which
                 # ignored inference_pool_size: 8 and MAX_WORKERS: 8, so the
                 # pool could never scale past 4 even under heavy load).
@@ -405,11 +419,10 @@ class FeedManager:
 
                 self.logger.debug(
                     f"[ScalingMonitor] avg_depth={avg_depth:.1f}, current_workers={current_size}, "
-                    f"up_threshold={FeedManagerConstants.SCALE_UP_THRESHOLD}, "
-                    f"down_threshold={FeedManagerConstants.SCALE_DOWN_THRESHOLD}"
+                    f"up_threshold={up_threshold:.0f}, down_threshold={down_threshold:.0f}"
                 )
 
-                if avg_depth > FeedManagerConstants.SCALE_UP_THRESHOLD and current_size < FeedManagerConstants.MAX_WORKERS:
+                if avg_depth > up_threshold and current_size < FeedManagerConstants.MAX_WORKERS:
                     now = time.time()
                     if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
                         # Memory-based guard: do not scale up if memory usage is already high
@@ -421,7 +434,7 @@ class FeedManager:
                             self._last_scale_time = now
                         else:
                             logger.warning(f"High load detected but memory limit reached ({mem:.1f}% >= {mem_limit}%). Skipping scale-up.")
-                elif avg_depth < FeedManagerConstants.SCALE_DOWN_THRESHOLD and current_size > FeedManagerConstants.MIN_WORKERS:
+                elif avg_depth < down_threshold and current_size > FeedManagerConstants.MIN_WORKERS:
                     now = time.time()
                     if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
                         logger.info(f"Low load detected (avg depth {avg_depth:.1f}). Scaling down...")

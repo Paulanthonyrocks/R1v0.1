@@ -70,6 +70,12 @@ inference:
   # same worker, so the configured batch_size (8) actually fills (was
   # collapsing to batch=1 when num_workers==SLOT_COUNT, e.g. 4 workers
   # for 3 feeds left each worker with 1 slot = 1 queue = empty batch).
+  #
+  # GATE: build the TensorRT engine once on the T4 box with
+  #   python scripts/export_tensorrt.py
+  # -> models/yolov8n.engine. The inference worker auto-loads .engine
+  # over .pt when it exists (inference_worker.py:205), dropping per-call
+  # latency ~4-8× vs float32 PyTorch forward.
   num_workers: 2
   worker_ready_timeout: 60
   use_tensorrt: false
@@ -449,7 +455,13 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
   image_gpu_acceleration: true
-  inference_pool_size: 8
+  inference_pool_size: 4
+  # Cap matches a 2-GPU box running 2 inference workers per GPU plus a
+  # safety margin; the previous 8 let ScalingMonitor run away and spawn
+  # 8 single-slot workers with no effect on throughput (Worker 0 still
+  # owned slots [0,2] from boot and absorbed all queue depth). Frozen at
+  # the current 2-GPU/2-worker production envelope.
+  scale_up_threshold: 60
   inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
