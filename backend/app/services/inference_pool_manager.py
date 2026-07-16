@@ -125,17 +125,29 @@ class InferencePoolManager:
                     pass
 
         # 5. Spawn new workers if scaling up
+        # Slot fan-out: with SLOT_COUNT=4 there are only 4 distinct slots.
+        # If target_size <= slot_count we keep strict 1:1 mapping (worker wid
+        # owns slot wid). Once target_size exceeds slot_count, the extra
+        # workers must still DO WORK, so they are assigned to slots via
+        # `slot % effective_workers == wid % effective_workers`, where
+        # effective_workers = min(target_size, slot_count). This lets an
+        # overflow worker consume the same Redis stream as an existing worker
+        # (the consumer group `workers` already allows >1 consumer per stream),
+        # so a hot feed's queue is drained by 2+ workers instead of backing up
+        # until the 60s SHM-stale timeout recycles segments and drops frames.
+        # Without this, workers 4..7 always got an empty slot list, loaded a
+        # model, and idled at ~0% util while one feed's queue depth ran to
+        # 1250+ and dropped ~26% of frames.
+        effective_workers = min(target_size, self.slot_count)
         for wid in range(target_size):
             if wid not in self._inference_pool:
                 # Ensure this worker has its slots assigned in _slot_to_worker
-                # If scaling up, some slots might still be assigned to old IDs or 
+                # If scaling up, some slots might still be assigned to old IDs or
                 # need initial assignment.
                 for slot in range(self.slot_count):
                     if self._slot_to_worker.get(slot, -1) == wid:
-                        continue # already assigned
-                    # If we are scaling up, we can rebalance some slots to the new worker
-                    # to keep load balanced.
-                    if (slot % target_size) == wid:
+                        continue  # already assigned
+                    if (slot % effective_workers) == (wid % effective_workers):
                         self._slot_to_worker[slot] = wid
 
                 self.spawn_worker(wid)

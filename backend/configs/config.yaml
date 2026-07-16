@@ -455,12 +455,17 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
   image_gpu_acceleration: true
-  inference_pool_size: 4
-  # Cap matches a 2-GPU box running 2 inference workers per GPU plus a
-  # safety margin; the previous 8 let ScalingMonitor run away and spawn
-  # 8 single-slot workers with no effect on throughput (Worker 0 still
-  # owned slots [0,2] from boot and absorbed all queue depth). Frozen at
-  # the current 2-GPU/2-worker production envelope.
+  inference_pool_size: 8
+  # Autoscaler ceiling for the inference pool. SLOT_COUNT is 4, so with
+  # strict 1:1 routing only workers 0..3 could ever own a slot and workers
+  # 4..7 idled (loaded a model, did no work) — which made raising this past 4
+  # pointless. InferencePoolManager.scale_pool now FAN-OUTS overflow workers
+  # onto the existing slot streams (validated: the `workers` consumer group
+  # round-robins messages to all consumers of a stream), so a hot feed's
+  # queue is drained by 2 workers. With 3 feeds and pool_size 8 each feed's
+  # single slot gets a 2nd worker, halving per-feed queue depth and the
+  # 60s SHM-stale timeout that was dropping ~26% of Feed_1 frames. Memory
+  # guard (memory_limit_percent) still caps real spawns under pressure.
   scale_up_threshold: 60
   inference_timeout: 0.05
   long_sleep_after_increase: 10
