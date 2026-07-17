@@ -155,10 +155,12 @@ def inference_worker(
         )
 
     vehicle_det_cfg = config.get("vehicle_detection", {})
+    inference_cfg = config.get("inference", {})
     target_fps = config.get("video_processing", {}).get("target_fps", 15)
     ocr_cfg = config.get("ocr_engine", {})
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
-    skip_frames = vehicle_det_cfg.get("skip_frames", 2)
+    # Read skip_frames from inference section (preferred) or vehicle_detection (fallback)
+    skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
     model_path = vehicle_det_cfg.get("model_path")
 
     # Detection filtering params (applied in the batched inference path so it
@@ -271,7 +273,8 @@ def inference_worker(
             batch_tasks = []
             q_depth = sum(central_input_queue[s].qsize() for s in slots)
 
-            batch_size = config.get("performance", {}).get("batch_size", 1)
+            # Read batch config from inference section (performance.batch_size is for ingestion)
+            batch_size = config.get("inference", {}).get("batch_size", config.get("performance", {}).get("batch_size", 1))
             
             # Handle both dict and multiprocessing.Value/RedisValue for pipeline_pressure
             pressure_val = 0.0
@@ -289,7 +292,8 @@ def inference_worker(
                     f"({pressure_val:.2f}). Batch size -> {batch_size}"
                 )
             batch_size = min(batch_size, 8)
-            inference_timeout = config.get("performance", {}).get("inference_timeout", 0.05)
+            # Read inference_timeout from inference section
+            inference_timeout = config.get("inference", {}).get("inference_timeout", config.get("performance", {}).get("inference_timeout", 0.05))
 
             # Initial poll of each slot
             for slot_id in slots:

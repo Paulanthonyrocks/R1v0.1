@@ -78,7 +78,9 @@ inference:
   # latency ~4-8× vs float32 PyTorch forward.
   num_workers: 2
   worker_ready_timeout: 60
-  use_tensorrt: false
+  use_tensorrt: true
+  inference_timeout: 0.15
+  skip_frames: 2
 ingestion:
   shared_memory_ipc: true
 interface:
@@ -467,7 +469,6 @@ performance:
   # 60s SHM-stale timeout that was dropping ~26% of Feed_1 frames. Memory
   # guard (memory_limit_percent) still caps real spawns under pressure.
   scale_up_threshold: 60
-  inference_timeout: 0.05
   long_sleep_after_increase: 10
   max_global_skip_factor: 2.0
   memory_limit_percent: 85
@@ -615,7 +616,7 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 0
+  skip_frames: 2
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -653,10 +654,6 @@ video_processing:
   adaptive_streaming: true
   roi_scale: 0.5
   adaptive_latency_threshold_ms: 120
-feed_manager:
-  max_concurrent_feeds: 10
-  db_write_interval: 0.5
-  error_check_interval: 5.0
 
 vis_options_default:
 - Grid Overlay
