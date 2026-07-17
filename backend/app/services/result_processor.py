@@ -24,11 +24,36 @@ _WIRE_VEHICLE_KEYS = (
     "license_plate", "class_name", "is_wrong_way", "is_stopped",
 )
 
+def _convert_metrics(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Convert numpy types in metrics dict to native Python types for msgpack."""
+    if not metrics:
+        return {}
+    import numpy as np
+    def _convert(val):
+        if isinstance(val, (np.floating, np.integer)):
+            return val.item()
+        if isinstance(val, np.ndarray):
+            return val.tolist()
+        if isinstance(val, dict):
+            return {k: _convert(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_convert(v) for v in val]
+        return val
+    return {k: _convert(v) for k, v in metrics.items()}
+
+
 def _wire_vehicles(vehicles: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """Project each vehicle down to the subset the frontend renders on a frame."""
     if not vehicles:
         return []
-    return [{k: v.get(k) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
+    import numpy as np
+    def _convert(val):
+        if isinstance(val, (np.floating, np.integer)):
+            return val.item()
+        if isinstance(val, np.ndarray):
+            return val.tolist()
+        return val
+    return [{k: _convert(v.get(k)) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
 
 
 class ResultProcessor:
@@ -344,7 +369,7 @@ class ResultProcessor:
                 "i": frame_idx,
                 "ts": time.time() * 1000,
                 "v": _wire_vehicles(vehicles),
-                "m": metrics,
+                "m": _convert_metrics(metrics),
                 "bg": frame_bytes,  # full-res; recording pump also uses this
             }
             full_data = msgpack.packb(compact_full, use_bin_type=True)

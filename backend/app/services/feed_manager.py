@@ -131,6 +131,7 @@ class FeedManager:
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_scale_time = 0.0
+        self._startup_time = time.time()
 
         # Virtual Slot Architecture for Dynamic Scaling
         self.slot_count = FeedManagerConstants.SLOT_COUNT
@@ -436,6 +437,11 @@ class FeedManager:
                             logger.warning(f"High load detected but memory limit reached ({mem:.1f}% >= {mem_limit}%). Skipping scale-up.")
                 elif avg_depth < down_threshold and current_size > FeedManagerConstants.MIN_WORKERS:
                     now = time.time()
+                    # Don't scale down during early startup - wait at least 60s
+                    # for the system to reach steady state
+                    if now - getattr(self, '_startup_time', now) < 60.0:
+                        await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
+                        continue
                     if now - self._last_scale_time >= FeedManagerConstants.SCALE_COOLDOWN:
                         logger.info(f"Low load detected (avg depth {avg_depth:.1f}). Scaling down...")
                         self.pool_manager.scale_pool(current_size - 1)
