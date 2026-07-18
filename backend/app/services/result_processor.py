@@ -24,36 +24,40 @@ _WIRE_VEHICLE_KEYS = (
     "license_plate", "class_name", "is_wrong_way", "is_stopped",
 )
 
+def _to_native(o: Any) -> Any:
+    """Recursively convert numpy scalars / arrays / nested containers to native
+    Python types so msgpack.packb can always serialize the payload.
+
+    The earlier converters only recursed into ``dict`` and ``list``; a structure
+    like a bbox stored as ``[(np.float32, np.float32), ...]`` (a list of numpy
+    scalars / tuples) slipped through and raised ``TypeError: can not serialize
+    'numpy.float32' object`` at packb time, dropping the entire frame broadcast.
+    This recurses into lists AND tuples, converting every numpy value it finds.
+    """
+    import numpy as np
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, dict):
+        return {k: _to_native(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_to_native(v) for v in o]
+    return o
+
+
 def _convert_metrics(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Convert numpy types in metrics dict to native Python types for msgpack."""
     if not metrics:
         return {}
-    import numpy as np
-    def _convert(val):
-        if isinstance(val, (np.floating, np.integer)):
-            return val.item()
-        if isinstance(val, np.ndarray):
-            return val.tolist()
-        if isinstance(val, dict):
-            return {k: _convert(v) for k, v in val.items()}
-        if isinstance(val, list):
-            return [_convert(v) for v in val]
-        return val
-    return {k: _convert(v) for k, v in metrics.items()}
+    return {k: _to_native(v) for k, v in metrics.items()}
 
 
 def _wire_vehicles(vehicles: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """Project each vehicle down to the subset the frontend renders on a frame."""
     if not vehicles:
         return []
-    import numpy as np
-    def _convert(val):
-        if isinstance(val, (np.floating, np.integer)):
-            return val.item()
-        if isinstance(val, np.ndarray):
-            return val.tolist()
-        return val
-    return [{k: _convert(v.get(k)) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
+    return [{k: _to_native(v.get(k)) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
 
 
 class ResultProcessor:
@@ -372,12 +376,12 @@ class ResultProcessor:
                 "m": _convert_metrics(metrics),
                 "bg": frame_bytes,  # full-res; recording pump also uses this
             }
-            full_data = msgpack.packb(compact_full, use_bin_type=True)
+            full_data = msgpack.packb(compact_full, use_bin_type=True, default=_to_native)
 
             if adaptive and small_bg:
                 compact_small = dict(compact_full)
                 compact_small["bg"] = small_bg
-                small_data = msgpack.packb(compact_small, use_bin_type=True)
+                small_data = msgpack.packb(compact_small, use_bin_type=True, default=_to_native)
             else:
                 small_data = full_data
 
