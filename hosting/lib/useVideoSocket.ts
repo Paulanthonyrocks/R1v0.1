@@ -248,16 +248,28 @@ const unsubscribeFromFeed = useCallback(() => {
           for (const idx of drop) seen.delete(idx);
         }
 
-        // Detect feed restart/loop: if index drops significantly, reset the tracker.
+        // Detect feed restart/loop: if index jumps significantly BACKWARD,
+        // reset the tracker.
         //
         // IMPORTANT: a *seamless* loop on a looped source file also wraps
-        // frame_index back to 0 with NO gap in frame delivery (the backend
+        // frame_index back toward 0 with NO gap in frame delivery (the backend
         // keeps streaming; only the index resets). A *genuine* backend restart
         // (crash/respawn) leaves the feed SILENT for seconds first. We use that
         // delivery gap to tell the two apart so a normal video loop is not
         // misreported as a feed crash -- which previously spammed the console
         // and made a real restart indistinguishable from a loop.
-        if (lastProcessedIndexRef.current > 100 && data.frame_index < 10) {
+        //
+        // We must key off a large BACKWARD jump (last - incoming > threshold),
+        // NOT "incoming < 10". Under backend frame-skipping the first post-loop
+        // frame can arrive as index 10/25/50 (0-9 skipped); requiring < 10 then
+        // never fires, lastProcessedIndex stays pinned high, and every wrapped
+        // frame is dropped as stale forever -> the stream hangs while frames
+        // keep arriving.
+        const LOOP_RESET_BACKJUMP = 100;
+        if (
+          lastProcessedIndexRef.current > LOOP_RESET_BACKJUMP &&
+          data.frame_index < lastProcessedIndexRef.current - LOOP_RESET_BACKJUMP
+        ) {
           const timeSinceLastFrame = performance.now() - lastSuccessfulFrameTimeRef.current;
           const isGenuineRestart = timeSinceLastFrame > 2000;
           if (isGenuineRestart) {
