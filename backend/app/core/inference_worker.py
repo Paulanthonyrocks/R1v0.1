@@ -108,6 +108,10 @@ def inference_worker(
 
     signal_stop = False
 
+    # Adaptive backpressure state (per-worker, persists across loop iterations).
+    # None => not yet synced; synced to the configured skip cadence on the
+    # first loop iteration so steady-state detection frequency is unchanged.
+
     def should_stop() -> bool:
         nonlocal signal_stop
         if signal_stop:
@@ -161,6 +165,8 @@ def inference_worker(
     stream_res = tuple(config.get("video_output", {}).get("stream_resolution", (640, 480)))
     # Read skip_frames from inference section (preferred) or vehicle_detection (fallback)
     skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
+    skip_frames_base = skip_frames  # baseline cadence; adaptive skip multiplies this
+    skip_factor = None  # None => unset; lazily set to 1.0 on first loop iteration
     model_path = vehicle_det_cfg.get("model_path")
 
     # Detection filtering params (applied in the batched inference path so it
@@ -275,22 +281,45 @@ def inference_worker(
 
             # Read batch config from inference section (performance.batch_size is for ingestion)
             batch_size = config.get("inference", {}).get("batch_size", config.get("performance", {}).get("batch_size", 1))
-            
-            # Handle both dict and multiprocessing.Value/RedisValue for pipeline_pressure
-            pressure_val = 0.0
-            if pipeline_pressure is not None:
-                pressure_val = (
-                    getattr(pipeline_pressure, 'value', 0.0) 
-                    if not isinstance(pipeline_pressure, dict) 
-                    else pipeline_pressure.get("value", 0.0)
-                )
 
-            if pressure_val > 0.7:
+            # Adaptive backpressure relief. The pipeline_pressure arg is ALWAYS
+            # None here (the pool manager passes None and the worker reads
+            # pressure from Redis instead), so the upstream pressure_val block
+            # was dead code and batch_size never shrank. Derive real pressure
+            # from THIS worker's own queue depth vs the configured ceiling so
+            # the autoscaler stops fighting an unbounded backlog by spawning
+            # more workers that only contend on the 2 GPUs.
+            perf_cfg = config.get("performance", {})
+            queue_max = float(perf_cfg.get("queue_max_size", 500))
+            fullness = min(1.0, q_depth / queue_max) if queue_max > 0 else 0.0
+
+            # Half the batch under heavy backlog so GPU forward calls stay
+            # cheap and the queue drains instead of growing.
+            if fullness > 0.7:
                 batch_size = max(1, batch_size // 2)
                 logger.debug(
-                    f"[Worker {worker_id}] High pipeline pressure "
-                    f"({pressure_val:.2f}). Batch size -> {batch_size}"
+                    f"[Worker {worker_id}] Queue fullness {fullness:.2f} "
+                    f"(depth {q_depth}). Batch size -> {batch_size}"
                 )
+
+            # Grow skip_frames under sustained backlog (detect less often, more
+            # tracks per YOLO call) to shed per-frame YOLO+ReID cost. The
+            # `global_skip_factor` in config is a MULTIPLIER on the configured
+            # baseline skip cadence (1.0x = normal, 2.0x = detect half as
+            # often), bounded by min/max so detection cadence never collapses.
+            # The warm-up frame (first_detect) always forces a detect regardless
+            # of skip, so tracking stays alive.
+            if skip_factor is None:
+                skip_factor = 1.0  # start at baseline cadence
+            min_skip = float(perf_cfg.get("min_global_skip_factor", 1.0))
+            max_skip = float(perf_cfg.get("max_global_skip_factor", 2.0))
+            increase_step = float(perf_cfg.get("skip_factor_increase_step", 0.1))
+            decrease_step = float(perf_cfg.get("skip_factor_decrease_step", 0.05))
+            if fullness > perf_cfg.get("queue_fullness_threshold_for_skip_increase", 0.8):
+                skip_factor = min(max_skip, skip_factor + increase_step)
+            else:
+                skip_factor = max(min_skip, skip_factor - decrease_step)
+            skip_frames = int(round(skip_frames_base * skip_factor))
             batch_size = min(batch_size, 8)
             # Read inference_timeout from inference section
             inference_timeout = config.get("inference", {}).get("inference_timeout", config.get("performance", {}).get("inference_timeout", 0.05))
@@ -596,6 +625,7 @@ def inference_worker(
                     combined_metrics.update(monitor.get_metrics())
                     
                     metrics_obj.frames_processed += 1
+                    metrics_obj.mark_frame()  # keep rolling fps real (was never called -> fps pinned at 0.0)
 
                     serialized_v = serialize_tracked_vehicles(
                         vis_tracks, vehicle_type_map=core.vehicle_type_map
