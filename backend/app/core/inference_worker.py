@@ -167,6 +167,7 @@ def inference_worker(
     skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
     skip_frames_base = skip_frames  # baseline cadence; adaptive skip multiplies this
     skip_factor = None  # None => unset; lazily set to 1.0 on first loop iteration
+    is_trt_engine = False  # set True once a static-batch TensorRT engine is loaded
     model_path = vehicle_det_cfg.get("model_path")
 
     # Detection filtering params (applied in the batched inference path so it
@@ -213,8 +214,14 @@ def inference_worker(
             if engine_path.exists():
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
                 shared_model = YOLO(str(engine_path))
+                # TensorRT engines are shape-locked to the batch they were
+                # exported with (export_tensorrt.py builds batch=1). Feeding a
+                # multi-frame list to a static-batch engine errors or silently
+                # drops all but the first frame, so force per-frame inference.
+                is_trt_engine = True
             else:
                 shared_model = YOLO(full_model_path)
+                is_trt_engine = False
 
             shared_model.to(device)
             logger.info(f"[Worker {worker_id}] Shared model loaded on {device}.")
@@ -321,6 +328,8 @@ def inference_worker(
                 skip_factor = max(min_skip, skip_factor - decrease_step)
             skip_frames = int(round(skip_frames_base * skip_factor))
             batch_size = min(batch_size, 8)
+            if is_trt_engine:
+                batch_size = 1  # static-batch=1 engine; multi-frame lists break it
             # Read inference_timeout from inference section
             inference_timeout = config.get("inference", {}).get("inference_timeout", config.get("performance", {}).get("inference_timeout", 0.05))
 
