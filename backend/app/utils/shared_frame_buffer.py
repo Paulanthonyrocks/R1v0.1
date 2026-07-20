@@ -137,7 +137,7 @@ class SharedFrameBuffer:
         if odd_timeout is None:
             odd_timeout = self._odd_timeout
 
-        now = time.time()
+        now = time.monotonic()
         stale_count = 0
         skipped_uninitialised = 0
         skipped_in_flight = 0
@@ -213,7 +213,7 @@ class SharedFrameBuffer:
             name = self._free_pool.get(timeout=timeout)
             get_redis_client().sadd(self._acquired_set_key, name)
             self._acquired_count += 1
-            self._last_acquire_time = time.time()
+            self._last_acquire_time = time.monotonic()
             with self._lock:
                 self._in_flight.add(name)
             return name
@@ -263,7 +263,7 @@ class SharedFrameBuffer:
         buf[self.HEADER_SIZE : self.HEADER_SIZE + size] = raw_bytes
         
         # 3. Finalize header: Write everything including EVEN version
-        now = time.time()
+        now = time.monotonic()
         # Layout: [version(i4), size(i4), width(i4), height(i4), channels(i4), feed_hash(i4), last_used(f8)]
         buf[4:24] = struct.pack('<iiiiI', size, w, h, c, feed_hash)
         buf[24:32] = struct.pack('<d', now)
@@ -334,7 +334,7 @@ class SharedFrameBuffer:
                     if final_version == version:
                         # Successfully read a stable frame. Update heartbeat and return.
                         try:
-                            buf[24:32] = struct.pack('<d', time.time())
+                            buf[24:32] = struct.pack('<d', time.monotonic())
                         except Exception:
                             pass
                         return data, (w, h, c)
@@ -379,28 +379,42 @@ class SharedFrameBuffer:
         try:
             # Always return to free pool - don't let tracking failures cause exhaustion
             logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
+            # CRITICAL FIX (ordering): clear distributed ownership BEFORE
+            # making the segment available in the free pool. The reclaimer
+            # (prune_stale_segments) already uses this exact order (srem then
+            # put). Previously release() did put() THEN srem(), leaving a window
+            # where the segment was acquirable from the free pool but its
+            # ownership entry still referenced the *releasing* worker. A
+            # concurrent acquire() would sadd() the name, then this srem() would
+            # wipe that new owner's claim -- leaving the live segment invisible
+            # to the reclaim guard and therefore reclaimable mid-flight (the
+            # "~14% read-failure" class of bug: a recycled segment handed to two
+            # readers at once). Clearing ownership first keeps the segment in a
+            # brief "neither owned nor free" state (not reclaimable, not
+            # acquirable) until the put() below makes it available with correct
+            # accounting.
+            try:
+                get_redis_client().srem(self._acquired_set_key, name)
+            except Exception:
+                pass
             try:
                 self._free_pool.put(name, block=False)
             except queue.Full:
                 # Pool is full (segment already returned twice) - safe to drop
                 logger.debug(f"SHM free pool full, dropping duplicate release of {name}")
-            # CRITICAL FIX: clear the segment from the acquired set so the
-            # stale-segment reclaimer (prune_stale_segments) no longer treats
-            # an in-flight segment as "leaked". Previously the acquired set was
-            # only ever grown on acquire() and never shrunk, so every segment
-            # ever touched stayed in it forever and prune() would reclaim
-            # segments that were still pending in central_output -> the result
-            # reader then read a recycled frame (wrong feed_hash) and dropped
-            # it. That was the ~14% SHM read-failure rate and the constant
-            # "Recovered N stale SHM segments" / SHM-leak chatter on shutdown.
-            try:
-                get_redis_client().srem(self._acquired_set_key, name)
-            except Exception:
-                pass
             self._release_count += 1
-            self._last_release_time = time.time()
+            self._last_release_time = time.monotonic()
         except Exception as e:
             logger.error(f"Error releasing {name}: {e}")
+
+    def available_count(self) -> int:
+        """Public accessor for the number of free SHM segments.
+
+        Replaces callers reaching into the private ``_free_pool`` attribute
+        (e.g. the ingestion worker). Lets the internal queue be renamed or
+        swapped without breaking consumers. Returns 0 for read-only buffers.
+        """
+        return self._free_pool.qsize() if self._free_pool else 0
 
     def get_stats(self) -> dict:
         """Return buffer statistics for diagnostics."""
@@ -418,8 +432,8 @@ class SharedFrameBuffer:
             # delta is the trustworthy indicator.
             'orphan_count': max(0, self._acquired_count - self._release_count - in_flight),
             'free_pool_size': self._free_pool.qsize() if self._free_pool else 0,
-            'last_acquire_ago': time.time() - self._last_acquire_time if self._last_acquire_time > 0 else None,
-            'last_release_ago': time.time() - self._last_release_time if self._last_release_time > 0 else None,
+            'last_acquire_ago': time.monotonic() - self._last_acquire_time if self._last_acquire_time > 0 else None,
+            'last_release_ago': time.monotonic() - self._last_release_time if self._last_release_time > 0 else None,
         }
 
     def cleanup(self):

@@ -35,6 +35,36 @@ except ImportError:
 
 logger = logging.getLogger("app.ml")
 
+class OCRQueueFull(Exception):
+    """Raised when the bounded OCR executor's pending queue is at capacity."""
+
+
+class _BoundedThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor with a hard cap on the *pending* (queued, not yet
+    running) task count.
+
+    The stock executor has an unbounded work queue: under a burst of OCR
+    submissions the queue grows without limit, the 2 worker threads can never
+    keep up, and memory/latency climb until OCR is minutes behind (and the
+    queued jobs hold references to frame buffers). Capping the pending queue
+    turns overload into a clean drop: the caller's dedup logic re-submits the
+    track on a later frame, so a skipped plate is simply re-attempted rather
+    than stacked.
+    """
+
+    def __init__(self, max_workers: int = 2, max_queue: int = 64, **kwargs):
+        super().__init__(max_workers=max_workers, **kwargs)
+        self._max_queue = max(1, int(max_queue))
+
+    def submit(self, fn, *args, **kwargs):
+        # _work_queue is the base class's deque-backed queue.Queue; qsize() is
+        # available on queue.Queue. We reject rather than block so the producer
+        # (detect_and_track) keeps its real-time cadence.
+        if self._work_queue.qsize() >= self._max_queue:
+            raise OCRQueueFull("ocr pending queue at capacity")
+        return super().submit(fn, *args, **kwargs)
+
+
 class TrackData(TypedDict, total=False):
     """Type definition for vehicle track metadata."""
     bbox: List[float]
@@ -168,6 +198,17 @@ class CoreModule:
         self.last_activity = 0.0
         self._reid_updates_this_frame = 0  # Per-frame budget control
         self._lock = threading.RLock()
+
+        # OCR submission de-duplication. Without this, every active track with
+        # confidence > 0.7 re-submits an OCR job on *every frame* (line ~682),
+        # so N vehicles at F FPS produce up to N*F concurrent submissions for
+        # the same plate. Combined with the previously-unbounded executor that
+        # let the pending queue grow without limit. Tracking in-flight track
+        # ids bounds work to at most one pending OCR per vehicle; a plate is
+        # re-submitted only after the prior one finishes (so it still refreshes).
+        self._ocr_in_flight: set = set()
+        self._ocr_lock = threading.Lock()
+        self._ocr_max_pending = self.config.get("ocr_engine", {}).get("max_pending_jobs", 64)
 
         if self.config.get("ocr_engine", {}).get("enabled", False):
             self._init_ocr()
@@ -314,7 +355,18 @@ class CoreModule:
 
         # Create executor if any OCR engine is enabled
         if initialized:
-            self.ocr_executor = ThreadPoolExecutor(max_workers=2)
+            # Clear stale in-flight tracking: a re-init (e.g. via update_config)
+            # swaps the executor, so track ids from the previous engine must not
+            # block new submissions forever.
+            with self._ocr_lock:
+                self._ocr_in_flight.clear()
+            # Bounded queue: see _BoundedThreadPoolExecutor. Default 64 pending
+            # jobs is enough headroom for 20 vehicles @ 15 FPS with 2 workers
+            # while preventing unbounded memory growth under sustained load.
+            self._ocr_max_pending = self.config.get("ocr_engine", {}).get("max_pending_jobs", 64)
+            self.ocr_executor = _BoundedThreadPoolExecutor(
+                max_workers=2, max_queue=self._ocr_max_pending
+            )
         
         return initialized
 
@@ -671,25 +723,54 @@ class CoreModule:
                 if track["status"] == "active":
                     vis_tracks[tid] = track
                     if (self.local_ocr or self.preprocessor) and track.get("confidence", 0) > 0.7:
-                        bbox = track.get("bbox")
-                        if bbox:
-                            x1, y1, x2, y2 = map(int, bbox)
-                            roi = frame[
-                                max(0, y1):min(frame.shape[0], y2),
-                                max(0, x1):min(frame.shape[1], x2),
-                            ]
-                            if roi.size > 0:
-                                self.ocr_executor.submit(self._run_ocr, tid, roi)
+                        self._maybe_submit_ocr(tid, frame, track.get("bbox"))
                 elif track["status"] == "predicting":
                     if (current_time - track["last_seen"]) < self.predict_timeout:
                         vis_tracks[tid] = track
 
         # Compute feed-level metrics (average speed, congestion)
         feed_metrics = self._compute_feed_metrics(vis_tracks)
-        self._save_vehicle_data(vis_tracks, feed_metrics)
+
+        # Drain OCR results FIRST so any plate recognised this frame is reflected
+        # in the DB write (and in vis_tracks) instead of being deferred a frame
+        # (audit 3.1). Previously _save_vehicle_data ran before OCR processing.
         self._process_ocr_results(vehicle_data)
 
+        self._save_vehicle_data(vis_tracks, feed_metrics)
+
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
+
+    def _maybe_submit_ocr(self, tid: str, frame: np.ndarray, bbox):
+        """Submit an OCR job for a track, de-duplicating in-flight requests.
+
+        A track may only have ONE pending OCR job at a time. If an OCR is
+        already pending for this track we skip; if the bounded executor's
+        pending queue is saturated we drop (the track is re-attempted on a
+        later frame). This bounds total OCR work to (active vehicles)
+        concurrent jobs instead of (active vehicles * frames/sec), and keeps
+        the executor's pending queue from growing without limit under burst
+        load.
+        """
+        if self.ocr_executor is None or not bbox or len(bbox) < 4:
+            return
+        with self._ocr_lock:
+            if tid in self._ocr_in_flight:
+                return  # already a pending OCR for this vehicle
+            self._ocr_in_flight.add(tid)
+        x1, y1, x2, y2 = map(int, bbox)
+        h, w = frame.shape[:2]
+        roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+        if roi.size == 0:
+            with self._ocr_lock:
+                self._ocr_in_flight.discard(tid)
+            return
+        try:
+            self.ocr_executor.submit(self._run_ocr, tid, roi)
+        except OCRQueueFull:
+            # Executor saturated: drop this submission, keep the track out of
+            # the in-flight set so it can be retried next frame.
+            with self._ocr_lock:
+                self._ocr_in_flight.discard(tid)
 
     def _run_ocr(self, tid: str, roi: np.ndarray):
         """Worker function for OCR executor."""
@@ -698,7 +779,7 @@ class CoreModule:
             # 1. Try Gemini OCR via preprocessor if available
             if self.preprocessor:
                 text = self.preprocessor.preprocess_and_ocr(roi)
-            
+        
             # 2. Fallback to local OCR if Gemini failed or is disabled
             if not text and self.local_ocr:
                 text = self.local_ocr.process(roi)
@@ -710,6 +791,10 @@ class CoreModule:
                     logger.warning(f"[{self.feed_id}] OCR results queue full. Dropping result for {tid}.")
         except Exception as e:
             logger.error(f"OCR processing failed for {tid}: {e}")
+        finally:
+            # Always release the in-flight slot so the track can be OCR'd again.
+            with self._ocr_lock:
+                self._ocr_in_flight.discard(tid)
 
     def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData], feed_metrics: Optional[Dict[str, Any]] = None):
         """
@@ -748,7 +833,14 @@ class CoreModule:
             # Fix: Check for existence of bbox and centroid to avoid KeyError
             bbox = data.get("bbox")
             centroid = data.get("centroid")
-            if bbox is None or centroid is None:
+            # Hardened guards (audit 3.2): skip malformed bbox/centroid rather
+            # than letting the list-comprehension below crash or write bad rows.
+            if (
+                not bbox
+                or len(bbox) < 4
+                or not centroid
+                or len(centroid) < 2
+            ):
                 continue
 
             try:
@@ -756,7 +848,7 @@ class CoreModule:
                     "type": "vehicle_data",
                     "feed_id": self.feed_id,
                     "vehicle_id": str(vehicle_id),
-                    "global_vehicle_id": str(data.get("global_vehicle_id", "")),
+                    "global_vehicle_id": str(data.get("global_vehicle_id") or ""),
                     "timestamp": float(now),
                     "bbox": [float(x) for x in bbox],
                     "centroid": [float(x) for x in centroid],
@@ -805,6 +897,9 @@ class CoreModule:
         self.reid_embedder = None
         self.preprocessor = None
         self.local_ocr = None
+        # Release cached lane-detection state (audit 5.4).
+        self.last_detected_lane_lines = None
+        self.cached_lane_boundaries = []
         logger.info(f"[{self.feed_id}] CoreModule resources cleaned up.")
 
     def update_config(self, updates: Dict[str, Any]):
@@ -842,12 +937,32 @@ class CoreModule:
                     self.transformer.update_calibration(calib_cfg)
 
             if "ocr_engine" in updates:
-                # Re-initialize OCR if enabled/disabled or settings changed
+                # Merge OCR engine settings into config, THEN re-initialize OCR
+                # engines. Previously the merge was skipped, so _init_ocr() read
+                # stale settings (audit 1.1).
+                ocr_cfg = self.config.get("ocr_engine", {})
+                self.config["ocr_engine"] = {**ocr_cfg, **updates["ocr_engine"]}
                 self._init_ocr()
 
             if "roi" in updates:
                 roi_points = updates["roi"]
                 if isinstance(roi_points, list):
                     self.roi_polygon_points = roi_points
+                    # Keep config in sync so other modules reading the dict see the
+                    # new polygon (audit 1.2). Previously only internal state changed.
+                    roi_cfg = self.config.get("roi_processing", {})
+                    roi_cfg["polygon_points"] = roi_points
+                    self.config["roi_processing"] = roi_cfg
                     self._initialize_roi_mask(res)
-                    self.detector.initialize_roi(res, self.roi_polygon_points)
+                    if self.detector:
+                        self.detector.initialize_roi(res, self.roi_polygon_points)
+
+            if "lane_detection" in updates:
+                # Previously there was NO handler for lane_detection updates, so
+                # interval/enabled changes were silently ignored (audit 1.2).
+                l_cfg_update = updates["lane_detection"]
+                current_l_cfg = self.config.get("lane_detection", {})
+                self.config["lane_detection"] = {**current_l_cfg, **l_cfg_update}
+                self.lane_detection_interval = l_cfg_update.get(
+                    "detection_interval", self.lane_detection_interval
+                )

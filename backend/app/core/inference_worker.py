@@ -166,7 +166,7 @@ def inference_worker(
     # Read skip_frames from inference section (preferred) or vehicle_detection (fallback)
     skip_frames = inference_cfg.get("skip_frames", vehicle_det_cfg.get("skip_frames", 2))
     skip_frames_base = skip_frames  # baseline cadence; adaptive skip multiplies this
-    skip_factor = None  # None => unset; lazily set to 1.0 on first loop iteration
+    skip_factor = 1.0  # baseline cadence; adaptive skip multiplies this. Initialised at boot, not lazily in the loop.
     is_trt_engine = False  # set True once a static-batch TensorRT engine is loaded
     model_path = vehicle_det_cfg.get("model_path")
 
@@ -284,6 +284,11 @@ def inference_worker(
 
             # --- Batching ---
             batch_tasks = []
+            # Must be initialised BEFORE the batch-fill loop: the smart-skip
+            # backpressure path (below) calls acked_msgs.add() under queue
+            # pressure, and acked_msgs was previously first defined only after
+            # that loop -> NameError crash on the worker under backlog.
+            acked_msgs: set = set()
             q_depth = sum(central_input_queue[s].qsize() for s in slots)
 
             # Read batch config from inference section (performance.batch_size is for ingestion)
@@ -316,8 +321,6 @@ def inference_worker(
             # often), bounded by min/max so detection cadence never collapses.
             # The warm-up frame (first_detect) always forces a detect regardless
             # of skip, so tracking stays alive.
-            if skip_factor is None:
-                skip_factor = 1.0  # start at baseline cadence
             min_skip = float(perf_cfg.get("min_global_skip_factor", 1.0))
             max_skip = float(perf_cfg.get("max_global_skip_factor", 2.0))
             increase_step = float(perf_cfg.get("skip_factor_increase_step", 0.1))
@@ -382,16 +385,24 @@ def inference_worker(
                 time.sleep(0.0005)
 
             # --- Process batch ---
-            acked_msgs: set = set()
             batch_meta: List[Dict] = []
             frames_to_infer: List[np.ndarray] = []
             inference_indices: List[int] = []
 
             try:
                 for msg_id, task, slot_q_ref in batch_tasks:
+                    # Defensive unpacking: payloads are 4-tuples
+                    # (feed_id, frame_index, shm_ref, extra_payload), but
+                    # tolerate malformed ones from a misbehaving producer
+                    # instead of raising ValueError and killing the whole batch.
+                    if not isinstance(task, (tuple, list)) or len(task) < 4:
+                        logger.error(
+                            f"[Worker {worker_id}] Malformed task payload: {task!r}"
+                        )
+                        if msg_id and hasattr(slot_q_ref, "ack"):
+                            slot_q_ref.ack(msg_id)
+                        continue
                     feed_id, frame_index, shm_ref, extra_payload = task
-
-                    # Control messages
                     if frame_index == -888:
                         metrics_map.setdefault(feed_id, WorkerMetrics(feed_id))
                         if feed_id in core_modules:
@@ -633,8 +644,7 @@ def inference_worker(
                     combined_metrics = metrics_obj.to_dict()
                     combined_metrics.update(monitor.get_metrics())
                     
-                    metrics_obj.frames_processed += 1
-                    metrics_obj.mark_frame()  # keep rolling fps real (was never called -> fps pinned at 0.0)
+                    metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps
 
                     serialized_v = serialize_tracked_vehicles(
                         vis_tracks, vehicle_type_map=core.vehicle_type_map

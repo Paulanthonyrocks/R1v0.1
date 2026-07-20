@@ -155,9 +155,15 @@ def ingestion_worker(
 
     logger.debug(f"[{feed_id}] Initializing FrameReader...")
 
+    # Cap critical-signal retries by attempt count rather than wall-clock, so a
+    # permanently blocked central queue can't hang ingestion for 10s on every
+    # start/stop signal. 50 * 0.1s = ~5s max, then fail fast with a fatal log.
+    CRITICAL_MAX_ATTEMPTS = 50
+    CRITICAL_RETRY_SLEEP = 0.1
+
     def safe_put(item: Any, timeout: float = 0.1, critical: bool = False) -> bool:
         """Wrapper for queue.put to ensure compatibility across backends and guaranteed delivery for critical signals."""
-        start_time = time.time()
+        attempts = 0
         while True:
             try:
                 # Try to put the item. 
@@ -172,14 +178,20 @@ def ingestion_worker(
                 if not critical:
                     # Non-critical frames are just dropped if the queue is full
                     return False
-                
-                # Critical signals (start/stop) must be delivered. Retry until timeout (max 10s).
-                if (time.time() - start_time) > 10.0:
-                    logger.critical(f"[{feed_id}] FAILED to deliver critical signal after 10s: {item}")
+
+                # Critical signals (start/stop) must be delivered, but bound the
+                # retry by attempt count to avoid an indefinite hang when the
+                # downstream pipeline is dead.
+                attempts += 1
+                if attempts >= CRITICAL_MAX_ATTEMPTS:
+                    logger.critical(
+                        f"[{feed_id}] FAILED to deliver critical signal after "
+                        f"{attempts} attempts (~{attempts * CRITICAL_RETRY_SLEEP:.1f}s): {item}"
+                    )
                     return False
-                
-                logger.warning(f"[{feed_id}] Queue full, retrying critical signal delivery...")
-                time.sleep(0.1)
+
+                logger.warning(f"[{feed_id}] Queue full, retrying critical signal delivery ({attempts}/{CRITICAL_MAX_ATTEMPTS})...")
+                time.sleep(CRITICAL_RETRY_SLEEP)
 
     try:
         # Sent feed_started signal with guaranteed delivery
@@ -257,8 +269,6 @@ def ingestion_worker(
     shm_ref = None
 
     def handle_command(cmd: Dict[str, Any]) -> None:
-        nonlocal last_frame_bytes, last_frame_format
-
         cmd_type = cmd.get("type")
         if cmd_type != "save_snapshot":
             return
@@ -327,24 +337,47 @@ def ingestion_worker(
                     logger.error(f"[{feed_id}] Command execution error: {e}")
 
             try:
-                result = reader.read()
+                # Resolve pipeline pressure BEFORE reading/decoding. Prefer the
+                # shared dict; fall back to a throttled Redis check so we don't
+                # round-trip on every frame. Moving this above reader.read()
+                # avoids burning CPU/GPU decoding frames we will drop anyway
+                # under backpressure.
+                cached_pressure = 0.0
+                if pipeline_pressure is not None:
+                    cached_pressure = (
+                        getattr(pipeline_pressure, 'value', 0.0)
+                        if not isinstance(pipeline_pressure, dict)
+                        else pipeline_pressure.get("value", 0.0)
+                    )
+                else:
+                    if frame_check_counter % pressure_check_interval == 0:
+                        pressure_val = redis_client.get("pipeline:pressure")
+                        cached_pressure = float(pressure_val) if pressure_val else 0.0
+                # Always advance the throttle counter, regardless of which
+                # pressure source was used (previously only incremented in the
+                # else branch, which stalled the Redis check cadence when a
+                # shared pressure object was supplied).
+                frame_check_counter += 1
 
+                if cached_pressure > 0.7:
+                    metrics.frames_dropped += 1
+                    if metrics.frames_dropped % 100 == 0:
+                        logger.warning(
+                            f"[{feed_id}] Pipeline pressure high ({cached_pressure:.2f}). "
+                            f"Skipping read for frame."
+                        )
+                    time.sleep(0.001)
+                    continue
+
+                result = reader.read()
                 if result is None:
                     if reader.end_of_video and not is_looped:
-                        # Live stream disconnect — attempt reconnect once
-                        logger.warning(f"[{feed_id}] Stream disconnected, attempting reconnect...")
-                        try:
-                            if reader.reconnect():
-                                logger.info(f"[{feed_id}] Stream reconnected successfully")
-                                continue
-                        except Exception:
-                            pass
-                        
-                        # Verify if reader is actually back online before continuing
-                        if not reader.isOpened:
-                            logger.info(f"[{feed_id}] End of stream (or reconnect failed).")
-                            break
-                        continue
+                        # Non-looped file reached its end (FrameReader sets
+                        # end_of_video and stops its thread, so isOpened is
+                        # already False). No reconnect path exists here — exit
+                        # cleanly rather than busy-looping on a dead source.
+                        logger.info(f"[{feed_id}] End of stream.")
+                        break
                     elif reader.end_of_video:
                         logger.info(f"[{feed_id}] End of stream.")
                         break
@@ -358,30 +391,6 @@ def ingestion_worker(
 
                 consecutive_errors = 0
                 frame_index, frame = result
-
-                # Determine pipeline pressure — prefer the shared dict, fall back to Redis
-                # (throttled to avoid a round-trip on every frame)
-                cached_pressure = 0.0
-                if pipeline_pressure is not None:
-                    cached_pressure = (
-                        getattr(pipeline_pressure, 'value', 0.0)
-                        if not isinstance(pipeline_pressure, dict)
-                        else pipeline_pressure.get("value", 0.0)
-                    )
-                else:
-                    if frame_check_counter % pressure_check_interval == 0:
-                        pressure_val = redis_client.get("pipeline:pressure")
-                        cached_pressure = float(pressure_val) if pressure_val else 0.0
-                    frame_check_counter += 1
-
-                if cached_pressure > 0.7:
-                    metrics.frames_dropped += 1
-                    if metrics.frames_dropped % 100 == 0:
-                        logger.warning(
-                            f"[{feed_id}] Pipeline pressure high ({cached_pressure:.2f}). "
-                            f"Dropping frame {frame_index}."
-                        )
-                    continue
 
                 try:
                     # Normalise frame to uint8 BGR before resize/encode
@@ -448,7 +457,7 @@ def ingestion_worker(
                         continue
                     
                     # Get free pool size to apply graduated backpressure
-                    free_pool_size = frame_buffer._free_pool.qsize() if frame_buffer._free_pool else 0
+                    free_pool_size = frame_buffer.available_count()
                     pool_size = frame_buffer.pool_size
                     
                     # Graduated backpressure based on free pool percentage
@@ -471,15 +480,18 @@ def ingestion_worker(
                     try:
                         if not safe_put((feed_id, frame_index, shm_ref, time.time()), timeout=0.1):
                             raise queue.Full
-                        metrics.frames_processed += 1
-                        metrics.mark_frame()
+                        metrics.mark_frame()  # increments frames_processed AND records rolling fps
                         shm_ref = None  # Ownership transferred; guard against double-release
                     except queue.Full:
                         # Queue is full — release the SHM slot we just acquired
                         frame_buffer.release(shm_ref)
                         shm_ref = None
                         metrics.frames_dropped += 1
-                        consecutive_errors += 1
+                        # NOTE: do NOT increment consecutive_errors here. That
+                        # counter is for *read/stream* failures (it breaks the
+                        # loop after max_consecutive_errors). A full output
+                        # queue is backpressure, not a broken source — counting
+                        # it here would kill a healthy feed after sustained load.
                         if metrics.frames_dropped % 50 == 0:
                             total = metrics.frames_processed + metrics.frames_dropped
                             drop_rate = (metrics.frames_dropped / total * 100) if total > 0 else 0
@@ -523,6 +535,20 @@ def ingestion_worker(
     finally:
         if reader:
             reader.stop()
+        # Drain and signal the secondary VideoWriter queue so its consumer
+        # (if recording is enabled) can flush and terminate instead of
+        # blocking forever on a full queue. A b"" sentinel marks EOS; the
+        # subscriber pump treats an empty payload as end-of-stream.
+        if video_writer_queue is not None:
+            try:
+                while True:
+                    try:
+                        video_writer_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                video_writer_queue.put_nowait(b"")  # EOS sentinel
+            except Exception:
+                pass
 
     try:
         if not safe_put(
