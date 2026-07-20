@@ -254,7 +254,7 @@ def ingestion_worker(
             )
             reader = None
 
-        if attempt < max_retries - 1 and (stop_event is None or not stop_event.is_set()):
+        if attempt < max_retries - 1 and not should_stop():
             logger.info(f"[{feed_id}] Retrying in {retry_delay}s...")
             time.sleep(retry_delay)
 

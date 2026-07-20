@@ -154,7 +154,14 @@ class CoreModule:
 
         res = v_cfg.get("frame_resolution", [640, 480])
         self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
-        self.detector.initialize_roi(res, self.roi_polygon_points)
+        # Pass exclusion zones through so DetectionEngine actually filters
+        # them (audit finding #7) -- previously only the polygon reached the
+        # detector and exclusion_zones were dead config.
+        self.detector.initialize_roi(
+            res,
+            self.roi_polygon_points,
+            self.config.get("roi_processing", {}).get("exclusion_zones", []),
+        )
         self._initialize_roi_mask(res)
 
         self.tracker = TrackingManager(self.config, self.fps, feed_id=self.feed_id)
@@ -409,36 +416,52 @@ class CoreModule:
     def _compute_feed_metrics(self, vis_tracks: Dict[str, TrackData]) -> Dict[str, Any]:
         """
         Aggregate per-vehicle data into feed-level metrics.
+
+        The vehicle population is EVERY currently-visible track (active OR
+        predicting) -- including stopped vehicles. Filtering on
+        ``speed > 0`` here (the old behaviour) caused three bugs:
+          1. During total gridlock (every vehicle at speed 0.0) it hit the
+             early-return branch and reported ``congestion_score: 0.0`` --
+             free flow -- which is the exact condition this metric exists to
+             flag (audit finding #4).
+          2. Density (``len(vehicles)/100``) was computed over only the
+             moving subset, so congestion *fell* as more vehicles stopped --
+             backwards from what density means.
+          3. ``vehicle_count`` switched meaning frame-to-frame (all tracks on
+             the empty path vs moving-only on the normal path).
+
+        This must stay in sync with TrafficMonitor.get_metrics()
+        (app/utils/monitoring.py): same weights and scale, and the same
+        vehicle population (all tracked vehicles), so the DB feed_metrics
+        record and the live WebSocket/predictor feature agree (audit C4).
         """
-        active_vehicles = [
-            t for t in vis_tracks.values() 
-            if t.get("status") == "active" and t.get("speed", 0) > 0
-        ]
-        
-        if not active_vehicles:
+        # All currently-visible tracks, active or predicting -- including
+        # stopped vehicles, which is the whole point of congestion scoring.
+        vehicles = list(vis_tracks.values())
+        if not vehicles:
             return {
                 "average_speed_kmh": 0.0,
                 "congestion_score": 0.0,
-                "vehicle_count": len(vis_tracks),
+                "vehicle_count": 0,
             }
-        
-        speeds = [t["speed"] for t in active_vehicles]
+
+        speeds = [float(t.get("speed", 0.0)) for t in vehicles]
         avg_speed = float(np.median(speeds))  # Robust to outliers
-        congestion = self._compute_congestion_score(active_vehicles, avg_speed)
-        
+        congestion = self._compute_congestion_score(vehicles, avg_speed)
+
         # Update session histories
         self.speed_history.append(avg_speed)
         self.congestion_history.append(congestion)
-        
+
         session_avg_speed = float(np.mean(self.speed_history)) if self.speed_history else 0.0
         session_avg_congestion = float(np.mean(self.congestion_history)) if self.congestion_history else 0.0
-        
+
         return {
             "average_speed_kmh": round(avg_speed, 1),
             "session_average_speed_kmh": round(session_avg_speed, 1),
             "congestion_score": congestion,
             "session_average_congestion_score": round(session_avg_congestion, 3),
-            "vehicle_count": len(active_vehicles),
+            "vehicle_count": len(vehicles),
             # total_vehicles_cumulative is tracked by TrafficMonitor.seen_vehicle_ids;
             # _compute_feed_metrics only writes to DB. Use monitor.get_metrics() for
             # the authoritative cumulative count (broadcast via VIDEO_FRAME).
@@ -955,7 +978,11 @@ class CoreModule:
                     self.config["roi_processing"] = roi_cfg
                     self._initialize_roi_mask(res)
                     if self.detector:
-                        self.detector.initialize_roi(res, self.roi_polygon_points)
+                        self.detector.initialize_roi(
+                            res,
+                            self.roi_polygon_points,
+                            self.config.get("roi_processing", {}).get("exclusion_zones", []),
+                        )
 
             if "lane_detection" in updates:
                 # Previously there was NO handler for lane_detection updates, so

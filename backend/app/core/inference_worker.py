@@ -31,6 +31,33 @@ def _unpack_queue_result(res) -> Tuple[Optional[Any], Any]:
     return None, res
 
 
+def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
+    """Forward a frame's raw bytes downstream without running detection.
+
+    Used for skip-frames (decoded as None) and as a best-effort passthrough
+    when a frame's detection/tracking throws, so the live stream never stalls
+    on a single bad frame (audit findings #2 / #8).
+    """
+    # If the outer batch handler already acked this message, never re-ack it
+    # (the finally block releases the SHM segment regardless).
+    if meta.get("frame_bytes") is None:
+        return
+    try:
+        combined_metrics = metrics_obj.to_dict() if metrics_obj is not None else {}
+        serialized_v = {}
+        extra = {}
+        central_output_queue.put(
+            (meta["feed_id"], meta["frame_index"], meta["frame_bytes"], combined_metrics, serialized_v, extra),
+            timeout=0.05,
+        )
+    except queue.Full:
+        if metrics_obj is not None:
+            metrics_obj.frames_dropped += 1
+    except Exception:
+        # Forwarding must never raise out of the per-item handler.
+        pass
+
+
 def inference_worker(
     worker_id: int,
     central_input_queue: Any,
@@ -432,25 +459,30 @@ def inference_worker(
                             logger.error(f"[Worker {worker_id}] SHM read failed for ref {shm_ref}: {e}")
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
-                                acked_msgs.add(msg_id)
-                            try:
-                                frame_buffer.release(shm_ref)
-                            except Exception:
-                                pass
+                            acked_msgs.add(msg_id)
+                            # CRITICAL (audit #1): do NOT release here. On a SHM
+                            # read failure the segment may already have been
+                            # recycled to another feed by the time we get here.
+                            # Releasing would srem the *new* owner's acquired-set
+                            # claim and push a phantom duplicate into the free
+                            # pool -- the very cross-feed corruption the
+                            # acquired-set was added to prevent. The real owner
+                            # releases it on its own.
                             continue
 
                         if res is None:
-                            # SHM read returns None when segment was recycled (feed mismatch) or stale.
-                            # This is normal under high load - frame is dropped to keep pipeline moving.
-                            # Increment drop counter for metrics tracking.
+                            # SHM read returns None when the segment was recycled
+                            # (feed mismatch) or is stale. Normal under high load.
+                            # CRITICAL (audit #1): the segment is no longer ours --
+                            # some other producer already re-acquired it. Releasing
+                            # would strip that owner's acquired-set entry and push a
+                            # duplicate name into the free pool, letting two
+                            # producers write the same segment concurrently (silent
+                            # cross-feed corruption). The real owner releases it.
                             if feed_id in metrics_map:
                                 metrics_map[feed_id].frames_dropped += 1
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
-                            try:
-                                frame_buffer.release(shm_ref)
-                            except Exception:
-                                pass
                             continue
                         if isinstance(res, tuple) and len(res) == 2:
                             frame_bytes, dims = res
@@ -563,6 +595,11 @@ def inference_worker(
 
                 # Batch inference
                 batch_detections_map: Dict[int, List] = {}
+                # Flagged True if the batched model call itself raises (CUDA
+                # OOM, malformed batch, driver hiccup). In that case downstream
+                # frames fall back to CoreModule's own detector instead of being
+                # silently reported as an empty road (audit finding #5).
+                batch_inference_failed = False
                 if frames_to_infer and shared_model is not None:
                     try:
                         results = shared_model(frames_to_infer, conf=batch_conf_floor, verbose=False, stream=False)
@@ -585,92 +622,143 @@ def inference_worker(
                                 formatted_dets.append((bbox, cls_id, conf))
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
+                        batch_inference_failed = True
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
 
                 # Tracking & output
                 for i, meta in enumerate(batch_meta):
-                    core = meta["core"]
-                    monitor = meta["monitor"]
-                    metrics_obj = meta["metrics"]
-                    frame = meta["frame"]
-                    f_idx = meta["frame_index"]
-
-                    if frame is None:
-                        continue
-
-                    detections = batch_detections_map.get(i, []) if meta["should_detect"] else []
-                    vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
-                        frame, f_idx, external_detections=detections, timestamp=meta.get("timestamp")
-                    )
-
-                    if vis_tracks and meta["first_detect"]:
-                        core._first_detection_done = True
-
-                    # Re-ID matching (guarded by config)
-                    if vehicle_det_cfg.get("reid_enabled", True):
-                        for vid, track in vis_tracks.items():
-                            vehicle_map = core.vehicle_type_map
-                            # global_vehicle_id persists in the tracker's
-                            # vehicle_data across frames. Re-running
-                            # match_or_register for an already-identified track
-                            # every frame causes a Redis round-trip storm
-                            # (hget/incr/set/rpush/publish per call) that pins
-                            # the worker to ~1 fps/feed. Only match/register
-                            # tracks that have not yet been assigned an id.
-                            if track.get("global_vehicle_id"):
-                                continue
-                            emb = track.get("embedding")
-                            if emb is not None:
-                                global_id = local_reid_manager.match_or_register(
-                                    feed_id=meta["feed_id"],
-                                    local_id=str(vid),
-                                    embedding=np.array(emb),
-                                    metadata={
-                                        "class_name": vehicle_map.get(
-                                            track["class_id"], "unknown"
-                                        )
-                                    },
-                                    confidence=track.get("confidence", 1.0),
-                                )
-                                track["global_vehicle_id"] = global_id
-                            else:
-                                mapped_id = local_reid_manager.get_global_id(meta["feed_id"], str(vid))
-                                if mapped_id:
-                                    track["global_vehicle_id"] = mapped_id
-
-                    monitor.update_vehicles(vis_tracks)
-                    
-                    # Merge operational metrics with traffic analytics
-                    combined_metrics = metrics_obj.to_dict()
-                    combined_metrics.update(monitor.get_metrics())
-                    
-                    metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps
-
-                    serialized_v = serialize_tracked_vehicles(
-                        vis_tracks, vehicle_type_map=core.vehicle_type_map
-                    )
-
-                    extra = {}
-
+                    # Per-item fault isolation (audit finding #8): a single bad
+                    # frame -- a malformed bbox hitting monitor.update_vehicles,
+                    # a Re-ID call throwing -- must not abort the loop and drop
+                    # the frames from *other feeds* that share this batch. We
+                    # still always forward the raw frame bytes downstream so the
+                    # stream never stalls (see finally-bypass below), but a
+                    # detection/tracking exception only costs that one frame.
                     try:
-                        # RedisStreamQueue uses put(), not put_nowait()
-                        # Option A (zero-SHM-race): forward the decoded frame
-                        # bytes instead of the SHM segment ref. The frame data
-                        # is copied out of shared memory here, so the segment
-                        # is released immediately (see finally block) and the
-                        # result processor never touches SHM. This eliminates
-                        # the ~14% read-failure race where a segment could be
-                        # recycled under the async result reader.
-                        central_output_queue.put(
-                            (meta["feed_id"], f_idx, meta["frame_bytes"], combined_metrics, serialized_v, extra),
-                            timeout=0.05
+                        core = meta["core"]
+                        monitor = meta["monitor"]
+                        metrics_obj = meta["metrics"]
+                        frame = meta["frame"]
+                        f_idx = meta["frame_index"]
+
+                        if frame is None:
+                            # Skip-frames (and any lane-only frame) are decoded
+                            # as None. The raw JPEG (meta["frame_bytes"]) is
+                            # still valid and is what gets forwarded, so the
+                            # live stream keeps running at the full ingestion
+                            # rate instead of 1/(skip_frames+1) (audit #2).
+                            # We cannot run detection/tracking on a None frame,
+                            # so we forward it as a passthrough with empty
+                            # tracks/metrics and let the result processor
+                            # present the last-known overlay.
+                            _forward_frame(
+                                central_output_queue, meta, metrics_obj, worker_id
+                            )
+                            continue
+
+                        # When the batched model call itself failed (CUDA OOM,
+                        # malformed batch, driver hiccup) we must NOT report an
+                        # empty road. Pass external_detections=None so
+                        # CoreModule falls back to its own detector -- an outage
+                        # is then visible as either a detection or an error,
+                        # not as "0 vehicles, free flow" (audit finding #5).
+                        if batch_inference_failed:
+                            detections: Optional[List] = None
+                        else:
+                            detections = batch_detections_map.get(i, []) if meta["should_detect"] else []
+
+                        vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
+                            frame, f_idx, external_detections=detections, timestamp=meta.get("timestamp")
                         )
-                        logger.debug(
-                            f"[Worker {worker_id}] Pushed result for {meta['feed_id']} "
-                            f"frame {f_idx} to central_output"
+
+                        if vis_tracks and meta["first_detect"]:
+                            core._first_detection_done = True
+
+                        # Re-ID matching (guarded by config)
+                        if vehicle_det_cfg.get("reid_enabled", True):
+                            for vid, track in vis_tracks.items():
+                                vehicle_map = core.vehicle_type_map
+                                # global_vehicle_id persists in the tracker's
+                                # vehicle_data across frames. Re-running
+                                # match_or_register for an already-identified track
+                                # every frame causes a Redis round-trip storm
+                                # (hget/incr/set/rpush/publish per call) that pins
+                                # the worker to ~1 fps/feed. Only match/register
+                                # tracks that have not yet been assigned an id.
+                                if track.get("global_vehicle_id"):
+                                    continue
+                                emb = track.get("embedding")
+                                if emb is not None:
+                                    global_id = local_reid_manager.match_or_register(
+                                        feed_id=meta["feed_id"],
+                                        local_id=str(vid),
+                                        embedding=np.array(emb),
+                                        metadata={
+                                            "class_name": vehicle_map.get(
+                                                track["class_id"], "unknown"
+                                            )
+                                        },
+                                        confidence=track.get("confidence", 1.0),
+                                    )
+                                    track["global_vehicle_id"] = global_id
+                                else:
+                                    mapped_id = local_reid_manager.get_global_id(meta["feed_id"], str(vid))
+                                    if mapped_id:
+                                        track["global_vehicle_id"] = mapped_id
+
+                        monitor.update_vehicles(vis_tracks)
+
+                        # Merge operational metrics with traffic analytics
+                        combined_metrics = metrics_obj.to_dict()
+                        combined_metrics.update(monitor.get_metrics())
+
+                        metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps
+
+                        serialized_v = serialize_tracked_vehicles(
+                            vis_tracks, vehicle_type_map=core.vehicle_type_map
                         )
-                    except queue.Full:
-                        metrics_obj.frames_dropped += 1
+
+                        extra = {}
+
+                        try:
+                            # RedisStreamQueue uses put(), not put_nowait()
+                            # Option A (zero-SHM-race): forward the decoded frame
+                            # bytes instead of the SHM segment ref. The frame data
+                            # is copied out of shared memory here, so the segment
+                            # is released immediately (see finally block) and the
+                            # result processor never touches SHM. This eliminates
+                            # the ~14% read-failure race where a segment could be
+                            # recycled under the async result reader.
+                            central_output_queue.put(
+                                (meta["feed_id"], f_idx, meta["frame_bytes"], combined_metrics, serialized_v, extra),
+                                timeout=0.05
+                            )
+                            logger.debug(
+                                f"[Worker {worker_id}] Pushed result for {meta['feed_id']} "
+                                f"frame {f_idx} to central_output"
+                            )
+                        except queue.Full:
+                            metrics_obj.frames_dropped += 1
+                    except Exception as e:
+                        # One frame's detection/tracking/ReID blew up. Record it
+                        # and keep going so sibling feeds in this batch are not
+                        # silently dropped. Still attempt to forward the raw
+                        # bytes so the stream does not stall on a single bad
+                        # frame.
+                        logger.error(
+                            f"[Worker {worker_id}] Frame {meta.get('frame_index')} for "
+                            f"{meta.get('feed_id')} failed processing: {e}",
+                            exc_info=True,
+                        )
+                        m_obj = meta.get("metrics")
+                        if m_obj:
+                            m_obj.errors += 1
+                        try:
+                            _forward_frame(
+                                central_output_queue, meta, m_obj, worker_id
+                            )
+                        except Exception:
+                            pass
 
                 now = time.time()
                 if now - last_metrics_log > 30.0:

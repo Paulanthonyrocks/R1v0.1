@@ -19,6 +19,7 @@ class DetectionEngine:
         # ROI Cache
         self.roi_mask = None
         self.normalized_roi_points: Optional[np.ndarray] = None
+        self._exclusion_zones: List = []
 
     def load_model(self):
         """Loads the model and validate the model object."""
@@ -53,20 +54,57 @@ class DetectionEngine:
         self.model(dummy_img, imgsz=self.imgsz, verbose=False)
         logger.info("Model warm-up inference completed successfully.")
 
-    def initialize_roi(self, resolution: List[int], roi_points: List[List[int]]):
-        """Creates an ROI mask based on normalized points to support dynamic resolution changes."""
+    def initialize_roi(self, resolution: List[int], roi_points: List[List[int]], exclusion_zones: Optional[List] = None):
+        """Creates an ROI mask from normalized [0,1] polygon points, then
+        subtracts any configured exclusion zones (e.g. sidewalks, opposing
+        lanes) so detections inside them are filtered out by ``is_in_roi()``.
+
+        Both ``roi_points`` and ``exclusion_zones`` are expected in NORMALIZED
+        [0,1] coordinates. Conversion to pixels is ``point * resolution`` (a
+        full-frame mask is the four corners ``[0,0],[1,0],[1,1],[0,1]``).
+
+        NOTE (audit finding #7 / cv2>=5): the previous code did
+        ``roi_points / resolution`` here AND ``* resolution`` again in
+        ``_create_mask`` -- a double divide that collapsed normalized [0,1]
+        coords to a ~1x1 box, so the entire ROI mask was inert (every pixel
+        flagged out-of-ROI) and ``exclusion_zones`` were never applied at all.
+        We now store the normalized points verbatim and convert to pixels only
+        once, at fill time, using integer rounding so ``cv2.fillPoly`` (which
+        mis-scales sub-pixel input on cv2>=5) behaves correctly.
+        """
+        h, w = resolution[1], resolution[0]
         if roi_points:
-            self.normalized_roi_points = np.array(roi_points, dtype=np.float32) / np.array(resolution, dtype=np.float32)
+            # Store NORMALIZED [0,1] points verbatim -- do NOT pre-divide.
+            self.normalized_roi_points = np.array(roi_points, dtype=np.float32)
         else:
             self.normalized_roi_points = None
-        
-        self.roi_mask = self._create_mask(resolution[1], resolution[0], self.normalized_roi_points)
+
+        self._exclusion_zones = exclusion_zones or []
+        self.roi_mask = self._create_mask(h, w, self.normalized_roi_points)
+        self._apply_exclusion_zones(h, w)
+
+    def _apply_exclusion_zones(self, h: int, w: int):
+        if not self._exclusion_zones:
+            return
+        for zone in self._exclusion_zones:
+            try:
+                # NORMALIZED [0,1] coords * resolution -> integer pixels.
+                zone_np = (np.array(zone, dtype=np.float32) * [w, h]).round().astype(np.int32)
+                cv2.fillPoly(self.roi_mask, [zone_np], 0)
+            except Exception as e:
+                logger.warning(f"Failed to apply exclusion zone {zone!r}: {e}")
 
     def _create_mask(self, h: int, w: int, points: Optional[np.ndarray]) -> np.ndarray:
-        """Helper to build a binary ROI mask from normalized points."""
+        """Helper to build a binary ROI mask from normalized [0,1] points.
+
+        Conversion is ``point * [w, h]`` with integer rounding. The previous
+        implementation divided by resolution *and* multiplied by it, collapsing
+        the polygon to a ~1x1 box under cv2>=5 (which mis-scales sub-pixel
+        input), leaving the ROI inert.
+        """
         mask = np.zeros((h, w), dtype=np.uint8)
         if points is not None:
-            pts = (points * [w, h]).astype(np.int32)
+            pts = (points * [w, h]).round().astype(np.int32)
             cv2.fillPoly(mask, [pts], 255)
         else:
             mask.fill(255)
@@ -109,7 +147,9 @@ class DetectionEngine:
         # Ensure ROI mask matches current frame resolution to avoid scaling artifacts
         if self.roi_mask is not None:
             if frame.shape[0] != self.roi_mask.shape[0] or frame.shape[1] != self.roi_mask.shape[1]:
-                self.roi_mask = self._create_mask(frame.shape[0], frame.shape[1], self.normalized_roi_points)
+                h, w = frame.shape[0], frame.shape[1]
+                self.roi_mask = self._create_mask(h, w, self.normalized_roi_points)
+                self._apply_exclusion_zones(h, w)
         
         # Fix: Add exception handling around model inference
         try:
