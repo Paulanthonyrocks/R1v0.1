@@ -8,6 +8,7 @@ import os
 import time
 import threading
 import zlib
+import struct
 from app.utils.distributed_queue import RedisQueue
 from app.utils.redis_client import get_redis_client
 
@@ -40,6 +41,16 @@ class SharedFrameBuffer:
 
         self._free_pool = None
         self._acquired_set_key = 'shm_acquired_pool'
+        # Free-name set (audit #1B). Mirrors the free pool (a Redis LIST) with a
+        # Redis SET so membership is O(1) and idempotent. prune_stale_segments
+        # and release() SADD here; acquire() SREM here. The LIST is the actual
+        # work queue; the SET exists purely to make "is this name already free?"
+        # a fast, deduplicating check. Without it, an idle-but-released segment
+        # (absent from the acquired set by definition) gets put_nowait'd into the
+        # free pool again on every prune tick, forever, producing phantom
+        # duplicates that let two producers acquire the same segment
+        # concurrently (silent cross-feed corruption). Single writer = owner.
+        self._free_set_key = 'shm_free_set'
 
         # Buffer tracking for diagnostics
         self._acquired_count = 0
@@ -51,6 +62,11 @@ class SharedFrameBuffer:
         # released). ``release()`` consults this set so double-release is a
         # fast no-op and so the orphan count can be reported accurately.
         self._in_flight: set[str] = set()
+        # Defense-in-depth (audit #1B): segment header version snapshotted at
+        # acquire() time, keyed by name. release() compares the live header
+        # version against this snapshot; a mismatch means the segment was
+        # recycled to another producer and this caller must not free it.
+        self._in_flight_version: dict[str, Optional[int]] = {}
         
         if not read_only:
             # Use RedisQueue for the free pool to ensure distributed access without MP Manager
@@ -62,6 +78,7 @@ class SharedFrameBuffer:
                 # but /dev/shm segments are gone.
                 self._free_pool.clear()
                 get_redis_client().delete(self._acquired_set_key)
+                get_redis_client().delete(self._free_set_key)
                 self.prune_orphans()
                 
                 for i in range(pool_size):
@@ -70,10 +87,12 @@ class SharedFrameBuffer:
                         shm = shared_memory.SharedMemory(name=name, create=True, size=max_frame_size)
                         self._segments[name] = shm
                         self._free_pool.put(name)
+                        get_redis_client().sadd(self._free_set_key, name)
                     except FileExistsError:
                         shm = shared_memory.SharedMemory(name=name)
                         self._segments[name] = shm
                         self._free_pool.put(name)
+                        get_redis_client().sadd(self._free_set_key, name)
                     except Exception as e:
                         logger.error(f'Failed to allocate SHM segment {name}: {e}')
             else:
@@ -199,8 +218,24 @@ class SharedFrameBuffer:
                     # line below preserves visibility when something is
                     # actually being recovered.
                     logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} PRUNE {name} (stale, version {version}, age {now - last_used:.2f}s)")
-                    get_redis_client().srem(self._acquired_set_key, name)
-                    self._free_pool.put_nowait(name)
+                    # Audit #1B: idempotent re-free. The LIST is the work queue;
+                    # _free_set (a Redis SET) mirrors it for O(1) membership.
+                    # A legit release() SADDs the name to _free_set before its
+                    # put(); prune must not enqueue a name that is already free.
+                    # The srem-then-sadd trick: if srem removed it, it was
+                    # already free (a racing release already reclaimed it) so we
+                    # skip the put_nowait -- no phantom duplicate. We re-SADD so
+                    # the SET stays accurate for the next caller. Order matters:
+                    # decide membership BEFORE touching the LIST.
+                    try:
+                        r = get_redis_client()
+                        was_free = r.srem(self._free_set_key, name)
+                        r.sadd(self._free_set_key, name)
+                        if not was_free:
+                            self._free_pool.put_nowait(name)
+                    except queue.Full:
+                        # Pool is full (segment already returned twice) - safe to drop
+                        logger.debug(f"SHM free pool full, dropping duplicate release of {name}")
                     stale_count += 1
             except Exception as e:
                 logger.debug(f"Could not read header for {name}, might be stale: {e}")
@@ -208,14 +243,46 @@ class SharedFrameBuffer:
         if stale_count > 0:
             logger.info(f"Recovered {stale_count} stale SHM segments (skipped {skipped_uninitialised} uninitialised, {skipped_in_flight} in-flight).")
 
+    def _read_version(self, name: str) -> Optional[int]:
+        """Best-effort read of a segment's current header version.
+
+        Returns None if the segment is unknown or its header can't be read.
+        Used by acquire()/release() for the version-snapshot defense-in-depth
+        (audit #1B): if the live version differs from the snapshot taken at
+        acquire time, the segment was recycled to another producer and the
+        caller must not release it.
+        """
+        shm = self._segments.get(name)
+        if shm is None:
+            return None
+        buf = shm.buf
+        if buf is None:
+            return None
+        try:
+            return struct.unpack_from('<I', buf, 0)[0]
+        except Exception:
+            return None
+
     def acquire(self, timeout: float = 0.2) -> Optional[str]:
         try:
             name = self._free_pool.get(timeout=timeout)
+            # Audit #1B: this name is leaving the free state -- remove it from
+            # the free-set mirror so prune/release membership checks stay accurate.
+            try:
+                get_redis_client().srem(self._free_set_key, name)
+            except Exception:
+                pass
             get_redis_client().sadd(self._acquired_set_key, name)
             self._acquired_count += 1
             self._last_acquire_time = time.monotonic()
             with self._lock:
                 self._in_flight.add(name)
+                # Defense-in-depth (audit #1B): snapshot the segment's current
+                # header version at acquire time. A producer that recycles this
+                # segment will bump the version; if it changed by release time,
+                # release() will no-op rather than freeing a segment it no
+                # longer legitimately owns (the cross-feed hazard).
+                self._in_flight_version[name] = self._read_version(name)
             return name
         except queue.Empty:
             self._drop_count += 1
@@ -359,25 +426,56 @@ class SharedFrameBuffer:
 
         logger.warning(f'Unable to read stable frame from segment {name} after 12 retries.')
         return None
-    def release(self, name: str):
+    def release(self, name: str, expected_version: Optional[int] = None):
+        """Return a segment to the free pool.
+
+        Args:
+            name: segment name.
+            expected_version: optional header version captured at acquire time.
+                If the live header version differs, the segment was recycled to
+                another producer (the cross-feed hazard) and we NO-OP instead of
+                freeing a segment this caller no longer legitimately owns
+                (audit #1B defense-in-depth). When omitted, the snapshot taken
+                in acquire() is consulted; a caller that never acquired (e.g.
+                the old inference-worker release sites, now removed) simply
+                has no snapshot and the check is skipped.
+        """
         if self._free_pool is None:
             return
-        # Double-release guard: if this segment was already returned to the
-        # free pool (e.g. by the prune_stale_segments loop, or by a redundant
-        # call from the result-processor after we already released on read),
-        # we silently drop it instead of pushing twice. This protects the
-        # free pool from growing phantom entries that mask real pool pressure.
-        with self._lock:
-            if name in self._in_flight:
-                self._in_flight.discard(name)
-            else:
-                # Not in flight — either already released or never acquired
-                # via this SharedFrameBuffer instance (workers attach read-only
-                # style to existing segments). Safe to drop without logging
-                # to avoid spam during normal operation.
-                pass
+        # Defense-in-depth (audit #1B): if the segment's header version moved
+        # on since we acquired it, a producer already recycled it. Freeing it
+        # now would strip the *new* owner's acquired-set claim and push a
+        # phantom duplicate into the free pool. Refuse.
+        ev = expected_version if expected_version is not None else self._in_flight_version.pop(name, None)
+        if ev is not None:
+            live = self._read_version(name)
+            if live is not None and live != ev:
+                logger.debug(
+                    f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE skipped {name}: "
+                    f"version moved {ev} -> {live} (recycled to another producer)."
+                )
+                return
+        # Already-free guard (audit #1B): the _free_set mirror is the
+        # distributed-safe source of truth for "currently free". A legitimate
+        # single release removed `name` from _free_set at acquire() time, so a
+        # re-release (double release, or a redundant call after a read-path
+        # release) finds it already present and is skipped -- no phantom
+        # duplicate in the free pool. This replaces the old process-local
+        # _in_flight check, which could not catch cross-process re-releases and
+        # (in the previous code) silently fell through to put() anyway.
         try:
-            # Always return to free pool - don't let tracking failures cause exhaustion
+            if get_redis_client().sismember(self._free_set_key, name):
+                logger.debug(
+                    f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE skipped {name}: "
+                    f"already free (double-release guard)."
+                )
+                return
+        except Exception:
+            pass
+        with self._lock:
+            self._in_flight.discard(name)
+        try:
+            # Return to free pool - don't let tracking failures cause exhaustion
             logger.debug(f"[SHM-LIFECYCLE] PID {os.getpid()} RELEASE {name}")
             # CRITICAL FIX (ordering): clear distributed ownership BEFORE
             # making the segment available in the free pool. The reclaimer
@@ -395,6 +493,12 @@ class SharedFrameBuffer:
             # accounting.
             try:
                 get_redis_client().srem(self._acquired_set_key, name)
+            except Exception:
+                pass
+            # Audit #1B: mark free in the SET mirror BEFORE enqueueing, so a
+            # concurrent prune sees membership and won't double-enqueue.
+            try:
+                get_redis_client().sadd(self._free_set_key, name)
             except Exception:
                 pass
             try:
@@ -444,7 +548,8 @@ class SharedFrameBuffer:
                 try:
                     self._free_pool.clear()
                     get_redis_client().delete(self._acquired_set_key)
-                    logger.debug("Cleared SHM free pool and acquired set.")
+                    get_redis_client().delete(self._free_set_key)
+                    logger.debug("Cleared SHM free pool, acquired set, and free set.")
                 except Exception as e:
                     logger.error(f"Failed to clear SHM free pool: {e}")
 

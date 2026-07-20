@@ -118,11 +118,13 @@ def inference_worker(
     redis_client = get_redis_client()
     central_output_queue = RedisStreamQueue("central_output", group_name="output-readers")
 
-    # Clean up stale stop signal from previous runs to prevent immediate exit
-    try:
-        redis_client.delete("signal:pipeline_stop")
-    except Exception as e:
-        logger.warning(f"Failed to clear stale pipeline stop signal: {e}")
+    # NOTE (audit #3): we do NOT delete("signal:pipeline_stop") here. The
+    # global stop signal is write-once-per-lifecycle and owned exclusively by
+    # the orchestrator (feed_manager: before scaling / startup / auto-scaling,
+    # lines 296/718/1172), which clears stale signals at controlled points.
+    # A child deleting it on boot could race with an in-progress shutdown and
+    # silently cancel it for every other process watching the key (design #3b).
+    # Workers only ever *read* the key (via should_stop()), never clear it.
 
     # NOTE (audit #3): we deliberately do NOT call stop_event.clear() here.
     # If stop_event is a per-spawn Event it is already unset; if it is shared
@@ -535,10 +537,35 @@ def inference_worker(
                         first_detect and not core.tracker.vehicle_data
                     )
 
+                    # Lane detection admission gate (audit #6).
+                    # `enabled` gates whether lane detection can ever fire;
+                    # `frame_interval` is a CHEAP, FRAME-COUNTED admission filter
+                    # -- it forces a frame to decode on a cycle the object
+                    # detector's `skip_frames` would otherwise skip, so lane
+                    # lines keep refreshing even when vehicle detection is
+                    # skipped. It is intentionally frame-counted, NOT wall-clock:
+                    # that is CoreModule.detect_and_track's `detection_interval_seconds`
+                    # (see core_module.py:543), which throttles the *expensive CV
+                    # recompute* in real time. Do NOT collapse these two into one
+                    # number -- they measure different things and the mismatch
+                    # grows as frame rate varies (and `skip_factor` adapts).
+                    # Old keys (dynamic_lane_detection_enabled / lane_detection_interval)
+                    # are read as a fallback for one release with a deprecation
+                    # warning, then removed.
                     lane_cfg = config.get("lane_detection", {})
-                    is_lane_frame = lane_cfg.get("dynamic_lane_detection_enabled", False) and (
-                        frame_index % lane_cfg.get("lane_detection_interval", 10) == 0
-                    )
+                    lane_enabled = lane_cfg.get("enabled", lane_cfg.get("dynamic_lane_detection_enabled", False))
+                    if "dynamic_lane_detection_enabled" in lane_cfg:
+                        logger.warning(
+                            "lane_detection.dynamic_lane_detection_enabled is deprecated; "
+                            "use lane_detection.enabled instead."
+                        )
+                    lane_frame_interval = int(lane_cfg.get("frame_interval", lane_cfg.get("lane_detection_interval", 10)))
+                    if "lane_detection_interval" in lane_cfg:
+                        logger.warning(
+                            "lane_detection.lane_detection_interval is deprecated; "
+                            "use lane_detection.frame_interval instead."
+                        )
+                    is_lane_frame = lane_enabled and (frame_index % lane_frame_interval == 0)
 
                     frame = None
                     if should_detect or is_lane_frame:

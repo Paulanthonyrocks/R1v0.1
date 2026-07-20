@@ -186,7 +186,19 @@ class CoreModule:
         self.last_detected_lane_lines = None
         self.cached_lane_boundaries: list = []
         self.last_lane_detection_time = 0.0
-        self.lane_detection_interval = l_cfg.get("detection_interval", 1.0)
+        # `detection_interval_seconds` is the WALL-CLOCK throttle on the
+        # expensive lane-CV recompute (real-time cadence). It is deliberately
+        # NOT frame-counted -- that is inference_worker's `frame_interval`
+        # (see inference_worker.py lane admission gate), which only forces a
+        # decode so lane detection *can* run. Keep the two distinct (audit #6).
+        # Old key `detection_interval` is read as a fallback for one release.
+        _raw_interval = l_cfg.get("detection_interval_seconds", l_cfg.get("detection_interval", 1.0))
+        self.lane_detection_interval = float(_raw_interval)
+        if "detection_interval" in l_cfg:
+            logger.warning(
+                "lane_detection.detection_interval is deprecated; "
+                "use lane_detection.detection_interval_seconds instead."
+            )
 
         # 5. Behavior & Speed
         self.pixels_per_meter = v_cfg.get("pixels_per_meter", 10.0)
@@ -541,8 +553,12 @@ class CoreModule:
         current_time = timestamp if timestamp is not None else time.time()
 
         # 1. Lane Detection (Periodic)
+        # `enabled` is the canonical gate (audit #6). Old key
+        # `dynamic_lane_detection_enabled` falls back for one release.
+        _lane_cfg = self.config.get("lane_detection", {})
+        _lane_enabled = _lane_cfg.get("enabled", _lane_cfg.get("dynamic_lane_detection_enabled", False))
         if (
-            self.config.get("lane_detection", {}).get("enabled", False)
+            _lane_enabled
             and process_frame_for_lanes
             and (current_time - self.last_lane_detection_time) >= self.lane_detection_interval
         ):
@@ -990,6 +1006,13 @@ class CoreModule:
                 l_cfg_update = updates["lane_detection"]
                 current_l_cfg = self.config.get("lane_detection", {})
                 self.config["lane_detection"] = {**current_l_cfg, **l_cfg_update}
-                self.lane_detection_interval = l_cfg_update.get(
-                    "detection_interval", self.lane_detection_interval
-                )
+                # Audit #6: accept both the new key `detection_interval_seconds`
+                # and the deprecated `detection_interval`.
+                if "detection_interval_seconds" in l_cfg_update:
+                    self.lane_detection_interval = float(l_cfg_update["detection_interval_seconds"])
+                elif "detection_interval" in l_cfg_update:
+                    self.lane_detection_interval = float(l_cfg_update["detection_interval"])
+                    logger.warning(
+                        "lane_detection.detection_interval is deprecated; "
+                        "use lane_detection.detection_interval_seconds instead."
+                    )
