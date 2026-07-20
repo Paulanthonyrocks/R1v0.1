@@ -124,12 +124,12 @@ def inference_worker(
     except Exception as e:
         logger.warning(f"Failed to clear stale pipeline stop signal: {e}")
 
-    if stop_event and hasattr(stop_event, "clear"):
-        try:
-            stop_event.clear()
-            logger.debug(f"[Worker {worker_id}] Cleared shared stop event on boot.")
-        except Exception as e:
-            logger.warning(f"Failed to clear shared stop event: {e}")
+    # NOTE (audit #3): we deliberately do NOT call stop_event.clear() here.
+    # If stop_event is a per-spawn Event it is already unset; if it is shared
+    # across the worker pool, clearing it would un-signal every other process
+    # watching that same object -- silently cancelling a shutdown in progress.
+    # Ownership of stale-signal clearing belongs to the orchestrator, not the
+    # child. See design sketch #3(b).
 
     slots = slots or []
 
@@ -493,10 +493,14 @@ def inference_worker(
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                                 acked_msgs.add(msg_id)
-                            try:
-                                frame_buffer.release(shm_ref)
-                            except Exception:
-                                pass
+                            # CRITICAL (audit #1A): do NOT release here. An
+                            # unexpected-format result means read() did not hand
+                            # us a live segment we own -- releasing would strip
+                            # the real owner's acquired-set claim and push a
+                            # phantom duplicate into the free pool. The real
+                            # owner releases it. (Dead-code today: read() only
+                            # returns None/(data,dims)/raises, never a third
+                            # shape, but left as a trap if its contract changes.)
                             continue
                     else:
                         raise RuntimeError(f"[Worker {worker_id}] Frame buffer is missing but SHM reference {shm_ref} was provided.")
