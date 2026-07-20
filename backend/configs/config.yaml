@@ -103,7 +103,7 @@ kalman_filter_params:
 lane_detection:
   canny_high_threshold: 150
   canny_low_threshold: 50
-  dynamic_lane_detection_enabled: false
+  enabled: false
   gaussian_blur_kernel_size: 5
   hough_max_line_gap: 20
   hough_min_line_length: 40
@@ -584,6 +584,34 @@ vehicle_detection:
   car_classifier_model_path: models/Car_Make_Model.tflite
   confidence_threshold: 0.25
   enabled: true
+  # Calibration: maps image pixels -> real-world ground plane (meters) via a
+  # homography. Required for physically-meaningful speed (km/h). Without it the
+  # pipeline falls back to pixel-based velocity (avg_speed broadcasts as 0.0).
+  # image_points are NORMALIZED [0,1] and scaled by `resolution` at load time.
+  # Edit these per-camera to match your scene; values below are a sane default
+  # trapezoid for a forward-facing 320x240 traffic cam.
+  calibration:
+    resolution:
+    - 320
+    - 240
+    image_points:
+    - - 0.25
+      - 0.25
+    - - 0.75
+      - 0.25
+    - - 0.85
+      - 0.95
+    - - 0.15
+      - 0.95
+    world_points:
+    - - -6.0
+      - 40.0
+    - - 6.0
+      - 40.0
+    - - 6.0
+      - 0.0
+    - - -6.0
+      - 0.0
   frame_resolution:
   - 320
   - 240

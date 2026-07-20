@@ -21,6 +21,18 @@ from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
 
 logger = logging.getLogger("Inference")
 
+# Warn-once guards: the lane-detection deprecation warnings used to fire on
+# every inference frame, flooding the log. Each worker process emits each
+# unique warning at most once via this set.
+_WARNED_DEPRECATIONS: set = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key in _WARNED_DEPRECATIONS:
+        return
+    _WARNED_DEPRECATIONS.add(key)
+    logger.warning(message)
+
 
 def _unpack_queue_result(res) -> Tuple[Optional[Any], Any]:
     """Normalise the (msg_id, task) pair returned by different queue backends."""
@@ -555,15 +567,17 @@ def inference_worker(
                     lane_cfg = config.get("lane_detection", {})
                     lane_enabled = lane_cfg.get("enabled", lane_cfg.get("dynamic_lane_detection_enabled", False))
                     if "dynamic_lane_detection_enabled" in lane_cfg:
-                        logger.warning(
+                        _warn_once(
+                            "dynamic_lane_detection_enabled",
                             "lane_detection.dynamic_lane_detection_enabled is deprecated; "
-                            "use lane_detection.enabled instead."
+                            "use lane_detection.enabled instead.",
                         )
                     lane_frame_interval = int(lane_cfg.get("frame_interval", lane_cfg.get("lane_detection_interval", 10)))
                     if "lane_detection_interval" in lane_cfg:
-                        logger.warning(
+                        _warn_once(
+                            "lane_detection_interval",
                             "lane_detection.lane_detection_interval is deprecated; "
-                            "use lane_detection.frame_interval instead."
+                            "use lane_detection.frame_interval instead.",
                         )
                     is_lane_frame = lane_enabled and (frame_index % lane_frame_interval == 0)
 
