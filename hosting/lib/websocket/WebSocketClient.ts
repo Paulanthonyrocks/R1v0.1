@@ -163,6 +163,15 @@ export class WebSocketClient implements IWebSocketClient {
 
     private pendingFrames: Map<string, number> = new Map();
     private readonly MAX_PENDING_FRAMES = 5;
+    // If the worker goes silent (stalls/throws without a reply), the
+    // pendingFrames counter would stay pinned at MAX_PENDING_FRAMES forever and
+    // every subsequent frame gets dropped at the gate -> the canvas freezes
+    // while the WS keeps delivering (the "frame hangs while console still
+    // shows frames arriving" symptom). This watchdog force-clears a feed's
+    // pending count if the worker hasn't acked within the window, so a stuck
+    // worker can never deadlock a feed.
+    private readonly PENDING_FRAME_TIMEOUT_MS = 2000;
+    private pendingFrameWatchdogs: Map<string, NodeJS.Timeout> = new Map();
     
     // Frame buffer to handle subscription race conditions
     private frameBufferByFeed: Map<string, Array<any>> = new Map();
@@ -209,24 +218,14 @@ export class WebSocketClient implements IWebSocketClient {
                     console.error(`[WebSocketClient ${this.instanceId}] Worker: Frame decoding failed`, e.data.error);
                     // Decrement pending frames counter even on error to prevent permanent blocking
                     if (feedId) {
-                        const pending = this.pendingFrames.get(feedId) ?? 1;
-                        if (pending > 1) {
-                            this.pendingFrames.set(feedId, pending - 1);
-                        } else {
-                            this.pendingFrames.delete(feedId);
-                        }
+                        this.releasePendingFrame(feedId);
                     }
                 } else {
                     console.log(`[WebSocketClient] Worker returned frame for feed: ${feedId}`);
                     
                     // Decrement pending frames counter
                     if (feedId) {
-                        const pending = this.pendingFrames.get(feedId) ?? 1;
-                        if (pending > 1) {
-                            this.pendingFrames.set(feedId, pending - 1);
-                        } else {
-                            this.pendingFrames.delete(feedId);
-                        }
+                        this.releasePendingFrame(feedId);
                     }
                     
                     // e.data contains feed_id, frame (ArrayBuffer), metrics, vehicles, etc.
@@ -735,7 +734,9 @@ export class WebSocketClient implements IWebSocketClient {
                     // JSON into the worker when available; falling back to direct
                     // notification only when the worker has been terminated.
                     if (this.videoWorker) {
-                        this.pendingFrames.set(f_id, pending + 1);
+                        if (!this.gateFrameForWorker(f_id)) {
+                            return; // congestion control: drop newest
+                        }
                         this.videoWorker.postMessage({
                             frameData: typeof frameData.frame === 'string' ? frameData.frame : null,
                             feed_id: f_id,
@@ -839,11 +840,9 @@ export class WebSocketClient implements IWebSocketClient {
                     }
 
                     if (f_id) {
-                        const pending = this.pendingFrames.get(f_id) ?? 0;
-                        if (pending >= this.MAX_PENDING_FRAMES) {
-                            return; // Drop frame
+                        if (!this.gateFrameForWorker(f_id)) {
+                            return; // congestion control: drop newest
                         }
-                        this.pendingFrames.set(f_id, pending + 1);
                     }
 
                     this.videoWorker.postMessage({
@@ -855,6 +854,63 @@ export class WebSocketClient implements IWebSocketClient {
             } catch (error) {
                 console.error(`[WebSocketClient ${this.instanceId}] Error posting binary data to worker:`, error);
             }
+        }
+    }
+
+    /**
+     * Gate a frame for the worker decode pipeline WITHOUT risking a permanent
+     * deadlock. The worker is allowed up to MAX_PENDING_FRAMES in flight; if a
+     * new frame arrives while the gate is saturated we DROP THE OLDEST in-flight
+     * slot (not the newest) so the latest frame always flows to the canvas.
+     * Previously the code `return`ed and dropped the newest frame, which (combined
+     * with a stalled worker that never acked) pinned the counter at MAX and
+     * silently dropped 100% of frames forever -> frozen canvas.
+     *
+     * A per-feed watchdog is (re)armed on every accepted frame; if the worker
+     * doesn't ack within PENDING_FRAME_TIMEOUT_MS the counter is force-cleared.
+     *
+     * @returns true if the frame may proceed to the worker, false if it was
+     *          dropped because there was no room AND we could not reclaim one.
+     */
+    private gateFrameForWorker(feedId: string): boolean {
+        const pending = this.pendingFrames.get(feedId) ?? 0;
+        if (pending >= this.MAX_PENDING_FRAMES) {
+            // Saturated: reclaim the oldest in-flight slot so we can still
+            // forward this (newest) frame instead of freezing on a backlog.
+            this.pendingFrames.set(feedId, pending - 1);
+        }
+        this.pendingFrames.set(feedId, (this.pendingFrames.get(feedId) ?? 0) + 1);
+
+        // (Re)arm the watchdog that protects against a stalled worker.
+        const existing = this.pendingFrameWatchdogs.get(feedId);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+            this.pendingFrameWatchdogs.delete(feedId);
+            // Worker didn't ack in time: release the backpressure so the feed
+            // can resume rather than stay gated forever.
+            this.pendingFrames.delete(feedId);
+        }, this.PENDING_FRAME_TIMEOUT_MS);
+        this.pendingFrameWatchdogs.set(feedId, timer);
+
+        return true;
+    }
+
+    /**
+     * Release one in-flight decode slot for a feed and cancel its watchdog.
+     * Called by the worker's onmessage (success or error) so the backpressure
+     * counter and the stall watchdog stay in lockstep with real acks.
+     */
+    private releasePendingFrame(feedId: string): void {
+        const wd = this.pendingFrameWatchdogs.get(feedId);
+        if (wd) {
+            clearTimeout(wd);
+            this.pendingFrameWatchdogs.delete(feedId);
+        }
+        const pending = this.pendingFrames.get(feedId) ?? 1;
+        if (pending > 1) {
+            this.pendingFrames.set(feedId, pending - 1);
+        } else {
+            this.pendingFrames.delete(feedId);
         }
     }
 
@@ -1068,6 +1124,10 @@ export class WebSocketClient implements IWebSocketClient {
         this.unsubscribeTokenRefresh?.();
         this.videoWorker?.terminate();
         this.messageQueue.length = 0;
+        // Clean up any pending-frame stall watchdogs so they don't fire late.
+        this.pendingFrameWatchdogs.forEach((t) => clearTimeout(t));
+        this.pendingFrameWatchdogs.clear();
+        this.pendingFrames.clear();
 
         // Cleanup network event listeners
         if (typeof window !== 'undefined') {
@@ -1107,6 +1167,11 @@ export class WebSocketClient implements IWebSocketClient {
         }
         // Clear pending frames counter
         this.pendingFrames.delete(feed_id);
+        const wd = this.pendingFrameWatchdogs.get(feed_id);
+        if (wd) {
+            clearTimeout(wd);
+            this.pendingFrameWatchdogs.delete(feed_id);
+        }
         console.log(`[WebSocketClient ${this.instanceId}] Pending frames counter cleared for feed ${feed_id}`);
         this.activeListeningFeeds.delete(feed_id);
     }

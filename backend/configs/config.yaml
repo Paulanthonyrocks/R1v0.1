@@ -680,8 +680,17 @@ video_output:
 video_processing:
   target_fps: 15
   adaptive_streaming: true
+  # Downscale factor for the bandwidth-light ("small") background JPEG sent to
+  # high-latency tunnel clients (loca.lt / cloudflare / ngrok). Keep this modest
+  # -- too small and the frame becomes unusable (the "shittiest quality" symptom).
   roi_scale: 0.5
-  adaptive_latency_threshold_ms: 120
+  # JPEG quality for the small background. 50 was visibly mushy; 70 is a sane
+  # floor that stays bandwidth-light while remaining watchable.
+  adaptive_jpeg_quality: 70
+  # RTT (ms) below which a client receives the full-res frame. Borderline
+  # tunnels (100-250ms) were being forced onto the small tier at 120; raise so
+  # only genuinely high-RTT links drop to the downscaled payload.
+  adaptive_latency_threshold_ms: 250
 
 vis_options_default:
 - Grid Overlay
