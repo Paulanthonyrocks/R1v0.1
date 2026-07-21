@@ -173,11 +173,12 @@ class ResultProcessor:
                 import numpy as np
                 stream_res = tuple(self.config.get("video_output", {}).get("stream_resolution", (320, 240)))
                 bg_scale = float(self.config.get("video_processing", {}).get("roi_scale", 0.5))
+                jpeg_quality = int(self.config.get("video_processing", {}).get("adaptive_jpeg_quality", 70))
                 arr = np.frombuffer(frame_bytes, dtype=np.uint8)
                 dec = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if dec is not None:
                     small = cv2.resize(dec, (0, 0), fx=bg_scale, fy=bg_scale)
-                    ok, buf = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                    ok, buf = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
                     if ok:
                         extra["bg"] = buf.tobytes()
             except Exception as e:
