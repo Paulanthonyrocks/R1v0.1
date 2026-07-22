@@ -49,15 +49,69 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
     Used for skip-frames (decoded as None) and as a best-effort passthrough
     when a frame's detection/tracking throws, so the live stream never stalls
     on a single bad frame (audit findings #2 / #8).
+
+    On skip-frames the previous implementation emitted an empty vehicles
+    list -- this surfaces on the frontend as "vehicle count drops to 0"
+    every (skip_frames + 1)th frame, even though the tracker is still
+    tracking them through the per-feed CoreModule. To keep the overlay
+    continuous we now read the persisted ``core.tracker.vehicle_data`` (if
+    available) and serialize the live tracks as the vehicles payload for
+    this skip-frame, so KPIs / bounding boxes hold steady until the next
+    detect-frame refreshes them. Falls back to empty when the tracker is
+    not yet primed (e.g. first few frames before the initial detect) --
+    in that case emitting zero is correct: there are no live tracks to
+    carry forward.
     """
-    # If the outer batch handler already acked this message, never re-ack it
-    # (the finally block releases the SHM segment regardless).
     if meta.get("frame_bytes") is None:
         return
     try:
         combined_metrics = metrics_obj.to_dict() if metrics_obj is not None else {}
-        serialized_v = {}
-        extra = {}
+
+        # Live-status universe -- must mirror VALID_STATUSES in worker_utils
+        # (which serialize_tracked_vehicles uses as its own gate) and the
+        # status filter in core_module.transform_tracks. We pre-filter here
+        # only to avoid handing a huge dict to the serializer when the
+        # tracker is full of stale/lost entries; the serializer will still
+        # enforce its own gate.
+        _LIVE_TRACK_STATUSES = {"active", "predicting"}
+
+        # Pull live tracks from the per-feed CoreModule so the skip-frame
+        # payload keeps the freshly-last-detected vehicles on the wire
+        # instead of zeroing out. Tracker state persists across detect/skip
+        # frames by design; serializing it on skip-frames makes the frontend
+        # KPI / bbox layer stable until the next detect refresh.
+        #
+        # The outer try/except is intentionally broad: a broken
+        # ``vehicle_data`` property (e.g. a buggy tracker that raises
+        # mid-access) must never propagate out of the forwarder -- the
+        # passthrough is the safety net the whole skip-frame branch exists
+        # to provide. ``hasattr``-style probes above the try block catch
+        # AttributeError but NOT Runtime/Value errors buried inside a
+        # property accessor.
+        serialized_v: List[Dict[str, Any]] = []
+        core = meta.get("core")
+        if core is not None and hasattr(core, "tracker"):
+            try:
+                tracker = core.tracker
+                vehicle_data = getattr(tracker, "vehicle_data", None)
+                if isinstance(vehicle_data, dict):
+                    live_tracks = {
+                        str(tid): track
+                        for tid, track in vehicle_data.items()
+                        if isinstance(track, dict) and track.get("status") in _LIVE_TRACK_STATUSES
+                    }
+                    if live_tracks:
+                        serialized_v = serialize_tracked_vehicles(
+                            live_tracks,
+                            vehicle_type_map=getattr(core, "vehicle_type_map", None),
+                        )
+            except Exception:
+                # Tracker access must never raise out of the forwarder --
+                # any exception falls back to empty and the next detect
+                # frame will repopulate the wire payload.
+                serialized_v = []
+
+        extra: Dict[str, Any] = {}
         central_output_queue.put(
             (meta["feed_id"], meta["frame_index"], meta["frame_bytes"], combined_metrics, serialized_v, extra),
             timeout=0.05,
@@ -693,9 +747,12 @@ def inference_worker(
                             # live stream keeps running at the full ingestion
                             # rate instead of 1/(skip_frames+1) (audit #2).
                             # We cannot run detection/tracking on a None frame,
-                            # so we forward it as a passthrough with empty
-                            # tracks/metrics and let the result processor
-                            # present the last-known overlay.
+                            # so we forward it as a passthrough and have
+                            # _forward_frame re-serialize the persisted live
+                            # tracks from core.tracker.vehicle_data -- this
+                            # keeps the frontend KPI / bbox overlay stable
+                            # between detect refreshes instead of blinking
+                            # back to "0 vehicles" every skip cycle.
                             _forward_frame(
                                 central_output_queue, meta, metrics_obj, worker_id
                             )

@@ -66,14 +66,44 @@ class ConnectionManager:
         self.signal_queues: Dict[str, asyncio.Queue] = {}         # Signals sender task
         self.client_tasks: Dict[str, asyncio.Task] = {}
 
-        # Per-feed "first frames" tracking. When the first 10 incoming frames for
-        # a given feed arrive, they are boosted to HIGH priority so the frontend
-        # transitions from 'starting' to 'running'. After that, all frames take
-        # the LOW priority path through the bounded deque. Sample videos loop
-        # forever, so feeding by absolute frame_index < 10 caused constant
-        # reboosting that overrode backpressure and surfaced as out-of-order
-        # delivery on slow networks.
-        self._sent_first_frames: set = set()
+        # Per-feed "first frames" tracking (LEGACY -- no longer used).
+        #
+        # The old behaviour boosted frames 0-9 per feed to HIGH priority so the
+        # UI transitioned 'starting' -> 'running' quickly. Combined with the
+        # latency-aware adaptive broadcast (per-client RTT decides full vs
+        # small payload), that produced a visible resolution flip on high-RTT
+        # tunnel clients: frames 0-9 sent full-res via the unbounded HIGH
+        # priority queue (default 50ms RTT falls under any reasonable
+        # threshold), then everything from frame 10 forward on a high-RTT link
+        # dropped to the small payload. The HIGH path also bypasses the
+        # bounded-deque backpressure safety net, so the first burst could
+        # stall the sender and trigger visible "hang" periods on the frontend
+        # while bytes kept flowing.
+        #
+        # We now keep everything on LOW priority; the bounded deque enforces
+        # consistent backpressure for every frame, and the per-RTT payload
+        # selection in broadcast_to_feed_realtime_bytes_adaptive is the only
+        # authority on which payload size ships. The "starting -> running"
+        # status transition on the frontend is driven by KPI/first-frame
+        # reception over a short window, not by priority routing.
+        self._sent_first_frames: set = set()  # retained for backward-compat reads (always empty)
+
+        # Per-client locked payload-size decision ('full' or 'small') used by
+        # broadcast_to_feed_realtime_bytes_adaptive. Once the first PONG samples
+        # RTT, the choice is frozen so subsequent frames cannot flip size
+        # mid-stream even if RTT drifts across the threshold. Cleared on
+        # disconnect so a reconnect can re-evaluate.
+        #
+        # The matching ``_sampled_rtt_clients`` set tracks which clients have
+        # at least one real PONG-derived latency sample. ``client_latencies``
+        # also carries the connect-time default of 50 ms for sizing purposes,
+        # but the adaptive broadcast must NOT treat that default as
+        # authoritative -- otherwise the original "first frames full, then
+        # flips to small when the first PONG lands" regression reappears on
+        # always-high-RTT tunnels where the connect default falls under any
+        # sensible threshold.
+        self._adaptive_payload_choice: Dict[str, str] = {}
+        self._sampled_rtt_clients: Set[str] = set()
         
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
@@ -212,6 +242,11 @@ class ConnectionManager:
         self.client_id_to_user_role.pop(client_id, None)
         self.last_pong_received_time.pop(client_id, None)
         self.client_latencies.pop(client_id, None)
+        # Drop the locked payload-size choice so a reconnect re-evaluates.
+        self._adaptive_payload_choice.pop(client_id, None)
+        # Reset the "has-a-real-PONG" marker so the next session starts in
+        # the conservative-small branch again.
+        self._sampled_rtt_clients.discard(client_id)
         self.client_queues.pop(client_id, None)
         self.low_priority_queues.pop(client_id, None)
         self.signal_queues.pop(client_id, None)
@@ -404,11 +439,59 @@ class ConnectionManager:
         elif latency_ms > 100:
             return 180   # was 60
         return 360       # was 120; ~2.5s of 3-feed video at 15fps per client
-    
+
+    def _maybe_resize_low_priority_queue(self, client_id: str) -> None:
+        """Re-create the per-client low_priority deque when RTT crosses a size
+        tier boundary.
+
+        ``deque(maxlen=...)`` is fixed at construction; mutating
+        ``client_latencies`` alone does NOT change the bound on the existing
+        deque. Before this fix, a client that connected with the default 50 ms
+        latency sample (deque sized 360) and then had its first PONG sample at
+        600 ms kept the 360-deep buffer for the entire session -- the
+        "adaptive" sizing was decorative past connect, and a slow tunnel could
+        accumulate ~24s of stale frames at 15fps before the deque started
+        dropping. We now snapshot the deque contents into a fresh deque of the
+        correct size whenever the target size changes.
+
+        Called from ``update_client_latency`` only -- not on every frame -- so
+        the cost is paid at most once per RTT transition (a handful of times
+        per session).
+        """
+        if client_id not in self.low_priority_queues:
+            return
+        target = self._calculate_low_priority_queue_size(client_id)
+        current = self.low_priority_queues[client_id]
+        if current.maxlen == target:
+            return
+        # Snapshot into a new deque. Newer frames are at the right; if the
+        # new bound is smaller, the auto-drop behavior of deque(maxlen=...)
+        # trims from the LEFT (oldest) as we extend -- which is exactly the
+        # drop policy we want (drop stale, keep fresh).
+        new_q = deque(current, maxlen=target)
+        self.low_priority_queues[client_id] = new_q
+        logger.debug(
+            f"[CONN_MGR] Resized low_priority_queue for {client_id}: "
+            f"{current.maxlen} -> {target} (rtt={self.client_latencies.get(client_id)}ms)"
+        )
+
     def update_client_latency(self, client_id: str, rtt_ms: float):
         """Update tracked latency for adaptive behavior."""
         if client_id in self.active_connections:
             self.client_latencies[client_id] = rtt_ms
+            # Mark the client as having a real PONG-derived sample so the
+            # adaptive broadcast will lock its payload-size decision on the
+            # next frame. Before the first PONG lands we conservatively pick
+            # the small payload (see broadcast_to_feed_realtime_bytes_adaptive)
+            # -- this prevents the connect-time default of 50 ms (which lives
+            # in client_latencies for sizing only) from being misread as a
+            # low-RTT sample and triggering a full-res -> small-res flip when
+            # the first real PONG arrives on a slow tunnel.
+            self._sampled_rtt_clients.add(client_id)
+            # The bounded deque's maxlen is fixed at construction; re-create
+            # the deque if the new RTT puts the client in a different size
+            # tier. Otherwise the "adaptive" sizing is a no-op past connect.
+            self._maybe_resize_low_priority_queue(client_id)
             logger.debug(f"Updated latency for client {client_id}: {rtt_ms}ms")
     
     def record_pong(self, client_id: str, rtt_ms: Optional[float] = None):
@@ -458,17 +541,16 @@ class ConnectionManager:
         """
         Send a message with 'fire-and-forget' logic.
         Use this for high-frequency data (video frames).
+
+        Routed through ``_enqueue_frame`` so the bounded-deque backpressure
+        and adaptive-resize behaviour are shared with the per-frame VIDEO_FRAME
+        fan-out path. The previous inline append+signal reimplemented the same
+        logic but silently bypassed any future backpressure improvements.
         """
-        if client_id in self.low_priority_queues:
-            try:
-                # Use the deque for LOW priority messages (automatic dropping via maxlen)
-                self.low_priority_queues[client_id].append(message)
-                
-                # Signal the sender task
-                if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
-                    self.signal_queues[client_id].put_nowait(True)
-            except Exception as e:
-                logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
+        try:
+            self._enqueue_frame(client_id, message, priority)
+        except Exception as e:
+            logger.error(f"Failed to enqueue realtime message for {client_id}: {e}")
 
     async def broadcast(self, message: str, priority: MessagePriority = MessagePriority.NORMAL):
         """Broadcast reliable message to all with specific priority."""
@@ -485,19 +567,31 @@ class ConnectionManager:
             await asyncio.gather(*tasks)
 
     async def broadcast_realtime_bytes(self, data: bytes):
-        """Broadcast fire-and-forget binary message to all (Msgpack) with LOW priority."""
-        for client_id in list(self.active_connections.keys()):
-            if client_id in self.low_priority_queues:
-                try:
-                    # Use the deque for binary frames
-                    self.low_priority_queues[client_id].append(data)
-                    if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
-                        self.signal_queues[client_id].put_nowait(True)
-                except Exception as e:
-                    logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
+        """Broadcast fire-and-forget binary message to all (Msgpack) with LOW priority.
 
-    def _enqueue_frame(self, client_id: str, data: bytes, priority: MessagePriority):
-        """Append a binary frame to the right per-client queue and wake the sender."""
+        Routed through ``_enqueue_frame`` for the same reason as
+        ``send_realtime_message`` -- single source of truth for backpressure.
+        """
+        for client_id in list(self.active_connections.keys()):
+            try:
+                self._enqueue_frame(client_id, data, MessagePriority.LOW)
+            except Exception as e:
+                logger.error(f"Failed to enqueue binary message for {client_id}: {e}")
+
+    def _enqueue_frame(self, client_id: str, data: Union[str, bytes], priority: MessagePriority):
+        """Append a frame (binary or text) to the right per-client queue and
+        wake the sender.
+
+        Centralising the enqueue path here means every fire-and-forget and
+        realtime broadcast -- not just the per-frame VIDEO_FRAME fan-out --
+        shares the same backpressure semantics (bounded deque for LOW,
+        bounded PriorityQueue for HIGH+) and the same signal-to-sender wake.
+        Before this, ``send_realtime_message`` / ``broadcast_realtime`` /
+        ``broadcast_realtime_bytes`` each reimplemented the deque append +
+        signal inlined, which meant any future change to backpressure (e.g.
+        the adaptive deque resize in ``_maybe_resize_low_priority_queue``)
+        would silently bypass those three callers.
+        """
         if priority == MessagePriority.HIGH:
             # High-priority (initial) frames go to the PriorityQueue
             if client_id in self.client_queues:
@@ -523,11 +617,24 @@ class ConnectionManager:
                 logger.warning(f"[CONN_MGR] Client {client_id} has no low_priority_queue, skipping")
 
     def _frame_priority(self, feed_id: str, frame_index: int) -> MessagePriority:
-        """Boost the first 10 frames per feed so the frontend transitions
-        'starting' -> 'running' quickly; afterwards frames take LOW path."""
-        if feed_id not in self._sent_first_frames and frame_index < 10:
-            self._sent_first_frames.add(feed_id)
-            return MessagePriority.HIGH
+        """Return priority for an outgoing VIDEO_FRAME.
+
+        Previously this boosted the first 10 frames per feed to HIGH so the
+        UI transitioned 'starting' -> 'running' quickly. Combined with the
+        latency-aware adaptive broadcast path, that produced a visible
+        resolution flip on high-RTT tunnel clients (frames 0-9 served full-res
+        from the unbounded PriorityQueue; frames 10+ routed to the bounded
+        deque and resized to the small payload). It also let the first burst
+        bypass backpressure entirely, surfacing as a "frames hang then jump"
+        symptom on slow networks.
+
+        We now send every frame through the LOW priority path so the bounded
+        deque enforces uniform backpressure and the per-RTT payload decision
+        in broadcast_to_feed_realtime_bytes_adaptive is the only authority on
+        how the frame is sized. The frontend's 'starting'/'running' status is
+        driven by feed-status messages, NOT by per-frame priority routing.
+        """
+        # NOTE: ``_sent_first_frames`` is intentionally left empty/no-op now.
         return MessagePriority.LOW
 
     async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
@@ -559,6 +666,35 @@ class ConnectionManager:
         ngrok -> bandwidth saved). RTT comes from the ping/pong loop
         (``record_pong``); clients with no latency sample default to the small
         payload to stay safe under unknown network conditions.
+
+        Persisted-per-client decision cache
+        -----------------------------------
+        ``client_latencies[client_id]`` is only populated after the first PONG
+        round-trips, which on slow links can take 1-2s. Without a stabiliser,
+        the *connect-time default* (50 ms) falls well under any sane
+        ``latency_threshold_ms``, so the first frames are sent full-res while
+        the very next PONG flips the client to the small tier. The visible
+        symptom was a brief burst of crisp frames followed by coarse frames
+        and a hang as the priority queue drained the unexpectedly-large
+        full-res payloads into a network already at its bandwidth ceiling.
+
+        We resolve this in two complementary ways:
+
+        1. Once we have *any* latency sample for a client, lock that decision
+           in ``_adaptive_payload_choice`` (full / small) and reuse it for
+           every subsequent frame. This eliminates per-frame jitter when RTT
+           hovers around the threshold (e.g. 245 ms vs 250 ms) and prevents
+           the size from oscillating each ping.
+
+        2. Until the first PONG arrives, treat the client as "high-latency
+           unknown" and route the very first frames through the SMALL payload.
+           By the time the first PONG samples the RTT, we have already shipped
+           a few small frames; subsequent frames follow the stable cached
+           decision. The user never sees a full-res -> small-res flip.
+
+        The reactive backpressure (bounded deque in ``_enqueue_frame``) still
+        discards over-age frames under sustained overload, so a brief tunnel
+        delay on the first few frames will not stall the stream.
         """
         logger.debug(f"[CONN_MGR] adaptive broadcast feed={feed_id} frame={frame_index} thr={latency_threshold_ms}ms")
         subscribed_clients = self.get_clients_for_feed(feed_id)
@@ -567,8 +703,27 @@ class ConnectionManager:
             return
         priority = self._frame_priority(feed_id, frame_index)
         for client_id in subscribed_clients:
-            rtt = self.client_latencies.get(client_id, 50)
-            data = full_data if rtt <= latency_threshold_ms else small_data
+            # Lock the size decision per client once we have a real PONG sample.
+            # _sampled_rtt_clients (populated by update_client_latency) is the
+            # authoritative signal; client_latencies alone is unreliable because
+            # the connect-time 50 ms default lives there too. Without this
+            # gate the very first PONG on a slow tunnel would flip the cache
+            # from full to small (the original "highest then shittiest"
+            # symptom).
+            cached_choice = self._adaptive_payload_choice.get(client_id)
+            if cached_choice is not None:
+                data = full_data if cached_choice == 'full' else small_data
+            elif client_id in self._sampled_rtt_clients:
+                rtt = self.client_latencies[client_id]
+                choice = 'full' if rtt <= latency_threshold_ms else 'small'
+                self._adaptive_payload_choice[client_id] = choice
+                data = full_data if choice == 'full' else small_data
+            else:
+                # No PONG yet: conservative pick (small payload). Holds the
+                # line until the first RTT sample lands, at which point the
+                # cache above locks in the decision for the rest of the
+                # session -- no resolution flip mid-stream.
+                data = small_data
             self._enqueue_frame(client_id, data, priority)
         logger.debug(f"[CONN_MGR] adaptive broadcast completed for feed={feed_id} frame={frame_index}")
 
