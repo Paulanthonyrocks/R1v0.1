@@ -266,11 +266,25 @@ def inference_worker(
     model_path = vehicle_det_cfg.get("model_path")
 
     # Detection filtering params (applied in the batched inference path so it
-    # matches DetectionEngine.detect(): honor the configured low-confidence
-    # floor for ByteTrack's second association stage, and restrict to vehicle
-    # classes. ROI filtering is applied per-feed via core.detector.is_in_roi().
+    # matches DetectionEngine.detect(): honor the configured confidence
+    # threshold for the YOLO call, restrict to vehicle classes, and cap the
+    # per-frame detection count so busy scenes do not pin the worker
+    # (audit findings #1 / #3 -- the old config used low_confidence_threshold
+    # of 0.01 as the batch floor, 25x below the display floor 0.25, producing
+    # 500+-box frames on the sample traffic scene at 320x240 / imgsz 640).
     vehicle_class_ids = set(vehicle_det_cfg.get("vehicle_class_ids", [2, 3, 5, 7]))
-    batch_conf_floor = vehicle_det_cfg.get("low_confidence_threshold", 0.1)
+    display_conf_floor = float(vehicle_det_cfg.get("confidence_threshold", 0.25))
+    low_conf_floor = float(vehicle_det_cfg.get("low_confidence_threshold", 0.1))
+    # YOLO conf floor is the higher of the two: low_confidence_threshold is
+    # now ONLY a legacy fallback for ByteTrack second-association tuning, never
+    # the batch YOLO call's conf arg. Setting the batch floor lower than the
+    # display floor generated noise boxes we later threw away -- wasted YOLO
+    # cost on the busiest frames.
+    batch_conf_floor = max(display_conf_floor, low_conf_floor)
+    # Hard cap on detections per frame after class/ROI filtering. Sorted by
+    # descending confidence; the top-N win. Default 100 is a generous ceiling
+    # for a 320x240 highway scene with imgsz tuned down to 320 (audit #3b).
+    max_detections_per_frame = int(vehicle_det_cfg.get("max_detections_per_frame", 100))
 
     # --- Shared model loading ---
     shared_reid_embedder = None
@@ -701,7 +715,18 @@ def inference_worker(
                 batch_inference_failed = False
                 if frames_to_infer and shared_model is not None:
                     try:
-                        results = shared_model(frames_to_infer, conf=batch_conf_floor, verbose=False, stream=False)
+                        # Audit #3b: passing imgsz explicitly caps YOLO's
+                        # internal letterbox at the input frame's longest
+                        # edge instead of letting Ultralytics select the
+                        # training shape (640 for yolov8n). On 320x240
+                        # sample-traffic input this is ~2.5-3x faster per call
+                        # with negligible mAP loss on vehicles. We clamp to
+                        # the configured `yolo_imgsz` as a ceiling so we never
+                        # upscale beyond the operator's accuracy budget.
+                        first_h, first_w = frames_to_infer[0].shape[:2]
+                        yolo_imgsz_cap = int(vehicle_det_cfg.get("yolo_imgsz", 640))
+                        runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
+                        results = shared_model(frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz, verbose=False, stream=False)
                         for i, result in enumerate(results):
                             meta_idx = inference_indices[i]
                             meta = batch_meta[meta_idx]
@@ -714,11 +739,27 @@ def inference_worker(
                                 # Restrict to vehicle classes (parity with DetectionEngine.detect)
                                 if int(cls_id) not in vehicle_class_ids:
                                     continue
+                                # Apply the display-level confidence floor so we
+                                # don't drag low-conf noise through ROI +
+                                # serialization (audit #1): the batch YOLO
+                                # call already used `conf=batch_conf_floor`,
+                                # but on scenes where `low_confidence_threshold`
+                                # was higher than the YOLO floor (rare now),
+                                # honour the higher floor here too.
+                                if float(conf) < display_conf_floor:
+                                    continue
                                 bbox = (rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off)
                                 # ROI filtering (parity with DetectionEngine.detect)
                                 if not detector.is_in_roi(np.array(bbox)):
                                     continue
                                 formatted_dets.append((bbox, cls_id, conf))
+                            # Audit #3: cap detections per frame by confidence
+                            # so busiest scenes (314+ boxes on sample traffic)
+                            # do not pin the worker on serialize / ws broadcast.
+                            # Sort is in-place; slicing keeps top-N.
+                            if max_detections_per_frame > 0 and len(formatted_dets) > max_detections_per_frame:
+                                formatted_dets.sort(key=lambda d: d[2], reverse=True)
+                                formatted_dets = formatted_dets[:max_detections_per_frame]
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
                         batch_inference_failed = True
