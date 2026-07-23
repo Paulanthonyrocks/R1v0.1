@@ -649,8 +649,12 @@ vehicle_detection:
   static_object_filter_enabled: true
   static_object_timeout: 20
   track_timeout: 10
+  # NOTE (crack #5): flag drift resolved. The predictor is gated by
+  # analytics_service.traffic_prediction.enabled (read by services.py and
+  # analytics_service.py). This nested copy is the SAME flag — keep its value
+  # synced to that canonical one (false) so operators see one source of truth.
   traffic_prediction:
-    enabled: true
+    enabled: false
   traffic_predictor:
     model_path: models/traffic_predictor_model.h5
   use_openvino: true

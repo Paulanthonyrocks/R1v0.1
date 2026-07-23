@@ -383,6 +383,15 @@ class FeedManager:
         while not self._stop_reader_flag:
             if self._is_shutting_down:
                 break
+            # Stand down when processing is stopped (POST /feeds/stop). Without
+            # this, the monitor keeps running after stop_processing() (which
+            # does not set _is_shutting_down) and keeps calling scale_pool
+            # against a dead feed set -- leaking scale actions on a stopped
+            # pipeline. Startup re-sets _is_processing_active=True and clears
+            # _startup_ready so normal scaling resumes.
+            if not self._is_processing_active:
+                await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
+                continue
             try:
                 total_depth = sum(
                     q.qsize() for q in self._inference_input_queues if hasattr(q, 'qsize')
@@ -824,12 +833,35 @@ class FeedManager:
                 self.logger.debug("PredictionScheduler disabled in config.")
 
     async def stop_processing(self):
-        """Stops the overall video processing and prediction scheduling."""
+        """Stops the overall video processing and prediction scheduling.
+
+        Warm-pool-safe: stands the pipeline DOWN (sample feed, scheduler, and
+        the background monitor/watchdog/result-reader tasks) but keeps the
+        inference worker pool HOT so a subsequent start_processing() can resume
+        without reloading models. Previously stop_processing() only stopped the
+        sample feed + scheduler, leaving the scaling monitor, watchdog, and
+        result-reader tasks running against a dead feed set (they only exit on
+        _is_shutting_down, which only shutdown() sets). Every stop/start cycle
+        therefore leaked zombie tasks and kept firing scale_pool on a stopped
+        pipeline. The monitor already stands down via _is_processing_active
+        (set False here); we additionally cancel the tasks so stop is a true
+        pause counterpart to start.
+        """
         if not self._is_processing_active:
             return
 
         self.logger.info("Stopping overall video processing.")
         self._is_processing_active = False
+
+        # Cancel background tasks (monitor/watchdog/reader). These are the
+        # SAME tasks shutdown() cancels -- we just do it without tearing down
+        # the worker pool.
+        for task_name in ("_scaling_task", "_watchdog_task", "_result_reader_task"):
+            task = getattr(self, task_name, None)
+            if task is not None and not task.done():
+                task.cancel()
+                self.logger.info(f"Cancelled background task {task_name}.")
+
         await self._check_and_manage_sample_feed()
 
         if self._prediction_scheduler:

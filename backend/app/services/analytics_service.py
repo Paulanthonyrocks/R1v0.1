@@ -88,8 +88,13 @@ class AnalyticsService:
 
     @property
     def _traffic_predictor(self):
-        # Respect the enabled flag in config to prevent unnecessary lazy-loading
-        if not self.config.get("traffic_prediction", {}).get("enabled", False):
+        # Single authority for prediction is prediction_scheduler.enabled (unified
+        # double-gate, crack #5). This lazy model-load gate and the scheduler's
+        # start() both read the SAME flag, so enabling prediction_scheduler.enabled
+        # is sufficient to activate prediction end-to-end (scheduler loop + model
+        # load + predictions). The legacy analytics_service.traffic_prediction.enabled
+        # key is informational only and no longer gates anything.
+        if not self.config.get("prediction_scheduler", {}).get("enabled", False):
             return None
 
         if self._traffic_predictor_instance is None:
@@ -192,17 +197,26 @@ class AnalyticsService:
                 "INFO": IncidentSeverityEnum.MEDIUM
             }
             
-            # Create incident for significant anomalies if not recently reported
+            # Create incident for significant anomalies if not recently reported.
+            # Awaited (not fire-and-forget): this method is already async and is
+            # itself awaited by the result-processor analytics hook, and incident
+            # creation is rare (per-anomaly, not per-frame), so awaiting adds no
+            # hot-path cost. A bare asyncio.create_task here would swallow any
+            # DB/validation error as an unobserved task exception and silently
+            # drop the incident (Crack: silent loss of safety incidents).
             if anomaly.get("severity") in ["Critical", "Warning"]:
                 sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
-                asyncio.create_task(self._incident_manager.create_incident(
-                    location={"latitude": latitude, "longitude": longitude},
-                    incident_type=IncidentTypeEnum.OTHER,
-                    severity=sev,
-                    description=f"Automated Alert: {anomaly.get('details')}",
-                    source_feed_id=feed_id,
-                    details=anomaly
-                ))
+                try:
+                    await self._incident_manager.create_incident(
+                        location={"latitude": latitude, "longitude": longitude},
+                        incident_type=IncidentTypeEnum.OTHER,
+                        severity=sev,
+                        description=f"Automated Alert: {anomaly.get('details')}",
+                        source_feed_id=feed_id,
+                        details=anomaly
+                    )
+                except Exception as e_inc:
+                    logger.error(f"Failed to persist anomaly incident for {feed_id}: {e_inc}")
 
         # Safety Monitor Checks
         if vehicles and self._safety_monitor:
@@ -211,14 +225,20 @@ class AnalyticsService:
             for alert in alerts:
                 # Convert Safety Alert to Incident
                 inc_sev = IncidentSeverityEnum.CRITICAL if alert["severity"] == "critical" else IncidentSeverityEnum.HIGH
-                asyncio.create_task(self._incident_manager.create_incident(
-                    location={"latitude": latitude, "longitude": longitude},
-                    incident_type=IncidentTypeEnum.ACCIDENT if alert["subtype"] == "stopped_vehicle" else IncidentTypeEnum.OTHER,
-                    severity=inc_sev,
-                    description=alert["description"],
-                    source_feed_id=feed_id,
-                    details=alert["meta"]
-                ))
+                # Awaited (not fire-and-forget): see anomaly path above -- a
+                # dropped task here would silently lose a critical/wrong-way
+                # incident. Per-alert, low frequency, so safe to await.
+                try:
+                    await self._incident_manager.create_incident(
+                        location={"latitude": latitude, "longitude": longitude},
+                        incident_type=IncidentTypeEnum.ACCIDENT if alert["subtype"] == "stopped_vehicle" else IncidentTypeEnum.OTHER,
+                        severity=inc_sev,
+                        description=alert["description"],
+                        source_feed_id=feed_id,
+                        details=alert["meta"]
+                    )
+                except Exception as e_inc:
+                    logger.error(f"Failed to persist safety incident for {feed_id}: {e_inc}")
         
         # Include calibration status in metrics for frontend HUD
         if self._safety_monitor:

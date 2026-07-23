@@ -84,7 +84,17 @@ class InferencePoolManager:
             )
 
     def scale_pool(self, target_size: int):
-        """Dynamically adjusts the number of active workers and rebalances slots."""
+        """Dynamically adjusts the number of active workers and rebalances slots.
+
+        Slot ownership lives in ``self._slot_to_worker``. Workers read their
+        slots ONCE at spawn time (see spawn_worker), so ANY reassignment made
+        here MUST be followed by a respawn of the affected workers, or the
+        change is invisible to them. The previous code reassigned orphaned
+        slots to survivors on scale-down but never told the survivors -- so
+        those slots were drained by NO worker (Crack A: silent inference loss
+        on a live feed). This rewrite respawns only the survivors whose slot
+        set actually changed, reusing spawn_worker's map re-read.
+        """
         target_size = max(FeedManagerConstants.MIN_WORKERS, min(target_size, FeedManagerConstants.MAX_WORKERS))
         current_size = len(self._inference_pool)
 
@@ -93,76 +103,80 @@ class InferencePoolManager:
 
         logger.info(f"Scaling inference pool: {current_size} -> {target_size}")
 
-        # 1. Identify workers to terminate
+        # Snapshot each worker's slot set BEFORE mutation, so we can later
+        # detect which survivors must be respawned to pick up new slots.
+        old_slot_sets = {
+            wid: {s for s, w in self._slot_to_worker.items() if w == wid}
+            for wid in self._inference_pool
+        }
+
+        # 1. Terminate excess workers (wid >= target_size).
         workers_to_kill = [wid for wid in self._inference_pool if wid >= target_size]
-        
-        # 2. Determine which slots need reassignment
-        slots_to_reassign = []
-        for wid in workers_to_kill:
-            slots_to_reassign.extend([s for s, w in self._slot_to_worker.items() if w == wid])
-        
-        # 3. Terminate excess workers
         for wid in workers_to_kill:
             p = self._inference_pool.pop(wid)
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception as e:
+                logger.warning(f"Error terminating InferenceWorker-{wid}: {e}")
             self._inference_command_queues.pop(wid, None)
             logger.debug(f"Terminated InferenceWorker-{wid} during scale-down")
 
-        # 4. Reassign orphaned slots to remaining workers (Round Robin)
-        if slots_to_reassign and target_size > 0:
-            for i, slot in enumerate(slots_to_reassign):
-                worker_id = i % target_size
-                self._slot_to_worker[slot] = worker_id
-            
-            # Notify remaining workers of their new slot assignments via config update
-            # (Since workers check their assigned slots, we send a signal to them to refresh)
-            for wid in range(target_size):
-                if wid in self._inference_pool:
-                    # In a real system, we'd send a specific 'slot_update' command.
-                    # For now, we can trigger a general config update or let them 
-                    # periodically check. To be safe and immediate, we'll restart them
-                    # ONLY if they gained new slots.
-                    pass
+        # Drop the killed workers' slot ownership so those slots become orphaned.
+        for slot in [s for s, w in self._slot_to_worker.items() if w in set(workers_to_kill)]:
+            del self._slot_to_worker[slot]
 
-        # 5. Spawn new workers if scaling up
-        # Slot fan-out: with SLOT_COUNT=4 there are only 4 distinct slots.
-        # If target_size <= slot_count we keep strict 1:1 mapping (worker wid
-        # owns slot wid). Once target_size exceeds slot_count, the extra
-        # workers must still DO WORK, so they are assigned to slots via
-        # `slot % effective_workers == wid % effective_workers`, where
-        # effective_workers = min(target_size, slot_count). This lets an
-        # overflow worker consume the same Redis stream as an existing worker
-        # (the consumer group `workers` already allows >1 consumer per stream),
-        # so a hot feed's queue is drained by 2+ workers instead of backing up
-        # until the 60s SHM-stale timeout recycles segments and drops frames.
-        # Without this, workers 4..7 always got an empty slot list, loaded a
-        # model, and idled at ~0% util while one feed's queue depth ran to
-        # 1250+ and dropped ~26% of frames.
         effective_workers = min(target_size, self.slot_count)
+        survivors = list(self._inference_pool.keys())
+
+        # 2. Reassign orphaned slots round-robin across survivors, using the
+        #    SAME fan-out formula as spawn_worker
+        #    (slot % effective_workers == wid % effective_workers) so the
+        #    mapping stays consistent with what spawn_worker assigns to any
+        #    newly-spawned worker.
+        for slot in range(self.slot_count):
+            if slot in self._slot_to_worker:
+                continue  # still owned by a survivor
+            if not survivors:
+                continue
+            owner = (slot % effective_workers) % len(survivors)
+            self._slot_to_worker[slot] = survivors[owner]
+
+        # 3. Spawn new workers on scale-up. spawn_worker reads slots fresh
+        #    from _slot_to_worker, so new workers get correct ownership.
         for wid in range(target_size):
             if wid not in self._inference_pool:
-                # Ensure this worker has its slots assigned in _slot_to_worker
-                # If scaling up, some slots might still be assigned to old IDs or
-                # need initial assignment.
                 for slot in range(self.slot_count):
                     if self._slot_to_worker.get(slot, -1) == wid:
-                        continue  # already assigned
+                        continue
                     if (slot % effective_workers) == (wid % effective_workers):
                         self._slot_to_worker[slot] = wid
-
                 self.spawn_worker(wid)
 
-        # IMPORTANT: To ensure workers actually pick up the new slot assignments,
-        # we must restart any worker whose slot set changed.
-        # Because we are using a simple list in the worker, the most reliable way 
-        # is to restart them. But we only restart if they actually changed.
-        # Note: This still causes some restarts, but far fewer than the previous version.
-        # To avoid restarts entirely, the worker would need to poll its slots from Redis.
-        # Given the current architecture, we'll stick to surgical restarts.
-        
-        # We'll perform a second pass to restart workers whose slots changed.
-        # (Omitted here for brevity, but the logic above significantly reduces 
-        # the "restart-all" behavior).
+        # 4. Respawn surviving workers whose slot set CHANGED so they actually
+        #    drain their newly-inherited slots (Crack A fix). spawn_worker
+        #    re-reads _slot_to_worker, so a respawn is the reliable way to apply
+        #    the reassignment. We only restart workers that existed before this
+        #    call AND whose set changed -- freshly-spawned workers (step 3) are
+        #    already correct and must NOT be double-spawned.
+        new_slot_sets = {
+            wid: {s for s, w in self._slot_to_worker.items() if w == wid}
+            for wid in self._inference_pool
+        }
+        for wid in list(self._inference_pool):
+            if wid not in old_slot_sets:
+                continue  # spawned fresh above; correct as-is
+            if old_slot_sets[wid] != new_slot_sets.get(wid):
+                logger.info(
+                    f"Scale: worker {wid} slot set changed "
+                    f"{sorted(old_slot_sets[wid])} -> {sorted(new_slot_sets.get(wid, set()))}; respawning."
+                )
+                p = self._inference_pool.pop(wid)
+                try:
+                    p.terminate()
+                except Exception as e:
+                    logger.warning(f"Error terminating InferenceWorker-{wid} for respawn: {e}")
+                self._inference_command_queues.pop(wid, None)
+                self.spawn_worker(wid)
 
 
     def stop_pool(self):

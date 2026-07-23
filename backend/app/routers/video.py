@@ -72,6 +72,7 @@ async def start_video_recording(
     request: StartRecordingRequest,
     video_manager: VideoManager = Depends(get_video_manager),
     feed_manager=Depends(get_feed_manager),
+    current_user: dict = Depends(get_current_active_user),
 ):
     """
     Start a recording for the given stream.
@@ -112,7 +113,8 @@ async def start_video_recording(
 @router.post("/record/stop")
 async def stop_video_recording(
     stream_id: str, video_manager: VideoManager = Depends(get_video_manager),
-    feed_manager=Depends(get_feed_manager)
+    feed_manager=Depends(get_feed_manager),
+    current_user: dict = Depends(get_current_active_user),
 ):
     config = get_current_config()
     if not config.get("video_output", {}).get("enabled", False):
@@ -135,6 +137,7 @@ async def get_processed_videos_metadata(
     limit: int = 100,
     offset: int = 0,
     db_manager=Depends(get_database_manager),
+    current_user: dict = Depends(get_current_active_user),
 ):
     videos = await db_manager.get_processed_videos(stream_id, limit, offset)
     return videos
@@ -144,6 +147,7 @@ async def get_processed_videos_metadata(
 async def download_processed_video(
     video_id: int,
     db_manager=Depends(get_database_manager),
+    current_user: dict = Depends(get_current_active_user),
 ):
     video_entry = await db_manager.get_processed_video_by_id(video_id)
     if not video_entry:

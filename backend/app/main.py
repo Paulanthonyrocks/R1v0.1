@@ -107,23 +107,30 @@ async def run_migrations():
 def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
     
-    # Use regex pattern to allow dynamic URLs (ngrok, cloudworkstations, loca.lt, etc.)
-    # This is required because origins=["*"] with allow_credentials=True is not allowed
+    # Regex pattern allows dynamic tunnel URLs (ngrok, cloudworkstations, loca.lt).
+    # This is the ONLY matcher used in development so we never ship the
+    # allow_origins=["*"] + allow_credentials=True combination, which Starlette
+    # normally rejects and which otherwise lets ANY tunnel subdomain with a
+    # token reach the API (crack #2).
     allow_origin_regex = r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
     
     if env == "development":
-        logger.info(f"CORS configured with regex pattern for development: {allow_origin_regex}")
+        # No wildcard origins — rely solely on the regex matcher.
+        allow_origins: list = []
+        logger.info(f"CORS configured (dev): regex-only matcher, no wildcard origins.")
     else:
-        # Production: also allow specific configured origins
+        # Production: explicit allow-list wins; regex stays as a fallback for
+        # dynamic tunnel URLs that operators whitelist via ALLOWED_ORIGINS /
+        # cors.allowed_origins. Never fallback to "*".
         allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
         cors_config = config.get("cors", {})
         specific_origins = list(set(allowed_origins_env + cors_config.get("allowed_origins", [])))
-        logger.info(f"CORS origins configured for production: {specific_origins}")
-        # Regex still applies as fallback for dynamic tunnel URLs
+        allow_origins = specific_origins or []
+        logger.info(f"CORS origins configured for production: {allow_origins}")
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Will be overridden by regex when credentials are needed
+        allow_origins=allow_origins,
         allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -377,15 +384,21 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     )
 
 # --- Middleware Registration ---
-# app.add_middleware(RequestIDMiddleware)
-# app.add_middleware(SecurityHeadersMiddleware)
-# app.add_middleware(LoggingMiddleware)
+# Re-enabled (crack #1/#2/#4): SecurityHeaders + Logging + RateLimit were
+# previously commented out, leaving REST with no rate limiting and no
+# security headers. FastAPI runs as a single process, so the in-memory
+# RateLimitMiddleware is acceptable here (multiprocessing is only used for
+# the inference/ingestion workers, which don't sit behind this ASGI stack).
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(LoggingMiddleware)
 
-# rate_limits = {
-#     "/api/v1/analytics": RateLimitConfig(limit=10, window=60),
-#     "/api/v1/feeds": RateLimitConfig(limit=30, window=60)
-# }
-# app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+# Per-route rate limits; everything else falls back to the default 60/60.
+rate_limits = {
+    "/api/v1/analytics": RateLimitConfig(limit=10, window=60),
+    "/api/v1/feeds": RateLimitConfig(limit=30, window=60),
+}
+app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
 
 # Initialize CORS
 if cfg_dict:
@@ -409,23 +422,26 @@ async def audit_middleware(request: Request, call_next):
             resource_type = path_parts[2] if len(path_parts) > 2 else "unknown" # api/v1/resource
             resource_id = request.path_params.get("id", "N/A")
             
-            await audit_logger.log_action(
-                user_id=user_id,
-                action=f"{request.method} {request.url.path}",
-                resource_type=resource_type,
-                resource_id=resource_id,
-                ip_address=request.client.host if request.client else "unknown"
+            # Fire-and-forget: the audit write (DB via to_thread) must NOT sit
+            # in the request hot path (crack #3). Schedule it on the loop so the
+            # response returns immediately; the task is tracked by
+            # create_background_task and drained on shutdown. log_action swallows
+            # its own exceptions, so a failed audit write can never break the
+            # request.
+            asyncio.create_task(
+                audit_logger.log_action(
+                    user_id=user_id,
+                    action=f"{request.method} {request.url.path}",
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    ip_address=request.client.host if request.client else "unknown"
+                ),
+                name=f"audit-{request.method}-{resource_type}-{resource_id}"
             )
         except Exception as e:
             logger.error(f"Error in audit middleware: {e}")
             
     return response
-
-@app.middleware("http")
-async def debug_options_middleware(request: Request, call_next):
-    if request.method == "OPTIONS":
-        logger.info(f"PREFLIGHT: Received OPTIONS request for {request.url.path} from origin: {request.headers.get('origin')}")
-    return await call_next(request)
 
 # --- Routers Inclusion ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])

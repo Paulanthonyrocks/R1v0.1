@@ -3,6 +3,8 @@ from typing import List, Optional
 from app.models.incidents import Incident, IncidentCreate, IncidentUpdate, IncidentStatus
 from app.services.services import get_incident_manager, get_database_manager
 from app.services.incident_manager import IncidentManager
+from app.dependency_injection import get_current_active_user, get_current_admin
+from app.models.user import User
 from datetime import datetime, timezone
 
 router = APIRouter(tags=["Incidents"])
@@ -12,7 +14,8 @@ async def list_incidents(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: Optional[IncidentStatus] = None,
-    db = Depends(get_database_manager)
+    db = Depends(get_database_manager),
+    current_user: User = Depends(get_current_active_user),
 ):
     """List recent incidents with optional filtering."""
     filters = {}
@@ -25,7 +28,8 @@ async def list_incidents(
 @router.post("/", response_model=Incident)
 async def create_new_incident(
     incident: IncidentCreate,
-    manager: IncidentManager = Depends(get_incident_manager)
+    manager: IncidentManager = Depends(get_incident_manager),
+    current_user: User = Depends(get_current_admin),
 ):
     """Manually report a new incident."""
     incident_id = await manager.create_incident(
@@ -46,7 +50,8 @@ async def create_new_incident(
 async def acknowledge_incident(
     incident_id: str,
     user_id: str = Query("operator", alias="user_id"),
-    manager: IncidentManager = Depends(get_incident_manager)
+    manager: IncidentManager = Depends(get_incident_manager),
+    current_user: User = Depends(get_current_admin),
 ):
     """Acknowledge an incident."""
     success = await manager.update_status(
@@ -61,7 +66,8 @@ async def resolve_incident(
     incident_id: str,
     notes: Optional[str] = Query(None),
     user_id: str = Query("operator", alias="user_id"),
-    manager: IncidentManager = Depends(get_incident_manager)
+    manager: IncidentManager = Depends(get_incident_manager),
+    current_user: User = Depends(get_current_admin),
 ):
     """Resolve an incident."""
     success = await manager.update_status(
@@ -75,7 +81,8 @@ async def resolve_incident(
 async def update_incident(
     incident_id: str,
     update: IncidentUpdate,
-    manager: IncidentManager = Depends(get_incident_manager)
+    manager: IncidentManager = Depends(get_incident_manager),
+    current_user: User = Depends(get_current_admin),
 ):
     """Update an incident's status or details."""
     existing = await manager._db_manager.get_incident_by_id(incident_id)

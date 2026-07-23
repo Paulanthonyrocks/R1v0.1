@@ -254,7 +254,11 @@ class ServiceRegistry:
         """Load the traffic predictor model if configured."""
         analytics_cfg = config.get("analytics_service", {})
         model_path = analytics_cfg.get("model_path")
-        prediction_enabled = analytics_cfg.get("traffic_prediction", {}).get("enabled", False)
+        # Single authority for prediction is prediction_scheduler.enabled (unified
+        # double-gate, crack #5). Both this boot-time model load and
+        # AnalyticsService._traffic_predictor read the SAME flag, so flipping
+        # prediction_scheduler.enabled alone activates prediction end-to-end.
+        prediction_enabled = config.get("prediction_scheduler", {}).get("enabled", False)
         
         if not prediction_enabled:
             logger.info("Traffic prediction disabled in config.")

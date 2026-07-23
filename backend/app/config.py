@@ -90,7 +90,10 @@ class AppConfig(BaseSettings):
     video_output: Dict[str, Any] = {"enabled": False, "output_directory": "backend/data/recordings", "fps": 10}
     reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "backend/data/reid_gallery.pkl"}
     prediction_scheduler: Dict[str, Any] = {"enabled": True}
-    auto_start_processing: bool = False
+    # Base default aligned to the shipped config.yaml intent + main.py fallback
+    # (crack #6): a caller that skips the yaml must still auto-start feed
+    # processing rather than silently leaving the pipeline idle.
+    auto_start_processing: bool = True
     file_watcher: Dict[str, Any] = {"enabled": False}
     post_startup_processing: Dict[str, Any] = {"enabled": False}
     cors: Dict[str, Any] = {"allowed_origins": []}
@@ -302,22 +305,4 @@ def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return initialize_config(config_path)  # Reload
 
 
-# Optional: Function to reload config (similar logic to router, but maybe called differently)
-def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Forces a reload of the configuration. Use with caution, especially with multiple workers.
-    Returns the newly loaded config.
-    """
-    global _config_instance
-    logger.warning("Attempting configuration reload...")
-    _config_instance = None  # Clear current instance
-    
-    # Invalidate RedisCient singletons to force reconnection with new config
-    try:
-        from app.utils.redis_client import RedisClient
-        RedisClient.reset()
-    except Exception as e:
-        logger.error(f"Failed to reset RedisClient during config reload: {e}")
-        
-    return initialize_config(config_path)  # Reload
 

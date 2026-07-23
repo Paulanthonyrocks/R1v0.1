@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from app.dependency_injection import get_feed_manager, get_connection_manager, get_rate_limiter_manager
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager, MessagePriority
-from app.utils.auth_utils import verify_firebase_token
+from app.utils.auth_utils import verify_firebase_token, get_server_role
 from app.dependency_injection import is_admin as is_admin_check
 from app.models.websocket import (
     WebSocketMessage,
@@ -129,8 +129,13 @@ async def message_receiver(
 
         # --- Main Message Loop ---
         async for message_text in websocket.iter_text():
-            # Log every raw message for debugging purposes
-            logger.info(f"RAW message from {client_id}: {message_text}")
+            # DO NOT log the raw payload: the AUTHENTICATE frame carries the
+            # client's Firebase ID token (a JWT) in cleartext, and the initial
+            # and re-auth frames both flow through this loop -- logging the raw
+            # text would leak live credentials into the server logs. Log only
+            # a size/type hint at debug level; per-message-type handlers below
+            # already log structured, token-free info at appropriate levels.
+            logger.debug(f"WS recv from {client_id}: {len(message_text)} bytes")
 
             # 0. Inbound Size Limit (Security)
             if len(message_text) > 64_000:
@@ -252,8 +257,12 @@ async def message_receiver(
                         )
                         continue
 
-                    # Check Authorization
-                    user_role = connection_manager.get_user_role(client_id)
+                    # Check Authorization (server-side, not the cached connect-time
+                    # role -- defeats role stickiness on long-lived sessions: a demoted
+                    # admin loses control immediately instead of at token expiry).
+                    cached_role = connection_manager.get_user_role(client_id)
+                    user_id = connection_manager.client_id_to_user_id.get(client_id)
+                    user_role = await get_server_role(user_id, fallback=cached_role)
                     if user_role != "admin":
                         logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
                         await connection_manager.send_personal_message(
