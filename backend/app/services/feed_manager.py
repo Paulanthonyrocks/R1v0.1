@@ -427,6 +427,20 @@ class FeedManager:
                     await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
                     continue
 
+                # PINNED POOL: when set, the autoscaler never scales up OR down.
+                # Rationale: each scale action respawns a worker that must reload
+                # the YOLO + ReID models onto the GPU. Under oscillating load the
+                # scaler thrashes (scale-up on a backlog spike, scale-down a moment
+                # later), reloading models dozens of times and -- if a model file
+                # is corrupt/truncated -- killing workers mid-run (the
+                # "PytorchStreamReader failed reading zip archive" crash seen at
+                # boot). A pinned pool removes that churn entirely: pick
+                # `inference_pool_size` to cover peak load and leave it fixed.
+                # Default False preserves the old adaptive behavior.
+                if self.config.get("performance", {}).get("pin_inference_pool", False):
+                    await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
+                    continue
+
                 self.logger.debug(
                     f"[ScalingMonitor] avg_depth={avg_depth:.1f}, current_workers={current_size}, "
                     f"up_threshold={up_threshold:.0f}, down_threshold={down_threshold:.0f}"

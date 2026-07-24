@@ -1,4 +1,5 @@
 import logging
+import os
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional, Any
@@ -36,6 +37,42 @@ class DetectionEngine:
                     return
             # Fix: Remove redundant device parameter from inference
             if self.model_type == "yolo":
+                # BOOT INTEGRITY GUARD: reject a corrupt/truncated .pt before
+                # handing it to ultralytics (which fails much later inside the
+                # C++ PytorchStreamReader with the opaque
+                # "failed reading zip archive: failed finding central directory"
+                # error -- the exact crash observed at boot). A valid YOLO .pt is
+                # a ZIP archive: starts with b'PK\x03\x04', ends with the EOCD
+                # record b'PK\x05\x06', and is > ~1 MB. Anything else (empty,
+                # a half-written download, a JPEG, a text error page) is rejected
+                # up front with an actionable message so the operator re-downloads
+                # rather than the worker dying mid-run and thrashing the autoscaler.
+                mp = self.model_path
+                if not os.path.exists(mp):
+                    raise FileNotFoundError(f"YOLO weights not found at {mp}")
+                if os.path.getsize(mp) < 1_000_000:
+                    raise ValueError(
+                        f"YOLO weights at {mp} are only {os.path.getsize(mp)} bytes "
+                        f"(expected ~6.2 MB). The file is truncated/corrupt -- "
+                        f"re-download it (e.g. `curl -L https://github.com/"
+                        f"ultralytics/assets/releases/download/v8.4.0/yolov8n.pt "
+                        f"-o {mp}`)."
+                    )
+                with open(mp, "rb") as _fh:
+                    _head = _fh.read(4)
+                    # A valid YOLO .pt is a ZIP archive whose End-Of-Central-
+                    # Directory record begins with b'PK\x05\x06'. Ultralytics
+                    # appends a small binary footer AFTER the EOCD, so the
+                    # signature is NOT at the very tail -- scan the last 64
+                    # bytes for it instead of demanding it at offset -4.
+                    _fh.seek(-64, os.SEEK_END)
+                    _tail = _fh.read(64)
+                if _head[:4] != b"PK\x03\x04" or b"PK\x05\x06" not in _tail:
+                    raise ValueError(
+                        f"YOLO weights at {mp} are not a valid PyTorch .pt archive "
+                        f"(bad ZIP magic: head={_head!r}, no EOCD record). The file "
+                        f"is corrupt -- re-download it before starting the backend."
+                    )
                 from ultralytics import YOLO
                 self.model = YOLO(self.model_path)
                 self.model.to(self.device)

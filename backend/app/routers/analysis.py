@@ -510,5 +510,8 @@ async def get_feed_history_endpoint(
     try:
         return await db.get_history_stats(feed_id, hours=hours)
     except Exception as e:
-        logger.error(f"Error fetching history for {feed_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch history")
+        # History is optional/eventually-consistent (see note above). Never let a
+        # DB hiccup (TimescaleDB down, SQLite lock, transient error) hard-fail the
+        # dashboard history widget. Degrade to an empty series instead of 500/503.
+        logger.warning(f"History fetch failed for {feed_id}, returning empty: {e}")
+        return []

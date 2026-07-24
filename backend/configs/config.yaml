@@ -458,6 +458,13 @@ performance:
   gpu_acceleration: true
   image_gpu_acceleration: true
   inference_pool_size: 8
+  # Pin the autoscaler: when true, the scaling monitor never scales the
+  # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
+  # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
+  # oscillating load that churns dozens of reloads and -- if a model file is
+  # corrupt -- kills workers mid-run. Set inference_pool_size to cover peak
+  # load and pin it. Default false = legacy adaptive scaling.
+  pin_inference_pool: true
   # Autoscaler ceiling for the inference pool. SLOT_COUNT is 4, so with
   # strict 1:1 routing only workers 0..3 could ever own a slot and workers
   # 4..7 idled (loaded a model, did no work) — which made raising this past 4
