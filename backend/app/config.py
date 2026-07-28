@@ -47,6 +47,13 @@ class PerformanceConfig(BaseModel):
     gpu_acceleration: bool = True
     video_gpu_acceleration: bool = False  # For HW accelerated decoding/encoding
     image_gpu_acceleration: bool = False  # For GPU-based image ops (resizing, etc.)
+    # When true, the inference-pool autoscaler never scales up OR down. The
+    # flag was previously declared only in config.yaml; because PerformanceConfig
+    # lacked the field, pydantic silently dropped it on validation and the
+    # scaler (feed_manager._scaling_monitor) always fell through to adaptive
+    # scaling -- so a "pinned" pool of 8 would still auto-grow under load and
+    # churn GPU model reloads. Declaring it here preserves the value end-to-end.
+    pin_inference_pool: bool = False
     inference_pool_size: int = 4
     memory_limit_percent: int = 80
     max_concurrent_feeds: int = 10

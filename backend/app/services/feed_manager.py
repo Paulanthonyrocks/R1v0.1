@@ -280,6 +280,24 @@ class FeedManager:
         """Returns a per-feed lock to ensure atomic operations like restart."""
         return self._feed_locks.setdefault(feed_id, asyncio.Lock())
 
+    def _resolve_pool_size(self) -> int:
+        """Resolve the desired inference worker count.
+
+        Preference order:
+          1. performance.inference_pool_size  (the documented "pinned pool"
+             target; config.yaml sets this to 8 with pin_inference_pool: true)
+          2. inference.num_workers            (legacy key, default 2)
+        Historically only `num_workers` was read, so a pinned pool of 8 in
+        config.yaml still booted at 2 and then (pre-pin fix) auto-scaled under
+        load. All pool-size reads now go through this helper so startup, the
+        "pool empty -> auto-scale" path, and feed routing agree on one number.
+        """
+        perf = self.config.get("performance", {}) if isinstance(self.config, dict) else {}
+        size = perf.get("inference_pool_size")
+        if isinstance(size, int) and size >= 1:
+            return size
+        return int(self.config.get("inference", {}).get("num_workers", 2))
+
     def _spawn_worker(self, worker_id: int):
         """Spawns a single inference worker assigned to specific slots."""
         self.pool_manager.spawn_worker(worker_id)
@@ -830,7 +848,7 @@ class FeedManager:
                             self.logger.warning(f"Fallback purge failed: {fb_err}")
         except Exception as e:
             self.logger.warning(f"Could not purge stale central_output messages: {e}")
-        pool_size = self.config.get("inference", {}).get("num_workers", 2)
+        pool_size = self._resolve_pool_size()
         self.scale_pool(pool_size)
 
         # Wait for workers to finish loading models before starting feeds
@@ -1209,7 +1227,7 @@ class FeedManager:
 
             # Auto-initialize inference pool if not running
             if not self.pool_manager._inference_pool:
-                pool_size = self.config.get("inference", {}).get("num_workers", 2)
+                pool_size = self._resolve_pool_size()
                 logger.warning(
                     f"Inference pool is empty — auto-scaling to {pool_size} worker(s) before starting feed."
                 )
@@ -1400,7 +1418,7 @@ class FeedManager:
         # distinct slot indices. Consecutive feeds therefore share a worker
         # and get batched together -> real GPU utilisation.
         with self._route_lock:
-            configured_pool = self.config.get("inference", {}).get("num_workers", 2)
+            configured_pool = self._resolve_pool_size()
             pool_size = max(1, self.pool_manager.pool_size or configured_pool or 1)
             wid = self._feed_launch_seq % pool_size
             sub = self._per_worker_feed_count.get(wid, 0)
