@@ -115,7 +115,11 @@ def ingestion_worker(
 
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+    # JPEG quality for the dashboard wire frame. 70 at 640x480 keeps the
+    # loca.lt tunnel payload near the previous 320x240@80 size; 80 was visibly
+    # mushy on busy scenes at 640x480. See ingestion_worker.py for the inline
+    # ``encode_params`` it pairs with.
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
 
     # Opt-in secondary producer for the per-feed VideoWriter (local persistence).
     # When ``video_output.enabled=true``, FeedManager passes the RedisQueue name

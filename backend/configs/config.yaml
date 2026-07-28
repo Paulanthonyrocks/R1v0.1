@@ -80,7 +80,11 @@ inference:
   worker_ready_timeout: 60
   use_tensorrt: true
   inference_timeout: 0.15
-  skip_frames: 2
+  # skip_frames=3 (was 2) compensates for the 4x GPU cost of running YOLO at
+  # 640x480 vs the previous 320x240 letterbox input. With skip=3 we run ~5
+  # YOLO forward calls/sec/feed instead of ~7.5 -- keeping per-feed GPU cost
+  # roughly flat while the wire frame is now 640x480.
+  skip_frames: 3
 ingestion:
   shared_memory_ipc: true
 interface:
@@ -594,13 +598,14 @@ vehicle_detection:
   # Calibration: maps image pixels -> real-world ground plane (meters) via a
   # homography. Required for physically-meaningful speed (km/h). Without it the
   # pipeline falls back to pixel-based velocity (avg_speed broadcasts as 0.0).
-  # image_points are NORMALIZED [0,1] and scaled by `resolution` at load time.
+  # image_points are NORMALIZED [0,1] and scaled by `resolution` at load time
+  # -- so raising `frame_resolution` does NOT require editing image_points.
   # Edit these per-camera to match your scene; values below are a sane default
-  # trapezoid for a forward-facing 320x240 traffic cam.
+  # trapezoid for a forward-facing 640x480 traffic cam.
   calibration:
     resolution:
-    - 320
-    - 240
+    - 640
+    - 480
     image_points:
     - - 0.25
       - 0.25
@@ -620,8 +625,8 @@ vehicle_detection:
     - - -6.0
       - 0.0
   frame_resolution:
-  - 320
-  - 240
+  - 640
+  - 480
   low_confidence_threshold: 0.01
   max_active_tracks: 100
   max_aspect_ratio: 100.0
@@ -679,25 +684,52 @@ video_input:
 video_output:
   codec: mp4v
   enabled: false
-  fps: 15
+  # fps at which the wire frame is emitted. Must match video_processing.target_fps
+  # (result_processor.py dedups to ``video_output.fps``); they used to disagree
+  # (15 vs 8) which silently capped effective throughput at the lower of the two.
+  fps: 8
   frame_resolution:
-  - 320
-  - 240
+  - 640
+  - 480
   output_directory: backend/data/processed_videos
   processing_enabled: true
+  # Wire JPEG for the dashboard. 640x480 at quality 80 is the cost ceiling for
+  # the loca.lt tunnel; if you bump resolution further, lower jpeg_quality in
+  # ingestion_worker.py accordingly (it's an inline constant there).
   stream_resolution:
-  - 320
-  - 240
+  - 640
+  - 480
 video_processing:
-  target_fps: 15
-  adaptive_streaming: true
+  # target_fps lowered from 15 -> 8 to ease the loca.lt tunnel. Traffic
+  # scenes are slow-moving; 8 fps is well below the perceptual flicker
+  # threshold for a dashboard view, and cuts tunnel bandwidth by ~47%
+  # vs 15. Combined with the 640x480 wire frame and adaptive_streaming off,
+  # this brings end-to-end latency on the tunnel back to ~1s from ~2.5s.
+  target_fps: 8
+  # Adaptive streaming: when TRUE the pipeline ships TWO JPEGs per frame
+  # (full-res and a downscaled "small" tier) and lets the broadcaster pick by
+  # client RTT. This is a bandwidth-conservation optimization for mixed
+  # clients on the SAME origin -- a low-RTT LAN client gets full-res, a
+  # high-RTT mobile client gets the small tier.
+  #
+  # Over a SINGLE loca.lt tunnel there is exactly one client, always
+  # high-RTT, so the "small" tier is selected every frame -- meaning we
+  # encode BOTH JPEGs and ship one. The second encode is pure waste.
+  # Set FALSE to ship a single tier and cut the per-frame encoder cost in
+  # half on the worker.
+  adaptive_streaming: false
   # Downscale factor for the bandwidth-light ("small") background JPEG sent to
-  # high-latency tunnel clients (loca.lt / cloudflare / ngrok). Keep this modest
-  # -- too small and the frame becomes unusable (the "shittiest quality" symptom).
-  roi_scale: 0.5
-  # JPEG quality for the small background. 50 was visibly mushy; 70 is a sane
-  # floor that stays bandwidth-light while remaining watchable.
-  adaptive_jpeg_quality: 70
+  # high-latency tunnel clients (loca.lt / cloudflare / ngrok).
+  # The pipeline already force-resizes every frame to stream_resolution
+  # (320x240) at ingestion, so the source ceiling is 320x240. A 0.5 factor
+  # pushed tunnel clients down to 160x120 -- a 4x quality loss for a
+  # negligible bandwidth saving on a 320x240 frame (~10-20KB JPEG). Set to
+  # 1.0 so tunnel clients receive the full 320x240; this removes the visible
+  # mushiness without materially increasing tunnel payload size.
+  roi_scale: 1.0
+  # JPEG quality for the small background. 50 was visibly mushy; 70 was a sane
+  # floor; 78 keeps bandwidth-light frames watchable at full 320x240.
+  adaptive_jpeg_quality: 78
   # RTT (ms) below which a client receives the full-res frame. Borderline
   # tunnels (100-250ms) were being forced onto the small tier at 120; raise so
   # only genuinely high-RTT links drop to the downscaled payload.

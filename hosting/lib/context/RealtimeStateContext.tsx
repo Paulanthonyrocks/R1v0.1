@@ -136,13 +136,30 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
                     const index = prevFeeds.findIndex((feed: FeedStatusData) => feed.feed_id === statusData.feed_id);
                     if (index !== -1) {
                         const existing = prevFeeds[index];
-                        // Deep compare to avoid unnecessary re-renders
-                        if (existing.status === statusData.status && JSON.stringify(existing.config) === JSON.stringify(statusData.config)) {
+                        // Deep compare to avoid unnecessary re-renders. We also
+                        // refresh latest_metrics whenever it changes, so panels
+                        // like Lane Metrics (which read feed.latest_metrics.*)
+                        // actually update. The backend re-broadcasts status on a
+                        // cadence with fresh metrics; ignore identical payloads.
+                        const metricsEqual =
+                            existing.latest_metrics === statusData.latest_metrics ||
+                            JSON.stringify(existing.latest_metrics) === JSON.stringify(statusData.latest_metrics);
+                        if (
+                            existing.status === statusData.status &&
+                            JSON.stringify(existing.config) === JSON.stringify(statusData.config) &&
+                            metricsEqual
+                        ) {
                             return prevFeeds;
                         }
-                        // Update in place without re-sorting if order unchanged
+                        // Update in place without re-sorting if order unchanged,
+                        // preserving the freshest metrics alongside other fields.
+                        const merged: FeedStatusData = {
+                            ...statusData,
+                            latest_metrics:
+                                statusData.latest_metrics ?? existing.latest_metrics,
+                        };
                         const newFeeds = [...prevFeeds];
-                        newFeeds[index] = statusData;
+                        newFeeds[index] = merged;
                         return newFeeds;
                     } else {
                         // New feed - need to insert in sorted position

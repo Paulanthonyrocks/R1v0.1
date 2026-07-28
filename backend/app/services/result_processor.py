@@ -82,6 +82,18 @@ class ResultProcessor:
         self._stop_flag = False
         # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
         self._subscriber_pump: Optional[Any] = None
+        # Throttled feed-status re-broadcast so the frontend's
+        # ``latest_metrics`` (which carries lane_occupancy / queue_lengths for
+        # the Lane Metrics widget) is actually delivered. Previously
+        # latest_metrics only rode the STARTING->RUNNING FEED_STATUS_UPDATE,
+        # which fires BEFORE _process_frame_data populates entry["latest_metrics"]
+        # -- so the panel received None and never refreshed (see audit note on
+        # the status-transition broadcast below). We re-push a lightweight
+        # status update on a fixed cadence once metrics exist.
+        self._feed_last_status_broadcast: Dict[str, float] = {}
+        self._status_broadcast_interval: float = float(
+            config.get("feed_status_broadcast_interval", 1.0) if config else 1.0
+        )
         # Optional hook for analytics ingestion (safety/incidents/history);
         # assigned via set_analytics_hook. Invoked once per deduped frame with
         # (feed_id, metrics, vehicles). Without it, SafetyMonitor and per-frame
@@ -356,6 +368,36 @@ class ResultProcessor:
                             ema[k] = (1 - alpha) * ema.get(k, 0) + alpha * v
                 
                 entry["latest_metrics"] = entry["ema_metrics"].copy()
+
+            # 1b. Re-push a lightweight FEED_STATUS_UPDATE on a fixed cadence so
+            # the frontend's ``feeds[*].latest_metrics`` actually carries the
+            # freshly-computed metrics (lane_occupancy / queue_lengths for the
+            # Lane Metrics widget, per-frame KPIs, etc.). The only other status
+            # update is the STARTING->RUNNING transition, which fires BEFORE
+            # this block populates entry["latest_metrics"], so without this the
+            # widget renders "AWAITING TRAFFIC FLOW..." forever. Throttled by
+            # _status_broadcast_interval to avoid a status msg per frame.
+            if self.broadcaster and entry.get("status") == FeedOperationalStatusEnum.RUNNING:
+                now_b = time.time()
+                last_b = self._feed_last_status_broadcast.get(feed_id, 0.0)
+                if now_b - last_b >= self._status_broadcast_interval:
+                    self._feed_last_status_broadcast[feed_id] = now_b
+                    try:
+                        from app.models.feeds import FeedStatusData, FeedConfigInfo
+                        status_data = FeedStatusData(
+                            feed_id=feed_id,
+                            config=entry.get("config_info") or FeedConfigInfo(
+                                name="Unknown", source_type="unknown", source_identifier=entry["source"]
+                            ),
+                            source=entry["source"],
+                            status=entry["status"],
+                            current_fps=entry["timer"].get_fps("loop_total") if entry.get("timer") else None,
+                            last_error=entry.get("error_message"),
+                            latest_metrics=entry.get("latest_metrics"),
+                        )
+                        await self.broadcaster.broadcast_feed_update(status_data)
+                    except Exception as e:
+                        logger.debug(f"[RESULT_PROC] status re-broadcast failed for {feed_id}: {e}")
 
             # 2. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
