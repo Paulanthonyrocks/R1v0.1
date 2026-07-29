@@ -8,14 +8,18 @@ class FeedManagerConstants:
     MAX_METRICS_HISTORY_LENGTH = 1000
 
     # Scaling & Slots
-    # SLOT_COUNT lowered 16 -> 4. With only 3 feeds, 16 round-robin
-    # slots left 13 idle and diluted the scale-up signal (avg_depth was
-    # total_depth/16 ~= 0.2, never > SCALE_UP_THRESHOLD). 4 slots
-    # co-locates the feeds so each worker's queues stay full, batches
-    # actually fill, and the per-worker scale metric (below) fires.
-    SLOT_COUNT = 4
+    # SLOT_COUNT raised 4 -> 24. With inference_pool_size = 24 (config.yaml),
+    # slot_count < pool_size caused InferencePoolManager.scale_pool's
+    # modulo-based assignment to OVERWRITE a worker's slot mid-spawn -- so
+    # workers 0..3 logged "Slots assigned: [0..3]" at boot but the slot map
+    # was immediately rewritten to wid=4..7, leaving workers 0..3 with stale
+    # slot ownership and no incoming frames. Setting slot_count == pool_size
+    # collapses effective_workers = min(target_size, slot_count) == pool_size,
+    # so every wid gets exactly one distinct slot and no overwrite is possible.
+    # Memory cost: ~24 RedisStreamQueue instances vs 4, ~negligible.
+    SLOT_COUNT = 24
     MIN_WORKERS = 1
-    MAX_WORKERS = 8
+    MAX_WORKERS = 24
     IDEAL_WORKERS = 4  # Balanced for 2-GPU systems
     SCALE_UP_THRESHOLD = 10
     SCALE_DOWN_THRESHOLD = 1

@@ -53,8 +53,11 @@ class PerformanceConfig(BaseModel):
     # scaler (feed_manager._scaling_monitor) always fell through to adaptive
     # scaling -- so a "pinned" pool of 8 would still auto-grow under load and
     # churn GPU model reloads. Declaring it here preserves the value end-to-end.
-    pin_inference_pool: bool = False
-    inference_pool_size: int = 4
+    # Default True to match config.yaml. PerformanceConfig is pydantic-validated;
+    # if this default drifts away from config.yaml, schema-driven tools (tests,
+    # docs generators) will report the wrong behavior.
+    pin_inference_pool: bool = True
+    inference_pool_size: int = 24
     memory_limit_percent: int = 80
     max_concurrent_feeds: int = 10
     auto_optimize: bool = True

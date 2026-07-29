@@ -436,15 +436,6 @@ class FeedManager:
                     )
                 )
 
-                # Cap at the configured inference pool size (was a hard '4', which
-                # ignored inference_pool_size: 8 and MAX_WORKERS: 8, so the
-                # pool could never scale past 4 even under heavy load).
-                pool_cap = int(self.config.get("performance", {}).get("inference_pool_size", FeedManagerConstants.MAX_WORKERS))
-                if current_size >= pool_cap:
-                    self.logger.warning(f"[ScalingMonitor] Worker cap ({pool_cap}) reached. Skipping scale-up.")
-                    await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
-                    continue
-
                 # PINNED POOL: when set, the autoscaler never scales up OR down.
                 # Rationale: each scale action respawns a worker that must reload
                 # the YOLO + ReID models onto the GPU. Under oscillating load the
@@ -455,7 +446,23 @@ class FeedManager:
                 # boot). A pinned pool removes that churn entirely: pick
                 # `inference_pool_size` to cover peak load and leave it fixed.
                 # Default False preserves the old adaptive behavior.
+                #
+                # Check pin BEFORE the cap warning: when pinned, hitting the cap
+                # is the *intended* steady state, not an anomaly. Without this
+                # ordering, a pinned deploy logs "[ScalingMonitor] Worker cap (N)
+                # reached" every SCALE_COOLDOWN seconds for the entire run
+                # (observed 16 occurrences in a 7-min run at 14:20:05 in
+                # backend_main.log), drowning real warnings.
                 if self.config.get("performance", {}).get("pin_inference_pool", False):
+                    await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
+                    continue
+
+                # Cap at the configured inference pool size (was a hard '4', which
+                # ignored inference_pool_size: 8 and MAX_WORKERS: 8, so the
+                # pool could never scale past 4 even under heavy load).
+                pool_cap = int(self.config.get("performance", {}).get("inference_pool_size", FeedManagerConstants.MAX_WORKERS))
+                if current_size >= pool_cap:
+                    self.logger.warning(f"[ScalingMonitor] Worker cap ({pool_cap}) reached. Skipping scale-up.")
                     await asyncio.sleep(FeedManagerConstants.SCALE_COOLDOWN)
                     continue
 

@@ -42,8 +42,24 @@ class InferencePoolManager:
                 logger.warning(f"Could not clear inference stop event before spawning worker {worker_id}: {e}")
 
         slots = [s for s, w in self._slot_to_worker.items() if w == worker_id]
+
+        # Refuse to spawn a worker with no slot ownership. This happens when
+        # scale_pool's modulo-based assignment overwrites a survivor's slot
+        # claim before that survivor respawns: the new worker reads the map,
+        # finds no slots for itself, and would otherwise sit idle forever
+        # burning a process + a CUDA context. (Log evidence: Workers 3 and 7
+        # in 14:20:05 backend_main.log both reported Slots assigned: [3],
+        # but slot 3 is never reachable by the feed-routing formula in
+        # feed_manager.start_feed, so neither produced any METRICS line.)
+        if not slots:
+            logger.warning(
+                f"Refusing to spawn InferenceWorker-{worker_id}: no slots "
+                f"assigned. _slot_to_worker={self._slot_to_worker}."
+            )
+            return
+
         cmd_q = RedisQueue(f'worker_cmd_{worker_id}', maxsize=100)
-        
+
         # Clear any leftover commands from a previous worker with the same ID
         try:
             while True:

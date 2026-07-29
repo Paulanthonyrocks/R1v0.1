@@ -461,7 +461,12 @@ performance:
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
   image_gpu_acceleration: true
-  inference_pool_size: 8
+  # Pool size = number of distinct slots, so every worker owns exactly one
+  # slot and there is no modulo collision or fan-out reuse (was 8; raised to
+  # 24 so per-feed inference throughput ≈ 12 fps vs ingestion 8 fps, closing
+  # the drop-rate gap seen in backend_main.log 14:20:05 where 8 workers ran
+  # at ~0.5 fps each against 3 feeds at 8 fps).
+  inference_pool_size: 24
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
   # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
