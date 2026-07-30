@@ -968,13 +968,17 @@ export class WebSocketClient implements IWebSocketClient {
                 }
             }
         } else {
-            console.debug(`[WebSocketClient ${this.instanceId}] No scope provided for ${type} message`);
+            if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+                console.debug(`[WebSocketClient ${this.instanceId}] No scope provided for ${type} message`);
+            }
         }
 
         // Handle Unscoped Listeners (except for VIDEO_FRAME, handled above)
         const unscopedListeners = this.listeners.get(type);
         if (unscopedListeners) {
-            console.debug(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
+            if (typeof window !== 'undefined' && (window as any).__WS_DEBUG_SUBSCRIBES__) {
+                console.debug(`[WebSocketClient ${this.instanceId}] Notifying ${unscopedListeners.size} unscoped listeners for ${type}`);
+            }
             unscopedListeners.forEach((listener) => {
                 try {
                     (listener as MessageListener<T>)(data);

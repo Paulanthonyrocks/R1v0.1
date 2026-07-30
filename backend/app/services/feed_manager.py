@@ -697,7 +697,7 @@ class FeedManager:
                 except Exception:
                     pass
 
-    async def _wait_for_workers_ready(self, expected_count: int, timeout: float = 60.0):
+    async def _wait_for_workers_ready(self, expected_count: int, timeout: float = 120.0):
         """Wait until all expected inference workers have signaled readiness in Redis."""
         if expected_count <= 0:
             return
