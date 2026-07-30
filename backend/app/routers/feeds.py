@@ -310,6 +310,31 @@ async def stop_all_feeds(
         raise OperationFailed(detail=f"Failed to stop all feeds: {e}")
 
 
+@router.post(
+    "/start-all",
+    response_model=APIResponse[StandardResponse],
+    summary="Start All Stopped or Error Feeds",
+)
+async def start_all_feeds(
+    fm: FeedManager = Depends(get_feed_manager),
+    current_user: User = Depends(get_current_admin),
+) -> APIResponse[StandardResponse]:
+    """
+    Endpoint to start all feeds that are currently stopped or in error. Requires authentication.
+    Mirrors /stop-all. Agents allowed at WS level still need admin for this bulk REST path,
+    since a single call can spin up N workers at once.
+    """
+    logger.info(
+        f"Admin user {current_user.username} attempting to start all feeds."
+    )
+    try:
+        await fm.start_all_feeds()
+        return APIResponse.success(message="Starting all stopped/error feeds initiated.")
+    except Exception as e:
+        logger.error(f"Failed to start all feeds: {e}", exc_info=True)
+        raise OperationFailed(detail=f"Failed to start all feeds: {e}")
+
+
 @router.delete(
     "/{feed_id}",
     status_code=status.HTTP_204_NO_CONTENT,

@@ -263,12 +263,25 @@ async def message_receiver(
                     cached_role = connection_manager.get_user_role(client_id)
                     user_id = connection_manager.client_id_to_user_id.get(client_id)
                     user_role = await get_server_role(user_id, fallback=cached_role)
-                    if user_role != "admin":
-                        logger.warning(f"Unauthorized feed control attempt by {client_id} (role: {user_role})")
+
+                    # UPDATE_FEED_CONFIG is admin-only because it rewrites per-feed
+                    # model + detection settings. The other three (start / stop /
+                    # restart) are agency-or-above so they match the surveillance
+                    # page guard and don't silently drop agency users' clicks.
+                    if msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
+                        required_role = "admin"
+                    else:
+                        required_role = "agency"
+                    role_rank = {"viewer": 0, "agency": 1, "admin": 2}
+                    if role_rank.get(user_role, -1) < role_rank.get(required_role, 99):
+                        logger.warning(
+                            f"Unauthorized {msg_type} attempt by {client_id} "
+                            f"(role: {user_role}, required: {required_role})"
+                        )
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": "Unauthorized: Admin privileges required for feed control."}
+                                data={"message": f"Unauthorized: {required_role.capitalize()} privileges required for {msg_type}."}
                             ).model_dump_json(),
                             client_id,
                             priority=MessagePriority.HIGH

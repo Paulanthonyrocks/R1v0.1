@@ -25,15 +25,23 @@ const SurveillancePage = () => {
   }, [feeds, searchQuery]);
 
   const handleStartAll = () => {
-    feeds.forEach(f => {
-      if (f.status === 'stopped' || f.status === 'error') startFeed(f.feed_id);
-    });
+    const eligible = feeds.filter(f => f.status === 'stopped' || f.status === 'error');
+    if (eligible.length === 0) {
+      console.warn('[Surveillance] Global Start: no feeds in stopped or error state.');
+      return;
+    }
+    eligible.forEach(f => startFeed(f.feed_id));
   };
 
   const handleStopAll = () => {
-    feeds.forEach(f => {
-      if (f.status === 'running' || f.status === 'starting') stopFeed(f.feed_id);
-    });
+    const eligible = feeds.filter(f =>
+      f.status === 'running' || f.status === 'starting' || f.status === 'stopping'
+    );
+    if (eligible.length === 0) {
+      console.warn('[Surveillance] Global Stop: no feeds in running, starting, or stopping state.');
+      return;
+    }
+    eligible.forEach(f => stopFeed(f.feed_id));
   };
 
   const renderContent = () => {

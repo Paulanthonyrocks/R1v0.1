@@ -1396,6 +1396,29 @@ class FeedManager:
 
         await self._broadcast_kpi_update()
 
+    async def start_all_feeds(self):
+        """Start all feeds currently in stopped or error state. Mirrors stop_all_feeds."""
+        logger.info("Starting all stopped/error feeds.")
+        async with self._lock:
+            feeds_to_start = [
+                fid for fid, entry in self.process_registry.items()
+                if entry["status"] in [
+                    FeedOperationalStatusEnum.STOPPED,
+                    FeedOperationalStatusEnum.ERROR,
+                ]
+            ]
+
+            if feeds_to_start:
+                for fid in feeds_to_start:
+                    try:
+                        await self._start_feed_internal(fid)
+                        # Broadcast update for each feed so frontend sees the state change
+                        await self._broadcast_feed_update(fid)
+                    except Exception as e:
+                        logger.error(f"Error starting feed {fid}: {e}")
+
+        await self._broadcast_kpi_update()
+
     async def request_snapshot(self, feed_id: str, incident_id: str):
         """Sends a command to the worker to save a high-res snapshot."""
         async with self._lock:
