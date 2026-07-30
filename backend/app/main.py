@@ -51,6 +51,11 @@ from app.routers import (
 logger = logging.getLogger("main")
 BASE_DIR = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = BASE_DIR / "data" / "snapshots"
+# Defensive: a prior deploy may have left a regular file at this path
+# (e.g. a stale snapshot blob written before the dir was expected), which
+# would make mkdir raise NotADirectoryError on every boot. Clear it.
+if SNAPSHOT_DIR.exists() and not SNAPSHOT_DIR.is_dir():
+    SNAPSHOT_DIR.unlink()
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
