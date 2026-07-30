@@ -205,9 +205,14 @@ class FeedManager:
             restart_callback=self.restart_feed
         )
 
-        self._initial_inference_pool_size = (
-            self.config.get("performance", {}).get("inference_pool_size", 2)
-        )
+        # Use _resolve_pool_size so this fallback chain matches the rest of
+        # the codebase: performance.inference_pool_size first, then
+        # inference.num_workers, then the hard default of 2. Reading
+        # inference_pool_size directly here caused a divergence where a
+        # config that set only inference.num_workers (legacy) would boot
+        # with pool_size=2 even when _resolve_pool_size elsewhere would
+        # return a different number.
+        self._initial_inference_pool_size = self._resolve_pool_size()
 
         self.initialize_shared_values()
         self._initialize_available_feeds()
@@ -292,6 +297,11 @@ class FeedManager:
         load. All pool-size reads now go through this helper so startup, the
         "pool empty -> auto-scale" path, and feed routing agree on one number.
         """
+        # self.config is a dict (converted from AppConfig via to_dict() in main.py).
+        # AppConfig.performance is PerformanceConfig (pydantic model). After
+        # model_dump() the performance fields survive because PerformanceConfig
+        # explicitly declares pin_inference_pool and inference_pool_size.
+        # The isinstance check is defensive for tests that pass a plain dict.
         perf = self.config.get("performance", {}) if isinstance(self.config, dict) else {}
         size = perf.get("inference_pool_size")
         if isinstance(size, int) and size >= 1:

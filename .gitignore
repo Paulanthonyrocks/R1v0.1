@@ -28,7 +28,7 @@ data
 .idx
 .cursor
 .firebase
-.gemini
+.hermes
 
 # Python cache files
 backend/__pycache__/

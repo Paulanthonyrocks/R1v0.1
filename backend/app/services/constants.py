@@ -17,6 +17,15 @@ class FeedManagerConstants:
     # collapses effective_workers = min(target_size, slot_count) == pool_size,
     # so every wid gets exactly one distinct slot and no overwrite is possible.
     # Memory cost: ~24 RedisStreamQueue instances vs 4, ~negligible.
+    #
+    # INVARIANT: SLOT_COUNT >= MAX_WORKERS. Verified empirically in
+    # investigation #2 (test_scale_pool_leak.py, scenario "Cold-start at max"):
+    # pool_size == slot_count yields 1:1 slot ownership with no orphans.
+    # DO NOT lower SLOT_COUNT without re-running the scale_pool integration
+    # tests -- oscillating scale_pool calls under pool_size > slot_count
+    # cause step 4 to leave workers stranded with stale slot ownership.
+    # If you must lower it, keep pin_inference_pool: true so scale_pool's
+    # early-return at line 102 keeps the bug unreachable.
     SLOT_COUNT = 24
     MIN_WORKERS = 1
     MAX_WORKERS = 24

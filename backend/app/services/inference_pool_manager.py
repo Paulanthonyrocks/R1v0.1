@@ -159,13 +159,39 @@ class InferencePoolManager:
 
         # 3. Spawn new workers on scale-up. spawn_worker reads slots fresh
         #    from _slot_to_worker, so new workers get correct ownership.
+        #
+        #    CRITICAL: when target_size > slot_count (oversubscribed pool),
+        #    we CANNOT give every new wid a distinct slot. Previously the
+        #    loop assigned slot s to wid N if (s % effective_workers ==
+        #    N % effective_workers), which OVERWROTE a survivor's slot
+        #    claim mid-iteration. Survivors whose slot got stolen ended
+        #    up with empty sets; step 4 detected the change and tried
+        #    to respawn them, but patch 1 (orphan gate) refused because
+        #    their new set was empty -- leaving the worker dead.
+        #
+        #    Fix: prefer an UNOWNED slot for the new worker. Only fall
+        #    back to the modulo formula if every slot is already taken.
+        #    This preserves the invariant "every alive worker owns at
+        #    least one slot" regardless of pool_size vs slot_count.
         for wid in range(target_size):
             if wid not in self._inference_pool:
+                claimed = False
+                # First pass: any unowned slot works
                 for slot in range(self.slot_count):
-                    if self._slot_to_worker.get(slot, -1) == wid:
-                        continue
-                    if (slot % effective_workers) == (wid % effective_workers):
+                    if slot not in self._slot_to_worker:
                         self._slot_to_worker[slot] = wid
+                        claimed = True
+                        break
+                # Second pass: fall back to the modulo formula (oversubscribed)
+                if not claimed:
+                    for slot in range(self.slot_count):
+                        if self._slot_to_worker.get(slot, -1) == wid:
+                            claimed = True
+                            break
+                        if (slot % effective_workers) == (wid % effective_workers):
+                            self._slot_to_worker[slot] = wid
+                            claimed = True
+                            break
                 self.spawn_worker(wid)
 
         # 4. Respawn surviving workers whose slot set CHANGED so they actually
@@ -174,6 +200,13 @@ class InferencePoolManager:
         #    the reassignment. We only restart workers that existed before this
         #    call AND whose set changed -- freshly-spawned workers (step 3) are
         #    already correct and must NOT be double-spawned.
+        #
+        #    ALSO: respawn any survivor whose new slot set is EMPTY (orphaned).
+        #    This handles the case where a worker's slot was reassigned to a
+        #    newcomer and the survivor was left with nothing to drain. Previously
+        #    such a worker would sit alive in the pool consuming a CUDA context
+        #    but producing zero frames. With the new step-3 logic (prefer unowned
+        #    slots) this is rare, but the respawn gate is a defense-in-depth.
         new_slot_sets = {
             wid: {s for s, w in self._slot_to_worker.items() if w == wid}
             for wid in self._inference_pool
@@ -181,11 +214,17 @@ class InferencePoolManager:
         for wid in list(self._inference_pool):
             if wid not in old_slot_sets:
                 continue  # spawned fresh above; correct as-is
-            if old_slot_sets[wid] != new_slot_sets.get(wid):
-                logger.info(
-                    f"Scale: worker {wid} slot set changed "
-                    f"{sorted(old_slot_sets[wid])} -> {sorted(new_slot_sets.get(wid, set()))}; respawning."
-                )
+            new_set = new_slot_sets.get(wid, set())
+            if old_slot_sets[wid] != new_set or not new_set:
+                if not new_set:
+                    logger.warning(
+                        f"Scale: worker {wid} has no slots (orphaned) -> respawning."
+                    )
+                else:
+                    logger.info(
+                        f"Scale: worker {wid} slot set changed "
+                        f"{sorted(old_slot_sets[wid])} -> {sorted(new_set)}; respawning."
+                    )
                 p = self._inference_pool.pop(wid)
                 try:
                     p.terminate()
