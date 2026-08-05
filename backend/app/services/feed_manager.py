@@ -1476,7 +1476,7 @@ class FeedManager:
             source,
             feed_id,
             target_queue,
-            None,   # stop_event — worker checks Redis
+            None,   # stop_event (legacy parameter) — worker checks Redis keys
             self.config,
             entry.get("is_looped_feed", False),
             None,   # command_queue — handled via Redis
@@ -1485,6 +1485,17 @@ class FeedManager:
             entry.get("video_writer_queue").name
                 if entry.get("video_writer_queue") is not None
                 else None,
+            # New: per-feed Redis stop-key name. The parent already creates
+            # entry["stop_event"] = RedisEvent('feed_stop_' + feed_id) at
+            # start time (line ~1274). Before this plumbing, _terminate_resources
+            # would call stop_event.set() but the worker never read the key
+            # -- it was checking the GLOBAL signal:pipeline_stop only -- so
+            # graceful stop was a no-op and every per-feed termination fell
+            # through to SIGTERM after a full 1.0s join wait. Pass the key
+            # name (not the RedisEvent handle, which isn't picklable across
+            # multiprocessing.Process) and let the worker check it via
+            # Redis EXISTS inside should_stop(), throttled to ~625ms cadence.
+            (lambda ev: getattr(ev, "name", None))(entry.get("stop_event")),
         )
 
         process = Process(
@@ -1552,14 +1563,38 @@ class FeedManager:
         if process and process.is_alive():
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, process.join, 1.0)
+                # Dropped join timeout from 1.0s -> 0.2s. Once the per-feed
+                # stop_event.set() above propagates to Redis (RedisEvent.set()
+                # is a synchronous SET), the ingestion worker's should_stop()
+                # exits its frame loop within ~150ms (observed in production
+                # logs: child sent end-of-stream 136ms after SIGTERM, with
+                # the Redis-key path being even faster). A 1.0s wait was
+                # 5-7x longer than necessary per feed, accumulating to ~24s
+                # of pure sleep across the 24-feed inference pool at every
+                # shutdown. If the worker is genuinely stuck (deadlocked in
+                # cv2 / frame_buffer), 200ms is still plenty for the SIGTERM
+                # escalation path below to do its job.
+                await loop.run_in_executor(None, process.join, 0.2)
 
                 if process.is_alive():
-                    logger.warning(f"Process {process.pid} for {feed_id} hung. Terminating.")
+                    # The per-feed stop_event was set but the worker didn't
+                    # break its loop within 200ms. Most likely causes:
+                    # blocked in cv2.VideoCapture.read() / SHM read / frame
+                    # encode. Escalate to SIGTERM -- the signal handler is
+                    # installed and will set the local flag immediately.
+                    logger.warning(
+                        f"Process {process.pid} for {feed_id} did not exit within "
+                        f"200ms after stop_event.set(); escalating to SIGTERM."
+                    )
                     process.terminate()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.2)
 
                     if process.is_alive():
+                        # SIGTERM didn't work either. Force-kill.
+                        logger.warning(
+                            f"Process {process.pid} for {feed_id} ignored SIGTERM. "
+                            f"Force-killing."
+                        )
                         process.kill()
             except Exception as e:
                 logger.error(f"Error joining process for {feed_id}: {e}")

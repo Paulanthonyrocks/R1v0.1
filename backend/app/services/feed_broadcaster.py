@@ -44,8 +44,15 @@ class FeedBroadcaster:
                 type=WebSocketMessageTypeEnum.FEED_STATUS_UPDATE,
                 data=FeedStatusUpdate(feed_status_data=status_data).model_dump(),
             )
-            # HIGH priority so status updates are never dropped by video-frame back-pressure
-            await self._connection_manager.broadcast(msg.model_dump_json(), priority=MessagePriority.HIGH)
+            # Demoted from HIGH -> NORMAL. Status updates were classified HIGH
+            # under the assumption they were actionable control messages, but
+            # they are pure telemetry (the frontend renders them, not acts on
+            # them) and the HIGH priority queue is bounded -- under a stalled
+            # sender they would queue up to maxsize and trigger 5s "queue
+            # full" drops on every KPI broadcast. NORMAL keeps them flowing
+            # through the same bounded backpressure as KPIs (which were
+            # already NORMAL) without putting them ahead of actionable frames.
+            await self._connection_manager.broadcast(msg.model_dump_json(), priority=MessagePriority.NORMAL)
         except Exception as e:
             logger.error(f"Error broadcasting feed update: {e}", exc_info=True)
 
@@ -59,8 +66,14 @@ class FeedBroadcaster:
                 type=WebSocketMessageTypeEnum.KPI_UPDATE,
                 data=kpi_data.model_dump(),
             )
+            # NORMAL priority -- KPI updates are sub-second telemetry that the
+            # frontend renders. The previous HIGH classification put them on
+            # the bounded asyncio.PriorityQueue and a stalled sender would
+            # block KPI delivery for 5s per message, accumulating "queue full"
+            # drops. NORMAL keeps them flowing without competing for the
+            # HIGH slot reserved for actionable control (CRITICAL/HIGH path).
             await self._connection_manager.broadcast_to_topic(
-                message.model_dump_json(), topic='kpi', priority=MessagePriority.HIGH
+                message.model_dump_json(), topic='kpi', priority=MessagePriority.NORMAL
             )
         except Exception as e:
             logger.error(f"Error broadcasting KPI update: {e}", exc_info=True)

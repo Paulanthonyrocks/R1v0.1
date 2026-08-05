@@ -29,6 +29,7 @@ def ingestion_worker(
     frame_buffer: Any = None,
     pipeline_pressure: Any = None,
     video_writer_queue_name: Optional[str] = None,
+    feed_stop_key: Optional[str] = None,
 ):
     """
     Lightweight process that captures frames and pushes them to a central queue.
@@ -59,6 +60,16 @@ def ingestion_worker(
     # NOTE: stop_event is always None for ingestion workers (FeedManager passes
     # None and relies on the Redis key / signals), so a bare `stop_event.is_set()`
     # check would never break the loop — this helper closes that hole.
+    #
+    # feed_stop_key (NEW): the per-feed RedisEvent key name FeedManager passes
+    # in at start time (e.g. "event:feed_stop_Feed_1_sample_traffic.mp4").
+    # When FeedManager.stop_feed → _terminate_resources calls
+    # stop_event.set() on the parent's RedisEvent, the underlying Redis SET
+    # fires immediately. Before this plumbing the key was created and set
+    # but never read by the worker, so every per-feed termination fell through
+    # to SIGTERM after a full 1.0s join wait — observable in production as
+    # "Process N for Feed_X hung. Terminating." for every feed at shutdown
+    # even though the worker responded to SIGTERM in 3-140ms.
     signal_stop = {"flag": False}
 
     def should_stop() -> bool:
@@ -67,8 +78,16 @@ def ingestion_worker(
         if stop_event and getattr(stop_event, "is_set", lambda: False)():
             return True
         try:
-            if redis_client and redis_client.exists("signal:pipeline_stop"):
-                return True
+            if redis_client:
+                if redis_client.exists("signal:pipeline_stop"):
+                    return True
+                # Per-feed key check — set by the parent's stop_event.set()
+                # in _terminate_resources. Cheap EXISTS (~0.1ms local Redis)
+                # but we throttle below so we don't hit Redis 8-15 times/sec
+                # per feed (3 feeds × 24 slots = 72 redundant EXISTS/sec at
+                # 8fps before this throttle).
+                if feed_stop_key and redis_client.exists(feed_stop_key):
+                    return True
         except Exception:
             pass
         return False
@@ -105,6 +124,17 @@ def ingestion_worker(
     # Throttle Redis pressure checks to avoid per-frame round-trips
     frame_check_counter = 0
     pressure_check_interval = 30
+
+    # Throttle the Redis-backed parts of should_stop() the same way. The
+    # local signal_stop["flag"] check stays free (zero-cost per frame);
+    # only the two Redis EXISTS calls (signal:pipeline_stop + feed_stop_key)
+    # are throttled. At 8fps with interval=5, worst-case stop detection
+    # latency is ~625ms — well below the 200ms grace window the parent
+    # now waits in _terminate_resources (was 1.0s). signal_stop still
+    # short-circuits on SIGTERM regardless of the throttle, so a hard
+    # SIGTERM-style kill lands within one frame.
+    stop_check_counter = 0
+    stop_check_interval = 5
 
     video_processing_cfg = config.get("video_processing", {})
     target_fps = video_processing_cfg.get("target_fps", 15)
@@ -326,9 +356,29 @@ def ingestion_worker(
 
     try:
         while True:
-            if should_stop():
+            # Throttled stop check. signal_stop["flag"] (set by the SIGTERM/
+            # SIGINT handler) is consulted every frame for instant hard-stop
+            # response; the two Redis EXISTS calls are skipped except every
+            # stop_check_interval frames.
+            nonlocal_stop_check = stop_check_counter % stop_check_interval == 0
+            if signal_stop["flag"]:
                 logger.info(f"[{feed_id}] Received stop signal. Terminating...")
                 break
+            if nonlocal_stop_check:
+                if stop_event and getattr(stop_event, "is_set", lambda: False)():
+                    logger.info(f"[{feed_id}] Received stop signal. Terminating...")
+                    break
+                try:
+                    if redis_client:
+                        if redis_client.exists("signal:pipeline_stop"):
+                            logger.info(f"[{feed_id}] Received pipeline stop signal. Terminating...")
+                            break
+                        if feed_stop_key and redis_client.exists(feed_stop_key):
+                            logger.info(f"[{feed_id}] Received per-feed stop signal. Terminating...")
+                            break
+                except Exception:
+                    pass
+            stop_check_counter += 1
 
             if command_queue:
                 try:

@@ -6,7 +6,7 @@ from enum import IntEnum
 from typing import Dict, Optional, List, Set, Union
 from collections import deque
 from fastapi import WebSocket
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocketState, WebSocketDisconnect
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum, PingData # Import necessary models
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,15 @@ class ConnectionManager:
         # sensible threshold.
         self._adaptive_payload_choice: Dict[str, str] = {}
         self._sampled_rtt_clients: Set[str] = set()
-        
+
+        # Per-client consecutive-send-failure counter. Used by _client_sender
+        # to abandon a stalled socket within ~15s instead of looping on a
+        # dead connection for the full 5s wait_for budget per message. The
+        # live counter lives on the manager (not on the websocket) because
+        # the websocket object can be replaced on reconnect. Reset to 0 on
+        # every successful send, cleaned up in _disconnect_unsafe.
+        self._csf: Dict[str, int] = {}
+
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
         self.ping_interval = ping_interval
@@ -183,14 +191,22 @@ class ConnectionManager:
             self.client_id_to_feeds.setdefault(client_id, set())
             self.last_pong_received_time[client_id] = time.time() # Initialize on connect
 
-            # Initialize sender queues and task with adaptive sizing and priority
+            # Initialize sender queues and task with adaptive sizing and priority.
+            # Headroom +50 (was +10): under a stalled sender, 10 messages of
+            # slack vanish in milliseconds at broadcast rate and the next
+            # send_personal_message call blocks on put() for the full 5s
+            # timeout. Wider headroom buys the sender enough time to detect
+            # the dead socket via the consecutive-failure counter and exit
+            # before reliable callers start timing out one by one.
             high_q_size = self._calculate_high_priority_queue_size(client_id)
             low_q_size = self._calculate_low_priority_queue_size(client_id)
-            
-            self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=high_q_size + 10)
+
+            self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=high_q_size + 50)
             self.low_priority_queues[client_id] = deque(maxlen=low_q_size)
             self.signal_queues[client_id] = asyncio.Queue()
             self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
+            # Reset consecutive-send-failure counter for the new socket.
+            self._csf[client_id] = 0
 
             # 2. Now clean up the OLD connection resources if they existed
             if old_ws:
@@ -250,6 +266,7 @@ class ConnectionManager:
         self.client_queues.pop(client_id, None)
         self.low_priority_queues.pop(client_id, None)
         self.signal_queues.pop(client_id, None)
+        self._csf.pop(client_id, None)
         
         # Topic cleanup
         topics = self.client_id_to_topics.pop(client_id, set())
@@ -350,24 +367,57 @@ class ConnectionManager:
                             try:
                                 prioritized_msg = high_priority_queue.get_nowait()
                                 message = prioritized_msg.message
-                                
+
                                 msg_count += 1
                                 high_msg_streak += 1
                                 sent_something = True
-                                
+
                                 if isinstance(message, bytes):
                                     await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                                 else:
                                     await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
                                 high_priority_queue.task_done()
+                                # Successful send — reset the consecutive-failure counter.
+                                self._csf[client_id] = 0
                             except asyncio.QueueEmpty:
                                 pass
-                            except (asyncio.TimeoutError, Exception) as e:
-                                if "close message has been sent" in str(e):
-                                    logger.info(f"[Sender {client_id}] Connection closed (detected during send). Exiting task.")
+                            except WebSocketDisconnect:
+                                # Peer closed cleanly. Exit immediately.
+                                logger.info(f"[Sender {client_id}] WebSocketDisconnect during high-priority send. Exiting task.")
+                                return
+                            except (asyncio.TimeoutError, RuntimeError, Exception) as e:
+                                err_str = str(e)
+                                if "close message has been sent" in err_str or "not connected" in err_str:
+                                    # Socket is definitively gone. Exit instead of
+                                    # looping on a dead connection.
+                                    logger.info(f"[Sender {client_id}] Connection closed (detected during high-priority send: {err_str}). Exiting task.")
                                     return
-                                logger.warning(f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. Dropping message.")
-                                high_priority_queue.task_done()
+                                # Live socket but the send just timed out (or raised
+                                # some other transient). Track consecutive failures
+                                # and force-close + exit after 3 in a row (~15s of
+                                # grace). Previously we logged and continued forever,
+                                # which let a single dead client hold up the queue
+                                # for 50s+ and trigger cascading "queue full" drops
+                                # on reliable callers.
+                                self._csf[client_id] = self._csf.get(client_id, 0) + 1
+                                if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                                    logger.warning(
+                                        f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
+                                        f"(state={websocket.client_state}); forcing close."
+                                    )
+                                    try:
+                                        await websocket.close(code=1011, reason="Send timeout")
+                                    except Exception:
+                                        pass
+                                    return
+                                logger.warning(
+                                    f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. "
+                                    f"Dropping message. ({self._csf[client_id]} consecutive)"
+                                )
+                                try:
+                                    high_priority_queue.task_done()
+                                except ValueError:
+                                    pass
 
                     # 2. Low-priority send logic
                     # We send a frame if:
@@ -379,18 +429,43 @@ class ConnectionManager:
                             msg_count += 1
                             sent_something = True
                             high_msg_streak = 0 # Reset streak after interleaving
-                            
+
                             if isinstance(message, bytes):
                                 await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
                             else:
                                 await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                            # Successful send — reset the consecutive-failure counter.
+                            self._csf[client_id] = 0
                         except IndexError:
                             pass
-                        except (asyncio.TimeoutError, Exception) as e:
-                            if "close message has been sent" in str(e):
-                                logger.info(f"[Sender {client_id}] Connection closed (detected during send). Exiting task.")
+                        except WebSocketDisconnect:
+                            logger.info(f"[Sender {client_id}] WebSocketDisconnect during low-priority send. Exiting task.")
+                            return
+                        except (asyncio.TimeoutError, RuntimeError, Exception) as e:
+                            err_str = str(e)
+                            if "close message has been sent" in err_str or "not connected" in err_str:
+                                logger.info(f"[Sender {client_id}] Connection closed (detected during low-priority send: {err_str}). Exiting task.")
                                 return
-                            logger.warning(f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. Dropping message.")
+                            # Same consecutive-failure policy as the high-priority
+                            # branch: 3 in a row -> force close + exit. Without
+                            # this, a single dead client on a slow tunnel can hold
+                            # up the LOW queue (bounded deque) and lose every frame
+                            # for ~50s before the runtime error stack finally fires.
+                            self._csf[client_id] = self._csf.get(client_id, 0) + 1
+                            if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                                logger.warning(
+                                    f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
+                                    f"(state={websocket.client_state}); forcing close."
+                                )
+                                try:
+                                    await websocket.close(code=1011, reason="Send timeout")
+                                except Exception:
+                                    pass
+                                return
+                            logger.warning(
+                                f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. "
+                                f"Dropping message. ({self._csf[client_id]} consecutive)"
+                            )
                     
                     # If we hit the streak limit but the low-priority queue was empty,
                     # we must reset the streak to allow high-priority messages to continue flowing.

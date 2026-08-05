@@ -30,6 +30,7 @@ router = APIRouter()
 async def message_receiver(
     websocket: WebSocket,
     initial_id: str,
+    assigned_id_holder: dict,
     connection_manager: ConnectionManager,
     feed_manager: FeedManager,
     rate_limiter: RateLimiterManager
@@ -85,6 +86,11 @@ async def message_receiver(
             # though ConnectionManager.connect usually just adds/replaces.
             await connection_manager.connect(websocket, assigned_id, user.username, user.role)
             client_id = assigned_id
+            # Publish the assigned id to the outer websocket_endpoint so its
+            # finally block can call ConnectionManager.disconnect with the
+            # correct key (the ConnectionManager's internal dicts are keyed by
+            # assigned_id, not by the URL-path id).
+            assigned_id_holder["id"] = assigned_id
             
             # Send AUTH_SUCCESS with the assigned client_id
             try:
@@ -357,8 +363,19 @@ async def message_receiver(
             except Exception as e:
                 logger.error(f"Error processing message from {client_id}: {e}", exc_info=True)
 
-    except WebSocketDisconnect:
-        logger.info(f"Client {client_id} disconnected normally.")
+    except (WebSocketDisconnect, RuntimeError) as e:
+        # Starlette's underlying receive path can raise RuntimeError instead
+        # of WebSocketDisconnect when the protocol state is invalid (e.g. a
+        # half-completed handshake where accept() never ran, or a peer that
+        # closed before the server accepted). Treat it as a clean disconnect
+        # at INFO level, not as an unexpected error with a full traceback —
+        # before this fix every WebSocket teardown on a slow tunnel logged an
+        # ERROR line + stacktrace, drowning the real signal in the logs.
+        msg = str(e)
+        if "WebSocket is not connected" in msg or "Need to call" in msg or "accept" in msg:
+            logger.info(f"Client {client_id} disconnected (socket closed before accept).")
+        else:
+            logger.info(f"Client {client_id} disconnected: {e}")
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
 
@@ -376,24 +393,33 @@ async def websocket_endpoint(
     """
     await websocket.accept()
 
-    # Use the client_id from the path as the temporary ID for tracking before authentication
-    temp_client_id = client_id
+    # Hold the *assigned* client_id (set by message_receiver after AUTH_SUCCESS)
+    # in a mutable container so the finally block below can read it. Using the
+    # FastAPI path-parameter `client_id` directly would be a shadow of the
+    # parameter, not a mutation — message_receiver's local `client_id =
+    # assigned_id` only rebinds its own scope.
+    assigned_id_holder: dict = {"id": None}
 
     try:
         try:
-            # Run the receiver loop.
-            await message_receiver(websocket, temp_client_id, connection_manager, feed_manager, rate_limiter)
+            # Run the receiver loop. Pass the URL-path id as initial; once
+            # AUTHENTICATE succeeds the holder will be updated.
+            await message_receiver(websocket, client_id, assigned_id_holder, connection_manager, feed_manager, rate_limiter)
 
         except Exception as e:
-            logger.error(f"Critical WebSocket error for {temp_client_id}: {e}", exc_info=True)
+            logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
         finally:
-            # Disconnect using the actual ID if it was assigned, otherwise the temp ID
-            # Note: message_receiver updates the connection_manager mapping.
-            # We must ensure we disconnect the correct session.
-            await connection_manager.disconnect(temp_client_id, websocket)
+            # Disconnect using the assigned id if auth completed, otherwise
+            # the URL-path id. The ConnectionManager's internal dicts are
+            # keyed by the assigned id (the path id is never inserted after
+            # AUTHENTICATE), so passing the wrong one used to skip the
+            # per-client dict cleanup, leaking _client_locks and leaving
+            # active_connections populated after teardown.
+            final_id = assigned_id_holder["id"] or client_id
+            await connection_manager.disconnect(final_id, websocket)
 
     except Exception as e:
-        logger.error(f"Error in websocket_endpoint for {temp_client_id}: {e}", exc_info=True)
+        logger.error(f"Error in websocket_endpoint for {client_id}: {e}", exc_info=True)
         try:
             await websocket.close(code=1011)
         except:
