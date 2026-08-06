@@ -74,14 +74,19 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   }, [streamId]);
 
   // Constants
-  const STATE_UPDATE_INTERVAL = 500; 
+  const STATE_UPDATE_INTERVAL = 500;
   // A frame GAP (backend backpressure / per-batch dedup) is normal and does NOT
   // mean the stream died. We must NOT blank the canvas or show "unavailable"
   // just because decoding stalled for a few seconds -- the last good frame should
   // stay painted (paused) and resume when frames return. Only a *sustained*
-  // outage (no decoded frame for 30s) warrants the unavailable overlay.
-  const FRAME_STALENESS_THRESHOLD = 30000; // 30s of total silence before flagging stale
-  const STALE_ERROR_AFTER = 3; // require 3 consecutive stale ticks (>=30s) to show error
+  // outage (no decoded frame for >=15s: 10s threshold + 2 consecutive 5s ticks)
+  // warrants the unavailable overlay. Tightened from 30s+3 because under heavy
+  // tunnel backpressure + low-priority deque drops, the old window let the
+  // overlay lag the actual freeze by ~90s, which made the user think the
+  // frontend was the problem when in fact the backend's bounded deque was
+  // already silently dropping all incoming frames.
+  const FRAME_STALENESS_THRESHOLD = 10000; // 10s of total silence before flagging stale
+  const STALE_ERROR_AFTER = 2; // require 2 consecutive stale ticks (10s+5s=15s) to show error
   const FPS_EMA_ALPHA = 0.1;
 
   // --- Sub-Hooks Implementation ---
