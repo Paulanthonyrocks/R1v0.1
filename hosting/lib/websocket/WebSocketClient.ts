@@ -730,10 +730,11 @@ export class WebSocketClient implements IWebSocketClient {
                     //   - (re)arms a per-feed watchdog that force-clears the counter
                     //     if the worker hasn't acked within PENDING_FRAME_TIMEOUT_MS,
                     //     so a permanently stalled worker can never deadlock the feed.
-                    if (!this.gateFrameForWorker(f_id)) {
-                        return; // Drop frame
-                    }
-
+                    // NOTE: gateFrameForWorker is called EXACTLY ONCE per frame.
+                    // The `videoWorker` branch below does NOT call it again; the
+                    // shared `if (true)` path (formerly line 733) handles the gate
+                    // for both binary and JSON frames.
+                    //
                     // CRITICAL FIX: always route VIDEO_FRAME through exactly ONE path.
                     // Previously, if the worker existed but `frameData.frame` was not
                     // a base64 string (e.g. an ImageBitmap already, or an ArrayBuffer
@@ -744,9 +745,6 @@ export class WebSocketClient implements IWebSocketClient {
                     // JSON into the worker when available; falling back to direct
                     // notification only when the worker has been terminated.
                     if (this.videoWorker) {
-                        if (!this.gateFrameForWorker(f_id)) {
-                            return; // congestion control: drop newest
-                        }
                         this.videoWorker.postMessage({
                             frameData: typeof frameData.frame === 'string' ? frameData.frame : null,
                             feed_id: f_id,

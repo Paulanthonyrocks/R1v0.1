@@ -440,6 +440,10 @@ const unsubscribeFromFeed = useCallback(() => {
       if (unsubscribeFrame) unsubscribeFrame();
       if (unsubscribeStatus) unsubscribeStatus();
       clearInterval(stalenessInterval);
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
       if (frameClosureTimeoutRef.current) {
         clearTimeout(frameClosureTimeoutRef.current);
       }

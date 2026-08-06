@@ -564,14 +564,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             tabIndex={0}
         >
             <div ref={containerRef} className="bg-black flex items-center justify-center relative group overflow-hidden">
-                {isLive ? (
-                    <canvas
-                        ref={canvasRef}
-                        className={cn("w-full h-full image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
-                        onClick={handleCanvasClick}
-                    />
-                ) : (
-                    <div className="absolute inset-0 flex items-center justify-center opacity-30">
+                <canvas
+                    ref={canvasRef}
+                    className={cn("w-full h-full image-rendering-pixelated filter-contrast-125", roiMode && "cursor-crosshair")}
+                    onClick={handleCanvasClick}
+                />
+                {!lastFrameRef.current && (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-30 pointer-events-none">
                         <Eye className="text-lcd-bg group-hover:text-lcd-text text-4xl" />
                     </div>
                 )}
