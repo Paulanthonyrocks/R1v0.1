@@ -60,6 +60,53 @@ def _wire_vehicles(vehicles: Optional[List[Dict[str, Any]]]) -> List[Dict[str, A
     return [{k: _to_native(v.get(k)) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
 
 
+def _deep_copy_for_ema(obj: Any) -> Any:
+    """Structural copy of metrics values suitable for EMA accumulation.
+
+    The previous shallow ``metrics.copy()`` aliased nested dicts (lane_occupancy,
+    queue_lengths) between ``ema_metrics`` and the live ``metrics`` arg, so any
+    in-place mutation on the EMA side would have corrupted the producer's frame.
+    Copy scalars as-is, dicts recursively (one level is enough for the current
+    metric shapes; nested-dict metrics are not produced), lists/tuples by value,
+    everything else via _to_native so numpy scalars don't leak into later code.
+    """
+    if isinstance(obj, dict):
+        return {k: _deep_copy_for_ema(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_deep_copy_for_ema(v) for v in obj]
+    return _to_native(obj)
+
+
+def _ema_merge(prev: Any, new: Any, alpha: float) -> Any:
+    """EMA-merge a single metrics field across frames.
+
+    - dict + dict: per-key EMA (so lane_occupancy[{lane_id}] smooths each lane
+      independently — the missing case that previously froze the Lane Metrics
+      widget on its first-frame dict).
+    - scalar + scalar: classic EMA, matches the original behaviour.
+    - mismatched types (e.g. dict -> scalar from a degenerate producer):
+      fall back to ``new`` so a malformed first frame can't poison subsequent
+      averages.
+    - lists / objects without a numeric type: replace atomically (no
+      meaningful EMA over heterogeneous lists).
+    """
+    if isinstance(prev, dict) and isinstance(new, dict):
+        merged = {}
+        for k, v in new.items():
+            merged[k] = _ema_merge(prev.get(k), v, alpha)
+        # Carry over keys that disappeared in the new frame so the EMA isn't
+        # reset every time a lane briefly goes empty.
+        for k, v in prev.items():
+            if k not in merged:
+                merged[k] = v
+        return merged
+    if isinstance(prev, bool) or isinstance(new, bool):
+        return new
+    if isinstance(prev, (int, float)) and isinstance(new, (int, float)):
+        return (1 - alpha) * prev + alpha * new
+    return _deep_copy_for_ema(new) if new is not None else prev
+
+
 class ResultProcessor:
     """
     Handles the reading and processing of inference results from the central queue.
@@ -355,19 +402,29 @@ class ResultProcessor:
                         if metrics.get("longitude") is None:
                             metrics["longitude"] = lon
             
-            # 1. Update registry metrics with Exponential Moving Average (EMA) to smooth spikes
+            # 1. Update registry metrics with Exponential Moving Average (EMA) to smooth spikes.
+            # The previous shape only smoothed scalars (isinstance(int,float)) and used a
+            # shallow .copy() — so dict-shaped metrics like lane_occupancy (Dict[int,float])
+            # and queue_lengths were frozen at their first-frame value forever, and the
+            # throttled re-broadcast below re-sent the same stale dict every second. From
+            # the frontend's POV (RealtimeStateContext JSON.stringify dedup), the panel
+            # either showed first-frame values or never appeared to update.
+            #
+            # The recursive merge below treats dicts as per-key EMA containers (so each
+            # lane_id inside lane_occupancy is smoothed independently), leaves lists and
+            # scalars untouched beyond their existing EMA path, and deep-copies on the
+            # initial assignment so mutating ema[k] never mutates the live metrics dict.
             if entry and metrics:
                 alpha = 1.0 / self.config.get("metrics_averaging_window_seconds", 300)
-                
+
                 if "ema_metrics" not in entry or entry["ema_metrics"] is None:
-                    entry["ema_metrics"] = metrics.copy()
+                    entry["ema_metrics"] = _deep_copy_for_ema(metrics)
                 else:
                     ema = entry["ema_metrics"]
                     for k, v in metrics.items():
-                        if isinstance(v, (int, float)):
-                            ema[k] = (1 - alpha) * ema.get(k, 0) + alpha * v
-                
-                entry["latest_metrics"] = entry["ema_metrics"].copy()
+                        ema[k] = _ema_merge(ema.get(k), v, alpha)
+
+                entry["latest_metrics"] = _deep_copy_for_ema(entry["ema_metrics"])
 
             # 1b. Re-push a lightweight FEED_STATUS_UPDATE on a fixed cadence so
             # the frontend's ``feeds[*].latest_metrics`` actually carries the

@@ -53,6 +53,17 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
+  experimental: {
+    // Next.js 16.3.0 reads `experimental.instantInsights.validationLevel`
+    // unconditionally in base-server.js:404 but does NOT default the object
+    // itself. Without this, every request 500s with:
+    //   TypeError: Cannot read properties of undefined (reading 'validationLevel')
+    // Pin to the schema default so we match Next.js's own dev probe worker
+    // (`use-cache-probe-worker.js:175`).
+    instantInsights: {
+      validationLevel: 'warning',
+    },
+  },
   /* other config options here */
 };
 

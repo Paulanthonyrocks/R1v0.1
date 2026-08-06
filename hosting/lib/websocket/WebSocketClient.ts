@@ -718,9 +718,19 @@ export class WebSocketClient implements IWebSocketClient {
 
                     if (!f_id) return;
 
-                    // Frame dropping mechanism to prevent worker congestion
-                    const pending = this.pendingFrames.get(f_id) ?? 0;
-                    if (pending >= this.MAX_PENDING_FRAMES) {
+                    // Frame backpressure: NEVER silently drop the newest frame on a
+                    // permanent gate. The previous `return` here pinned pendingFrames at
+                    // MAX_PENDING_FRAMES once the worker stalled and dropped 100% of
+                    // frames forever -> frozen canvas (rAF only repaints on index
+                    // change, so dropping pre-listener = no repaint, ever).
+                    //
+                    // Delegate to gateFrameForWorker, which:
+                    //   - reclaims the OLDEST in-flight slot when saturated so the
+                    //     newest frame always flows;
+                    //   - (re)arms a per-feed watchdog that force-clears the counter
+                    //     if the worker hasn't acked within PENDING_FRAME_TIMEOUT_MS,
+                    //     so a permanently stalled worker can never deadlock the feed.
+                    if (!this.gateFrameForWorker(f_id)) {
                         return; // Drop frame
                     }
 
