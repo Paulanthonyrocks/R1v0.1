@@ -30,10 +30,17 @@ function shouldAccept(feed_id, frame_index) {
 
     if (frame_index + 256 < state.highestAcceptedIndex) {
         // Loop / restart detected: reset and accept anything.
+        // TELEMETRY: log every loop/restart so we can distinguish "file is
+        // looping normally" from "worker lost state" in the console.
+        console.debug(`[Worker] Loop/restart reset for ${feed_id}: prev_highest=${state.highestAcceptedIndex}, new=${frame_index}`);
         state.highestAcceptedIndex = frame_index;
         return true;
     }
     if (frame_index <= state.highestAcceptedIndex) {
+        // TELEMETRY: silent drops here cause canvas freezes. Log every drop
+        // with the (prev, incoming) so the console shows the exact moment
+        // backpressure / out-of-order / duplicate frames are filtered.
+        console.debug(`[Worker] DROPPING stale or duplicate frame for ${feed_id}: incoming=${frame_index}, highest=${state.highestAcceptedIndex}`);
         return false; // Older (or duplicate) frame — drop.
     }
     state.highestAcceptedIndex = frame_index;

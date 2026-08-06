@@ -54,6 +54,10 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const lastSuccessfulFrameTimeRef = useRef<number>(performance.now());
   const lastProcessedIndexRef = useRef<number>(-1);
   const frameCountRef = useRef<number>(0);
+  // TELEMETRY: per-feed frame counter sampled on the 5s staleness tick so we
+  // can see exact delivery rate without flooding the console. Reset each tick
+  // so the printed number is "frames since last tick" -> "fps" when divided by 5.
+  const framesSinceLastTickRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
   const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -309,6 +313,8 @@ const unsubscribeFromFeed = useCallback(() => {
         lastProcessedIndexRef.current = (lastProcessedIndexRef.current || 0) + 1;
       }
       frameCountRef.current += 1;
+      // TELEMETRY: count frames-per-5s window for the staleness tick below.
+      framesSinceLastTickRef.current += 1;
 
       const now = performance.now();
 
@@ -373,6 +379,14 @@ const unsubscribeFromFeed = useCallback(() => {
     const stalenessInterval = setInterval(() => {
       const now = performance.now();
       const timeSinceLastFrame = now - lastSuccessfulFrameTimeRef.current;
+      // TELEMETRY: print per-feed delivery rate every 5s so we can see exactly
+      // when frames stop arriving. fps = frames_in_5s / 5. Includes the gap
+      // since the last successful frame so a stall is visible immediately.
+      const framesInWindow = framesSinceLastTickRef.current;
+      framesSinceLastTickRef.current = 0;
+      const deliveryFps = (framesInWindow / 5).toFixed(2);
+      const lastIdx = lastProcessedIndexRef.current;
+      console.debug(`[useVideoSocket ${hookId.current}] delivery-check feed=${currentStreamId} fps_in_last_5s=${deliveryFps} last_index=${lastIdx} gap_ms=${lastSuccessfulFrameTimeRef.current > 0 ? Math.round(timeSinceLastFrame) : 'n/a'}`);
       
       if (lastSuccessfulFrameTimeRef.current > 0 && 
           timeSinceLastFrame > FRAME_STALENESS_THRESHOLD) {

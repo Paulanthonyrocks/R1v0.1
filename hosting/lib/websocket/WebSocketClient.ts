@@ -885,6 +885,9 @@ export class WebSocketClient implements IWebSocketClient {
         if (pending >= this.MAX_PENDING_FRAMES) {
             // Saturated: reclaim the oldest in-flight slot so we can still
             // forward this (newest) frame instead of freezing on a backlog.
+            // TELEMETRY: log every reclaim so the console shows exactly when
+            // backpressure starts (the worker can't keep up with decode).
+            console.debug(`[WebSocketClient ${this.instanceId}] Backpressure reclaim for ${feedId}: was saturated at ${pending}, forwarding newest`);
             this.pendingFrames.set(feedId, pending - 1);
         }
         this.pendingFrames.set(feedId, (this.pendingFrames.get(feedId) ?? 0) + 1);
