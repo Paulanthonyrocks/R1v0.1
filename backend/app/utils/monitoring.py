@@ -2,7 +2,7 @@ import logging
 import time
 import psutil  # Needed for check_system_resources
 from typing import Dict, Any, Tuple, Optional, List
-from collections import deque, defaultdict
+from collections import deque, defaultdict, OrderedDict
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,26 @@ class TrafficMonitor:
         self.config = config
         self.tracked_vehicles: Dict[str, Dict[str, Any]] = {}
         self.lane_counts: Dict[int, int] = {}
-        self.seen_vehicle_ids = set()
+        # Bounded dedup set for cumulative counting (audit finding #3).
+        # Previously an unbounded `set()` that grew for the entire feed lifetime
+        # -> memory leak on long-running feeds. We keep a monotonic counter for
+        # the cumulative total (so the broadcast value never decreases) and use
+        # an insertion-ordered dict as a FIFO-bounded dedup set: once it exceeds
+        # `max_seen_ids` we evict the oldest entries. A vehicle whose id is
+        # evicted and later re-seen may be counted twice, but that is a rare,
+        # bounded inaccuracy -- far better than unbounded memory growth.
+        self.cumulative_vehicle_count: int = 0
+        self.max_seen_ids: int = int(config.get("traffic_monitor", {}).get("max_seen_ids", 200_000))
+        # OrderedDict: insertion order is preserved and popitem(last=False)
+        # evicts the oldest id -> FIFO-bounded dedup set (robust on all Pythons,
+        # unlike dict.popitem(last=...) which some builds reject).
+        self.seen_vehicle_ids: "OrderedDict[Any, None]" = OrderedDict()
+        # Local track_ids that have already been counted this feed. A vehicle is
+        # first seen under its local track_id (before ReID assigns a global id);
+        # once it gets a global_vehicle_id that is the SAME physical vehicle, so
+        # we must not count it again under the new id (audit fix: intra-feed
+        # double-count when track_id -> global_vehicle_id transition occurs).
+        self.seen_local_ids: "OrderedDict[Any, None]" = OrderedDict()
         self.session_metrics = {
             "speed_sum": 0.0,
             "speed_samples": 0,
@@ -114,7 +133,30 @@ class TrafficMonitor:
         for track_id, data in vehicles.items():
             # Use global ID if available for unique counting, otherwise fallback to local track_id
             unique_id = data.get("global_vehicle_id") or track_id
-            self.seen_vehicle_ids.add(unique_id)
+            gid = data.get("global_vehicle_id")
+
+            if gid:
+                if track_id in self.seen_local_ids:
+                    # Already counted this physical vehicle under its local
+                    # track_id before ReID resolved the global id -> do NOT
+                    # count again; just record the global id for stability.
+                    self.seen_vehicle_ids[gid] = None
+                elif gid not in self.seen_vehicle_ids:
+                    self.cumulative_vehicle_count += 1
+                    self.seen_vehicle_ids[gid] = None
+                self.seen_local_ids[track_id] = None
+            else:
+                if track_id not in self.seen_local_ids:
+                    if track_id not in self.seen_vehicle_ids:
+                        self.cumulative_vehicle_count += 1
+                    self.seen_vehicle_ids[track_id] = None
+                    self.seen_local_ids[track_id] = None
+
+            # Bound memory: evict oldest ids once over cap (FIFO via insertion order)
+            while len(self.seen_vehicle_ids) > self.max_seen_ids:
+                self.seen_vehicle_ids.popitem(last=False)
+            while len(self.seen_local_ids) > self.max_seen_ids:
+                self.seen_local_ids.popitem(last=False)
             
             lane = data.get("lane", -1)
             if lane != -1:
@@ -223,7 +265,7 @@ class TrafficMonitor:
 
         return {
             "total_vehicles": current_vehicle_count,
-            "total_vehicles_cumulative": len(self.seen_vehicle_ids),
+            "total_vehicles_cumulative": self.cumulative_vehicle_count,
             "session_average_speed_kmh": round(session_avg_speed, 1),
             "session_congestion_level_percent": round(session_avg_congestion, 1),
             "session_average_congestion_score": round(session_avg_congestion_score, 1),

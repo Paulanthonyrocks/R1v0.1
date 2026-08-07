@@ -1811,10 +1811,23 @@ class FeedManager:
         global_avg_speed = (total_speed_sum / total_speed_count) if total_speed_count > 0 else 0.0
         global_congestion_index = total_congestion_sum / active_feeds_count
 
+        # Global distinct vehicle count (audit finding #2): summing per-feed
+        # `total_vehicles_cumulative` double-counts any vehicle seen in more
+        # than one feed (it owns one global_vehicle_id but is added to each
+        # feed's tally). The ReID manager's gallery is the authoritative
+        # system-wide unique-vehicle registry -- a vehicle seen across feeds
+        # keeps a single global_id -- so its size is the true distinct count.
+        # It is bounded by TTL + max_gallery_size, i.e. distinct vehicles within
+        # the retention window (not all-time). Falls back to the per-feed
+        # cumulative sum when the ReID manager has no entries (reid disabled).
+        reid_mgr = getattr(self, "_reid_manager", None)
+        global_distinct = reid_mgr.distinct_vehicle_count() if reid_mgr else 0
+        total_flow = global_distinct if global_distinct > 0 else int(total_vehicles_cumulative)
+
         kpi_data = GlobalRealtimeMetrics(
             timestamp=datetime.now(timezone.utc).isoformat(),
             metrics_source="aggregated_feeds",
-            total_flow=int(total_vehicles_cumulative),
+            total_flow=total_flow,
             average_speed_kmh=round(global_avg_speed, 1),
             congestion_index=round(global_congestion_index, 1),
             active_incidents_count=0,

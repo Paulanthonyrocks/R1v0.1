@@ -138,6 +138,18 @@ class GlobalReIDManager:
         with self._lock:
             return self.local_to_global.get(feed_id, {}).get(local_id)
 
+    def distinct_vehicle_count(self) -> int:
+        """Number of distinct global vehicle identities currently tracked.
+
+        This is the authoritative system-wide unique-vehicle count: a vehicle
+        seen in multiple feeds shares a single global_id here, so the size is
+        deduplicated across feeds (used by the KPI `total_flow`, audit #2).
+        Bounded by TTL + max_gallery_size, so it reflects distinct vehicles
+        within the retention window rather than all-time.
+        """
+        with self._lock:
+            return len(self.gallery_ids)
+
     def match_only(self, embedding: np.ndarray) -> Optional[str]:
         embedding = self._normalize(embedding)
         with self._lock:

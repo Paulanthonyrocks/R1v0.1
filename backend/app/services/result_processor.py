@@ -77,6 +77,21 @@ def _deep_copy_for_ema(obj: Any) -> Any:
     return _to_native(obj)
 
 
+# Metrics keys that are counters / identity values, not rate-like signals.
+# EMA-smoothing a monotonic counter (or an instantaneous headcount) makes the
+# broadcast value lag reality forever -- e.g. total_vehicles_cumulative only
+# ever asymptotes toward the true total and never catches up (~63% under-report
+# after 300 detect-frames, see audit finding #1). These keys must carry the
+# LATEST observed value instead of an EMA.
+_NON_SMOOTHED_METRIC_KEYS = frozenset({
+    "total_vehicles",             # instantaneous active headcount (snapshot, not a rate)
+    "total_vehicles_cumulative",  # monotonic ever-seen count (must never be smoothed)
+    "vehicles_per_lane",          # per-lane integer counts
+    "vehicle_type_counts",        # per-type integer counts
+    "high_density_lanes",         # list of lane ids
+})
+
+
 def _ema_merge(prev: Any, new: Any, alpha: float) -> Any:
     """EMA-merge a single metrics field across frames.
 
@@ -422,7 +437,13 @@ class ResultProcessor:
                 else:
                     ema = entry["ema_metrics"]
                     for k, v in metrics.items():
-                        ema[k] = _ema_merge(ema.get(k), v, alpha)
+                        # Counters / identity values bypass EMA and take the
+                        # latest value (audit finding #1): smoothing a monotonic
+                        # or snapshot count distorts the broadcast KPI forever.
+                        if k in _NON_SMOOTHED_METRIC_KEYS:
+                            ema[k] = _deep_copy_for_ema(v)
+                        else:
+                            ema[k] = _ema_merge(ema.get(k), v, alpha)
 
                 entry["latest_metrics"] = _deep_copy_for_ema(entry["ema_metrics"])
 
