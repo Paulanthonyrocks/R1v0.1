@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time # Import time for timestamping
 from enum import IntEnum
-from typing import Dict, Optional, List, Set, Union
+from typing import Dict, Optional, List, Set, Tuple, Union
 from collections import deque
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState, WebSocketDisconnect
@@ -59,12 +59,26 @@ class ConnectionManager:
         self.last_pong_received_time: Dict[str, float] = {} # New: Track last pong time
         self.client_latencies: Dict[str, float] = {}  # Track RTT for adaptive behavior
         self._client_locks: Dict[str, asyncio.Lock] = {}
-        
+
         # Output queues for backpressure management
         self.client_queues: Dict[str, asyncio.PriorityQueue] = {} # Now specifically for NORMAL+
         self.low_priority_queues: Dict[str, deque] = {}           # For LOW priority (video, etc.)
         self.signal_queues: Dict[str, asyncio.Queue] = {}         # Signals sender task
         self.client_tasks: Dict[str, asyncio.Task] = {}
+        # Per-client low-priority drop counter. Incremented in _enqueue_frame
+        # when the bounded deque rotates (was previously silent -- the dominant
+        # silent-drop site that masked the "video feed unavailable" freeze as
+        # a frontend bug when it was actually a transport backpressure issue).
+        self._low_drops: Dict[str, int] = {}
+        # Per-client per-feed throttle state. broadcast_to_feed_realtime_bytes
+        # uses _last_frame_ts[(client_id, feed_id)] to enforce a minimum gap
+        # between successive enqueues for that client+feed pair. Skipped frames
+        # are counted in _throttled_skips[(client_id, feed_id)] for telemetry.
+        # Combined with the deque drop counter, this gives us full visibility
+        # into every place a frame can be lost between result_processor and the
+        # websocket.
+        self._last_frame_ts: Dict[Tuple[str, str], float] = {}
+        self._throttled_skips: Dict[Tuple[str, str], int] = {}
 
         # Per-feed "first frames" tracking (LEGACY -- no longer used).
         #
@@ -267,6 +281,15 @@ class ConnectionManager:
         self.low_priority_queues.pop(client_id, None)
         self.signal_queues.pop(client_id, None)
         self._csf.pop(client_id, None)
+        self._low_drops.pop(client_id, None)
+        # Per-feed throttle state is keyed on (client_id, feed_id) -- drop
+        # every entry for this client so a reconnect starts with a clean slate.
+        for key in list(self._last_frame_ts.keys()):
+            if key[0] == client_id:
+                del self._last_frame_ts[key]
+        for key in list(self._throttled_skips.keys()):
+            if key[0] == client_id:
+                del self._throttled_skips[key]
         
         # Topic cleanup
         topics = self.client_id_to_topics.pop(client_id, set())
@@ -331,7 +354,7 @@ class ConnectionManager:
         high_priority_queue = self.client_queues.get(client_id)
         low_priority_queue = self.low_priority_queues.get(client_id)
         signal_queue = self.signal_queues.get(client_id)
-        
+
         if high_priority_queue is None or low_priority_queue is None or signal_queue is None:
             logger.error(f"[Sender {client_id}] Task exiting: Missing queues. HighQ: {bool(high_priority_queue)}, LowQ: {bool(low_priority_queue)}, SigQ: {bool(signal_queue)}")
             return
@@ -351,8 +374,26 @@ class ConnectionManager:
                     logger.info(f"[Sender {client_id}] WebSocket state is {websocket.client_state}. Exiting sender task.")
                     return
 
+                # Re-read the low-priority deque from the manager on every
+                # wake-up. _maybe_resize_low_priority_queue REPLACES the deque
+                # object when the client's RTT tier changes; the local binding
+                # captured at task start would then point at an orphaned deque
+                # that _enqueue_frame no longer appends to, and the sender
+                # would drain it once and then sit idle forever while frames
+                # piled into the new deque. That is the "backend broadcasts,
+                # frontend receives nothing" freeze.
+                low_priority_queue = self.low_priority_queues.get(client_id)
+                if low_priority_queue is None:
+                    logger.info(f"[Sender {client_id}] low_priority_queue gone; exiting sender task.")
+                    return
+
                 # Process queues until both are empty
                 while not high_priority_queue.empty() or low_priority_queue:
+                    # Same re-read inside the drain loop: a PONG can land (and
+                    # trigger a resize) between iterations.
+                    low_priority_queue = self.low_priority_queues.get(client_id)
+                    if low_priority_queue is None:
+                        return
                     if websocket.client_state != WebSocketState.CONNECTED:
                         logger.info(f"[Sender {client_id}] WebSocket state is {websocket.client_state}. Stopping sender loop.")
                         return
@@ -514,6 +555,46 @@ class ConnectionManager:
         elif latency_ms > 100:
             return 180   # was 60
         return 360       # was 120; ~2.5s of 3-feed video at 15fps per client
+
+    def _per_client_min_frame_interval(self, client_id: str) -> float:
+        """Minimum gap between successive per-feed enqueues for this client.
+
+        Returns the per-feed minimum interval (seconds) that broadcast_to_feed_realtime_bytes
+        enforces to prevent the bounded deque from silently rotating oldest
+        frames. The math targets sustained backpressure avoidance:
+
+        * LAN (<100ms RTT): the sender drains ~30fps per client, well above
+          ingest. We pass through every frame (interval = 0).
+        * Mixed (100-250ms): sender drains ~10fps. We cap at the sender
+          rate divided by the number of active feeds, defaulting to 2fps
+          per feed (interval = 500ms).
+        * Tunnel (>250ms): sender drains ~3-4fps over a slow tunnel. We cap
+          at 1fps per feed (interval = 1000ms). Three feeds * 1fps = 3fps,
+          which the sender can keep up with over a 250ms-RTT link.
+
+        The cap is ALWAYS PER-FEED: a high-latency client still gets the
+        latest frame from each feed at its tier rate, just not every frame.
+        The deque then holds only what the sender can actually transmit,
+        eliminating the silent-rotate drop path entirely.
+
+        Returns 0 to disable throttling (LAN clients).
+        """
+        # No REAL PONG sample yet -> pass through the first burst. The
+        # connect-time default of 50ms in client_latencies is NOT a real
+        # sample; gate on _sampled_rtt_clients exactly like the adaptive size
+        # path (update_client_latency) so we never misread the default-50 as a
+        # low-latency link and throttle a fresh client into a 6fps cap before
+        # its first PONG lands. This also restores the intended first-burst
+        # free pass that the unreachable `latency_ms <= 0` branch used to
+        # (wrongly) promise.
+        if client_id not in self._sampled_rtt_clients:
+            return 0.0
+        latency_ms = self.client_latencies[client_id]
+        if latency_ms < 100:
+            return 0.0  # LAN: pass through every frame
+        if latency_ms < 250:
+            return 0.5  # Mixed: 2 fps per feed (3 feeds = 6 fps aggregate)
+        return 1.0      # Tunnel: 1 fps per feed (3 feeds = 3 fps, matches sender drain)
 
     def _maybe_resize_low_priority_queue(self, client_id: str) -> None:
         """Re-create the per-client low_priority deque when RTT crosses a size
@@ -683,7 +764,41 @@ class ConnectionManager:
             # LOW priority frames go to the deque for automatic dropping (via maxlen)
             if client_id in self.low_priority_queues:
                 try:
-                    self.low_priority_queues[client_id].append(data)
+                    low_q = self.low_priority_queues[client_id]
+                    # If the deque is full, the next .append() would silently drop
+                    # the OLDEST frame -- the precise opposite of what we want for
+                    # a real-time video stream (stale frame is worse than dropping
+                    # the *incoming* new frame). Explicitly popleft here so we
+                    # keep the freshest frame AND get a per-client drop counter
+                    # that surfaces backpressure in the backend log instead of
+                    # hiding it. Previously the bounded deque's silent rotation
+                    # was the dominant silent-drop site: with 24fps ingest vs
+                    # ~4fps sender drain over a slow tunnel, the deque filled
+                    # in ~3.75s and then silently rotated the oldest ~20fps
+                    # forever, making the user-visible freeze look like a
+                    # frontend bug when it was actually a transport queue issue.
+                    dropped = 0
+                    # deque(maxlen=N) always has maxlen as a concrete int at
+                    # runtime; coerce for the type checker.
+                    q_max = low_q.maxlen if low_q.maxlen is not None else 0
+                    while len(low_q) >= q_max:
+                        try:
+                            low_q.popleft()
+                            dropped += 1
+                        except IndexError:
+                            break
+                    low_q.append(data)
+                    if dropped > 0:
+                        # Aggregate per-client drop accounting so a sustained
+                        # backpressure event is visible in one line, not 1000.
+                        self._low_drops[client_id] = self._low_drops.get(client_id, 0) + dropped
+                        if dropped > 10 or self._low_drops[client_id] % 100 < dropped:
+                            logger.warning(
+                                f"[CONN_MGR] low_priority_queue saturated for {client_id}: "
+                                f"dropped {dropped} oldest frames (total_drops={self._low_drops[client_id]}, "
+                                f"deque_size={len(low_q)}/{q_max}, rtt={self.client_latencies.get(client_id)}ms). "
+                                f"Sender is draining slower than ingest; consider lowering video_output.fps."
+                            )
                     if client_id in self.signal_queues:
                         self.signal_queues[client_id].put_nowait(True)
                 except Exception as e:
@@ -717,16 +832,47 @@ class ConnectionManager:
         Broadcast binary frame to subscribers.
         LOW priority frames are routed to the low_priority_queue (deque) for automatic dropping.
         High priority (initial frames) go to the client_queue.
+
+        Per-client rate gating: for high-latency clients (RTT > 250ms), the
+        sender drains slower than ingest, so we'd silently drop ~80% of frames
+        in the bounded deque (see _enqueue_frame drop counter). Instead of
+        filling the deque with frames that will be rotated out, we rate-limit
+        each client's per-feed enqueue so the deque only ever holds what the
+        sender can drain. LAN clients (RTT < 100ms) get every frame; tunnel
+        clients (RTT > 250ms) get the per-feed cap their RTT tier allows.
+
+        This is the rate-mismatch fix that completes the silent-freeze audit:
+        the deque telemetry now shows drops; this throttling eliminates them
+        for sustained backpressure while preserving the per-feed ordering
+        (we always push the LATEST frame the producer emitted, not a sampled
+        older one).
         """
-        logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes feed={feed_id} frame={frame_index} data_size={len(data)}")
         subscribed_clients = self.get_clients_for_feed(feed_id)
         if not subscribed_clients:
             logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping broadcast.")
             return
         priority = self._frame_priority(feed_id, frame_index)
-        if priority == MessagePriority.HIGH:
-            logger.debug(f"[CONN_MGR] Frame {frame_index} boosted to HIGH priority (first frames for {feed_id})")
+        now = time.time()
         for client_id in subscribed_clients:
+            # Per-client per-feed minimum interval. Picked to keep the deque
+            # below its RTT-tier maxlen even under sustained ingest.
+            min_interval = self._per_client_min_frame_interval(client_id)
+            if min_interval > 0:
+                last_ts = self._last_frame_ts.get((client_id, feed_id), 0.0)
+                if now - last_ts < min_interval:
+                    # Increment per-feed drop counter so sustained throttling
+                    # is visible in the same logging channel as the deque drops.
+                    key = (client_id, feed_id)
+                    self._throttled_skips[key] = self._throttled_skips.get(key, 0) + 1
+                    # Only log the first skip in a window (every 50) to avoid spam.
+                    if self._throttled_skips[key] == 1 or self._throttled_skips[key] % 50 == 0:
+                        logger.debug(
+                            f"[CONN_MGR] throttled-skip frame for {client_id}/{feed_id}: "
+                            f"interval={min_interval*1000:.0f}ms, since_last={(now-last_ts)*1000:.0f}ms, "
+                            f"total_skips={self._throttled_skips[key]}"
+                        )
+                    continue
+                self._last_frame_ts[(client_id, feed_id)] = now
             self._enqueue_frame(client_id, data, priority)
         logger.debug(f"[CONN_MGR] broadcast_to_feed_realtime_bytes completed for feed={feed_id} frame={frame_index}")
 
@@ -777,7 +923,25 @@ class ConnectionManager:
             logger.debug(f"[CONN_MGR] No subscribers for feed {feed_id}, skipping adaptive broadcast.")
             return
         priority = self._frame_priority(feed_id, frame_index)
+        now = time.time()
         for client_id in subscribed_clients:
+            # Same per-client rate gate as broadcast_to_feed_realtime_bytes --
+            # the adaptive path also pushes into the bounded deque, so without
+            # this gate the same silent-rotate freeze would surface here once
+            # adaptive_streaming is re-enabled.
+            min_interval = self._per_client_min_frame_interval(client_id)
+            if min_interval > 0:
+                last_ts = self._last_frame_ts.get((client_id, feed_id), 0.0)
+                if now - last_ts < min_interval:
+                    key = (client_id, feed_id)
+                    self._throttled_skips[key] = self._throttled_skips.get(key, 0) + 1
+                    if self._throttled_skips[key] == 1 or self._throttled_skips[key] % 50 == 0:
+                        logger.debug(
+                            f"[CONN_MGR] throttled-skip (adaptive) for {client_id}/{feed_id}: "
+                            f"interval={min_interval*1000:.0f}ms, total_skips={self._throttled_skips[key]}"
+                        )
+                    continue
+                self._last_frame_ts[(client_id, feed_id)] = now
             # Lock the size decision per client once we have a real PONG sample.
             # _sampled_rtt_clients (populated by update_client_latency) is the
             # authoritative signal; client_latencies alone is unreliable because

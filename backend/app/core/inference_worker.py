@@ -329,6 +329,35 @@ def inference_worker(
                 # drops all but the first frame, so force per-frame inference.
                 is_trt_engine = True
             else:
+                # TENSORRT ENGINE ABSENT -> we fall back to float32 PyTorch on
+                # the T4. This is the single biggest throughput lever in the
+                # system: a static-batch TensorRT engine (built by
+                # scripts/export_tensorrt.py on the GPU box, FP16 / imgsz=320 /
+                # batch=1) typically yields 5-10x the inference fps of raw
+                # PyTorch. Without it, inference runs at ~0.7-3 fps/worker
+                # while ingestion delivers 8 fps/feed, producing low/choppy
+                # video. This is expected on a fresh deploy (the .engine must
+                # be built ON the target GPU, which needs nvidia-tensorrt +
+                # CUDA), but we warn loudly so the gap is never silent.
+                #
+                # NOTE on the path trap (see §3a): the .engine is derived as
+                # Path(model_path).with_suffix(".engine"). That resolves
+                # correctly ONLY if model_path carries the "models/" prefix.
+                # Current config sets model_path: models/yolov8n.pt, so the
+                # lookup is "<root>/models/yolov8n.engine" and this warning is
+                # simply "build it on the box". If model_path were ever changed
+                # to a bare "yolov8n.pt", this derivation would silently look in
+                # "<root>/yolov8n.engine", never find the engine that export
+                # wrote to models/, and fall through to PyTorch forever with no
+                # error -- keep the "models/" prefix in config.yaml.
+                logger.warning(
+                    f"[Worker {worker_id}] TensorRT engine NOT found at {engine_path}. "
+                    f"Falling back to float32 PyTorch ({device}) -- expect ~0.7-3 fps/worker "
+                    f"vs 5-10x with a TRT engine. Build it on the GPU box: "
+                    f"python scripts/export_tensorrt.py (FP16, imgsz=320, batch=1). "
+                    f"Requires model_path to keep its 'models/' prefix so the "
+                    f".engine path resolves."
+                )
                 shared_model = YOLO(full_model_path)
                 is_trt_engine = False
 

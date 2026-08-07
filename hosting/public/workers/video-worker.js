@@ -40,7 +40,15 @@ function shouldAccept(feed_id, frame_index) {
         // TELEMETRY: silent drops here cause canvas freezes. Log every drop
         // with the (prev, incoming) so the console shows the exact moment
         // backpressure / out-of-order / duplicate frames are filtered.
-        console.debug(`[Worker] DROPPING stale or duplicate frame for ${feed_id}: incoming=${frame_index}, highest=${state.highestAcceptedIndex}`);
+        // Aggregate via a per-feed drop counter so a noisy reconnect doesn't
+        // flood the console -- only log on first drop in a window or when
+        // the drop rate crosses a threshold.
+        state.dropCount = (state.dropCount || 0) + 1;
+        const dropped = state.dropCount;
+        const highest = state.highestAcceptedIndex;
+        if (dropped === 1 || dropped % 50 === 0) {
+            console.debug(`[Worker] DROPPING stale or duplicate frame for ${feed_id}: incoming=${frame_index}, highest=${highest}, total_drops=${dropped}`);
+        }
         return false; // Older (or duplicate) frame — drop.
     }
     state.highestAcceptedIndex = frame_index;
@@ -146,14 +154,31 @@ self.onmessage = async function (e) {
 
             let state = processingState.get(f_id);
             if (!state) {
-                state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1 };
+                state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1, coalescedCount: 0, dropCount: 0 };
                 processingState.set(f_id, state);
             }
 
             if (!shouldAccept(f_id, metadata.frame_index)) {
                 return;
             }
-            
+
+            // TELEMETRY: detect coalesced (silently overwritten) frames. When a
+            // new frame arrives while a previous decode is in flight, we replace
+            // latestPayload with the NEW payload and the OLD payload is dropped.
+            // This is by-design per the worker docstring ("only the latest one is
+            // processed"), but a sustained high coalesce rate means the worker
+            // can't keep up with decode and the user sees a stuttering stream.
+            // Aggregate via a per-feed counter so we can see exactly when the
+            // worker becomes the bottleneck (vs the backend deque, which has its
+            // own counter).
+            if (state.isProcessing && state.latestPayload) {
+                state.coalescedCount = (state.coalescedCount || 0) + 1;
+                const c = state.coalescedCount;
+                if (c === 1 || c % 25 === 0) {
+                    console.debug(`[Worker] Coalesced incoming frame for ${f_id} (decode in flight): coalesced=${c}, incoming_index=${metadata.frame_index}, pending_index=${state.latestPayload.metadata.frame_index}`);
+                }
+            }
+
             state.latestPayload = {
                 binaryFrame: decoded,
                 frameData: null,
@@ -192,14 +217,23 @@ self.onmessage = async function (e) {
 
         let state = processingState.get(feed_id);
         if (!state) {
-            state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1 };
+            state = { isProcessing: false, latestPayload: null, highestAcceptedIndex: -1, coalescedCount: 0, dropCount: 0 };
             processingState.set(feed_id, state);
         }
 
         if (!shouldAccept(feed_id, metadata.frame_index)) {
             return;
         }
-        
+
+        // TELEMETRY: coalesced-frame detection (mirror of the binary path above).
+        if (state.isProcessing && state.latestPayload) {
+            state.coalescedCount = (state.coalescedCount || 0) + 1;
+            const c = state.coalescedCount;
+            if (c === 1 || c % 25 === 0) {
+                console.debug(`[Worker] Coalesced incoming frame for ${feed_id} (decode in flight): coalesced=${c}, incoming_index=${metadata.frame_index}, pending_index=${state.latestPayload.metadata.frame_index}`);
+            }
+        }
+
         state.latestPayload = {
             binaryFrame,
             frameData,
