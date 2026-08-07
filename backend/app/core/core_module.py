@@ -215,7 +215,10 @@ class CoreModule:
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
 
         # Session Metrics
-        self.speed_history: deque = deque(maxlen=300)  # 300 frames @ 1 FPS = 5 min
+        # 300 frames is NOT 5 minutes: the deque holds the most recent 300
+        # *processed* frames. At a typical inference rate of 15+ FPS that is
+        # ~20s of history; at 30 FPS it is ~10s. (Prior comment assumed 1 FPS.)
+        self.speed_history: deque = deque(maxlen=300)
         self.congestion_history: deque = deque(maxlen=300)
         self._homography_fallback_warned = False
 
@@ -675,6 +678,12 @@ class CoreModule:
                         if dt > 0:
                             dist = math.sqrt((curr_gx - prev_gx) ** 2 + (curr_gy - prev_gy) ** 2)
                             raw_speed = (dist / dt) * 3.6
+                            # Clamp raw_speed BEFORE it enters the EWMA (fix #6):
+                            # a single bad sample (e.g. a jumpy track after a long
+                            # occlusion gap) would otherwise seed the running average
+                            # and corrupt every subsequent smoothed value. The 180
+                            # km/h physical cap below is the final safety net.
+                            raw_speed = min(raw_speed, 180.0)
                             # Sanity cap: skip EWMA after long occlusion gaps
                             if dt > 2.0:
                                 track["speed"] = raw_speed

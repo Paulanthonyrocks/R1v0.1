@@ -98,6 +98,16 @@ class TrafficMonitor:
         self.congestion_speed_threshold: float = incident_cfg.get("congestion_speed_threshold", 20.0)
         self.stopped_threshold_kmh: float = config.get("stopped_speed_threshold_kmh", 5.0)
 
+        # Hard-braking gate. Operator-tunable via behavior_analysis.accel_threshold_mps2
+        # (audit fix #3): previously _detect_anomalies hard-coded -8.0 m/s², so the
+        # config value was silently ignored. A vehicle decelerating harder than this
+        # (more negative accel) is flagged as hard_braking. Default -8.0 preserves the
+        # prior behavior when the key is absent.
+        behavior_cfg = config.get("behavior_analysis", {})
+        self.hard_braking_accel_threshold_mps2: float = -abs(
+            behavior_cfg.get("accel_threshold_mps2", 8.0)
+        )
+
     def update_vehicles(self, vehicles: Dict[str, Dict[str, Any]]):
         self.tracked_vehicles = vehicles
         self.lane_counts.clear()
@@ -122,7 +132,7 @@ class TrafficMonitor:
         now = time.time()
         for v_id, data in vehicles.items():
             accel = data.get("acceleration", 0.0)
-            if accel < -8.0:
+            if accel < self.hard_braking_accel_threshold_mps2:
                 self.anomalies.append({
                     "type": "hard_braking",
                     "vehicle_id": v_id,
