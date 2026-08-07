@@ -53,6 +53,17 @@ class GlobalReIDManager:
         self.local_to_global: Dict[str, Dict[str, str]] = {}
         self.last_cleanup_time = time.time()
         self.last_sync_time = time.time()
+        # Throttle the FULL Redis re-sync (see _sync_from_redis). match_or_register
+        # requests a full sync whenever the in-memory gallery misses a vector AND
+        # the last full sync was >10s ago; without this floor, every cache miss on
+        # a cold/partially-warmed instance re-pulls the ENTIRE remote gallery
+        # (~1500-2000 ids each time) and vstacks it in again -- the observed
+        # "Syncing N new identities" storm (55 bursts in ~4 min) that floods the log
+        # and churns Redis with ~100k round-trips/run. Steady-state upkeep is owned
+        # by the pub/sub listener (_sync_single_id_from_redis); the full pull is a
+        # cold-start / catch-up path only and must not run more often than this.
+        self.full_sync_interval = self.reid_cfg.get("full_sync_interval_seconds", 30.0)
+        self.last_full_sync_time = 0.0  # force one full pull on first miss
         self.gallery_ids: List[str] = []
         self.gallery_matrix: Optional[np.ndarray] = None 
         
@@ -271,9 +282,18 @@ class GlobalReIDManager:
             self.local_to_global[feed_id][local_id] = global_id
 
         # 3. Network Sync (Outside Lock)
+        # A cache miss on a vector search requests a full re-sync, but we throttle
+        # the FULL pull to full_sync_interval_seconds: the pub/sub listener already
+        # keeps each instance's gallery warm incrementally, so re-pulling the
+        # entire remote gallery on every miss is what caused the sync storm. We
+        # still always honor a genuine miss via the incremental path -- only the
+        # expensive bulk re-pull is rate-limited. The recursion is preserved so a
+        # just-synced gallery gets a fresh match attempt.
         if sync_needed:
             self.last_sync_time = now
-            self._sync_from_redis()
+            if now - self.last_full_sync_time >= self.full_sync_interval:
+                self.last_full_sync_time = now
+                self._sync_from_redis()
             return self.match_or_register(feed_id, local_id, embedding, metadata, confidence=confidence)
 
         if sync_emb is not None:
@@ -384,7 +404,11 @@ class GlobalReIDManager:
             new_ids = [rid for rid in remote_ids if rid not in local_id_set]
             if not new_ids: return
             
-            logger.info(f"Syncing {len(new_ids)} new identities from Redis.")
+            # Only log when we actually pulled something new. Under the throttled
+            # full-sync this is now rare (the pub/sub path does steady-state
+            # upkeep), so the log line is informative rather than spam.
+            if new_ids:
+                logger.info(f"Syncing {len(new_ids)} new identities from Redis.")
             for gid in new_ids:
                 meta = self.redis.hgetall(f"reid:meta:{gid}")
                 if not meta: continue
