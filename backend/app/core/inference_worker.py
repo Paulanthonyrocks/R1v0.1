@@ -297,7 +297,19 @@ def inference_worker(
         try:
             logger.info(f"[Worker {worker_id}] Loading shared models...")
             root_dir = config.get("project_root_dir", "")
+            # Models live under <root>/backend/models/ (export_tensorrt.py writes
+            # the TensorRT engine there). project_root_dir defaults to the repo
+            # root (config.py:86), so a bare "models/..." path would resolve to
+            # <root>/models/... and miss the real <root>/backend/models/ dir.
+            # YOLO silently auto-downloads the .pt when the path is wrong, which
+            # hides the bug for the weights but exposes it for the .engine (which
+            # does NOT auto-download) -> the "engine NOT found" warning. Resolve
+            # backend-aware: prefer <root>/backend/<model_path> when the plain
+            # join doesn't exist. Mirrors main.py:215's path convention.
             full_model_path = str(Path(root_dir) / model_path)
+            backend_variant = str(Path(root_dir) / "backend" / model_path)
+            if not Path(full_model_path).exists() and Path(backend_variant).exists():
+                full_model_path = backend_variant
             use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
 
             try:
@@ -340,16 +352,15 @@ def inference_worker(
                 # be built ON the target GPU, which needs nvidia-tensorrt +
                 # CUDA), but we warn loudly so the gap is never silent.
                 #
-                # NOTE on the path trap (see §3a): the .engine is derived as
-                # Path(model_path).with_suffix(".engine"). That resolves
-                # correctly ONLY if model_path carries the "models/" prefix.
-                # Current config sets model_path: models/yolov8n.pt, so the
-                # lookup is "<root>/models/yolov8n.engine" and this warning is
-                # simply "build it on the box". If model_path were ever changed
-                # to a bare "yolov8n.pt", this derivation would silently look in
-                # "<root>/yolov8n.engine", never find the engine that export
-                # wrote to models/, and fall through to PyTorch forever with no
-                # error -- keep the "models/" prefix in config.yaml.
+                # NOTE on the path: engine_path is derived as
+                # Path(full_model_path).with_suffix(".engine"), where
+                # full_model_path is now resolved backend-aware (see the
+                # root_dir handling above). So when model_path = "models/...",
+                # engine_path resolves to "<root>/backend/models/<name>.engine"
+                # -- exactly where scripts/export_tensorrt.py writes it. This
+                # warning now means one of: (a) the .engine truly hasn't been
+                # built yet on this GPU box, or (b) project_root_dir is wrong.
+                # It is no longer a "models/ prefix" trap.
                 logger.warning(
                     f"[Worker {worker_id}] TensorRT engine NOT found at {engine_path}. "
                     f"Falling back to float32 PyTorch ({device}) -- expect ~0.7-3 fps/worker "
