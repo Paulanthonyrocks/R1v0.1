@@ -88,6 +88,12 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const FRAME_STALENESS_THRESHOLD = 10000; // 10s of total silence before flagging stale
   const STALE_ERROR_AFTER = 2; // require 2 consecutive stale ticks (10s+5s=15s) to show error
   const FPS_EMA_ALPHA = 0.1;
+  // Backward jump in frame_index larger than this means the source looped (or
+  // the feed restarted), not an out-of-order/stale frame. Every monotonic
+  // guard in the receive path must reset on it, otherwise the first loop
+  // permanently wedges that guard. Shared by handleFrame's
+  // lastProcessedIndexRef gate and the decoder onFrame gate.
+  const LOOP_RESET_BACKJUMP = 100;
 
   // --- Sub-Hooks Implementation ---
   const { decode } = useVideoDecoder({
@@ -96,11 +102,25 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
       // Skip vehicle data in minimal mode to reduce memory/GC pressure
       const vehiclesToStore = minimal ? null : frameVehicles;
       
-      if (index < (lastFrameRef.current?.index ?? -1)) {
-        if (image instanceof ImageBitmap) {
-          try { image.close(); } catch (e) {}
+      const previousIndex = lastFrameRef.current?.index ?? -1;
+      if (index < previousIndex) {
+        // A looped source wraps frame_index back toward 0. The upstream guards
+        // (video-worker's highestAcceptedIndex, handleFrame's
+        // lastProcessedIndexRef) BOTH reset their watermark on a large backward
+        // jump, but this one used to have no reset at all -- so after the first
+        // loop every post-wrap frame was dropped here forever. The canvas froze
+        // on the last pre-loop frame and lastSuccessfulFrameTimeRef stopped
+        // advancing, which tripped the staleness watchdog into
+        // "VIDEO FEED UNAVAILABLE" while ACCEPTED frames kept climbing in the
+        // console. Mirror the same backjump reset so a loop flows through.
+        if (previousIndex > LOOP_RESET_BACKJUMP && index < previousIndex - LOOP_RESET_BACKJUMP) {
+          console.debug(`[useVideoSocket ${hookId.current}] Loop wrap at decoder (prev=${previousIndex}, new=${index}); accepting new sequence`);
+        } else {
+          if (image instanceof ImageBitmap) {
+            try { image.close(); } catch (e) {}
+          }
+          return;
         }
-        return;
       }
 
       // Skip redundant decoding if same frame received (reconnect race)
@@ -274,7 +294,6 @@ const unsubscribeFromFeed = useCallback(() => {
         // never fires, lastProcessedIndex stays pinned high, and every wrapped
         // frame is dropped as stale forever -> the stream hangs while frames
         // keep arriving.
-        const LOOP_RESET_BACKJUMP = 100;
         if (
           lastProcessedIndexRef.current > LOOP_RESET_BACKJUMP &&
           data.frame_index < lastProcessedIndexRef.current - LOOP_RESET_BACKJUMP
