@@ -334,12 +334,34 @@ def inference_worker(
 
             if engine_path.exists():
                 logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
-                shared_model = YOLO(str(engine_path))
-                # TensorRT engines are shape-locked to the batch they were
-                # exported with (export_tensorrt.py builds batch=1). Feeding a
-                # multi-frame list to a static-batch engine errors or silently
-                # drops all but the first frame, so force per-frame inference.
-                is_trt_engine = True
+                try:
+                    # Attach the TRT engine via .load() on the always-present
+                    # .pt. Directly doing YOLO(str(engine_path)) raises "should
+                    # be a *.pt PyTorch model" on some ultralytics builds and on
+                    # engine/runtime version mismatches -- which used to take
+                    # the entire worker down (CRITICAL -> Exiting -> watchdog
+                    # respawn loop, never recovering). If the engine is corrupt
+                    # or version-incompatible we now fall back to FP32 PyTorch
+                    # and keep the worker alive instead of dying.
+                    shared_model = YOLO(full_model_path)
+                    shared_model.load(str(engine_path))
+                    # TensorRT engines are shape-locked to the batch they were
+                    # exported with (export_tensorrt.py builds batch=1). Feeding
+                    # a multi-frame list to a static-batch engine errors or
+                    # silently drops all but the first frame, so force per-frame
+                    # inference.
+                    is_trt_engine = True
+                    logger.info(f"[Worker {worker_id}] TensorRT engine attached successfully.")
+                except Exception as e:
+                    logger.warning(
+                        f"[Worker {worker_id}] TensorRT engine load FAILED: {e}. "
+                        f"Falling back to float32 PyTorch ({device}) -- expect "
+                        f"~0.7-3 fps/worker vs 5-10x with a working TRT engine. "
+                        f"Rebuild it on the GPU box: python scripts/export_tensorrt.py "
+                        f"(FP16, imgsz=320, batch=1)."
+                    )
+                    shared_model = YOLO(full_model_path)
+                    is_trt_engine = False
             else:
                 # TENSORRT ENGINE ABSENT -> we fall back to float32 PyTorch on
                 # the T4. This is the single biggest throughput lever in the
