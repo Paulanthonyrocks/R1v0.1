@@ -168,8 +168,6 @@ class CoreModule:
 
         calib_cfg = v_cfg.get("calibration", {})
         self.transformer = CoordinateTransformer(calib_cfg)
-        self.homography_matrix = None
-        self._update_homography(calib_cfg)
 
         # 4. State & Helpers
         self.reid_embedder = preloaded_reid or (
@@ -201,10 +199,19 @@ class CoreModule:
             )
 
         # 5. Behavior & Speed
-        self.pixels_per_meter = v_cfg.get("pixels_per_meter", 10.0)
-        self.ewma_alpha = b_cfg.get("speed_smoothing_factor", 0.3)
-        self.speed_limit = b_cfg.get("speed_limit_kmh", 60)
-        self.accel_threshold_mps2 = b_cfg.get("acceleration_threshold_mps2", 2.0)
+        # NOTE: these keys live under `behavior_analysis:` in config.yaml.
+        # A prior refactor read the WRONG key names (speed_limit_kmh /
+        # acceleration_threshold_mps2 / speed_smoothing_factor), so every one
+        # fell through to its default and silently ignored the operator-tuned
+        # values. The only behavioural knobs read correctly are
+        # stopped_speed_threshold_kmh (same name) and speed_limit (a
+        # backwards-compatible alias the .get() accepts).
+        # calibration_monitor.py has its OWN homography_matrix (local var) and
+        # is unaffected by the key names here.
+        self.pixels_per_meter = config.get("pixels_per_meter", 30)  # top-level key, default 30 (config.yaml)
+        self.ewma_alpha = b_cfg.get("ewma_alpha", 0.3)              # was 'speed_smoothing_factor' (nonexistent)
+        self.speed_limit = b_cfg.get("speed_limit", 60)             # was 'speed_limit_kmh' (nonexistent)
+        self.accel_threshold_mps2 = b_cfg.get("accel_threshold_mps2", 2.0)  # was 'acceleration_threshold_mps2'
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
 
         # Session Metrics
@@ -297,39 +304,6 @@ class CoreModule:
                 return cropped_frame, True, x_min, y_min
 
         return frame, False, 0, 0
-
-    def _update_homography(self, calibration_cfg: Dict, resolution: Optional[List[int]] = None):
-        """
-        Computes the perspective transformation matrix for distance and speed calculations.
-
-        Args:
-            calibration_cfg: Configuration containing image_points and world_points.
-            resolution: Optional explicit resolution [width, height] to use for scaling.
-        """
-        if not calibration_cfg or "image_points" not in calibration_cfg:
-            return
-
-        img_pts = np.array(calibration_cfg["image_points"], dtype=np.float32)
-        world_pts = np.array(calibration_cfg.get("world_points", []), dtype=np.float32)
-
-        if len(img_pts) < 4 or len(world_pts) < 4:
-            return
-
-        # Normalised points (0–1) need scaling to pixel coordinates
-        if np.max(img_pts) <= 1.0:
-            if resolution:
-                width, height = resolution
-            else:
-                v_cfg = self.config.get("vehicle_detection", {})
-                width, height = v_cfg.get("frame_resolution", [640, 480])
-            img_pts = img_pts * [width, height]
-
-        H, status = cv2.findHomography(img_pts, world_pts)
-        if H is None:
-            logger.warning(f"[{self.feed_id}] Homography computation failed – points may be degenerate.")
-            return
-        self.homography_matrix = H
-        logger.info(f"[{self.feed_id}] Homography matrix recalibrated.")
 
     def _init_ocr(self) -> bool:
         """
@@ -969,10 +943,12 @@ class CoreModule:
                 v_cfg_update = updates["vehicle_detection"]
                 self.confidence_threshold = v_cfg_update.get("confidence_threshold", self.confidence_threshold)
                 
-                # Recompute homography if resolution changed or calibration updated
+                # Recompute homography if resolution changed or calibration updated.
+                # The live calibration now lives only in self.transformer; the
+                # old self.homography_matrix mirror was dead (never read for
+                # speed). Drop the dead mirror call and keep the canonical one.
                 if "calibration" in v_cfg_update or res_changed:
                     calib_cfg = v_cfg_update.get("calibration", v_cfg.get("calibration", {}))
-                    self._update_homography(calib_cfg, resolution=res)
                     self.transformer.update_calibration(calib_cfg)
 
             if "ocr_engine" in updates:
