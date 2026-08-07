@@ -30,6 +30,7 @@ data
 .firebase
 .hermes
 
+backend/scripts
 # Python cache files
 backend/__pycache__/
 __pycache__/
