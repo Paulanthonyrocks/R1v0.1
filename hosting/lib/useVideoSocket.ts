@@ -535,11 +535,22 @@ const unsubscribeFromFeed = useCallback(() => {
       }
     }
 
-    // Skip expensive per-vehicle drawing on dashboard thumbnails
-    if (minimal) return;
+    // Minimal/thumbnail mode used to `return` here and skip ALL overlay
+    // drawing, which made bounding boxes vanish on the surveillance grid and
+    // dashboard tiles. We now keep drawing boxes (cheap) but skip the heavier
+    // per-vehicle label text + the corner metrics readout for performance.
+    const skipLabels = minimal;
 
     if (vehicles && showBoundingBoxes && vehicles.length > 0) {
-      const vehiclesToShow = showAllDetections ? vehicles : vehicles.filter(v => selectedVehicleIds.has(v.global_vehicle_id || v.vehicle_id));
+      // When nothing is selected, show every tracked vehicle so the feed is
+      // never blank on first load. Once the operator selects a vehicle AND
+      // "Show All Detections" is OFF, narrow the view to the selection only.
+      const vehiclesToShow = showAllDetections
+        ? vehicles
+        : vehicles.filter(v => {
+            const id = v.global_vehicle_id || v.vehicle_id;
+            return selectedVehicleIds.size === 0 || selectedVehicleIds.has(id);
+          });
 
       vehiclesToShow.forEach(vehicle => {
         const {
@@ -547,9 +558,6 @@ const unsubscribeFromFeed = useCallback(() => {
           class_name,
           speed,
           license_plate,
-          behavior,
-          is_wrong_way,
-          is_stopped,
           global_vehicle_id,
           vehicle_id
         } = vehicle;
@@ -568,7 +576,7 @@ const unsubscribeFromFeed = useCallback(() => {
             ctx.lineWidth = isSelected ? 3 : 2;
             ctx.strokeRect(x, y, width, height);
 
-            if (showVehicleDetails) {
+            if (showVehicleDetails && !skipLabels) {
               ctx.fillStyle = isSelected ? 'rgba(0, 255, 0, 0.3)' : 'rgba(255, 0, 0, 0.3)';
               ctx.font = '12px monospace';
               ctx.fillText(`${class_name} ${speed.toFixed(1)} km/h`, x, y - 10);
@@ -581,7 +589,7 @@ const unsubscribeFromFeed = useCallback(() => {
       });
     }
 
-    if (metrics && showVehicleDetails) {
+    if (metrics && showVehicleDetails && !skipLabels) {
       ctx.fillStyle = '#00ff00';
       ctx.font = '14px monospace';
       if (metrics.total_vehicles !== undefined) {

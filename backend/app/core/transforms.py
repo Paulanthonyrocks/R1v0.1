@@ -9,9 +9,43 @@ class CoordinateTransformer:
     def __init__(self, calibration_cfg: dict):
         self.homography_matrix = None
         self.inv_homography_matrix = None
-        
+        self.calibration_source = None  # 'config_pairs' | 'matrix_file' | 'none'
+
         if "image_points" in calibration_cfg and "world_points" in calibration_cfg:
             self._update_homography(calibration_cfg)
+            self.calibration_source = "config_pairs"
+        elif calibration_cfg.get("matrix_path"):
+            # A precomputed .npy homography can be loaded directly. This keeps
+            # config.yaml's `perspective_calibration.matrix_path` path usable
+            # without inline image/world point pairs.
+            try:
+                import numpy as np
+                m = np.load(calibration_cfg["matrix_path"])
+                self.homography_matrix = m
+                success, self.inv_homography_matrix = cv2.invert(m, cv2.DECOMP_SVD)  # noqa: matches existing call at line 111
+                if not success:
+                    self.inv_homography_matrix = None
+                    self.homography_matrix = None
+                else:
+                    self.calibration_source = "matrix_file"
+                    logger.info(f"Homography loaded from {calibration_cfg['matrix_path']}")
+            except Exception as e:
+                logger.warning(
+                    f"Calibration matrix_path '{calibration_cfg.get('matrix_path')}' "
+                    f"could not be loaded ({type(e).__name__}: {e}). "
+                    f"Speed will be reported as UNCALIBRATED."
+                )
+        else:
+            # No points, no matrix file: the feed cannot compute ground-plane
+            # speeds. Previously this failed silently and every vehicle reported
+            # speed=0.0, which then pinned congestion near 75/100 and made the
+            # KPI claim a gridlock that wasn't real. Make it loud + explicit.
+            logger.warning(
+                "Calibration config has neither image_points/world_points nor a "
+                "loadable matrix_path. Ground-plane speed will be UNCALIBRATED "
+                "(reported as null). Supply perspective_calibration points in "
+                "config.yaml or a valid matrix_path to enable km/h speed."
+            )
 
     def _update_homography(self, calibration_cfg: Dict):
         """Calculates the homography matrix to map image pixels to real-world ground coordinates.

@@ -89,6 +89,14 @@ _NON_SMOOTHED_METRIC_KEYS = frozenset({
     "vehicles_per_lane",          # per-lane integer counts
     "vehicle_type_counts",        # per-type integer counts
     "high_density_lanes",         # list of lane ids
+    # Speed/congestion calibration signals: these are None when the camera is
+    # uncalibrated. Smoothing a null against a previously numeric value would
+    # average "unknown" with "known" and produce a misleading in-between number,
+    # so always take the latest value verbatim.
+    "average_speed_kmh",
+    "session_average_speed_kmh",
+    "speed_uncalibrated",
+    "congestion_uncalibrated",
 })
 
 

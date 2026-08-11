@@ -1765,6 +1765,7 @@ class FeedManager:
         total_speed_count = 0
         total_congestion_sum = 0.0
         active_feeds_count = 0
+        uncalibrated_feeds_count = 0
 
         async with self._lock:
             for feed_id, entry in self.process_registry.items():
@@ -1779,16 +1780,26 @@ class FeedManager:
                     total_vehicles_active += v_active
                     total_vehicles_cumulative += metrics.get("total_vehicles_cumulative", v_active)
 
-                    avg_speed = metrics.get("session_average_speed_kmh") or metrics.get(
-                        "average_speed_kmh", 0.0
-                    )
-                    if avg_speed > 0:
+                    avg_speed = metrics.get("session_average_speed_kmh")
+                    if avg_speed is None:
+                        avg_speed = metrics.get("average_speed_kmh", 0.0)
+                    # Only count feeds that actually have a measurable (positive)
+                    # speed. A None/0 speed means "uncalibrated", which must NOT be
+                    # folded into the global average as if it were a real 0 km/h
+                    # reading -- that would silently drag the fleet average down
+                    # and hide the calibration gap.
+                    if avg_speed is not None and avg_speed > 0:
                         total_speed_sum += avg_speed
                         total_speed_count += 1
 
-                    congestion = metrics.get("session_average_congestion_score") or metrics.get(
-                        "congestion_score", 0.0
-                    )
+                    congestion = metrics.get("session_average_congestion_score")
+                    if congestion is None:
+                        congestion = metrics.get("congestion_score", 0.0)
+                    # If the congestion reading is itself flagged uncalibrated,
+                    # don't let it pollute the global congestion index either.
+                    if metrics.get("congestion_uncalibrated"):
+                        congestion = 0.0
+                        uncalibrated_feeds_count += 1
                     total_congestion_sum += congestion
                     active_feeds_count += 1
 
@@ -1832,10 +1843,15 @@ class FeedManager:
             congestion_index=round(global_congestion_index, 1),
             active_incidents_count=0,
             feed_statuses={"active": active_feeds_count, "total": len(self.process_registry)},
-            custom_metrics={"active_vehicles": total_vehicles_active},
+            custom_metrics={
+                "active_vehicles": total_vehicles_active,
+                "uncalibrated_feeds": uncalibrated_feeds_count,
+                "speed_calibrated": (active_feeds_count - uncalibrated_feeds_count) > 0,
+            },
         )
 
-        logger.info(f"[BROADCAST_KPI] Broadcasting KPI: feeds={active_feeds_count}, avg_speed={global_avg_speed:.1f}, congestion={global_congestion_index:.1f}")
+        calib_note = f" (uncalibrated_feeds={uncalibrated_feeds_count})" if uncalibrated_feeds_count else ""
+        logger.info(f"[BROADCAST_KPI] Broadcasting KPI: feeds={active_feeds_count}, avg_speed={global_avg_speed:.1f}, congestion={global_congestion_index:.1f}{calib_note}")
 
         await self.broadcaster.broadcast_kpi_update(kpi_data)
 

@@ -168,6 +168,17 @@ class CoreModule:
 
         calib_cfg = v_cfg.get("calibration", {})
         self.transformer = CoordinateTransformer(calib_cfg)
+        # If the transformer has no usable homography, ground-plane speed is
+        # impossible. Don't leave this silent -- the previous behavior reported
+        # speed=0.0 for every vehicle, which pinned congestion ~75/100 and made
+        # the KPI claim a gridlock that wasn't real. Surface it at startup.
+        if not self.transformer.is_calibrated:
+            logger.warning(
+                f"[{self.feed_id}] Camera UNCALIBRATED: no perspective homography "
+                f"available. Speed will be reported as UNCALIBRATED (null), not 0 "
+                f"km/h. Provide calibration image_points/world_points or a valid "
+                f"matrix_path in feed config to enable km/h speed."
+            )
 
         # 4. State & Helpers
         self.reid_embedder = preloaded_reid or (
@@ -366,7 +377,7 @@ class CoreModule:
         
         return initialized
 
-    def _pixel_based_speed(self, track: TrackData) -> float:
+    def _pixel_based_speed(self, track: TrackData) -> Optional[float]:
         """
         Calculates vehicle speed in km/h based on pixel-space velocity.
         Used as a fallback when ground-plane coordinates are unavailable.
@@ -375,14 +386,24 @@ class CoreModule:
             track: The track data containing 'vx' and 'vy'.
 
         Returns:
-            The calculated speed in km/h.
+            The calculated speed in km/h, or None if the fallback cannot
+            produce a meaningful value (uncalibrated camera with no populated
+            pixel velocity). Returning None (not 0.0) is deliberate: a 0.0 km/h
+            speed reads as "stopped in gridlock" and corrupts the congestion
+            KPI, whereas None is explicitly "unknown / uncalibrated".
         """
+        # The ground-plane path was unavailable (no homography) and the
+        # pixel-fallback needs vx/vy, which are never populated by the tracker
+        # in this codebase. In that uncalibrated state there is no honest
+        # speed to report -- return None rather than a fake 0.0.
+        if not self.transformer.is_calibrated and "vx" not in track and "vy" not in track:
+            return None
         vx = track.get("vx", 0.0)
         vy = track.get("vy", 0.0)
         pixel_speed = math.sqrt(vx ** 2 + vy ** 2)
         return (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
 
-    def _compute_congestion_score(self, vehicles: List[Dict], avg_speed: float) -> float:
+    def _compute_congestion_score(self, vehicles: List[Dict], avg_speed: Optional[float]) -> float:
         """
         Computes congestion score on a 0-100 scale.
         0 = free flow, 100 = jammed.
@@ -391,15 +412,25 @@ class CoreModule:
         (app/utils/monitoring.py) — same weights and scale — so the DB
         feed_metrics record and the live WebSocket/predictor feature agree
         (audit C4). Canonical: 0.7 * speed_factor + 0.3 * density_factor, x100.
-        """
-        free_flow_speed = self.speed_limit
-        speed_factor = 1.0 - (avg_speed / free_flow_speed) if free_flow_speed > 0 else 0.0
-        speed_factor = max(0.0, min(1.0, speed_factor))
 
+        When ``avg_speed`` is None (uncalibrated camera — speed unknowable),
+        the speed_factor term is dropped so congestion reflects DENSITY ONLY.
+        Crucially this does NOT default to a gridlock reading: without a speed
+        signal we cannot claim congestion either, so the score is explicitly
+        flagged uncalibrated by the caller rather than pinned near 75/100.
+        """
         density_factor = len(vehicles) / 100.0
         density_factor = max(0.0, min(1.0, density_factor))
 
-        congestion = (speed_factor * 0.7 + density_factor * 0.3) * 100.0
+        if avg_speed is None:
+            # No speed signal available: report density-only congestion with
+            # no speed contribution (rather than pretending gridlock).
+            congestion = density_factor * 0.3 * 100.0
+        else:
+            free_flow_speed = self.speed_limit
+            speed_factor = 1.0 - (avg_speed / free_flow_speed) if free_flow_speed > 0 else 0.0
+            speed_factor = max(0.0, min(1.0, speed_factor))
+            congestion = (speed_factor * 0.7 + density_factor * 0.3) * 100.0
         return round(congestion, 1)
 
     def _compute_feed_metrics(self, vis_tracks: Dict[str, TrackData]) -> Dict[str, Any]:
@@ -434,21 +465,43 @@ class CoreModule:
                 "vehicle_count": 0,
             }
 
-        speeds = [float(t.get("speed", 0.0)) for t in vehicles]
-        avg_speed = float(np.median(speeds))  # Robust to outliers
-        congestion = self._compute_congestion_score(vehicles, avg_speed)
+        valid_speeds = [t.get("speed") for t in vehicles]
+        speeds = [float(s) for s in valid_speeds if s is not None]
+        # If no vehicle has a calibrated speed (e.g. uncalibrated camera),
+        # report the average speed as None ("uncalibrated") rather than 0.0.
+        # A 0.0 avg speed would be interpreted as gridlock and pin the
+        # congestion KPI near 75/100 -- a fake-but-plausible number. None is
+        # the honest signal that speed simply isn't measurable here.
+        if speeds:
+            avg_speed = float(np.median(speeds))  # Robust to outliers
+            speed_uncalibrated = False
+        else:
+            avg_speed = 0.0
+            speed_uncalibrated = True
 
-        # Update session histories
-        self.speed_history.append(avg_speed)
+        # Congestion from a null speed must not silently read as free-flow OR
+        # as gridlock. When speed is uncalibrated we still have vehicle density,
+        # so compute the density component but flag the score as uncalibrated.
+        if speed_uncalibrated:
+            congestion = self._compute_congestion_score(vehicles, None)
+        else:
+            congestion = self._compute_congestion_score(vehicles, avg_speed)
+
+        # Update session histories (only record numeric avg speeds so the
+        # EMA session average isn't polluted by uncalibrated frames)
+        if not speed_uncalibrated:
+            self.speed_history.append(avg_speed)
         self.congestion_history.append(congestion)
 
         session_avg_speed = float(np.mean(self.speed_history)) if self.speed_history else 0.0
         session_avg_congestion = float(np.mean(self.congestion_history)) if self.congestion_history else 0.0
 
         return {
-            "average_speed_kmh": round(avg_speed, 1),
-            "session_average_speed_kmh": round(session_avg_speed, 1),
+            "average_speed_kmh": round(avg_speed, 1) if not speed_uncalibrated else None,
+            "speed_uncalibrated": speed_uncalibrated,
+            "session_average_speed_kmh": round(session_avg_speed, 1) if self.speed_history else None,
             "congestion_score": congestion,
+            "congestion_uncalibrated": speed_uncalibrated,
             "session_average_congestion_score": round(session_avg_congestion, 3),
             "vehicle_count": len(vehicles),
             # total_vehicles_cumulative is tracked by TrafficMonitor.seen_vehicle_ids;
@@ -712,8 +765,11 @@ class CoreModule:
                         self._homography_fallback_warned = True
                     track["speed"] = self._pixel_based_speed(track)
 
-                # Physical speed cap to prevent anomalies (e.g., 180 km/h)
-                track["speed"] = min(track["speed"], 180.0)
+                # Physical speed cap to prevent anomalies (e.g., 180 km/h).
+                # Only clamp when we actually have a numeric speed; an
+                # uncalibrated feed stores None (reported as UNCALIBRATED).
+                if track["speed"] is not None:
+                    track["speed"] = min(track["speed"], 180.0)
 
                 # --- Acceleration (m/s^2) & direction ---
                 # Consumed by TrafficMonitor._detect_anomalies (hard_braking /
