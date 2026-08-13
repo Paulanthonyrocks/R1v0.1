@@ -17,6 +17,25 @@ class DetectionEngine:
         # Fix: Read from correct config level
         self.imgsz = config.get("vehicle_detection", {}).get("yolo_imgsz", 640)
         
+        # Detect if preloaded model is a TensorRT engine (shape-locked to export imgsz=320)
+        # Check multiple indicators: model path, model file attribute, or explicit engine loading
+        self.is_trt_engine = False
+        if preloaded_model is not None:
+            # Check if the model was loaded from an .engine file
+            model_path_attr = getattr(preloaded_model, 'ckpt_path', None) or getattr(preloaded_model, 'model_path', None)
+            if model_path_attr and str(model_path_attr).endswith('.engine'):
+                self.is_trt_engine = True
+            # Also check internal model reference
+            internal_model = getattr(preloaded_model, 'model', None)
+            if internal_model and str(internal_model).endswith('.engine'):
+                self.is_trt_engine = True
+            # Check if model_path itself is an engine (when loading directly, not preloaded)
+            elif str(model_path).endswith('.engine'):
+                self.is_trt_engine = True
+        
+        if self.is_trt_engine:
+            self.imgsz = 320  # TRT engine exported at 320 in export_tensorrt.py
+        
         # ROI Cache
         self.roi_mask = None
         self.normalized_roi_points: Optional[np.ndarray] = None

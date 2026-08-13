@@ -790,7 +790,11 @@ def inference_worker(
                         # upscale beyond the operator's accuracy budget.
                         first_h, first_w = frames_to_infer[0].shape[:2]
                         yolo_imgsz_cap = int(vehicle_det_cfg.get("yolo_imgsz", 640))
-                        runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
+                        # TensorRT engines are shape-locked to their export imgsz (320 in export_tensorrt.py).
+                        # Passing a larger imgsz to a static engine causes "input size != max model size"
+                        # and CUDA illegal memory access. Cap at 320 when using TRT engine.
+                        trt_imgsz_cap = 320 if is_trt_engine else yolo_imgsz_cap
+                        runtime_imgsz = min(max(64, trt_imgsz_cap), max(first_h, first_w))
                         results = shared_model(frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz, verbose=False, stream=False)
                         for i, result in enumerate(results):
                             meta_idx = inference_indices[i]
