@@ -667,6 +667,7 @@ def inference_worker(
                             model_type=vehicle_det_cfg.get("model_type", "yolo"),
                             preloaded_model=shared_model,
                             preloaded_reid=shared_reid_embedder,
+                            device=device,
                         )
                         core_modules[feed_id]._first_detection_done = False
                         traffic_monitors[feed_id] = TrafficMonitor(config)

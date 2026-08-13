@@ -99,6 +99,7 @@ class CoreModule:
         model_type: str = "yolo",
         preloaded_model: Optional[Any] = None,
         preloaded_reid: Optional[Any] = None,
+        device: Optional[str] = None,
     ):
         """
         Core processing module for a single video feed.
@@ -114,6 +115,8 @@ class CoreModule:
             model_type: Type of detection model (e.g., 'yolo').
             preloaded_model: Pre-loaded model instance to avoid reloading.
             preloaded_reid: Pre-loaded ReID model instance.
+            device: Explicit device to use (e.g., 'cuda:0', 'cuda:1', 'cpu'). 
+                    Required when preloaded_model is provided to ensure device alignment.
         """
         self.feed_id = feed_id
         self.config = copy.deepcopy(config)
@@ -146,9 +149,15 @@ class CoreModule:
         self.max_active_tracks = v_cfg.get("max_active_tracks", 50)
 
         # 3. Modular engines
-        device = self._check_gpu_availability()
+        # If device is explicitly provided (e.g., by worker for multi-GPU alignment),
+        # use it. Otherwise fall back to auto-detection.
+        if device is not None:
+            self.device = device
+            logger.info(f"[{self.feed_id}] Using explicit device: {device}")
+        else:
+            self.device = self._check_gpu_availability()
         self.detector = DetectionEngine(
-            str(self.model_path), self.config, device, preloaded_model=preloaded_model
+            str(self.model_path), self.config, self.device, preloaded_model=preloaded_model
         )
         self.detector.load_model()
 
