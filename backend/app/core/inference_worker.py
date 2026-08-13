@@ -396,7 +396,8 @@ def inference_worker(
                 shared_model = YOLO(full_model_path)
                 is_trt_engine = False
 
-            shared_model.to(device)
+            if not is_trt_engine:
+                shared_model.to(device)
             logger.info(f"[Worker {worker_id}] Shared model loaded on {device}.")
 
             if vehicle_det_cfg.get("reid_enabled", True):

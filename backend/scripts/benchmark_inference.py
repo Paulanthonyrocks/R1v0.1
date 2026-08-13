@@ -12,7 +12,9 @@ def benchmark_yolo(model_path, imgsz=640, num_frames=100, device='cuda'):
     
     try:
         model = YOLO(model_path)
-        model.to(device)
+        # Only call .to(device) for PyTorch models, not TensorRT engines
+        if not str(model_path).endswith('.engine'):
+            model.to(device)
     except Exception as e:
         print(f"Error loading model: {e}")
         return
