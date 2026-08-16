@@ -969,12 +969,18 @@ def inference_worker(
                         first_h, first_w = frames_to_infer[0].shape[:2]
                         yolo_imgsz_cap = int(vehicle_det_cfg.get("yolo_imgsz", 640))
                         # TensorRT engines are shape-locked to their export
-                        # imgsz, which is now the SAME config value --
+                        # imgsz, which is the SAME config value --
                         # export_tensorrt.py reads vehicle_detection.yolo_imgsz.
-                        # CONTRACT: re-export the engine after changing
-                        # yolo_imgsz, or a stale static engine raises
-                        # "input size != max model size" at boot.
-                        runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
+                        # For an engine we MUST pass exactly that size (the
+                        # letterbox feeds the engine's baked input shape); the
+                        # frame-edge clamp below is only for the dynamic
+                        # PyTorch path. A size mismatch ("input size != max
+                        # model size") errors EVERY detect frame. CONTRACT:
+                        # re-export the engine after changing yolo_imgsz.
+                        if is_trt_engine:
+                            runtime_imgsz = yolo_imgsz_cap
+                        else:
+                            runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
                         results = shared_model(frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz, verbose=False, stream=False)
                         for i, result in enumerate(results):
                             meta_idx = inference_indices[i]
