@@ -51,8 +51,31 @@ def _unpack_queue_result(res) -> Tuple[Optional[Any], Any]:
 # 19s, zero results emitted for the feed. flock() on a per-device lockfile
 # serializes model init across the worker processes (spawn'd, separate PIDs,
 # shared host filesystem) so only one worker touches a GPU at boot.
+#
+# 2026-08-16 root-cause update: standalone probes that saw exactly ONE GPU per
+# process (CUDA_VISIBLE_DEVICES=1) passed 100% on BOTH T4s -- same engine, same
+# warmup call, fresh processes; only the pool's both-GPUs-visible workers fault
+# deterministically. The pool manager now pins each worker to one physical GPU
+# at spawn (CUDA_VISIBLE_DEVICES + R1_PHYSICAL_GPU_ID, see
+# InferencePoolManager._resolve_gpu_pin); _apply_gpu_pin() below is the
+# in-process safety net, and the flock serialization remains the second line
+# of defense (locking on the PHYSICAL device id, see the lock_dev logic).
 _CORE_REBUILD_BACKOFF = 30.0  # seconds between failed CoreModule rebuilds
 _CUDA_FATAL_MARKERS = ("illegal memory access", "CUDA error", "CUDA out of memory")
+
+
+def _apply_gpu_pin() -> None:
+    """Give the worker a single-GPU view (see InferencePoolManager._resolve_gpu_pin).
+
+    The pool manager sets R1_PHYSICAL_GPU_ID + CUDA_VISIBLE_DEVICES in the
+    parent env before spawn; the child inherits both. This safety net covers
+    any spawn path that set only the id. It MUST run before the first
+    torch.cuda call in the process: torch fixes its device list at the first
+    CUDA init, so a late CUDA_VISIBLE_DEVICES change is ignored.
+    """
+    phys = os.environ.get("R1_PHYSICAL_GPU_ID")
+    if phys is not None and "CUDA_VISIBLE_DEVICES" not in os.environ:
+        os.environ["CUDA_VISIBLE_DEVICES"] = phys
 
 
 def _is_cuda_fatal(err: str) -> bool:
@@ -392,6 +415,11 @@ def inference_worker(
                 full_model_path = backend_variant
             use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
 
+            # Apply the pool manager's GPU pin (single-GPU view) BEFORE any
+            # torch.cuda call -- torch fixes its device list at first CUDA
+            # init, so this must precede ultralytics import and is_available().
+            _apply_gpu_pin()
+
             try:
                 from ultralytics import YOLO
             except ImportError as e:
@@ -402,12 +430,25 @@ def inference_worker(
 
             # Multi-GPU support: distribute workers across available GPUs
             use_gpu = config.get("performance", {}).get("gpu_acceleration", False)
+            gpu_id = 0  # default; reassigned in the GPU branch below
             if use_gpu and torch.cuda.is_available():
                 num_gpus = torch.cuda.device_count()
                 # Assign worker to GPU in round-robin fashion
                 gpu_id = worker_id % num_gpus
                 device = f"cuda:{gpu_id}"
-                logger.info(f"[Worker {worker_id}] Multi-GPU: using GPU {gpu_id}/{num_gpus} ({torch.cuda.get_device_name(gpu_id)})")
+                pinned = os.environ.get("R1_PHYSICAL_GPU_ID")
+                if pinned is not None:
+                    # Pool-manager pin: this process sees exactly ONE GPU
+                    # (CUDA_VISIBLE_DEVICES set at spawn), so device is
+                    # cuda:0 and the PHYSICAL gpu id is what logs and the
+                    # init lock must use.
+                    logger.info(
+                        f"[Worker {worker_id}] Multi-GPU: pinned to physical GPU {pinned} "
+                        f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}, "
+                        f"logical device {device})"
+                    )
+                else:
+                    logger.info(f"[Worker {worker_id}] Multi-GPU: using GPU {gpu_id}/{num_gpus} ({torch.cuda.get_device_name(gpu_id)})")
             else:
                 device = "cpu"
             # Serialize per-device model init across the worker pool: 12
@@ -418,9 +459,13 @@ def inference_worker(
             # GPU.
             _init_lock = None
             if use_gpu and torch.cuda.is_available():
-                _init_lock = _PerDeviceInitLock(device)
+                # Lock on the PHYSICAL device: pinned workers all see "cuda:0"
+                # logically, but init must serialize per physical GPU so lock
+                # names stay stable between pinned and unpinned workers.
+                lock_dev = f"cuda:{os.environ.get('R1_PHYSICAL_GPU_ID', gpu_id)}"
+                _init_lock = _PerDeviceInitLock(lock_dev)
                 _init_lock.acquire()
-                logger.info(f"[Worker {worker_id}] Acquired GPU init lock for {device}")
+                logger.info(f"[Worker {worker_id}] Acquired GPU init lock for {lock_dev}")
 
             try:
                 engine_path = Path(full_model_path).with_suffix(".engine")

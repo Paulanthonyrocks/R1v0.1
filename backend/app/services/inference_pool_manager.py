@@ -1,13 +1,34 @@
 from typing import Dict, Any, List, Optional
 import logging
+import os
 import time
 import multiprocessing
 from multiprocessing import Process
+import torch
 from app.core.inference_worker import inference_worker
 from app.utils.distributed_queue import RedisQueue
 from app.services.constants import FeedManagerConstants
 
 logger = logging.getLogger("app.services.inference_pool_manager")
+
+
+def _resolve_gpu_pin(worker_id: int, num_gpus: int, gpu_mode: bool) -> Optional[Dict[str, str]]:
+    """Env overrides that pin a worker to one physical GPU at spawn time.
+
+    CUDA_VISIBLE_DEVICES is read by torch at the child's FIRST CUDA call
+    (fresh interpreter under spawn), so setting it in the parent's
+    os.environ before Process.start() deterministically gives the worker a
+    single-GPU view -- the exact condition under which every standalone
+    engine probe on this hardware passes (a 2xT4 box whose cuda:1 faults
+    deterministically at the first TRT kernel only when the pool's workers
+    see BOTH GPUs). R1_PHYSICAL_GPU_ID lets the worker log and flock on the
+    PHYSICAL device, since its logical view is always cuda:0 when pinned.
+    Returns None when GPU mode is off so callers can clear stale pins.
+    """
+    if not gpu_mode or num_gpus <= 0:
+        return None
+    gpu_id = worker_id % num_gpus
+    return {"R1_PHYSICAL_GPU_ID": str(gpu_id), "CUDA_VISIBLE_DEVICES": str(gpu_id)}
 
 class InferencePoolManager:
     """
@@ -27,6 +48,26 @@ class InferencePoolManager:
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
+
+        # Per-worker GPU pinning. Every reproduction probe that PASSED on
+        # this hardware ran with exactly ONE GPU visible to the process
+        # (CUDA_VISIBLE_DEVICES=1); the only configuration that faults
+        # (cudaErrorIllegalAddress on the first TRT kernel, deterministically,
+        # in ~50 fresh processes across 3 runs) is the pool where every
+        # worker sees both T4s. Pin each worker to its physical GPU at spawn
+        # so all workers run under the proven-good single-device condition.
+        # Workers are spawned sequentially, so per-spawn os.environ mutation
+        # is race-free: each child snapshots the env at its own start().
+        self._gpu_mode = False
+        self._num_gpus = 0
+        try:
+            use_gpu = bool((config.get("performance") or {}).get("gpu_acceleration", False))
+            if use_gpu and torch.cuda.is_available():
+                self._gpu_mode = True
+                self._num_gpus = torch.cuda.device_count()
+        except Exception:
+            self._gpu_mode = False
+            self._num_gpus = 0
         # Worker ids permanently removed from the pool after repeated
         # CUDA-fatal exits (see feed_watchdog watchdog_loop). Quarantined
         # workers are never respawned and never receive feed routing; their
@@ -127,6 +168,22 @@ class InferencePoolManager:
             daemon=False,
             name=f"InferenceWorker-{worker_id}",
         )
+        # Pin the worker to ONE physical GPU BEFORE the child starts: the
+        # child inherits os.environ and torch fixes its device list at the
+        # child's first CUDA call (fresh interpreter under spawn), so the
+        # pin is guaranteed even though this parent may have CUDA inited
+        # with both GPUs visible. See _resolve_gpu_pin.
+        pin = _resolve_gpu_pin(worker_id, self._num_gpus, self._gpu_mode)
+        if pin is not None:
+            os.environ.update(pin)
+            logger.info(
+                f"Pinning InferenceWorker-{worker_id} to physical GPU "
+                f"{pin['CUDA_VISIBLE_DEVICES']} "
+                f"(CUDA_VISIBLE_DEVICES={pin['CUDA_VISIBLE_DEVICES']})"
+            )
+        else:
+            # GPU mode off: don't leak a stale pin from an earlier GPU-mode spawn.
+            os.environ.pop("R1_PHYSICAL_GPU_ID", None)
         p.start()
         self._inference_pool[worker_id] = p
         logger.info(f"Launched InferenceWorker-{worker_id} handling slots {slots}")
