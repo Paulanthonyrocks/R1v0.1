@@ -79,12 +79,15 @@ inference:
   num_workers: 2
   worker_ready_timeout: 60
   use_tensorrt: true
-  inference_timeout: 0.15
-  # skip_frames=3 (was 2) compensates for the 4x GPU cost of running YOLO at
-  # 640x480 vs the previous 320x240 letterbox input. With skip=3 we run ~5
-  # YOLO forward calls/sec/feed instead of ~7.5 -- keeping per-feed GPU cost
-  # roughly flat while the wire frame is now 640x480.
-  skip_frames: 3
+  inference_timeout: 0.05
+  # skip_frames=0: detect EVERY ingested frame (was 3). The GPUs sit at
+  # ~0% util on the 3 sample feeds (~8fps each); the old skip=3 ran only
+  # ~5 YOLO forwards/sec/feed. With skip=0 and target_fps 8 that becomes
+  # 8 detects/sec/feed (24/sec across 3 feeds) -- still trivial for a T4
+  # (~2-6% util at 640x640), but 4x the current GPU work. If you want the
+  # cards genuinely loaded, raise yolo_imgsz / re-export the TRT engine
+  # at 640+ (the engine caps input at 320) or add more feeds.
+  skip_frames: 0
 ingestion:
   shared_memory_ipc: true
 interface:
@@ -536,14 +539,30 @@ post_startup_processing:
       latitude: 34.0522
       longitude: 118.2437
       path: backend/data/sample_traffic.mp4
+      name: sample_traffic.mp4 (load-4)
     - is_looped: true
       latitude: 34.053
       longitude: 118.244
       path: backend/data/sample_traffic_2.mp4
+      name: sample_traffic_2.mp4 (load-5)
     - is_looped: true
       latitude: 34.051
       longitude: 118.243
       path: backend/data/sample_traffic_3.mp4
+    # Workload test (GPU utilization): 2 extra feeds decoding existing live
+    # files, taking the pool to max_concurrent_feeds (5). Each adds ~8-15fps
+    # of ingestion + detection work. Same source files are safe: feed ids are
+    # manager-assigned, sources may repeat. Remove these two entries to revert.
+    - is_looped: true
+      latitude: 34.0522
+      longitude: 118.2437
+      path: backend/data/sample_traffic.mp4
+      name: sample_traffic.mp4 (load-6)
+    - is_looped: true
+      latitude: 34.053
+      longitude: 118.244
+      path: backend/data/sample_traffic_2.mp4
+      name: sample_traffic_2.mp4 (load-7)
 
 prediction_scheduler:
   accuracy_cache_ttl_minutes: 60
@@ -678,7 +697,10 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
-  skip_frames: 2
+  # Fallback only — the worker reads inference.skip_frames first (see the
+  # comment there); keep in sync so the fallback path also detects every
+  # frame instead of skipping 2/3.
+  skip_frames: 0
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
@@ -697,7 +719,13 @@ vehicle_detection:
   - 3
   - 5
   - 7
-  yolo_imgsz: 640
+  # 640 -> 960 (workload increase): 2.25x per-detect GPU compute AND a real
+  # accuracy gain on the 640x480 sources (1.5x supersample helps small/distant
+  # vehicles). NOTE: a deployed TensorRT engine is shape-locked to its export
+  # imgsz (320) and caps here at 320 (inference_worker.py trt_imgsz_cap) --
+  # re-export the engine at 960 for this to bite. 1280 is available if you
+  # want brute force (4x).
+  yolo_imgsz: 960
 video_input:
   max_queue_size: 500
   queue_put_timeout_ms: 1000
@@ -709,7 +737,7 @@ video_output:
   # fps at which the wire frame is emitted. Must match video_processing.target_fps
   # (result_processor.py dedups to ``video_output.fps``); they used to disagree
   # (15 vs 8) which silently capped effective throughput at the lower of the two.
-  fps: 8
+  fps: 15
   frame_resolution:
   - 640
   - 480
@@ -722,12 +750,12 @@ video_output:
   - 640
   - 480
 video_processing:
-  # target_fps lowered from 15 -> 8 to ease the loca.lt tunnel. Traffic
-  # scenes are slow-moving; 8 fps is well below the perceptual flicker
-  # threshold for a dashboard view, and cuts tunnel bandwidth by ~47%
-  # vs 15. Combined with the 640x480 wire frame and adaptive_streaming off,
-  # this brings end-to-end latency on the tunnel back to ~1s from ~2.5s.
-  target_fps: 8
+  # target_fps 8 -> 15 (workload increase): +87% frames through ingestion and,
+  # with inference.skip_frames=0, +87% detection work on the GPUs. The old
+  # tunnel-bandwidth rationale is largely mitigated by the per-client rate
+  # gate (tunnel clients are capped at 1-3fps per feed regardless). If tunnel
+  # latency regresses, drop back to 8.
+  target_fps: 15
   # Adaptive streaming: when TRUE the pipeline ships TWO JPEGs per frame
   # (full-res and a downscaled "small" tier) and lets the broadcaster pick by
   # client RTT. This is a bandwidth-conservation optimization for mixed
