@@ -43,6 +43,83 @@ def _unpack_queue_result(res) -> Tuple[Optional[Any], Any]:
     return None, res
 
 
+# --- GPU init serialization & CUDA-fatal handling ---------------------------
+# 24 pinned workers across 2 T4s = 12 concurrent torch CUDA context creations
+# per device at boot. Observed (backend_ml.log 2026-08-13): one cuda:1 context
+# came up corrupted, and every subsequent model call on that device failed with
+# `cudaErrorIllegalAddress` for the whole run -- 1,038 identical ERROR lines in
+# 19s, zero results emitted for the feed. flock() on a per-device lockfile
+# serializes model init across the worker processes (spawn'd, separate PIDs,
+# shared host filesystem) so only one worker touches a GPU at boot.
+_CORE_REBUILD_BACKOFF = 30.0  # seconds between failed CoreModule rebuilds
+_CUDA_FATAL_MARKERS = ("illegal memory access", "CUDA error", "CUDA out of memory")
+
+
+def _is_cuda_fatal(err: str) -> bool:
+    """True when a CUDA error is permanent for this process' device context
+    (illegal-address poisoning, OOM leaving the context unusable). Retrying in
+    place cannot recover -- the worker must exit so the watchdog respawns a
+    fresh process with a clean context."""
+    return any(m in str(err) for m in _CUDA_FATAL_MARKERS)
+
+
+class _PerDeviceInitLock:
+    """Serializes CUDA model initialization per GPU device across the
+    multiprocessing worker pool via flock() on /tmp/r1_gpu_init_<dev>.lock.
+    Workers block until their device's turn; init then runs one process at a
+    time per GPU, eliminating the concurrent-init race that poisoned a cuda:1
+    context at boot."""
+
+    def __init__(self, device: str):
+        self._path = f"/tmp/r1_gpu_init_{device.replace(':', '_')}.lock"
+        self._fh = None
+
+    def acquire(self) -> "_PerDeviceInitLock":
+        import fcntl
+
+        self._fh = open(self._path, "w")
+        fcntl.flock(self._fh, fcntl.LOCK_EX)
+        return self
+
+    def release(self) -> None:
+        import fcntl
+
+        try:
+            if self._fh is not None:
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+        finally:
+            if self._fh is not None:
+                self._fh.close()
+                self._fh = None
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def _exit_worker_fatal(worker_id: int, feed_id: str, err: str) -> None:
+    """Logs a CUDA-fatal init failure once and exits the worker so the
+    FeedWatchdog respawns it (exponential backoff, feed_watchdog.py:91-113).
+    Previously the poisoned context was retried on EVERY frame -- the
+    1,038-line `Failed to load model: CUDA error: an illegal memory access`
+    storm -- with zero chance of recovery in place."""
+    logger.error(
+        f"[Worker {worker_id}] Feed {feed_id}: CUDA-fatal error during model "
+        f"init: {err}. The device context is poisoned for this process; "
+        f"exiting (code 42) so the watchdog respawns a fresh worker with a "
+        f"clean CUDA context."
+    )
+    try:
+        logging.shutdown()
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(42)
+
+
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
     """Forward a frame's raw bytes downstream without running detection.
 
@@ -240,6 +317,9 @@ def inference_worker(
     traffic_monitors: Dict[str, TrafficMonitor] = {}
     pending_configs: Dict[str, Dict] = {}
     metrics_map: Dict[str, WorkerMetrics] = {}
+    # feed_id -> {"ts": float, "error": str}; failed CoreModule builds are
+    # cached here so a broken init is retried on a backoff, not per frame.
+    core_fail_state: Dict[str, Dict] = {}
     shared_model = None
 
     from app.services.reid_manager import GlobalReIDManager
@@ -330,82 +410,99 @@ def inference_worker(
                 logger.info(f"[Worker {worker_id}] Multi-GPU: using GPU {gpu_id}/{num_gpus} ({torch.cuda.get_device_name(gpu_id)})")
             else:
                 device = "cpu"
-            engine_path = Path(full_model_path).with_suffix(".engine")
+            # Serialize per-device model init across the worker pool: 12
+            # workers boot on each T4, and 12 concurrent CUDA context
+            # creations corrupted one cuda:1 context at boot (illegal memory
+            # access, permanent for the process). Hold the per-device flock
+            # for the entire YOLO + ReID load so init runs one-at-a-time per
+            # GPU.
+            _init_lock = None
+            if use_gpu and torch.cuda.is_available():
+                _init_lock = _PerDeviceInitLock(device)
+                _init_lock.acquire()
+                logger.info(f"[Worker {worker_id}] Acquired GPU init lock for {device}")
 
-            if engine_path.exists():
-                logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
-                try:
-                    # Load the TRT engine with an EXPLICIT task. A bare
-                    # YOLO(str(engine_path)) makes ultralytics guess the task off
-                    # the file, it cannot read task metadata from an engine, so it
-                    # warns ("Unable to automatically guess model task") and then
-                    # falls into the *.pt-only code path -> "should be a *.pt
-                    # PyTorch model" -> the whole worker dies (CRITICAL -> Exiting
-                    # -> watchdog respawn loop, never recovering). Passing
-                    # task="detect" skips the guess and uses the engine correctly
-                    # (see ultralytics GH issue #7644, maintainer-confirmed).
-                    shared_model = YOLO(str(engine_path), task="detect")
-                    # TensorRT engines are shape-locked to the batch they were
-                    # exported with (export_tensorrt.py builds batch=1). Feeding
-                    # a multi-frame list to a static-batch engine errors or
-                    # silently drops all but the first frame, so force per-frame
-                    # inference.
-                    is_trt_engine = True
-                    logger.info(f"[Worker {worker_id}] TensorRT engine loaded successfully.")
-                except Exception as e:
+            try:
+                engine_path = Path(full_model_path).with_suffix(".engine")
+
+                if engine_path.exists():
+                    logger.info(f"[Worker {worker_id}] Found TensorRT engine: {engine_path}")
+                    try:
+                        # Load the TRT engine with an EXPLICIT task. A bare
+                        # YOLO(str(engine_path)) makes ultralytics guess the task off
+                        # the file, it cannot read task metadata from an engine, so it
+                        # warns ("Unable to automatically guess model task") and then
+                        # falls into the *.pt-only code path -> "should be a *.pt
+                        # PyTorch model" -> the whole worker dies (CRITICAL -> Exiting
+                        # -> watchdog respawn loop, never recovering). Passing
+                        # task="detect" skips the guess and uses the engine correctly
+                        # (see ultralytics GH issue #7644, maintainer-confirmed).
+                        shared_model = YOLO(str(engine_path), task="detect")
+                        # TensorRT engines are shape-locked to the batch they were
+                        # exported with (export_tensorrt.py builds batch=1). Feeding
+                        # a multi-frame list to a static-batch engine errors or
+                        # silently drops all but the first frame, so force per-frame
+                        # inference.
+                        is_trt_engine = True
+                        logger.info(f"[Worker {worker_id}] TensorRT engine loaded successfully.")
+                    except Exception as e:
+                        logger.warning(
+                            f"[Worker {worker_id}] TensorRT engine load FAILED: {e}. "
+                            f"Falling back to float32 PyTorch ({device}) -- expect "
+                            f"~0.7-3 fps/worker vs 5-10x with a working TRT engine. "
+                            f"Rebuild it on the GPU box: python scripts/export_tensorrt.py "
+                            f"(FP16, imgsz=320, batch=1). If the engine was exported "
+                            f"with a different ultralytics/TensorRT version than the "
+                            f"runtime, re-export it on the target box."
+                        )
+                        shared_model = YOLO(full_model_path)
+                        is_trt_engine = False
+                else:
+                    # TENSORRT ENGINE ABSENT -> we fall back to float32 PyTorch on
+                    # the T4. This is the single biggest throughput lever in the
+                    # system: a static-batch TensorRT engine (built by
+                    # scripts/export_tensorrt.py on the GPU box, FP16 / imgsz=320 /
+                    # batch=1) typically yields 5-10x the inference fps of raw
+                    # PyTorch. Without it, inference runs at ~0.7-3 fps/worker
+                    # while ingestion delivers 8 fps/feed, producing low/choppy
+                    # video. This is expected on a fresh deploy (the .engine must
+                    # be built ON the target GPU, which needs nvidia-tensorrt +
+                    # CUDA), but we warn loudly so the gap is never silent.
+                    #
+                    # NOTE on the path: engine_path is derived as
+                    # Path(full_model_path).with_suffix(".engine"), where
+                    # full_model_path is now resolved backend-aware (see the
+                    # root_dir handling above). So when model_path = "models/...",
+                    # engine_path resolves to "<root>/backend/models/<name>.engine"
+                    # -- exactly where scripts/export_tensorrt.py writes it. This
+                    # warning now means one of: (a) the .engine truly hasn't been
+                    # built yet on this GPU box, or (b) project_root_dir is wrong.
+                    # It is no longer a "models/ prefix" trap.
                     logger.warning(
-                        f"[Worker {worker_id}] TensorRT engine load FAILED: {e}. "
-                        f"Falling back to float32 PyTorch ({device}) -- expect "
-                        f"~0.7-3 fps/worker vs 5-10x with a working TRT engine. "
-                        f"Rebuild it on the GPU box: python scripts/export_tensorrt.py "
-                        f"(FP16, imgsz=320, batch=1). If the engine was exported "
-                        f"with a different ultralytics/TensorRT version than the "
-                        f"runtime, re-export it on the target box."
+                        f"[Worker {worker_id}] TensorRT engine NOT found at {engine_path}. "
+                        f"Falling back to float32 PyTorch ({device}) -- expect ~0.7-3 fps/worker "
+                        f"vs 5-10x with a TRT engine. Build it on the GPU box: "
+                        f"python scripts/export_tensorrt.py (FP16, imgsz=320, batch=1). "
+                        f"Requires model_path to keep its 'models/' prefix so the "
+                        f".engine path resolves."
                     )
                     shared_model = YOLO(full_model_path)
                     is_trt_engine = False
-            else:
-                # TENSORRT ENGINE ABSENT -> we fall back to float32 PyTorch on
-                # the T4. This is the single biggest throughput lever in the
-                # system: a static-batch TensorRT engine (built by
-                # scripts/export_tensorrt.py on the GPU box, FP16 / imgsz=320 /
-                # batch=1) typically yields 5-10x the inference fps of raw
-                # PyTorch. Without it, inference runs at ~0.7-3 fps/worker
-                # while ingestion delivers 8 fps/feed, producing low/choppy
-                # video. This is expected on a fresh deploy (the .engine must
-                # be built ON the target GPU, which needs nvidia-tensorrt +
-                # CUDA), but we warn loudly so the gap is never silent.
-                #
-                # NOTE on the path: engine_path is derived as
-                # Path(full_model_path).with_suffix(".engine"), where
-                # full_model_path is now resolved backend-aware (see the
-                # root_dir handling above). So when model_path = "models/...",
-                # engine_path resolves to "<root>/backend/models/<name>.engine"
-                # -- exactly where scripts/export_tensorrt.py writes it. This
-                # warning now means one of: (a) the .engine truly hasn't been
-                # built yet on this GPU box, or (b) project_root_dir is wrong.
-                # It is no longer a "models/ prefix" trap.
-                logger.warning(
-                    f"[Worker {worker_id}] TensorRT engine NOT found at {engine_path}. "
-                    f"Falling back to float32 PyTorch ({device}) -- expect ~0.7-3 fps/worker "
-                    f"vs 5-10x with a TRT engine. Build it on the GPU box: "
-                    f"python scripts/export_tensorrt.py (FP16, imgsz=320, batch=1). "
-                    f"Requires model_path to keep its 'models/' prefix so the "
-                    f".engine path resolves."
-                )
-                shared_model = YOLO(full_model_path)
-                is_trt_engine = False
 
-            if not is_trt_engine:
-                shared_model.to(device)
-            logger.info(f"[Worker {worker_id}] Shared model loaded on {device}.")
+                if not is_trt_engine:
+                    shared_model.to(device)
+                logger.info(f"[Worker {worker_id}] Shared model loaded on {device}.")
 
-            if vehicle_det_cfg.get("reid_enabled", True):
-                from app.ml.reid_model import ReIDEmbedder
+                if vehicle_det_cfg.get("reid_enabled", True):
+                    from app.ml.reid_model import ReIDEmbedder
 
-                logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder on {device}...")
-                shared_reid_embedder = ReIDEmbedder(config, device=device)
-                logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+                    logger.info(f"[Worker {worker_id}] Pre-loading ReID Embedder on {device}...")
+                    shared_reid_embedder = ReIDEmbedder(config, device=device)
+                    logger.info(f"[Worker {worker_id}] ReID Embedder pre-loaded.")
+            finally:
+                if _init_lock is not None:
+                    _init_lock.release()
+                    logger.info(f"[Worker {worker_id}] Released GPU init lock for {device}")
 
             # Signal readiness to FeedManager
             try:
@@ -657,22 +754,54 @@ def inference_worker(
                     metrics_map.setdefault(feed_id, WorkerMetrics(feed_id))
 
                     if feed_id not in core_modules:
-                        core_modules[feed_id] = CoreModule(
-                            feed_id=feed_id,
-                            model_path=vehicle_det_cfg.get("model_path"),
-                            config=config,
-                            fps=target_fps,
-                            db_queue=db_queue,
-                            gemini_api_key=ocr_cfg.get("gemini_api_key"),
-                            model_type=vehicle_det_cfg.get("model_type", "yolo"),
-                            preloaded_model=shared_model,
-                            preloaded_reid=shared_reid_embedder,
-                            device=device,
-                        )
-                        core_modules[feed_id]._first_detection_done = False
-                        traffic_monitors[feed_id] = TrafficMonitor(config)
-                        if feed_id in pending_configs:
-                            core_modules[feed_id].update_config(pending_configs.pop(feed_id))
+                        # Rebuild guard: a failed CoreModule build (e.g. the
+                        # detector warm-up hitting a poisoned CUDA context)
+                        # used to be re-attempted on EVERY frame -- observed
+                        # 1,038 identical "Failed to load model: CUDA error:
+                        # an illegal memory access" lines in backend_ml.log
+                        # over 19s with zero results for the feed. Cache the
+                        # failure and retry on a backoff; a CUDA-fatal error
+                        # is permanent for this process, so exit and let the
+                        # watchdog respawn a fresh worker instead.
+                        _now = time.time()
+                        _last_fail = core_fail_state.get(feed_id)
+                        if _last_fail is not None and (_now - _last_fail.get("ts", 0.0)) < _CORE_REBUILD_BACKOFF:
+                            if msg_id and hasattr(slot_q_ref, "ack"):
+                                slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            continue
+                        try:
+                            core_modules[feed_id] = CoreModule(
+                                feed_id=feed_id,
+                                model_path=vehicle_det_cfg.get("model_path"),
+                                config=config,
+                                fps=target_fps,
+                                db_queue=db_queue,
+                                gemini_api_key=ocr_cfg.get("gemini_api_key"),
+                                model_type=vehicle_det_cfg.get("model_type", "yolo"),
+                                preloaded_model=shared_model,
+                                preloaded_reid=shared_reid_embedder,
+                                device=device,
+                            )
+                            core_modules[feed_id]._first_detection_done = False
+                            core_fail_state.pop(feed_id, None)
+                            traffic_monitors[feed_id] = TrafficMonitor(config)
+                            if feed_id in pending_configs:
+                                core_modules[feed_id].update_config(pending_configs.pop(feed_id))
+                        except Exception as e:
+                            _err = str(e)
+                            core_fail_state[feed_id] = {"ts": _now, "error": _err}
+                            if _is_cuda_fatal(_err):
+                                _exit_worker_fatal(worker_id, feed_id, _err)
+                            logger.error(
+                                f"[Worker {worker_id}] Failed to initialize "
+                                f"CoreModule for {feed_id}: {_err}. Retrying in "
+                                f"{int(_CORE_REBUILD_BACKOFF)}s."
+                            )
+                            if msg_id and hasattr(slot_q_ref, "ack"):
+                                slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            continue
 
                     core = core_modules[feed_id]
                     monitor = traffic_monitors[feed_id]
@@ -834,6 +963,12 @@ def inference_worker(
                     except Exception as e:
                         batch_inference_failed = True
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
+                        # A CUDA-fatal error (illegal address / OOM) means the
+                        # device context is poisoned -- the per-frame fallback
+                        # below would fail identically on every frame. Exit so
+                        # the watchdog respawns a fresh worker.
+                        if _is_cuda_fatal(str(e)):
+                            _exit_worker_fatal(worker_id, "*batch*", str(e))
 
                 # Tracking & output
                 for i, meta in enumerate(batch_meta):
