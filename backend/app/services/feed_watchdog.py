@@ -15,10 +15,15 @@ class FeedWatchdog:
     def __init__(self, 
                  registry: Any, 
                  pool_manager: Any, 
-                 restart_callback):
+                 restart_callback,
+                 halt_feeds_callback=None):
         self.registry = registry
         self.pool_manager = pool_manager
         self.restart_callback = restart_callback
+        # Async callable(slots: List[int]) -> None. Invoked when a worker is
+        # quarantined: stops the feeds routed to that worker's slots so their
+        # queues stop accumulating frames and the SHM free pool recovers.
+        self.halt_feeds_callback = halt_feeds_callback
         self._stop_flag = False
 
     def stop(self):
@@ -35,6 +40,12 @@ class FeedWatchdog:
         # Track restart attempts and next allowed restart time per worker
         worker_restart_attempts: Dict[int, int] = {}
         worker_next_restart_time: Dict[int, float] = {}
+
+        # CUDA-fatal (exit code 42) deaths per worker id. Quarantine after
+        # WORKER_QUARANTINE_THRESHOLD -- a device that faults on its first
+        # compute kernel in a fresh process is broken; respawning just spreads
+        # the failures out while the dead slot queue exhausts the SHM pool.
+        worker_cuda_fatal_count: Dict[int, int] = {}
 
         while not self._stop_flag:
             try:
@@ -94,6 +105,40 @@ class FeedWatchdog:
                     now = time.time()
                     workers_to_respawn = []
                     for wid in dead_workers:
+                        # Distinguish a CUDA-fatal death (poisoned device
+                        # context -- exit code 42 from
+                        # inference_worker._exit_worker_fatal) from a generic
+                        # crash. CUDA-fatal deaths are counted and quarantined
+                        # at the threshold; generic crashes keep the existing
+                        # backoff + respawn path.
+                        proc = self.pool_manager._inference_pool.get(wid)
+                        exit_code = proc.exitcode if proc is not None else None
+                        if exit_code == FeedManagerConstants.CUDA_FATAL_EXIT_CODE:
+                            fatal_count = worker_cuda_fatal_count.get(wid, 0) + 1
+                            worker_cuda_fatal_count[wid] = fatal_count
+                            if fatal_count >= FeedManagerConstants.WORKER_QUARANTINE_THRESHOLD:
+                                logger.warning(
+                                    f"Watchdog: Worker {wid} died with CUDA-fatal exit "
+                                    f"code {exit_code} {fatal_count} times in a row. "
+                                    f"Quarantining it and halting its feeds."
+                                )
+                                try:
+                                    slots = self.pool_manager.quarantine_worker(
+                                        wid,
+                                        f"{fatal_count} consecutive CUDA-fatal exits (code {exit_code})",
+                                    )
+                                    if slots and self.halt_feeds_callback is not None:
+                                        await self.halt_feeds_callback(slots)
+                                except Exception as e:
+                                    logger.error(f"Watchdog: Failed to quarantine worker {wid}: {e}")
+                                worker_restart_attempts.pop(wid, None)
+                                worker_next_restart_time.pop(wid, None)
+                                continue
+                            logger.warning(
+                                f"Watchdog: Worker {wid} exited with CUDA-fatal code {exit_code} "
+                                f"({fatal_count}/{FeedManagerConstants.WORKER_QUARANTINE_THRESHOLD}). "
+                                f"Respawning (fresh CUDA context) -- will quarantine on next failures."
+                            )
                         if now >= worker_next_restart_time.get(wid, 0):
                             workers_to_respawn.append(wid)
                             # Increment attempt count for the next failure detection

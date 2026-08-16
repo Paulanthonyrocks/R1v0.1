@@ -77,6 +77,17 @@ class FeedManagerConstants:
     MAX_RESTART_ATTEMPTS = 5
     BACKOFF_BASE_DELAY = 5
     BACKOFF_MAX_DELAY = 3600
+    # Inference workers exit with this code on a CUDA-fatal error (poisoned
+    # device context; see inference_worker._exit_worker_fatal). The watchdog
+    # counts these deaths per worker id and quarantines the worker -- and
+    # halts its feeds -- after WORKER_QUARANTINE_THRESHOLD of them. A device
+    # that faults on its first compute kernel in a FRESH process (observed on
+    # cuda:1, 2026-08-16: boot load OK, warmup illegal-address, 26 respawns,
+    # zero recovery) is a hardware failure; respawning cannot fix it, and the
+    # dead worker's slot queue keeps accumulating frames until the SHM free
+    # pool exhausts and healthy feeds start dropping.
+    CUDA_FATAL_EXIT_CODE = 42
+    WORKER_QUARANTINE_THRESHOLD = 3
 
     # Cleanup
     ATEXIT_JOIN_TIMEOUT = 0.5

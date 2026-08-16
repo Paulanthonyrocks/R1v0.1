@@ -27,9 +27,51 @@ class InferencePoolManager:
         self._inference_pool: Dict[int, Process] = {}
         self._inference_command_queues: Dict[int, RedisQueue] = {}
         self._slot_to_worker: Dict[int, int] = {}
+        # Worker ids permanently removed from the pool after repeated
+        # CUDA-fatal exits (see feed_watchdog watchdog_loop). Quarantined
+        # workers are never respawned and never receive feed routing; their
+        # slots are orphaned so scale_pool can rebalance them to survivors.
+        self._quarantined_workers: set = set()
+
+    @property
+    def quarantined_workers(self) -> set:
+        return set(self._quarantined_workers)
+
+    def quarantine_worker(self, worker_id: int, reason: str) -> List[int]:
+        """Permanently removes a worker from the pool after repeated fatal
+        failures (CUDA-fatal exits, exit code 42). A device whose first
+        compute kernel faults in a fresh process is a hardware failure --
+        respawning just spreads failures out. Returns the slot ids that were
+        owned so the caller can halt the feeds routed there before the dead
+        slot queue exhausts the SHM free pool.
+
+        The slots are ORPHANED (removed from _slot_to_worker) so the next
+        scale_pool pass reassigns them to surviving workers; with a pinned
+        pool the reassignment also respawns the slot's new owner (slot sets
+        are read once at spawn), which is a one-time model reload per
+        quarantine.
+        """
+        slots = [s for s, w in self._slot_to_worker.items() if w == worker_id]
+        self._quarantined_workers.add(worker_id)
+        self._inference_pool.pop(worker_id, None)
+        self._inference_command_queues.pop(worker_id, None)
+        for s in slots:
+            del self._slot_to_worker[s]
+        logger.warning(
+            f"QUARANTINED InferenceWorker-{worker_id}: {reason}. "
+            f"Pool is now {len(self._inference_pool)} workers; released slots {slots}."
+        )
+        return slots
 
     def spawn_worker(self, worker_id: int):
         """Spawns a single inference worker assigned to specific slots."""
+        if worker_id in self._quarantined_workers:
+            logger.warning(
+                f"Refusing to spawn InferenceWorker-{worker_id}: quarantined "
+                f"(repeated CUDA-fatal exits). Restart it manually after the "
+                f"GPU/device issue is resolved."
+            )
+            return
         if self._is_shutting_down:
             logger.warning(f"Shutdown in progress. Refusing to spawn worker {worker_id}.")
             return

@@ -202,7 +202,8 @@ class FeedManager:
         self.watchdog = FeedWatchdog(
             registry=self.registry,
             pool_manager=self.pool_manager,
-            restart_callback=self.restart_feed
+            restart_callback=self.restart_feed,
+            halt_feeds_callback=self.halt_feeds_for_worker,
         )
 
         # Use _resolve_pool_size so this fallback chain matches the rest of
@@ -1349,6 +1350,32 @@ class FeedManager:
         if not is_sample:
             await self._check_and_manage_sample_feed()
 
+    async def halt_feeds_for_worker(self, slots) -> None:
+        """Stops every running feed whose ingestion routes to one of the given
+        inference slots. Called by the watchdog when a worker is quarantined
+        (repeated CUDA-fatal exits, see feed_watchdog.watchdog_loop): that
+        worker's slot queues have no consumer, so frames would keep
+        accumulating until the SHM free pool exhausts and healthy feeds start
+        dropping (observed 2026-08-16: pool at 0% free, total_drops ~999).
+        """
+        slot_set = set(slots or [])
+        to_stop = []
+        async with self._lock:
+            for feed_id, entry in self.process_registry.items():
+                proc = entry.get("process")
+                if proc and entry.get("inference_slot") in slot_set:
+                    to_stop.append(feed_id)
+        for feed_id in to_stop:
+            slot = self.process_registry.get(feed_id, {}).get("inference_slot")
+            logger.warning(
+                f"Halting feed {feed_id}: its inference slot {slot} is owned by "
+                f"a quarantined (CUDA-fatal) inference worker."
+            )
+            try:
+                await self.stop_feed(feed_id)
+            except Exception as e:
+                logger.error(f"Failed to halt feed {feed_id} after worker quarantine: {e}")
+
     async def restart_feed(self, feed_id: str):
         logger.info(f"Restart requested for: '{feed_id}'")
         async with self._get_feed_lock(feed_id):
@@ -1460,10 +1487,36 @@ class FeedManager:
         with self._route_lock:
             configured_pool = self._resolve_pool_size()
             pool_size = max(1, self.pool_manager.pool_size or configured_pool or 1)
-            wid = self._feed_launch_seq % pool_size
+            base_wid = self._feed_launch_seq % pool_size
+            quarantined = self.pool_manager.quarantined_workers
+            # Quarantine guard: never route a feed to a quarantined worker or
+            # to a slot owned by one -- that slot queue has no consumer, so
+            # frames pile up until the SHM free pool exhausts and healthy
+            # feeds start dropping (observed 2026-08-16: dead worker -> 0%
+            # free -> total_drops ~999). Scan forward for the next live
+            # candidate worker + slot.
+            wid = base_wid
+            slot_id = None
+            for _offset in range(pool_size):
+                candidate = (base_wid + _offset) % pool_size
+                if candidate in quarantined:
+                    continue
+                cand_sub = self._per_worker_feed_count.get(candidate, 0)
+                cand_slot = (candidate + cand_sub * pool_size) % self.slot_count
+                owner = self.pool_manager.slot_to_worker.get(cand_slot, -1)
+                if owner in quarantined or owner == -1:
+                    continue
+                wid = candidate
+                slot_id = cand_slot
+                break
+            if slot_id is None:
+                # Every worker/slot is quarantined -- fall back to the base
+                # worker so the feed still starts (and fails visibly) instead
+                # of silently never launching.
+                wid = base_wid
+                slot_id = (wid + self._per_worker_feed_count.get(wid, 0) * pool_size) % self.slot_count
             sub = self._per_worker_feed_count.get(wid, 0)
             # Worker `wid` owns slots { wid, wid + pool_size, wid + 2*pool_size, ... }.
-            slot_id = (wid + sub * pool_size) % self.slot_count
             self._per_worker_feed_count[wid] = sub + 1
             self._feed_launch_seq += 1
 
@@ -1507,6 +1560,8 @@ class FeedManager:
         process.start()
         entry["process"] = process
         entry["start_time"] = time.time()
+        entry["inference_slot"] = slot_id
+        entry["inference_worker"] = wid
         logger.info(f"Launched ingestion PID {process.pid} for '{feed_id}'")
 
     def _detach_resources(self, feed_id: str) -> Optional[Dict[str, Any]]:
