@@ -1835,7 +1835,9 @@ class FeedManager:
                     total_vehicles_active += v_active
                     total_vehicles_cumulative += metrics.get("total_vehicles_cumulative", v_active)
 
-                    avg_speed = metrics.get("session_average_speed_kmh")
+                    avg_speed = metrics.get("recent_average_speed_kmh")
+                    if avg_speed is None:
+                        avg_speed = metrics.get("session_average_speed_kmh")
                     if avg_speed is None:
                         avg_speed = metrics.get("average_speed_kmh", 0.0)
                     # Only count feeds that actually have a measurable (positive)
@@ -1847,7 +1849,9 @@ class FeedManager:
                         total_speed_sum += avg_speed
                         total_speed_count += 1
 
-                    congestion = metrics.get("session_average_congestion_score")
+                    congestion = metrics.get("recent_average_congestion_score")
+                    if congestion is None:
+                        congestion = metrics.get("session_average_congestion_score")
                     if congestion is None:
                         congestion = metrics.get("congestion_score", 0.0)
                     # If the congestion reading is itself flagged uncalibrated,
@@ -1868,6 +1872,7 @@ class FeedManager:
                 average_speed_kmh=0.0,
                 congestion_index=0.0,
                 active_incidents_count=0,
+                global_health_score=0.0,
                 feed_statuses={"active": 0, "total": len(self.process_registry)},
                 custom_metrics={"active_vehicles": 0},
             )
@@ -1876,6 +1881,23 @@ class FeedManager:
 
         global_avg_speed = (total_speed_sum / total_speed_count) if total_speed_count > 0 else 0.0
         global_congestion_index = total_congestion_sum / active_feeds_count
+
+        # Global health score (frontend reads this; previously never sent so the
+        # widget fell back to a fake 100/"OPTIMAL" forever). Start from 100 and
+        # subtract for the conditions that degrade a live system:
+        #   - every non-RUNNING feed (stopped/error) is a hard penalty;
+        #   - uncalibrated feeds can't produce trustworthy speeds;
+        #   - severe congestion is a soft penalty.
+        total_feeds = len(self.process_registry)
+        non_running = max(0, total_feeds - active_feeds_count)
+        health_score = 100.0
+        health_score -= non_running * 25.0
+        health_score -= uncalibrated_feeds_count * 10.0
+        if global_congestion_index >= 80:
+            health_score -= 15.0
+        elif global_congestion_index >= 60:
+            health_score -= 8.0
+        health_score = max(0.0, min(100.0, round(health_score, 1)))
 
         # Global distinct vehicle count (audit finding #2): summing per-feed
         # `total_vehicles_cumulative` double-counts any vehicle seen in more
@@ -1897,6 +1919,7 @@ class FeedManager:
             average_speed_kmh=round(global_avg_speed, 1),
             congestion_index=round(global_congestion_index, 1),
             active_incidents_count=0,
+            global_health_score=health_score,
             feed_statuses={"active": active_feeds_count, "total": len(self.process_registry)},
             custom_metrics={
                 "active_vehicles": total_vehicles_active,

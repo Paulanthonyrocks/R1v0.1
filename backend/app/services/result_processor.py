@@ -97,6 +97,10 @@ _NON_SMOOTHED_METRIC_KEYS = frozenset({
     "session_average_speed_kmh",
     "speed_uncalibrated",
     "congestion_uncalibrated",
+    # Recent-window aggregates (TrafficMonitor already averages over the
+    # configured window); EMA-ing an aggregate would lag it a second time.
+    "recent_average_speed_kmh",
+    "recent_average_congestion_score",
 })
 
 

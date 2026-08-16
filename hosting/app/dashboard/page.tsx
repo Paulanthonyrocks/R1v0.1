@@ -53,24 +53,19 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     if (kpis) {
       setKpiHistory(prev => {
-        const lastPoint = prev.length > 0 ? prev[prev.length - 1] : null;
-        const alpha = 0.4;
+        // No client-side re-smoothing: the backend already EMA-windows the
+        // per-feed metrics (metrics_averaging_window_seconds) and averages the
+        // live KPIs over metrics_recent_window_seconds, so a second alpha
+        // filter here only added lag to an already-lagged signal (the old
+        // alpha=0.4 smoothing made the trend chart look pinned/flat).
         const currentCongestion = kpis.congestion_index ?? 0;
         const currentSpeed = kpis.average_speed_kmh ?? 0;
         
-        const smoothedCongestion = lastPoint 
-            ? (alpha * currentCongestion + (1 - alpha) * lastPoint.congestion_index)
-            : currentCongestion;
-            
-        const smoothedSpeed = lastPoint
-            ? (alpha * currentSpeed + (1 - alpha) * lastPoint.avg_speed)
-            : currentSpeed;
-
         const newPoint: TrendDataPoint = {
           timestamp: new Date().toISOString(),
           total_vehicles: kpis.total_flow ?? 0,
-          avg_speed: Math.round(smoothedSpeed * 10) / 10,
-          congestion_index: Math.round(smoothedCongestion * 10) / 10,
+          avg_speed: Math.round(currentSpeed * 10) / 10,
+          congestion_index: Math.round(currentCongestion * 10) / 10,
           health_score: kpis.global_health_score ?? 100
         };
 

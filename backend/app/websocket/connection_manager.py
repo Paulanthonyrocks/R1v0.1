@@ -569,8 +569,12 @@ class ConnectionManager:
           rate divided by the number of active feeds, defaulting to 2fps
           per feed (interval = 500ms).
         * Tunnel (>250ms): sender drains ~3-4fps over a slow tunnel. We cap
-          at 1fps per feed (interval = 1000ms). Three feeds * 1fps = 3fps,
-          which the sender can keep up with over a 250ms-RTT link.
+          at 2fps per feed (interval = 500ms). Three feeds * 2fps = 6fps,
+          which the sender can keep up with over a 250ms-RTT link; the
+          deque then holds at most ~1 frame per feed, so catch-up bursts
+          stay short. (Was 1000ms/1fps; raised after the 2026-08-16 run
+          showed steady 0.8-1.0 fps delivery with stalls up to ~9.5s while
+          the wire had headroom.)
 
         The cap is ALWAYS PER-FEED: a high-latency client still gets the
         latest frame from each feed at its tier rate, just not every frame.
@@ -594,7 +598,7 @@ class ConnectionManager:
             return 0.0  # LAN: pass through every frame
         if latency_ms < 250:
             return 0.5  # Mixed: 2 fps per feed (3 feeds = 6 fps aggregate)
-        return 1.0      # Tunnel: 1 fps per feed (3 feeds = 3 fps, matches sender drain)
+        return 0.5      # Tunnel: 2 fps per feed (3 feeds = 6 fps aggregate)
 
     def _maybe_resize_low_priority_queue(self, client_id: str) -> None:
         """Re-create the per-client low_priority deque when RTT crosses a size

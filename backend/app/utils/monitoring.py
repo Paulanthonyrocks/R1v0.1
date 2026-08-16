@@ -108,6 +108,15 @@ class TrafficMonitor:
             "congestion_score_sum": 0.0,
             "congestion_score_samples": 0
         }
+        # Recent-window rolling samples for LIVE KPIs. The session_* metrics
+        # above are since-boot cumulative means -- they asymptote toward the
+        # run's average and never reflect current conditions (observed: global
+        # congestion pinned at 72.9-73.5 for a whole 23-min run while the
+        # per-frame value swung 60-98). The dashboard headline KPI needs a
+        # short-window mean instead: keep a bounded deque of (ts, speed,
+        # congestion_score) samples and average over the configured window.
+        self.recent_window_seconds: float = float(config.get("metrics_recent_window_seconds", 60))
+        self._recent_samples: "deque[tuple]" = deque(maxlen=256)
         self.lane_areas: Dict[int, float] = {}
         self.anomalies: List[Dict[str, Any]] = []
         self.speed_limit_kmh: float = config.get("speed_limit", 60.0)
@@ -242,6 +251,20 @@ class TrafficMonitor:
             self.session_metrics["congestion_score_sum"] += congestion_score
             self.session_metrics["congestion_score_samples"] += 1
 
+            # Recent-window rolling samples for LIVE KPIs (see __init__ note).
+            # Append one sample per observed frame and prune to the window;
+            # averaging over these gives a short-horizon mean that actually
+            # tracks current conditions instead of the since-boot session mean.
+            self._recent_samples.append((time.time(), avg_speed_kmh, congestion_score))
+            _now = time.time()
+            while self._recent_samples and (self._recent_samples[0][0] < _now - self.recent_window_seconds):
+                self._recent_samples.popleft()
+
+        recent_speeds = [s[1] for s in self._recent_samples if s[1] is not None]
+        recent_congestions = [s[2] for s in self._recent_samples if s[2] is not None]
+        recent_avg_speed = float(np.mean(recent_speeds)) if recent_speeds else 0.0
+        recent_avg_congestion = float(np.mean(recent_congestions)) if recent_congestions else 0.0
+
         session_avg_congestion_score = self.session_metrics["congestion_score_sum"] / self.session_metrics["congestion_score_samples"] if self.session_metrics["congestion_score_samples"] > 0 else 0.0
 
         lane_occupancy: Dict[int, float] = {}
@@ -269,6 +292,8 @@ class TrafficMonitor:
             "session_average_speed_kmh": round(session_avg_speed, 1),
             "session_congestion_level_percent": round(session_avg_congestion, 1),
             "session_average_congestion_score": round(session_avg_congestion_score, 1),
+            "recent_average_speed_kmh": round(recent_avg_speed, 1),
+            "recent_average_congestion_score": round(recent_avg_congestion, 1),
             "stopped_vehicles": stopped_count,
             "speeding_vehicles": speeding_count,
             "average_speed_kmh": round(avg_speed_kmh, 1),

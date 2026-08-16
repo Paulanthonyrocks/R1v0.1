@@ -457,6 +457,16 @@ auto_start_processing: true
 performance:
   auto_optimize: true
   batch_size: 16
+  # ReID embedding budget per detect frame (core_module.py reads these via
+  # config["performance"].get("reid_budget_per_frame", 10) and
+  # ("reid_assoc_budget_per_frame", 20)). The shipped key
+  # vehicle_detection.max_reid_per_frame: 2 was DEAD — no code reads it — so
+  # the real budget silently ran at the 10+20 code defaults, i.e. up to 30
+  # mobilenet_v3_small forwards at 256x256 per detect frame. That is the bulk
+  # of the ~0.85s/detect cost that pins each worker to ~1.2 fps/feed (TRT YOLO
+  # itself is ~2.4ms). Wire the operator's intended cap here.
+  reid_budget_per_frame: 2
+  reid_assoc_budget_per_frame: 4
   cpu_limit_percent: 95
   cpu_threshold_for_skip_increase: 85
   gpu_acceleration: true
@@ -567,6 +577,13 @@ redis:
   host: localhost
   port: 6379
 kpi_broadcast_interval: 5
+# EMA window for per-feed metric smoothing (result_processor). Was silently at
+# the code default 300s -> alpha=1/300, which froze broadcast KPIs near-static
+# (congestion pinned 72.9-73.5 for 23 min). 10-30s tracks live conditions.
+metrics_averaging_window_seconds: 30
+# Rolling window for TrafficMonitor's recent_average_* live KPIs (the
+# feed_manager headline uses these instead of since-boot session averages).
+metrics_recent_window_seconds: 60
 roi_processing:
   crop_rect:
   - 0

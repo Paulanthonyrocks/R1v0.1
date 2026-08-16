@@ -299,7 +299,12 @@ const unsubscribeFromFeed = useCallback(() => {
           data.frame_index < lastProcessedIndexRef.current - LOOP_RESET_BACKJUMP
         ) {
           const timeSinceLastFrame = performance.now() - lastSuccessfulFrameTimeRef.current;
-          const isGenuineRestart = timeSinceLastFrame > 2000;
+          // 5s (was 2s): the 2026-08-16 run showed ordinary stall gaps up to
+          // ~9.5s on tunnel clients while the backend stayed healthy, and a
+          // 2033ms silence tripped a false "feed restart" alarm. A genuine
+          // backend restart still surfaces as backend-side process death, so
+          // nothing is lost by widening the window.
+          const isGenuineRestart = timeSinceLastFrame > 5000;
           if (isGenuineRestart) {
             console.warn(`[useVideoSocket ${hookId.current}] Detected feed restart for ${currentStreamId} (silent for ${Math.round(timeSinceLastFrame)}ms), resetting frame index tracker`);
           } else {

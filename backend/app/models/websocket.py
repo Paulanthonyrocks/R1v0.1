@@ -48,6 +48,7 @@ class GlobalRealtimeMetrics(BaseModel):
     average_speed_kmh: Optional[float] = Field(None, example=30.2)
     active_incidents_count: Optional[int] = Field(None, example=3)
     total_flow: Optional[int] = Field(None, example=1250)
+    global_health_score: Optional[float] = Field(None, example=88.5)
     feed_statuses: Optional[Dict[str, int]] = Field(
         None, example={"running": 5, "stopped": 2, "error": 1}
     )
