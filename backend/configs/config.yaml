@@ -45,7 +45,12 @@ database:
 feed_manager:
   db_write_interval: 0.5
   error_check_interval: 5.0
-  max_concurrent_feeds: 5
+  # Workload headroom: raised from 5 (was 3 feeds; now 5 configured). Kept at
+  # 8 -- NOT filled to the brim: 5 feeds x 15fps at imgsz 960 (fp32) is
+  # already ~1 card of compute; adding feeds past ~7 just piles onto the
+  # drop-counter (skip_threshold) instead of the GPU. Fill toward 8 after a
+  # TRT-960 re-export (fp16 ~10x cheaper per detect).
+  max_concurrent_feeds: 8
 file_watcher:
   enabled: false
   watch_directory: data/new_sample_videos
