@@ -499,6 +499,7 @@ class ResultProcessor:
             # frontend (which reads bg/v/m/t) handles either transparently.
             adaptive = bool(self.config.get("video_processing", {}).get("adaptive_streaming", False))
             small_bg = extra.get("bg") if (extra and isinstance(extra, dict)) else None
+            lanes_payload = extra.get("ln") if (extra and isinstance(extra, dict)) else None
 
             compact_full = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
@@ -508,6 +509,7 @@ class ResultProcessor:
                 "v": _wire_vehicles(vehicles),
                 "m": _convert_metrics(metrics),
                 "bg": frame_bytes,  # full-res; recording pump also uses this
+                "ln": lanes_payload,  # normalized lane lines/bounds for lane-flow overlay
             }
             full_data = msgpack.packb(compact_full, use_bin_type=True, default=_to_native)
 

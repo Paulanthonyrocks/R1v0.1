@@ -7,6 +7,7 @@ interface DecoderOptions {
         index: number;
         metrics: any;
         vehicles: any[];
+        lanes: any;
         timestamp: number;
     }) => void;
     onError?: (error: Error) => void;
@@ -60,6 +61,7 @@ export const useVideoDecoder = (options: DecoderOptions) => {
                     index: data.frame_index || 0,
                     metrics: data.metrics || null,
                     vehicles: data.vehicles || [],
+                    lanes: data.lanes || null,
                     timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now()
                 });
             }

@@ -21,6 +21,7 @@ interface StreamOverlayControlsProps {
   setShowTrajectories: (value: boolean) => void;
   showLaneOverlays: boolean;
   setShowLaneOverlays: (value: boolean) => void;
+  hidePerVehicleToggles?: boolean;
   controlId: string;
   feedSettings?: React.ReactNode;
 }
@@ -69,6 +70,7 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
   setShowTrajectories,
   showLaneOverlays,
   setShowLaneOverlays,
+  hidePerVehicleToggles,
   controlId,
   feedSettings,
 }) => {
@@ -108,14 +110,16 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Vehicle Details</Label>
-            <MatrixCheckbox
-              id={`toggle-details-${controlId}`}
-              checked={showVehicleDetails}
-              onCheckedChange={setShowVehicleDetails}
-            />
-          </div>
+          {!hidePerVehicleToggles && (
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Vehicle Details</Label>
+              <MatrixCheckbox
+                id={`toggle-details-${controlId}`}
+                checked={showVehicleDetails}
+                onCheckedChange={setShowVehicleDetails}
+              />
+            </div>
+          )}
 
           <div className="flex items-center justify-between gap-4">
             <Label htmlFor={`toggle-roi-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Region of Interest</Label>
@@ -126,23 +130,27 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
             />
           </div>
 
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor={`toggle-trajectories-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Trajectories</Label>
-            <MatrixCheckbox
-              id={`toggle-trajectories-${controlId}`}
-              checked={showTrajectories}
-              onCheckedChange={setShowTrajectories}
-            />
-          </div>
+          {!hidePerVehicleToggles && (
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor={`toggle-trajectories-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Trajectories</Label>
+              <MatrixCheckbox
+                id={`toggle-trajectories-${controlId}`}
+                checked={showTrajectories}
+                onCheckedChange={setShowTrajectories}
+              />
+            </div>
+          )}
 
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor={`toggle-lane-flow-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Lane Flow Overlays</Label>
-            <MatrixCheckbox
-              id={`toggle-lane-flow-${controlId}`}
-              checked={showLaneOverlays}
-              onCheckedChange={setShowLaneOverlays}
-            />
-          </div>
+          {!hidePerVehicleToggles && (
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor={`toggle-lane-flow-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Lane Flow Overlays</Label>
+              <MatrixCheckbox
+                id={`toggle-lane-flow-${controlId}`}
+                checked={showLaneOverlays}
+                onCheckedChange={setShowLaneOverlays}
+              />
+            </div>
+          )}
 
           {setShowExclusionZones && (
             <div className="flex items-center justify-between gap-4">

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WebSocketMessageType, WebSocketMessage } from './websocket/WebSocketClient';
 import { useWebSocket } from './websocket/WebSocketProvider';
-import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData, VideoFrameSnapshot } from './types';
+import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData, VideoFrameSnapshot, LaneOverlayData } from './types';
 import { useVideoDecoder } from './hooks/useVideoDecoder';
 import videoStreamManager from './videoStreamManager';
 import {
@@ -37,11 +37,16 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
     image: ImageBitmap | HTMLImageElement | null,
     index: number,
     vehicles: VehicleFrontendData[] | null,
-    metrics: SurveillanceFeedMessage | null
+    metrics: SurveillanceFeedMessage | null,
+    lanes?: LaneOverlayData | null
   } | null>(null);
   
   const vehiclesRef = useRef<VehicleFrontendData[] | null>(null);
   const metricsRef = useRef<SurveillanceFeedMessage | null>(null);
+  // Sticky lane geometry: skip-frames carry no "ln" payload, so keep the last
+  // known lanes here to avoid flicker on the lane-flow overlay between
+  // detect frames.
+  const lanesRef = useRef<LaneOverlayData | null>(null);
 
   const lastStateJsonRef = useRef<string>("");
   const throttleTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -98,9 +103,10 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   // --- Sub-Hooks Implementation ---
   const { decode } = useVideoDecoder({
     onFrame: (decodedData) => {
-      const { image, index, metrics: frameMetrics, vehicles: frameVehicles, timestamp } = decodedData;
+      const { image, index, metrics: frameMetrics, vehicles: frameVehicles, lanes: frameLanes, timestamp } = decodedData;
       // Skip vehicle data in minimal mode to reduce memory/GC pressure
       const vehiclesToStore = minimal ? null : frameVehicles;
+      if (frameLanes) lanesRef.current = frameLanes;
       
       const previousIndex = lastFrameRef.current?.index ?? -1;
       if (index < previousIndex) {
@@ -172,7 +178,8 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
         image,
         index,
         vehicles: vehiclesToStore,
-        metrics: frameMetrics
+        metrics: frameMetrics,
+        lanes: lanesRef.current
       };
 
       const now = performance.now();
@@ -505,16 +512,18 @@ const unsubscribeFromFeed = useCallback(() => {
       index: number;
       vehicles: VehicleFrontendData[] | null;
       metrics: SurveillanceFeedMessage | null;
+      lanes?: LaneOverlayData | null;
     },
     options: any = {}
   ) => {
-    const { image, vehicles, metrics } = frame;
+    const { image, vehicles, metrics, lanes } = frame;
     const {
       showBoundingBoxes = true,
       showVehicleDetails = true,
       showTrajectories = false,
       selectedVehicleIds = new Set(),
       showAllDetections = false,
+      showLaneOverlays = false,
       minimal = false,  // Dashboard thumbnails: skip per-vehicle bboxes/metrics canvas text
     } = options;
 
@@ -538,6 +547,38 @@ const unsubscribeFromFeed = useCallback(() => {
         // Fallback for race conditions where bitmap detaches mid-draw
         console.warn(`[useVideoSocket ${hookId.current}] Failed to draw frame - image detached`);
       }
+    }
+
+    // Lane-flow overlay: draw the backend's normalized lane lines/bounds
+    // (payload key "ln"). Gated by the StreamOverlayControls toggle.
+    if (showLaneOverlays && lanes) {
+      const cw = ctx.canvas.width;
+      const ch = ctx.canvas.height;
+      ctx.save();
+      if (Array.isArray(lanes.lines)) {
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.45)';
+        ctx.lineWidth = 2;
+        for (const line of lanes.lines) {
+          const [x1, y1, x2, y2] = line;
+          ctx.beginPath();
+          ctx.moveTo(x1 * cw, y1 * ch);
+          ctx.lineTo(x2 * cw, y2 * ch);
+          ctx.stroke();
+        }
+      }
+      if (Array.isArray(lanes.bounds) && lanes.bounds.length >= 2) {
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.18)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        for (const bx of lanes.bounds) {
+          const px = bx * cw;
+          ctx.moveTo(px, 0);
+          ctx.lineTo(px, ch);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
     }
 
     // Minimal/thumbnail mode used to `return` here and skip ALL overlay

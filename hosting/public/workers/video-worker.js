@@ -111,6 +111,7 @@ async function processFeedQueue(feed_id) {
                     frame_index: metadata.frame_index,
                     metrics: metadata.metrics,
                     vehicles: metadata.vehicles,
+                    lanes: metadata.lanes,
                     timestamp: metadata.timestamp
                 }, [bitmap]);
 
@@ -149,6 +150,7 @@ self.onmessage = async function (e) {
                 frame_index: decoded.i || 0,
                 metrics: decoded.m,
                 vehicles: decoded.v,
+                lanes: decoded.ln,
                 timestamp: decoded.ts
             };
 
@@ -203,6 +205,7 @@ self.onmessage = async function (e) {
             frame_index: 0,
             metrics: null,
             vehicles: [],
+            lanes: null,
             timestamp: Date.now()
         };
 
@@ -211,6 +214,7 @@ self.onmessage = async function (e) {
                 frame_index: binaryFrame.i || 0,
                 metrics: binaryFrame.m,
                 vehicles: binaryFrame.v,
+                lanes: binaryFrame.ln,
                 timestamp: binaryFrame.ts
             };
         }

@@ -1112,6 +1112,24 @@ def inference_worker(
                         )
 
                         extra = {}
+                        try:
+                            # Lane geometry (normalized 0-1): forwarded so the
+                            # frontend can render lane-flow overlays client-side
+                            # instead of the dead toggle it used to be. Present
+                            # only when lane detection produced lines; the
+                            # result processor ships it as the "ln" payload key.
+                            if lane_lines or lane_bounds:
+                                h, w = frame.shape[:2]
+                                extra["ln"] = {
+                                    "lines": [
+                                        [float(x1) / w, float(y1) / h, float(x2) / w, float(y2) / h]
+                                        for (x1, y1, x2, y2) in (lane_lines or [])
+                                    ],
+                                    "bounds": [float(b) / w for b in (lane_bounds or [])],
+                                }
+                        except Exception:
+                            # Lane metadata is best-effort; never fail the frame.
+                            pass
 
                         try:
                             # RedisStreamQueue uses put(), not put_nowait()

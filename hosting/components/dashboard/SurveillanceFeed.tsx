@@ -119,6 +119,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     // Tracks global_vehicle_id → last known vehicle_id for sticky cleanup
     const stickyMapRef = useRef<Map<string, string>>(new Map());
 
+    // Client-side trajectory history per vehicle (normalized centroids). The
+    // wire payload carries no track history, so we accumulate it here and
+    // prune entries when a track disappears.
+    const trajectoryMapRef = useRef<Map<string, { x: number, y: number }[]>>(new Map());
+
     useEffect(() => {
         const currentVehicles = vehicles;
         if (!currentVehicles || currentVehicles.length === 0) return;
@@ -224,7 +229,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     };
 
     const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!canvasRef.current || minimalControls) return;
+        if (!canvasRef.current) return;
 
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
@@ -386,7 +391,51 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     notifyFrameRendered(frame.index);
                     lastDrawnIndex = frame.index;
 
-                    if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0 && !minimalControls)) {
+                    // Trajectory overlays: accumulate bbox-center history per
+                    // vehicle and draw polylines when the toggle is on. Gated
+                    // off in minimal (grid) mode where vehicle data is absent.
+                    if (opts.showTrajectories && !minimalControls && frame.vehicles && frame.vehicles.length > 0) {
+                        const trajMap = trajectoryMapRef.current;
+                        const seen = new Set<string>();
+                        for (const v of frame.vehicles) {
+                            if (!v.bbox || !Array.isArray(v.bbox) || v.bbox.length !== 4) continue;
+                            const id = v.global_vehicle_id || v.vehicle_id;
+                            if (!id) continue;
+                            seen.add(id);
+                            const cx = (v.bbox[0] + v.bbox[2]) / 2;
+                            const cy = (v.bbox[1] + v.bbox[3]) / 2;
+                            let pts = trajMap.get(id);
+                            if (!pts) {
+                                pts = [];
+                                trajMap.set(id, pts);
+                            }
+                            const last = pts[pts.length - 1];
+                            if (!last || Math.abs(last.x - cx) > 0.01 || Math.abs(last.y - cy) > 0.01) {
+                                pts.push({ x: cx, y: cy });
+                                if (pts.length > 40) pts.shift();
+                            }
+                        }
+                        for (const id of Array.from(trajMap.keys())) {
+                            if (!seen.has(id)) trajMap.delete(id);
+                        }
+                        ctx.save();
+                        ctx.strokeStyle = 'rgba(0, 255, 200, 0.55)';
+                        ctx.lineWidth = 1.5;
+                        for (const pts of trajMap.values()) {
+                            if (pts.length < 2) continue;
+                            ctx.beginPath();
+                            pts.forEach((p, i) => {
+                                const px = p.x * canvas.width;
+                                const py = p.y * canvas.height;
+                                if (i === 0) ctx.moveTo(px, py);
+                                else ctx.lineTo(px, py);
+                            });
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                    }
+
+                    if (roi.roiMode === 'roi' || (opts.showOverlays && opts.showROI && roi.roiPoints.length > 0)) {
                         ctx.save();
                         ctx.strokeStyle = roi.roiMode === 'roi' ? '#00ff00' : 'rgba(0, 255, 0, 0.3)';
                         ctx.lineWidth = 2;
@@ -410,7 +459,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                         ctx.restore();
                     }
 
-                    if (opts.showOverlays && opts.showExclusionZones && !minimalControls) {
+                    if (opts.showOverlays && opts.showExclusionZones) {
                         ctx.save();
 
                         exclusionZones.forEach(zone => {
@@ -542,6 +591,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 setShowTrajectories={isAdmin ? handleToggleTrajectories : setShowTrajectories}
                 showLaneOverlays={showLaneOverlays}
                 setShowLaneOverlays={setShowLaneOverlays}
+                hidePerVehicleToggles={minimalControls}
                 showExclusionZones={showExclusionZones}
                 setShowExclusionZones={setShowExclusionZones}
                 onClearExclusionZones={isAdmin ? handleClearExclusionZones : undefined}
@@ -575,7 +625,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {isAdmin && roiMode && !minimalControls && (
+                {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">
                             {roiMode === 'roi' ? 'Set Inclusion ROI' : 'Add Exclusion Zone'}
@@ -642,16 +692,14 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </Badge>
                 )}
 
-                {!minimalControls && (
-                    <MetricsPanel
-                        metrics={metrics}
-                        isLive={isLive}
-                        className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto scale-95 origin-top-right"
-                    />
-                )}
+                <MetricsPanel
+                    metrics={metrics}
+                    isLive={isLive}
+                    className="absolute top-1.5 right-1.5 z-20 w-48 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto scale-95 origin-top-right"
+                />
 
-                {!isToggling && !isLoading && !minimalControls && (
-                    <div className="absolute bottom-1.5 left-1.5 flex gap-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                {!isToggling && (!isLoading || status === 'stopped') && (
+                    <div className="absolute bottom-1.5 left-1.5 flex gap-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto">
                         <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm">
                             <button
                                 onClick={(e) => { e.stopPropagation(); handleRestartFeed(); }}
@@ -679,7 +727,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                             </button>
                         </div>
 
-                        {isAdmin && !minimalControls && (
+                        {isAdmin && (
                             <div className="flex bg-black/60 backdrop-blur-sm p-0.5 rounded-sm ml-1">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setRoiMode(roiMode === 'roi' ? null : 'roi'); }}
@@ -700,8 +748,8 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
-                {!isToggling && !isLoading && !error && !minimalControls && (
-                    <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                {!isToggling && !isLoading && !error && (
+                    <div className="absolute top-12 right-1.5 flex flex-col gap-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none group-hover:pointer-events-auto">
                         {isFullscreen ? (
                             <button
                                 className="text-lcd-bg group-hover:text-lcd-text p-1 rounded-none bg-black/50 backdrop-blur-sm hover:bg-black/70"

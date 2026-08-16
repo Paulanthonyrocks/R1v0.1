@@ -132,6 +132,8 @@ export interface CongestionNodeProps {
 
 export interface SurveillanceFeedProps {
   feed_id: string; // Changed from feed: FeedStatusData to feed_id: string
+  // Minimal mode: suppress per-vehicle data subscription and canvas overlays
+  // (dashboard grid perf). Control chrome (gear, play/stop, ROI, metrics) always renders.
   minimalControls?: boolean;
 }
 export interface LegendItemProps { color: string; text: string; }
@@ -243,7 +245,17 @@ export interface VideoFrameSnapshot {
     index: number;
     vehicles: VehicleFrontendData[] | null;
     metrics: SurveillanceFeedMessage | null;
+    lanes?: LaneOverlayData | null;
     timestamp: number;
+}
+
+// Normalized (0-1) lane geometry from the backend "ln" payload key:
+// lines = [x1,y1,x2,y2] per detected lane line, bounds = x positions of
+// lane boundaries. Coordinates are relative to the frame, so the canvas
+// renderer multiplies by canvas width/height at draw time.
+export interface LaneOverlayData {
+  lines?: [number, number, number, number][];
+  bounds?: number[];
 }
 
 export interface SurveillanceFeedMessage {
@@ -275,5 +287,6 @@ export interface VideoFrameMessage {
   timestamp?: string | number;
   metrics?: SurveillanceFeedMessage;
   vehicles?: VehicleFrontendData[];
+  lanes?: LaneOverlayData | null;
 
 }

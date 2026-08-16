@@ -107,7 +107,7 @@ kalman_filter_params:
 lane_detection:
   canny_high_threshold: 150
   canny_low_threshold: 50
-  enabled: false
+  enabled: true
   gaussian_blur_kernel_size: 5
   hough_max_line_gap: 20
   hough_min_line_length: 40
@@ -602,7 +602,7 @@ storage:
   image_output_dir: data/pavement_images
   report_output_dir: data/pavement_reports
 tracking:
-  use_appearance_in_tracking: false
+  use_appearance_in_tracking: true
 traffic_predictor_model_path: models/traffic_predictor_model.h5
 v2x:
   broadcast_ip: 255.255.255.255
