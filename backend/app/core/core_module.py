@@ -669,6 +669,21 @@ class CoreModule:
 
         vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
 
+        # Enforce the configured active-track cap (the key was read at init
+        # but NEVER enforced -- dead). At low detection fps the frame-based
+        # track timeout stretches in wall-clock (10 frames @ 0.6fps = ~17s),
+        # so stale tracks accumulate far past max_active_tracks (observed
+        # 178 live vehicles with the cap set to 100), bloating the wire
+        # payload, ReID matching, and tracker cost. Cull the least-recently
+        # seen tracks to honor the operator's declared cap.
+        if len(vehicle_data) > self.max_active_tracks:
+            by_seen = sorted(
+                vehicle_data.items(),
+                key=lambda kv: kv[1].get("last_seen", 0.0),
+                reverse=True,
+            )
+            vehicle_data = dict(by_seen[: self.max_active_tracks])
+
         # Apply previous statuses for adaptive ReID
         for tid, track in vehicle_data.items():
             track["prev_status"] = current_statuses.get(tid, "unknown")

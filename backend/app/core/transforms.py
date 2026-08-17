@@ -88,7 +88,7 @@ class CoordinateTransformer:
                     logger.error("Image points appear normalized, but no 'resolution' provided in calibration config. Aborting homography calculation.")
                     return
                 
-                logger.warning(f"Image points appear normalized (max={img_pts.max():.3f}). Scaling by {resolution}")
+                logger.info(f"Image points appear normalized (max={img_pts.max():.3f}). Scaling by {resolution}")
                 img_pts[:, 0] *= resolution[0]
                 img_pts[:, 1] *= resolution[1]
             

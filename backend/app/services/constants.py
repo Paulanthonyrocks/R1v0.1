@@ -8,25 +8,25 @@ class FeedManagerConstants:
     MAX_METRICS_HISTORY_LENGTH = 1000
 
     # Scaling & Slots
-    # SLOT_COUNT raised 4 -> 24. With inference_pool_size = 24 (config.yaml),
-    # slot_count < pool_size caused InferencePoolManager.scale_pool's
-    # modulo-based assignment to OVERWRITE a worker's slot mid-spawn -- so
-    # workers 0..3 logged "Slots assigned: [0..3]" at boot but the slot map
-    # was immediately rewritten to wid=4..7, leaving workers 0..3 with stale
-    # slot ownership and no incoming frames. Setting slot_count == pool_size
-    # collapses effective_workers = min(target_size, slot_count) == pool_size,
-    # so every wid gets exactly one distinct slot and no overwrite is possible.
-    # Memory cost: ~24 RedisStreamQueue instances vs 4, ~negligible.
+    # SLOT_COUNT 24 -> 6 (2026-08-17). The 24 value enforced a strict 1:1
+    # worker:slot mapping (pool 24 == slots 24), which meant EACH FEED WAS
+    # SERVED BY EXACTLY ONE WORKER -- with 3-5 feeds, 19-21 of 24 workers sat
+    # idle (confirmed: only Workers 0/1/2 logged per-feed METRICS in the
+    # 08-17 00:00 run) and each feed's fps was capped by a single worker's
+    # ReID+detect cost. With the rewritten scale_pool (unowned-slot-first +
+    # step-4 respawn gate) the old overwrite bug that motivated 24 is gone,
+    # and slot_count=6 + pool 24 fans out to 4 consumers per slot
+    # (wids {0,6,12,18} on slot 0, etc.) -- verified by driving the REAL
+    # scale_pool: every slot gets 4 consumers, no orphaned spawns, feeds
+    # route to slots (wid % 6) = 0..4.
     #
-    # INVARIANT: SLOT_COUNT >= MAX_WORKERS. Verified empirically in
-    # investigation #2 (test_scale_pool_leak.py, scenario "Cold-start at max"):
-    # pool_size == slot_count yields 1:1 slot ownership with no orphans.
-    # DO NOT lower SLOT_COUNT without re-running the scale_pool integration
-    # tests -- oscillating scale_pool calls under pool_size > slot_count
-    # cause step 4 to leave workers stranded with stale slot ownership.
-    # If you must lower it, keep pin_inference_pool: true so scale_pool's
-    # early-return at line 102 keeps the bug unreachable.
-    SLOT_COUNT = 24
+    # CAVEAT: oscillating scale_pool calls (scale-down then up) under
+    # pool_size > slot_count strand the low-wid survivors (their slots get
+    # stolen and the respawn is refused). pin_inference_pool: true keeps the
+    # scaling monitor from calling scale_pool after boot, so live the only
+    # call is the boot 0->24 -- the safe path. If you ever unpin, keep
+    # slot_count >= max_concurrent_feeds or re-test the oscillation case.
+    SLOT_COUNT = 6
     MIN_WORKERS = 1
     MAX_WORKERS = 24
     IDEAL_WORKERS = 4  # Balanced for 2-GPU systems

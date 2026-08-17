@@ -1,4 +1,6 @@
-accel_threshold_mps2: 4.0
+# NOTE: accel_threshold_mps2 lives ONLY under behavior_analysis (the
+# monitoring module reads it there). A top-level copy previously sat at the
+# top of this file and silently drifted -- removed 2026-08-17.
 advanced_analytics:
   enabled: false
 analytics_service:
