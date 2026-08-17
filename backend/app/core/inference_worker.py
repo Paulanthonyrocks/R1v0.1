@@ -167,6 +167,26 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
     try:
         combined_metrics = metrics_obj.to_dict() if metrics_obj is not None else {}
 
+        # Traffic telemetry on skip/passthrough frames. The detect path
+        # merges ``monitor.get_metrics()`` into the payload; without the
+        # same merge here, skip-frames (and detection-failure passthroughs)
+        # carry ONLY operational WorkerMetrics (fps/drops/errors). Every
+        # traffic key the frontend MetricsPanel reads (total_vehicles*,
+        # average_speed_kmh, session_*, congestion_*) is then absent, the
+        # panel falls back to 0, and the telemetry readout "resets" on
+        # every skip frame even though the tracker state hasn't changed.
+        # The monitor persists across frames, so this emits the
+        # last-detected traffic state -- the same values the next detect
+        # frame refreshes -- keeping the panel continuous. A metrics
+        # failure must never stall the forward, so it degrades to
+        # ops-only rather than skipping the put.
+        monitor = meta.get("monitor")
+        if monitor is not None:
+            try:
+                combined_metrics.update(monitor.get_metrics())
+            except Exception:
+                pass
+
         # Live-status universe -- must mirror VALID_STATUSES in worker_utils
         # (which serialize_tracked_vehicles uses as its own gate) and the
         # status filter in core_module.transform_tracks. We pre-filter here
