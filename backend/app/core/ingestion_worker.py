@@ -380,6 +380,21 @@ def ingestion_worker(
                     pass
             stop_check_counter += 1
 
+            # Command queue: feed_manager puts snapshot commands on the
+            # Redis-backed RedisQueue('feed_cmd_' + feed_id) but passes None
+            # for command_queue in worker_args (comment: "handled via Redis") --
+            # so this drain was DEAD CODE and the queue filled to maxsize 50,
+            # making every request_snapshot raise queue.Full (83 empty ERROR
+            # lines in one 2-min run). Attach a same-name handle here so the
+            # worker actually drains it. A RedisQueue is just a key wrapper;
+            # constructing it again connects to the SAME Redis list.
+            if command_queue is None and feed_id:
+                try:
+                    from app.utils.distributed_queue import RedisQueue
+
+                    command_queue = RedisQueue("feed_cmd_" + feed_id, maxsize=50)
+                except Exception as e:
+                    logger.warning(f"[{feed_id}] Could not attach to feed command queue: {e}")
             if command_queue:
                 try:
                     while True:

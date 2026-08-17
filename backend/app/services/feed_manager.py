@@ -1459,6 +1459,23 @@ class FeedManager:
             try:
                 entry["command_queue"].put_nowait({"type": "save_snapshot", "incident_id": incident_id})
                 logger.info(f"Requested snapshot for feed {feed_id}, incident {incident_id}")
+            except queue.Full:
+                # Best-effort feature: a full command queue (incident burst
+                # faster than the worker drains) must not spam ERROR --
+                # queue.Full carries no message, which produced 83 empty
+                # "Failed to put snapshot command" lines in one run. Drop with
+                # a rate-limited warning instead. (The real fix is the worker
+                # actually draining the Redis queue; see ingestion_worker.)
+                now_ = time.time()
+                last_warn = getattr(self, "_last_snapshot_full_warn", 0.0)
+                if now_ - last_warn > 30.0:
+                    setattr(self, "_last_snapshot_full_warn", now_)
+                    logger.warning(
+                        f"Snapshot command queue full for {feed_id}; dropping snapshot "
+                        f"request (incident burst?)"
+                    )
+                else:
+                    logger.debug(f"Dropped snapshot command for {feed_id} (queue full)")
             except Exception as e:
                 logger.error(f"Failed to put snapshot command for {feed_id}: {e}")
 

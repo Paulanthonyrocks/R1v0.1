@@ -1080,6 +1080,18 @@ def inference_worker(
 
                         # Re-ID matching (guarded by config)
                         if vehicle_det_cfg.get("reid_enabled", True):
+                            # Per-frame MATCH budget. With appearance tracking on,
+                            # many new tracks carry embeddings every frame, and
+                            # each match_or_register for a genuinely new track
+                            # pays ~5 synchronous Redis calls (hget + incr + set
+                            # + hset + rpush/publish), plus a throttled full
+                            # gallery re-pull (~1s) every 30s. Unbounded, that
+                            # storm pinned workers to ~1 fps/feed on dense scenes
+                            # (130-180 vehicles). Cap attempts per frame; the
+                            # remaining unassigned tracks are matched on
+                            # subsequent frames as earlier ones get ids.
+                            match_budget = int(vehicle_det_cfg.get("reid_match_budget_per_frame", 6))
+                            matched_this_frame = 0
                             for vid, track in vis_tracks.items():
                                 vehicle_map = core.vehicle_type_map
                                 # global_vehicle_id persists in the tracker's
@@ -1093,6 +1105,13 @@ def inference_worker(
                                     continue
                                 emb = track.get("embedding")
                                 if emb is not None:
+                                    if matched_this_frame >= match_budget:
+                                        # Budget exhausted: defer to next frame.
+                                        # Tracks that already got ids this frame
+                                        # will skip next frame, so the budget
+                                        # keeps cycling through the backlog.
+                                        continue
+                                    matched_this_frame += 1
                                     global_id = local_reid_manager.match_or_register(
                                         feed_id=meta["feed_id"],
                                         local_id=str(vid),

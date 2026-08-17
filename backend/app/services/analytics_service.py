@@ -205,6 +205,26 @@ class AnalyticsService:
             # DB/validation error as an unobserved task exception and silently
             # drop the incident (Crack: silent loss of safety incidents).
             if anomaly.get("severity") in ["Critical", "Warning"]:
+                # Honor the "if not recently reported" claim in the comment
+                # above: without a rate limit, an anomaly storm (same vehicle
+                # re-firing hard-braking every frame) creates one incident per
+                # anomaly per frame -- observed ~1/sec/feed of "Sudden
+                # deceleration" at 0.5 m/s², each spawning a snapshot request
+                # and overflowing the feed command queue. Bound to one
+                # incident per (feed, anomaly type) per window.
+                rate_limit = getattr(self, "_anomaly_incident_rate_limit", None)
+                if rate_limit is None:
+                    rate_limit = {}
+                    self._anomaly_incident_rate_limit = rate_limit
+                window = float(
+                    self.config.get("incident_detection", {}).get(
+                        "anomaly_incident_min_interval_seconds", 60.0
+                    )
+                )
+                rl_key = (feed_id, anomaly.get("type", "unknown"))
+                if now - rate_limit.get(rl_key, 0.0) < window:
+                    continue
+                rate_limit[rl_key] = now
                 sev = severity_map.get(anomaly.get("severity"), IncidentSeverityEnum.MEDIUM)
                 try:
                     await self._incident_manager.create_incident(

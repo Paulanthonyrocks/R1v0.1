@@ -1,4 +1,4 @@
-accel_threshold_mps2: 0.5
+accel_threshold_mps2: 4.0
 advanced_analytics:
   enabled: false
 analytics_service:
@@ -11,7 +11,11 @@ anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
 behavior_analysis:
-  accel_threshold_mps2: 0.5
+  accel_threshold_mps2: 4.0
+  # Same vehicle must not re-fire a hard-braking anomaly within this window
+  # (monitoring.py reads it); without it the anomaly list floods on dense
+  # scenes where speed wobble is tracking noise, not braking.
+  hard_braking_cooldown_seconds: 10
   ewma_alpha: 0.2
   lane_change_buffer: 20
   speed_limit: 60
@@ -702,6 +706,13 @@ vehicle_detection:
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600
+  # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
+  # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis
+  # calls, and unbounded matching on dense scenes (130+ vehicles) pinned
+  # workers to ~1 fps/feed. Remaining unassigned tracks get matched on later
+  # frames as earlier ones receive global ids. 0 = disabled (motion-only
+  # matching), higher = faster global-id assignment at more Redis cost.
+  reid_match_budget_per_frame: 6
   # Fallback only — the worker reads inference.skip_frames first (see the
   # comment there); keep in sync so the fallback path also detects every
   # frame instead of skipping 2/3.

@@ -135,6 +135,15 @@ class TrafficMonitor:
         self.hard_braking_accel_threshold_mps2: float = -abs(
             behavior_cfg.get("accel_threshold_mps2", 8.0)
         )
+        # Per-vehicle cooldown for hard-braking anomalies. Without this, the
+        # SAME vehicle re-fires every frame while its accel stays under the
+        # threshold (common with 130+ tracked vehicles where speed wobble is
+        # tracking noise, not braking), flooding the anomalies list and, via
+        # analytics_service, creating an incident per frame per vehicle.
+        self.hard_braking_cooldown_seconds: float = float(
+            behavior_cfg.get("hard_braking_cooldown_seconds", 10.0)
+        )
+        self._last_braking_fire: Dict[str, float] = {}
 
     def update_vehicles(self, vehicles: Dict[str, Dict[str, Any]]):
         self.tracked_vehicles = vehicles
@@ -184,6 +193,14 @@ class TrafficMonitor:
         for v_id, data in vehicles.items():
             accel = data.get("acceleration", 0.0)
             if accel < self.hard_braking_accel_threshold_mps2:
+                # Cooldown: same vehicle must not re-fire until the window
+                # elapses -- the anomaly list is consumed per-frame and creates
+                # an incident per anomaly, so an unbounded stream of the same
+                # vehicle's braking floods incidents + snapshot requests.
+                last = self._last_braking_fire.get(v_id, 0.0)
+                if now - last < self.hard_braking_cooldown_seconds:
+                    continue
+                self._last_braking_fire[v_id] = now
                 self.anomalies.append({
                     "type": "hard_braking",
                     "vehicle_id": v_id,
