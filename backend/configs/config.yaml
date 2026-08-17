@@ -515,14 +515,19 @@ performance:
   min_global_skip_factor: 1.0
   queue_fullness_threshold_for_skip_increase: 0.8
   queue_max_size: 500
-  # Worker's drop-on-pressure cut-in. The inline default (200) fires once
-  # the per-slot queue depth exceeds 200 frames and the worker's first
-  # detection for that feed has already happened. Under the previous
-  # 1-feed-per-worker routing, queue depth cleared 200 within seconds
-  # and the worker dropped ~96% of frames before any batch fired. Lifting
-  # the threshold well above the natural queue depth lets the worker
-  # process through transient backlog instead of widening the drop.
-  skip_threshold: 5000
+  # Worker's drop-on-pressure cut-in. Fires once the per-slot queue depth
+  # (lag + pending, i.e. the slot's SHM segment footprint) exceeds the
+  # threshold and the worker's first detection for that feed has happened.
+  # 5000 was set under 1-feed-per-worker routing when queues drained within
+  # seconds; with multi-worker slots (SLOT_COUNT=6) it now sits ABOVE
+  # shm_pool_size (2000), so the smart-skip valve opens only after the SHM
+  # free pool is already empty (observed: first 'free pool empty' at ~50s of
+  # feed time in both Aug-17 runs). Derived from the pool instead: 2000
+  # segments shared across active slots (~666/slot at 3 feeds, ~400/slot at
+  # the configured 5). 400 caps a slot's footprint below its fair share so
+  # skipping sheds frames while segments are still free, and the skip path
+  # (ack + frame_buffer.release) recycles them immediately.
+  skip_threshold: 400
   skip_factor_adjustment_interval: 360.0
   skip_factor_decrease_step: 0.05
   skip_factor_increase_step: 0.1
@@ -534,8 +539,10 @@ performance:
   # is never reclaimed (which previously caused feed_hash mismatches + drops).
   # NOTE: pool_size was briefly dropped to 500 during tuning; that starved the
   # free pool (1158 'free pool empty' drops) because a segment is checked out
-  # from ingestion all the way through result_processor read. 2000 is the
-  # original headroom and never exhausted (free=2000/2000 in baseline logs).
+  # from ingestion all the way through result_processor read. 2000 exhausts
+  # under sustained ingest-vs-inference mismatch (45 fps in vs ~3 fps drain:
+  # first 'free pool empty' at ~50s in both Aug-17 runs) -- the skip valve
+  # above is the relief, not pool growth.
   shm_stale_timeout: 60.0
   video_gpu_acceleration: true
 personalized_routing:

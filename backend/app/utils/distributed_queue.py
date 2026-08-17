@@ -432,6 +432,19 @@ class RedisStreamQueue:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # CRITICAL (duplicate-consumption audit): feed_manager sets the
+        # multiprocessing start method to 'spawn'. Process args are pickled
+        # ONCE in the parent, so every child unpickles the SAME consumer_id
+        # baked at construction (default: worker_<parent_pid>). Redis
+        # consumer groups then see all workers on a slot as ONE consumer,
+        # and the pending-first read in get() (XREADGROUP ID '0') re-reads
+        # every in-flight, unacked message on every call -- each worker on a
+        # 4-worker slot re-processed the same frames (observed: identical
+        # frame_idx=0 results 2-3x in result_processor logs). Regenerate a
+        # per-process consumer id so XREADGROUP round-robins correctly.
+        # Unconditional: every construction site in this codebase omits
+        # consumer_id, and the documented default is explicitly pid-derived.
+        self.consumer_id = f"worker_{os.getpid()}"
 
     def qsize(self) -> int:
         """
