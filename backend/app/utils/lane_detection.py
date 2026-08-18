@@ -171,7 +171,11 @@ def get_lane_boundaries_from_lines(frame_width: int, detected_lines: List[Tuple[
             for i in range(num_lanes_fallback + 1):
                 lane_boundaries.append(int(i * lane_width_fallback))
     elif len(sorted_lines) == 1:
-        logger.warning("Only one lane line detected. Extrapolating from single line.")
+        # Expected degradation path (sparse / occluded lane markings), not an
+        # error: the caller already falls back to a sensible boundary. Logging
+        # this at WARNING per-frame spammed the log (100+ lines/run) and buried
+        # real errors, so it is DEBUG.
+        logger.debug("Only one lane line detected. Extrapolating from single line.")
         line_x_avg = (sorted_lines[0][0] + sorted_lines[0][2]) / 2
         
         # Check if the detected line is likely a left or right boundary
