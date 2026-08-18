@@ -34,7 +34,16 @@ class DetectionEngine:
                 self.is_trt_engine = True
         
         if self.is_trt_engine:
-            self.imgsz = 320  # TRT engine exported at 320 in export_tensorrt.py
+            # CONTRACT (see inference_worker.py:~991 and export_tensorrt.py): a
+            # TRT engine is shape-locked to the imgsz it was exported with, and
+            # export_tensorrt.py reads vehicle_detection.yolo_imgsz. We MUST feed
+            # exactly that size, so use the configured value -- NOT a hardcoded
+            # 320. A mismatch ("input size != max model size") makes warm-up /
+            # every detect frame fail. The previous hardcoded 320 only lined up
+            # when yolo_imgsz happened to be 320; with the current 960 engine it
+            # raised "input size [1,3,320,320] not equal to max model size
+            # (1,3,960,960)" and killed the feed's CoreModule init.
+            self.imgsz = int(self.config.get("vehicle_detection", {}).get("yolo_imgsz", 640))
         
         # ROI Cache
         self.roi_mask = None
