@@ -143,6 +143,14 @@ def ingestion_worker(
     gpu_acceleration = perf_cfg.get("video_gpu_acceleration", False)
     logger.info(f"[{feed_id}] Video GPU Acceleration enabled: {gpu_acceleration}")
 
+    # Decode-side throttle floor. When the SHM free pool drops below this
+    # fraction we skip reading/decoding the frame entirely instead of burning
+    # CPU on a frame that would be dropped at acquire(). This lets the pool
+    # drain toward the inference pipeline's ~3fps rate rather than the
+    # decoder's ~45fps, which is the root cause of the bulk of
+    # "SHM free pool empty" drops. 0.0 disables the gate (legacy behaviour).
+    shm_min_free_fraction = float(perf_cfg.get("shm_min_free_fraction", 0.20))
+
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
     # JPEG quality for the dashboard wire frame. 70 at 640x480 keeps the
@@ -437,6 +445,28 @@ def ingestion_worker(
                         )
                     time.sleep(0.001)
                     continue
+
+                # Decode-side throttle (F1/F3): if the SHM free pool is below
+                # the configured floor, skip reading/decoding this frame. We
+                # deliberately do NOT call reader.read() — that would advance
+                # the decoder and waste a frame when there's nowhere to put it.
+                # Shedding here lets free segments rebuild so the pool drains at
+                # the inference rate. This replaces the cosmetic post-acquire
+                # backpressure that only fired after a frame was already decoded.
+                if shm_min_free_fraction > 0.0 and frame_buffer is not None:
+                    _free = frame_buffer.available_count()
+                    _pool = frame_buffer.pool_size
+                    _free_frac = (_free / _pool) if _pool > 0 else 1.0
+                    if _free_frac < shm_min_free_fraction:
+                        metrics.frames_dropped += 1
+                        if metrics.frames_dropped % 100 == 0:
+                            logger.warning(
+                                f"[{feed_id}] SHM free pool low "
+                                f"({_free_frac:.1%} < {shm_min_free_fraction:.1%}); "
+                                f"skipping decode to shed load."
+                            )
+                        time.sleep(0.005)
+                        continue
 
                 result = reader.read()
                 if result is None:

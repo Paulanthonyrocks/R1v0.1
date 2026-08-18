@@ -307,7 +307,40 @@ async def message_receiver(
                             asyncio.create_task(feed_manager.restart_feed(feed_id_data.feed_id))
                         elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
                             update_data = UpdateFeedConfigData(**data)
-                            asyncio.create_task(feed_manager.update_feed_config(update_data.feed_id, update_data.updates))
+                            _task = asyncio.create_task(
+                                feed_manager.update_feed_config(
+                                    update_data.feed_id, update_data.updates
+                                )
+                            )
+
+                            def _surface_update_error(t: asyncio.Task) -> None:
+                                # Retrieve the exception so asyncio doesn't log
+                                # a bare "Task exception was never retrieved".
+                                # A malformed ROI (or any config error) must
+                                # reach the client, not vanish.
+                                ex = t.exception()
+                                if ex is None:
+                                    return
+                                logger.error(
+                                    f"[{client_id}] update_feed_config failed: {ex}"
+                                )
+                                try:
+                                    asyncio.create_task(
+                                        connection_manager.send_personal_message(
+                                            WebSocketMessage(
+                                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                                                data={
+                                                    "message": f"Config update failed: {str(ex)}"
+                                                },
+                                            ).model_dump_json(),
+                                            client_id,
+                                            priority=MessagePriority.HIGH,
+                                        )
+                                    )
+                                except Exception:
+                                    pass
+
+                            _task.add_done_callback(_surface_update_error)
                     except Exception as e:
                         logger.error(f"Error scheduling {msg_type}: {e}")
                         await connection_manager.send_personal_message(
@@ -362,6 +395,17 @@ async def message_receiver(
                 logger.warning(f"Received invalid JSON from {client_id}: {message_text}")
             except Exception as e:
                 logger.error(f"Error processing message from {client_id}: {e}", exc_info=True)
+                try:
+                    await connection_manager.send_personal_message(
+                        WebSocketMessage(
+                            type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
+                            data={"message": f"Message rejected: {str(e)}"},
+                        ).model_dump_json(),
+                        client_id,
+                        priority=MessagePriority.HIGH,
+                    )
+                except Exception:
+                    pass
 
     except (WebSocketDisconnect, RuntimeError) as e:
         # Starlette's underlying receive path can raise RuntimeError instead

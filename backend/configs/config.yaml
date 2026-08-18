@@ -534,6 +534,13 @@ performance:
   use_shared_memory: true
   use_shm: true
   shm_pool_size: 2000
+  # Decode-side throttle floor (F1/F3 fix). When the SHM free pool drops below
+  # this fraction, the ingestion decoder SKIPS reading/decoding the frame
+  # entirely (instead of decoding it and dropping it at acquire()). Lets the
+  # pool drain at the inference rate (~3fps) rather than the decoder rate
+  # (~45fps), which is the root cause of the bulk of "SHM free pool empty"
+  # drops. Set to 0.0 to disable (legacy post-acquire backpressure only).
+  shm_min_free_fraction: 0.15
   # How long a segment may sit unwritten/abandoned before prune_stale_segments
   # reclaims it. Raised well above worst-case reader lag so an in-flight frame
   # is never reclaimed (which previously caused feed_hash mismatches + drops).

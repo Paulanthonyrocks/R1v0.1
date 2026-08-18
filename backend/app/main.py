@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Scope, Receive, Send
 
 # --- Core Modules ---
 from app.config import initialize_config, AppConfig
@@ -139,9 +140,41 @@ def setup_cors(app: FastAPI, config: dict):
         allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID"],
+        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID", "X-Tunnel-Password"],
         expose_headers=["*"],
     )
+
+
+# --- Tunnel secret handling (F4) ---
+# loca.lt (and similar HTTP tunnels) only honour the password as a `?password=`
+# query param on the *tunneled* request, so the query form is kept for tunnel
+# deployments and is mandatory there. For direct (non-tunnel) backends the
+# secret should travel as the `X-Tunnel-Password` request header instead, so it
+# never lands in access logs / browser history / proxy logs the way a query
+# param does. This middleware lets the backend honour the header form so a
+# direct deployment can drop the query param entirely. It does not strip the
+# query param for tunnel deployments (that would break the tunnel gate).
+class TunnelSecretMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "http":
+            headers = scope.get("headers", [])
+            header_pw = None
+            for k, v in headers:
+                if k == b"x-tunnel-password":
+                    header_pw = v
+                    break
+            if header_pw is not None:
+                # Promote header secret to the query so downstream handlers that
+                # read `?password=` (tunnel compat) still work without the
+                # secret being in the URL the client constructed.
+                qs = scope.get("query_string", b"").decode("latin-1")
+                if "password=" not in qs:
+                    qs = (qs + "&" if qs else "") + "password=" + header_pw.decode("latin-1")
+                    scope["query_string"] = qs.encode("latin-1")
+        await self.app(scope, receive, send)
 # --- Middleware Implementation ---
 class WebSocketOriginMiddleware:
     """
@@ -397,6 +430,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(TunnelSecretMiddleware)
 
 # Per-route rate limits; everything else falls back to the default 60/60.
 rate_limits = {

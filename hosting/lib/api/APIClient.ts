@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
-import { getBackendBaseURL, withTunnelPassword } from './backendBaseUrl';
+import { getBackendBaseURL, withTunnelPassword, getTunnelPassword } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -30,10 +30,19 @@ export class APIClient {
         // lib/api/backendBaseUrl.ts.
         this.baseURL = options.baseURL || getBackendBaseURL();
         this.timeout = options.timeout || 30000;
-        this.headers = {
+        // `X-Tunnel-Password` header carries the tunnel secret for direct
+        // (non-tunnel) backends so it never appears in the URL / access logs /
+        // browser history. The query-param form (withTunnelPassword) is still
+        // applied for the tunnel itself, which only inspects the URL it is
+        // given. Sending both is harmless and lets deployments drop the
+        // query param where the tunnel isn't in front.
+        const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': '69420'
         };
+        const tunnelPw = getTunnelPassword();
+        if (tunnelPw) headers['X-Tunnel-Password'] = tunnelPw;
+        this.headers = headers;
         this.tokenManager = TokenManager.getInstance();
 
         // Subscribe to token updates

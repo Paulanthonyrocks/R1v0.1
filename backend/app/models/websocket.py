@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, Dict, Any, Union, List
 from datetime import datetime, timezone
 import enum
@@ -148,6 +148,28 @@ class InitialFeedStatusesData(BaseModel):
 class UpdateFeedConfigData(BaseModel):
     feed_id: str
     updates: Dict[str, Any]
+
+    @model_validator(mode="after")
+    def _validate_roi_shape(self) -> "UpdateFeedConfigData":
+        """Reject malformed ROI payloads at the WS boundary.
+
+        feed_manager.update_feed_config raises ValueError("ROI must be a list
+        of [x1, y1, x2, y2] coordinates.") for a roi that is a list whose
+        elements aren't 4-tuples. Earlier that error fired inside a
+        fire-and-forget create_task and was logged-and-lost (asyncio
+        "Task exception was never retrieved"). Validating here turns a silent
+        failure into a concrete client-facing error.
+        """
+        roi = self.updates.get("roi")
+        if roi is not None:
+            if not isinstance(roi, list):
+                raise ValueError("ROI must be a list of [x1, y1, x2, y2] coordinates.")
+            for box in roi:
+                if not isinstance(box, (list, tuple)) or len(box) != 4:
+                    raise ValueError(
+                        "ROI must be a list of [x1, y1, x2, y2] coordinates."
+                    )
+        return self
 
 # --- 5. WebSocket Message Wrapper ---
 
