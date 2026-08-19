@@ -67,7 +67,8 @@ firebase_admin:
   storage_bucket: r1v0-1.appspot.com
 # Legacy top-level fps (kept for backward compatibility). Must match
 # video_output.fps and video_processing.target_fps.
-fps: 8
+# Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
+fps: 5
 incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
@@ -123,7 +124,9 @@ kalman_filter_params:
 lane_detection:
   canny_high_threshold: 150
   canny_low_threshold: 50
-  enabled: true
+  # Disabled: Hough params don't match sample video geometry,
+  # producing "Detected lines are too close or inverted" warnings.
+  enabled: false
   gaussian_blur_kernel_size: 5
   hough_max_line_gap: 20
   hough_min_line_length: 40
@@ -143,6 +146,12 @@ lane_detection:
     - 0.6
   - - 0.9
     - 1.0
+  # Lane detection runs every N frames to save compute (Hough + line clustering).
+  # Default 10 = detect lanes on 1 of every 10 frames at 8fps = 0.8Hz.
+  frame_interval: 10
+  # CoreModule uses this (seconds) to throttle its own lane CV recompute.
+  # Default 1.0s = lanes refreshed at most once per second.
+  detection_interval_seconds: 1.0
 log_files:
   allowed_log_files:
   - backend_main.log
@@ -546,8 +555,8 @@ performance:
   # pool drain at the inference rate (~3fps) rather than the decoder rate
   # (~45fps), which is the root cause of the bulk of "SHM free pool empty"
   # drops. Set to 0.0 to disable (legacy post-acquire backpressure only).
-  # Raised from 0.15 to 0.20 to trigger decode-skip earlier and prevent pool exhaustion.
-  shm_min_free_fraction: 0.20
+  # Raised from 0.20 to 0.25 to trigger decode-skip earlier and prevent pool exhaustion.
+  shm_min_free_fraction: 0.25
   # How long a segment may sit unwritten/abandoned before prune_stale_segments
   # reclaims it. Raised well above worst-case reader lag so an in-flight frame
   # is never reclaimed (which previously caused feed_hash mismatches + drops).
@@ -795,7 +804,8 @@ video_output:
   # (result_processor.py dedups to ``video_output.fps``); they used to disagree
   # (15 vs 8) which silently capped effective throughput at the lower of the two.
   # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
-  fps: 8
+  # Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
+  fps: 5
   frame_resolution:
   - 640
   - 480
@@ -814,7 +824,8 @@ video_processing:
   # gate (tunnel clients are capped at 1-3fps per feed regardless). If tunnel
   # latency regresses, drop back to 8.
   # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
-  target_fps: 8
+  # Reduced from 8 to 5 to match sustainable inference throughput (~2-5 fps/worker).
+  target_fps: 5
   # Adaptive streaming: when TRUE the pipeline ships TWO JPEGs per frame
   # (full-res and a downscaled "small" tier) and lets the broadcaster pick by
   # client RTT. This is a bandwidth-conservation optimization for mixed
@@ -851,7 +862,10 @@ weather_service:
   enabled: false
 websocket:
   max_connections: 1000
-  ping_interval: 30
-  pong_timeout: 120
+  # Aligned with frontend (WebSocketClient.ts: 10s ping, 60s pong timeout)
+  # and main.py default (ping_interval=15, pong_timeout=60).
+  # With 50-67s RTT over tunnel, 60s timeout is tight; 120s was too loose.
+  ping_interval: 15
+  pong_timeout: 60
   token_refresh_interval: 300
 
