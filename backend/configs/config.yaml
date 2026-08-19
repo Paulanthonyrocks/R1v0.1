@@ -65,7 +65,9 @@ firebase_admin:
   project_id: gen-lang-client-0230118708
   service_account_key_path: configs/firebase/service-account-key.json
   storage_bucket: r1v0-1.appspot.com
-fps: 15
+# Legacy top-level fps (kept for backward compatibility). Must match
+# video_output.fps and video_processing.target_fps.
+fps: 8
 incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
@@ -378,7 +380,7 @@ logging:
       handlers:
       - consoleHandler
       - mainFileHandler
-      level: INFO
+      level: DEBUG
       propagate: false
     fastapi:
       handlers:
@@ -490,7 +492,7 @@ performance:
   # 24 so per-feed inference throughput ≈ 12 fps vs ingestion 8 fps, closing
   # the drop-rate gap seen in backend_main.log 14:20:05 where 8 workers ran
   # at ~0.5 fps each against 3 feeds at 8 fps).
-  inference_pool_size: 24
+  inference_pool_size: 8
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
   # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
@@ -527,13 +529,15 @@ performance:
   # the configured 5). 400 caps a slot's footprint below its fair share so
   # skipping sheds frames while segments are still free, and the skip path
   # (ack + frame_buffer.release) recycles them immediately.
-  skip_threshold: 400
+  # With shm_pool_size=4000 and ~3 active feeds: ~1333/slot. Set to 1000 to
+  # open the skip valve while segments are still available.
+  skip_threshold: 1000
   skip_factor_adjustment_interval: 360.0
   skip_factor_decrease_step: 0.05
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 2000
+  shm_pool_size: 4000
   # Decode-side throttle floor (F1/F3 fix). When the SHM free pool drops below
   # this fraction, the ingestion decoder SKIPS reading/decoding the frame
   # entirely (instead of decoding it and dropping it at acquire()). Lets the
@@ -769,7 +773,8 @@ video_output:
   # fps at which the wire frame is emitted. Must match video_processing.target_fps
   # (result_processor.py dedups to ``video_output.fps``); they used to disagree
   # (15 vs 8) which silently capped effective throughput at the lower of the two.
-  fps: 15
+  # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
+  fps: 8
   frame_resolution:
   - 640
   - 480
@@ -787,7 +792,8 @@ video_processing:
   # tunnel-bandwidth rationale is largely mitigated by the per-client rate
   # gate (tunnel clients are capped at 1-3fps per feed regardless). If tunnel
   # latency regresses, drop back to 8.
-  target_fps: 15
+  # Reduced from 15 to 8 to match sustainable ingestion/inference throughput.
+  target_fps: 8
   # Adaptive streaming: when TRUE the pipeline ships TWO JPEGs per frame
   # (full-res and a downscaled "small" tier) and lets the broadcaster pick by
   # client RTT. This is a bandwidth-conservation optimization for mixed
