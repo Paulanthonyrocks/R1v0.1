@@ -488,11 +488,11 @@ performance:
   gpu_acceleration: true
   image_gpu_acceleration: true
   # Pool size = number of distinct slots, so every worker owns exactly one
-  # slot and there is no modulo collision or fan-out reuse (was 8; raised to
-  # 24 so per-feed inference throughput ≈ 12 fps vs ingestion 8 fps, closing
-  # the drop-rate gap seen in backend_main.log 14:20:05 where 8 workers ran
-  # at ~0.5 fps each against 3 feeds at 8 fps).
-  inference_pool_size: 8
+  # slot and there is no modulo collision or fan-out reuse.
+  # Reduced from 8 to 4 (2 per GPU) to eliminate CUDA context thrashing
+  # from 12 concurrent CUDA inits. With SLOT_COUNT=4 and 2 GPUs, 4 workers
+  # = 1:1 worker:slot affinity. Each GPU runs 2 workers pinned to it.
+  inference_pool_size: 4
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
   # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
@@ -537,14 +537,17 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  shm_pool_size: 4000
+  # Raised from 4000 to 6000 to provide more headroom for 3 feeds at 8fps
+  # with decode-skip backpressure at 20%.
+  shm_pool_size: 6000
   # Decode-side throttle floor (F1/F3 fix). When the SHM free pool drops below
   # this fraction, the ingestion decoder SKIPS reading/decoding the frame
   # entirely (instead of decoding it and dropping it at acquire()). Lets the
   # pool drain at the inference rate (~3fps) rather than the decoder rate
   # (~45fps), which is the root cause of the bulk of "SHM free pool empty"
   # drops. Set to 0.0 to disable (legacy post-acquire backpressure only).
-  shm_min_free_fraction: 0.15
+  # Raised from 0.15 to 0.20 to trigger decode-skip earlier and prevent pool exhaustion.
+  shm_min_free_fraction: 0.20
   # How long a segment may sit unwritten/abandoned before prune_stale_segments
   # reclaims it. Raised well above worst-case reader lag so an in-flight frame
   # is never reclaimed (which previously caused feed_hash mismatches + drops).
@@ -624,6 +627,19 @@ redis:
   enabled: true
   host: localhost
   port: 6379
+  # Connection pool settings for ReID stability (fixes reconnect storm)
+  # Max connections in pool: 10 (enough for 4 inference workers + services)
+  max_connections: 10
+  # Retry on timeout/connection errors
+  retry_on_timeout: true
+  # Socket keepalive to detect stale connections
+  socket_keepalive: true
+  # Connection timeout (seconds)
+  socket_connect_timeout: 5
+  # Socket read timeout (seconds)
+  socket_timeout: 5
+  # Health check interval for idle connections
+  health_check_interval: 30
 kpi_broadcast_interval: 5
 # EMA window for per-feed metric smoothing (result_processor). Was silently at
 # the code default 300s -> alpha=1/300, which froze broadcast KPIs near-static
@@ -723,6 +739,11 @@ vehicle_detection:
     similarity_threshold: 0.80
     use_appearance_in_tracking: true
     use_openvino: false
+    # Full sync interval (seconds): throttle the expensive full Redis gallery
+    # re-pull to prevent the "Syncing N new identities" storm (observed: 55
+    # bursts in ~4 min). The pub/sub listener handles steady-state upkeep;
+    # full_sync is only for cold-start catch-up. Default 30s.
+    full_sync_interval_seconds: 30.0
   reid_enabled: true
   reid_interval_frames: 30
   reid_timeout: 3600

@@ -33,14 +33,22 @@ class GlobalReIDManager:
         try:
             import redis
             if self.redis_cfg.get("enabled", False):
-                self.redis = redis.Redis(
+                # Use connection pool for stability
+                pool = redis.ConnectionPool(
                     host=self.redis_cfg.get("host", "localhost"),
                     port=self.redis_cfg.get("port", 6379),
                     db=self.redis_cfg.get("db", 0),
                     password=self.redis_cfg.get("password"),
-                    decode_responses=False
+                    decode_responses=False,
+                    max_connections=self.redis_cfg.get("max_connections", 10),
+                    retry_on_timeout=self.redis_cfg.get("retry_on_timeout", True),
+                    socket_keepalive=self.redis_cfg.get("socket_keepalive", True),
+                    socket_connect_timeout=self.redis_cfg.get("socket_connect_timeout", 5),
+                    socket_timeout=self.redis_cfg.get("socket_timeout", 5),
+                    health_check_interval=self.redis_cfg.get("health_check_interval", 30),
                 )
-                logger.info(f"Connected to Redis for ReID at {self.redis_cfg.get('host')}:{self.redis_cfg.get('port')}")
+                self.redis = redis.Redis(connection_pool=pool)
+                logger.info(f"Connected to Redis for ReID at {self.redis_cfg.get('host')}:{self.redis_cfg.get('port')} (pool: max_connections={self.redis_cfg.get('max_connections', 10)})")
                 
                 # Start Pub/Sub listener for real-time sync
                 self._sub_thread = threading.Thread(target=self._listen_for_updates, daemon=True)
