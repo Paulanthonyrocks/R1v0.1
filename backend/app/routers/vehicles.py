@@ -21,7 +21,12 @@ class IdentifiedVehicleResponse(BaseModel):
 
 class VehicleTrackResponse(BaseModel):
     feed_id: str
-    track_id: int
+    # vehicle_tracks.track_id is a STRING composite id
+    # (f"{feed_id}__{track_uuid}", written by save_vehicle_data_batch) — an int
+    # here 500s the whole /global/{id}/history endpoint with
+    # ResponseValidationError (Aug-22 run: 3 unhandled exceptions, frontend
+    # history widget broken).
+    track_id: str
     timestamp: float
     class_id: Optional[int] = None
     confidence: Optional[float] = None

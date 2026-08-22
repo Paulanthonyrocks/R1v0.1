@@ -150,6 +150,15 @@ def ingestion_worker(
     # decoder's ~45fps, which is the root cause of the bulk of
     # "SHM free pool empty" drops. 0.0 disables the gate (legacy behaviour).
     shm_min_free_fraction = float(perf_cfg.get("shm_min_free_fraction", 0.20))
+    # Hysteresis resume band: shedding latches ON below shm_min_free_fraction
+    # and only releases once the free fraction climbs back to this level. Must
+    # be > shm_min_free_fraction; a single-threshold gate pins the pool AT the
+    # floor forever (Aug-22 run: 12min at exactly 20.0%, ~98k shed frames/feed).
+    _shm_resume_fraction = float(
+        perf_cfg.get("shm_resume_fraction", max(shm_min_free_fraction + 0.15, 0.35))
+    )
+    if _shm_resume_fraction <= shm_min_free_fraction:
+        _shm_resume_fraction = min(shm_min_free_fraction + 0.10, 0.95)
 
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
@@ -453,11 +462,30 @@ def ingestion_worker(
                 # Shedding here lets free segments rebuild so the pool drains at
                 # the inference rate. This replaces the cosmetic post-acquire
                 # backpressure that only fired after a frame was already decoded.
+                #
+                # Hysteresis (Aug-22 21:33-21:46 run): with a single threshold,
+                # once ingestion sheds down to the inference drain rate the pool
+                # sits pinned AT the floor forever (observed: free=1198/6000 =
+                # 19.97% for 12 straight minutes, ~2,950 gate warnings, ~98k
+                # shed frames/feed). Shedding below `floor` but resuming normal
+                # decode only above `resume` (a higher hysteresis band) lets
+                # freed segments accumulate between waves so ingestion bursts
+                # instead of trickling at the equilibrium point.
                 if shm_min_free_fraction > 0.0 and frame_buffer is not None:
                     _free = frame_buffer.available_count()
                     _pool = frame_buffer.pool_size
                     _free_frac = (_free / _pool) if _pool > 0 else 1.0
-                    if _free_frac < shm_min_free_fraction:
+                    # Latch: stay shedding until we clear the resume band, so
+                    # flapping around the floor doesn't re-trigger per frame.
+                    if not _shedding:
+                        _shedding = _free_frac < shm_min_free_fraction
+                    elif _free_frac >= _shm_resume_fraction:
+                        _shedding = False
+                        logger.info(
+                            f"[{feed_id}] SHM pool recovered "
+                            f"({_free_frac:.1%} >= {_shm_resume_fraction:.1%}); resuming decode."
+                        )
+                    if _shedding:
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:
                             logger.warning(
