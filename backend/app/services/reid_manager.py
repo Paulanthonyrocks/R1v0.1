@@ -410,6 +410,16 @@ class GlobalReIDManager:
                 local_id_set = set(self.gallery_ids)
             
             new_ids = [rid for rid in remote_ids if rid not in local_id_set]
+            # Cap the pull to the local gallery's remaining capacity. The Redis
+            # index is trimmed to max_gallery_size on cleanup, but the local
+            # gallery is trimmed to the SAME bound on its own TTL schedule, so
+            # without this cap a full-sized remote list perpetually shows
+            # ~max_gallery_size "new" ids and every full sync re-pulls them
+            # (the 2001-identity bursts observed in backend_services.log).
+            capacity = self.max_gallery_size - len(local_id_set)
+            if capacity <= 0:
+                return
+            new_ids = new_ids[:capacity]
             if not new_ids: return
             
             # Only log when we actually pulled something new. Under the throttled
@@ -481,7 +491,11 @@ class GlobalReIDManager:
 
         if self.redis:
             try:
-                self.redis.ltrim("reid:gallery", 0, self.max_gallery_size * 2)
+                # Keep the Redis index aligned with the LOCAL gallery bound.
+                # It was max_gallery_size*2, which guaranteed the remote list
+                # always exceeded what any instance can hold, so every full
+                # sync saw ~1000+ permanent "new" ids (sync-storm root cause).
+                self.redis.ltrim("reid:gallery", 0, self.max_gallery_size - 1)
             except Exception as e:
                 logger.error(f"Failed to trim Redis gallery: {e}")
 

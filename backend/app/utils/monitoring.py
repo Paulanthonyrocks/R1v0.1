@@ -232,15 +232,24 @@ class TrafficMonitor:
             vehicle_type_counts["unknown"] = 0
 
         for data in self.tracked_vehicles.values():
-            speed_kmh = float(data.get("speed", 0.0))
+            # Type stats must count EVERY tracked vehicle, including ones with
+            # no usable speed reading.
+            class_id = data.get("class_id", -1)
+            type_name = vehicle_type_map.get(class_id, "unknown")
+            vehicle_type_counts[type_name] = vehicle_type_counts.get(type_name, 0) + 1
+            # An uncalibrated camera stores speed=None (the honest "unknown"
+            # signal from core_module._pixel_based_speed). float(None) would
+            # raise TypeError and kill the whole get_metrics call, so treat
+            # None as "no reading": skip only the speed aggregates.
+            raw_speed = data.get("speed", 0.0)
+            if raw_speed is None:
+                continue
+            speed_kmh = float(raw_speed)
             speeds_list_kmh.append(speed_kmh)
             if speed_kmh < self.stopped_threshold_kmh:
                 stopped_count += 1
             if speed_kmh > self.speed_limit_kmh:
                 speeding_count += 1
-            class_id = data.get("class_id", -1)
-            type_name = vehicle_type_map.get(class_id, "unknown")
-            vehicle_type_counts[type_name] = vehicle_type_counts.get(type_name, 0) + 1
 
         avg_speed_kmh = float(np.median(speeds_list_kmh)) if speeds_list_kmh else 0.0
         congestion_lvl_percent = float((stopped_count / current_vehicle_count) * 100.0) if current_vehicle_count > 0 else 0.0
