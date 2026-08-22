@@ -185,6 +185,18 @@ class AnalyticsService:
         timestamp = metrics.get(
             "timestamp", time.time()
         )
+        # Coerce numeric epochs to an aware UTC datetime ONCE here. No producer
+        # embeds "timestamp" in per-frame metrics (WorkerMetrics.to_dict and
+        # TrafficMonitor.get_metrics both omit it), so the float fallback is
+        # the live path. Downstream consumers all assume datetime:
+        # TrafficDataCache._clean_old_data / get_recent_data compare
+        # point["timestamp"] > cutoff (datetime) -- a raw float raises
+        # TypeError there, which silently killed cache pruning and predictor
+        # fetches; pd.to_datetime(float) additionally misreads epochs as
+        # nanoseconds (every point -> 1970). SafetyMonitor already accepts
+        # both types; this normalization makes every consumer correct.
+        if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+            timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
         # Handle Anomalies
         anomalies = metrics.get("anomalies", [])

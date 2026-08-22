@@ -954,7 +954,12 @@ class CoreModule:
                     "timestamp": float(now),
                     "bbox": [float(x) for x in bbox],
                     "centroid": [float(x) for x in centroid],
-                    "speed": float(data.get("speed", 0.0)),
+                    "speed": data.get("speed"),
+                    # No float() coercion: uncalibrated feeds store speed=None
+                    # by design, and float(None) would raise TypeError (this
+                    # try only catches queue.Full, so the exception escapes
+                    # into the detect loop). Pass NULL through to both the
+                    # SQLite and Timescale writers -- both bind None directly.
                     "license_plate": str(data.get("license_plate", "Unknown")),
                     "class_id": int(data.get("class_id", -1)),
                     "class_name": str(self.vehicle_type_map.get(data.get("class_id", -1), "unknown")),
