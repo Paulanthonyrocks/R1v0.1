@@ -159,6 +159,10 @@ def ingestion_worker(
     )
     if _shm_resume_fraction <= shm_min_free_fraction:
         _shm_resume_fraction = min(shm_min_free_fraction + 0.10, 0.95)
+    # Hysteresis latch state. Must exist before the read loop: the Aug-23 run
+    # crashed every frame with UnboundLocalError on '_shedding' because the
+    # latch block below referenced it without a prior assignment.
+    _shedding = False
 
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
