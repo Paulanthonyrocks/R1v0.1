@@ -163,6 +163,12 @@ def ingestion_worker(
     # crashed every frame with UnboundLocalError on '_shedding' because the
     # latch block below referenced it without a prior assignment.
     _shedding = False
+    _shed_since = time.time()
+    # Starvation guard: max continuous shed before forced resume. Configurable
+    # via performance.shm_shed_max_age_seconds; default 30s ≈ 2-3 decode bursts
+    # of the other feeds. Prevents a permanently latched feed from blacking out
+    # while others oscillate inside the hysteresis band.
+    _shed_max_age = float(perf_cfg.get("shm_shed_max_age_seconds", 30.0))
 
     video_out_cfg = config.get("video_output", {})
     stream_res = tuple(video_out_cfg.get("stream_resolution", (640, 480)))
@@ -483,6 +489,8 @@ def ingestion_worker(
                     # flapping around the floor doesn't re-trigger per frame.
                     if not _shedding:
                         _shedding = _free_frac < shm_min_free_fraction
+                        if _shedding:
+                            _shed_since = time.time()
                     elif _free_frac >= _shm_resume_fraction:
                         _shedding = False
                         logger.info(
@@ -492,11 +500,37 @@ def ingestion_worker(
                     if _shedding:
                         metrics.frames_dropped += 1
                         if metrics.frames_dropped % 100 == 0:
+                            if _free_frac < shm_min_free_fraction:
+                                _why = (
+                                    f"below floor ({_free_frac:.1%} < "
+                                    f"{shm_min_free_fraction:.1%})"
+                                )
+                            else:
+                                _why = (
+                                    f"latched in hysteresis band "
+                                    f"{shm_min_free_fraction:.1%}-{_shm_resume_fraction:.1%}, "
+                                    f"awaiting {_shm_resume_fraction:.1%} to resume"
+                                )
                             logger.warning(
-                                f"[{feed_id}] SHM free pool low "
-                                f"({_free_frac:.1%} < {shm_min_free_fraction:.1%}); "
-                                f"skipping decode to shed load."
+                                f"[{feed_id}] SHM shed: {_why}; skipping decode."
                             )
+                        # Starvation guard (Aug-23 22:37-22:42 run): with one
+                        # shared SHM pool and per-feed latches, feeds that
+                        # release together re-burst-decode and re-pin the pool
+                        # inside the band, so a feed still latched (Feed_3)
+                        # can never see the resume threshold and sheds to a
+                        # silent blackout. If we have been shedding for longer
+                        # than the aging timeout, resume anyway: worst case we
+                        # re-latch on the next frame, best case we get our
+                        # share of segments before other feeds refill.
+                        if time.time() - _shed_since > _shed_max_age:
+                            _shedding = False
+                            logger.warning(
+                                f"[{feed_id}] SHM shed aged out after "
+                                f"{_shed_max_age:.0f}s (pool at "
+                                f"{_free_frac:.1%}); forcing decode resumption."
+                            )
+                            continue
                         time.sleep(0.005)
                         continue
 

@@ -752,6 +752,24 @@ def inference_worker(
                         continue
 
                     if frame_index == -999:
+                        # Sentinel collision guard: ingestion reuses -999 for
+                        # BOTH feed_ended and snapshot_saved (the snapshot
+                        # path puts (feed_id, -999, b"", {"type":
+                        # "snapshot_saved"})). Tearing down the CoreModule on
+                        # a snapshot killed ReID/OCR/lane state + metrics_map
+                        # and forced a full warm-up rebuild (~90s churn +
+                        # worker uptime reset per snapshot). Only a genuine
+                        # feed_ended tears down; snapshot_saved is just acked.
+                        _ctrl_type = (
+                            extra_payload.get("type")
+                            if isinstance(extra_payload, dict)
+                            else None
+                        )
+                        if _ctrl_type == "snapshot_saved":
+                            if msg_id and hasattr(slot_q_ref, "ack"):
+                                slot_q_ref.ack(msg_id)
+                                acked_msgs.add(msg_id)
+                            continue
                         if feed_id in core_modules:
                             core_modules[feed_id].cleanup()
                             del core_modules[feed_id]

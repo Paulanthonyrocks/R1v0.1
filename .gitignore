@@ -45,3 +45,5 @@ gha-creds-*.json
 backend/configs/firrebase/service-account-key.json
 memory.md
 backend/scripts
+# Model weights (6.5MB binaries; re-downloadable from ultralytics)
+*.pt
