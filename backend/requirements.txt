@@ -32,6 +32,10 @@ nvidia-tensorrt>=8.6.1
 pycuda>=2022.1
 easyocr>=1.7.0
 
+# Route optimization (route_optimizer.py imports networkx at module top;
+# reachable from /api/v1/routes via route_optimization_service).
+networkx>=3.0
+
 # TensorFlow (with GPU support)
 tensorflow>=2.16.1
 
@@ -58,6 +62,12 @@ aiohttp>=3.8.0
 # WebRTC
 aiortc>=1.8.0
 av>=11.0.0
+
+# NOTE (audit 2026-08-23): `app/ml/segmentation/edgetam.py` imports `transformers` and
+# `app/ml/pavement_analysis/reporting/report_generator.py` imports `matplotlib`, but
+# neither module is reachable from the live pipeline (edgetam has no importers;
+# pavement analysis is an offline subsystem). Install manually if you use them:
+#   pip install transformers matplotlib
 
 # Testing
 pytest>=7.4.0
