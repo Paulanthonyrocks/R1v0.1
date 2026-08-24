@@ -151,7 +151,12 @@ class FeedManager:
                 RedisStreamQueue(f'inference_input:slot_{i}', group_name='workers')
                 for i in range(self.slot_count)
             ]
-            self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers')
+            # Audit M7 (2026-08-23): post Option-A this stream carries full frame BYTES
+            # (~50KB/msg). The default maxlen=10000 implied a ~500MB steady-state
+            # Redis ceiling. The result reader normally drains immediately; maxlen
+            # only matters when it stalls. ~2.5 min of frames (~135MB) is ample
+            # stall headroom without crowding the box.
+            self._central_output_queue = RedisStreamQueue('central_output', group_name='output-readers', maxlen=2500)
 
             # Purge stale consumer groups from the old monolithic stream (pre-fix migration)
             try:
@@ -1606,6 +1611,24 @@ class FeedManager:
             "video_writer_queue": None,
             "timer": None,
         })
+
+        # Audit M6 (2026-08-23): decrement the per-worker feed counter so the
+        # slot-routing round-robin in _launch_worker stays balanced across
+        # stop/start cycles. Previously only incremented (launch) — never
+        # decremented — so counts drifted monotonically and new feeds piled
+        # onto early slots after any stop/restart churn. The worker id was
+        # recorded at launch as entry["inference_worker"].
+        launched_wid = entry.get("inference_worker")
+        if launched_wid is not None:
+            current = self._per_worker_feed_count.get(launched_wid, 0)
+            if current > 0:
+                self._per_worker_feed_count[launched_wid] = current - 1
+            else:
+                logger.debug(
+                    f"_per_worker_feed_count for worker {launched_wid} already 0 "
+                    f"while detaching {feed_id}; skipping decrement."
+                )
+            entry["inference_worker"] = None
 
         if feed_id in self._feed_running_events:
             self._feed_running_events[feed_id].clear()

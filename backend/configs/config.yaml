@@ -78,7 +78,7 @@ inference:
   device: cuda:0
   # 2 T4 GPUs: start with `num_workers` (=2) — one Worker per GPU at
   # 1:1. The pool grows under load up to inference_pool_size (8); see
-  # inference_pool_manager.scale_pool. With SLOT_COUNT=4 and 2 workers,
+  # inference_pool_manager.scale_pool. With SLOT_COUNT=6 (see constants.py) and 2 workers,
   # each worker owns 2 slots and the existing route formula
   # `(wid + sub*pool_size) % SLOT_COUNT` co-locates 2+ feeds onto the
   # same worker, so the configured batch_size (8) actually fills (was
@@ -499,7 +499,7 @@ performance:
   # Pool size = number of distinct slots, so every worker owns exactly one
   # slot and there is no modulo collision or fan-out reuse.
   # Reduced from 8 to 4 (2 per GPU) to eliminate CUDA context thrashing
-  # from 12 concurrent CUDA inits. With SLOT_COUNT=4 and 2 GPUs, 4 workers
+  # from 12 concurrent CUDA inits. With SLOT_COUNT=6 and 2 GPUs, 4 workers
   # = 1:1 worker:slot affinity. Each GPU runs 2 workers pinned to it.
   inference_pool_size: 4
   # Pin the autoscaler: when true, the scaling monitor never scales the
@@ -509,7 +509,7 @@ performance:
   # corrupt -- kills workers mid-run. Set inference_pool_size to cover peak
   # load and pin it. Default false = legacy adaptive scaling.
   pin_inference_pool: true
-  # Autoscaler ceiling for the inference pool. SLOT_COUNT is 4, so with
+  # Autoscaler ceiling for the inference pool. SLOT_COUNT is 6, so with
   # strict 1:1 routing only workers 0..3 could ever own a slot and workers
   # 4..7 idled (loaded a model, did no work) — which made raising this past 4
   # pointless. InferencePoolManager.scale_pool now FAN-OUTS overflow workers
@@ -557,6 +557,15 @@ performance:
   # drops. Set to 0.0 to disable (legacy post-acquire backpressure only).
   # Raised from 0.20 to 0.25 to trigger decode-skip earlier and prevent pool exhaustion.
   shm_min_free_fraction: 0.25
+  # Hysteresis resume threshold for the decode-shed latch. Shedding engages below
+  # shm_min_free_fraction and only releases once the free fraction climbs back to
+  # this level. Must exceed shm_min_free_fraction.
+  shm_resume_fraction: 0.40
+  # Starvation guard: a feed latched in the hysteresis band force-resumes after
+  # this many seconds even if the pool never reaches shm_resume_fraction —
+  # prevents one feed blacking out indefinitely while others oscillate inside
+  # the band (observed on Feed_3, 2026-08-23 22:37-22:42 run).
+  shm_shed_max_age_seconds: 30.0
   # How long a segment may sit unwritten/abandoned before prune_stale_segments
   # reclaims it. Raised well above worst-case reader lag so an in-flight frame
   # is never reclaimed (which previously caused feed_hash mismatches + drops).

@@ -192,7 +192,7 @@ async def get_all_nodes_congestion_data(
     ),
 ) -> APIResponse[AllNodesCongestionResponse]:
     logger.info(
-        f"GET /analytics/nodes/congestion endpoint called by user: {current_user.get('email')}"
+        f"GET /analytics/nodes/congestion endpoint called by user: {current_user.email}"
     )
     """
     Retrieves the latest congestion data for all monitored nodes.
@@ -202,7 +202,7 @@ async def get_all_nodes_congestion_data(
     """
     try:
         logger.info(
-            f"User {current_user.get('email')} requesting all nodes congestion data."
+            f"User {current_user.email} requesting all nodes congestion data."
         )
         node_data_list = await analytics_service.get_all_location_congestion_data()
         logger.debug(f"Retrieved node data list: {node_data_list}")

@@ -56,7 +56,7 @@ async def set_signal_phase(
             detail=f"Invalid phase. Valid phases are: {', '.join(valid_phases)}",
         )
 
-    user_email = current_user.get("email")
+    user_email = current_user.email
     # logger.info(f"User {user_email} attempting to set phase for signal {signal_id}.")
 
     try:

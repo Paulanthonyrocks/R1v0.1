@@ -112,7 +112,7 @@ async def delete_alert_endpoint(
     conn_manager: ConnectionManager = Depends(get_connection_manager),
 ):
     logger.info(
-        f"User '{current_user.get('email')}' attempting to delete alert ID: {alert_id}"
+        f"User '{current_user.email}' attempting to delete alert ID: {alert_id}"
     )
 
     # TODO: Add role-based access control if needed, e.g., only admins can delete.
@@ -120,7 +120,7 @@ async def delete_alert_endpoint(
     deleted = await db.delete_alert(alert_id)
     if not deleted:
         logger.warning(
-            f"Alert ID {alert_id} not found for deletion by user '{current_user.get('email')}'."
+            f"Alert ID {alert_id} not found for deletion by user '{current_user.email}'."
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -128,7 +128,7 @@ async def delete_alert_endpoint(
         )
 
     logger.info(
-        f"Alert ID {alert_id} successfully deleted by user '{current_user.get('email')}'."
+        f"Alert ID {alert_id} successfully deleted by user '{current_user.email}'."
     )
 
     # Broadcast alert status update
@@ -166,7 +166,7 @@ async def acknowledge_alert_endpoint(
     conn_manager: ConnectionManager = Depends(get_connection_manager),
 ) -> AlertModel:
     logger.info(
-        f"User '{current_user.get('email')}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}"
+        f"User '{current_user.email}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}"
     )
 
     # TODO: Add role-based access control if needed.
@@ -176,7 +176,7 @@ async def acknowledge_alert_endpoint(
     )
     if not success:
         logger.warning(
-            f"Alert ID {alert_id} not found for acknowledge by user '{current_user.get('email')}'."
+            f"Alert ID {alert_id} not found for acknowledge by user '{current_user.email}'."
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -187,7 +187,7 @@ async def acknowledge_alert_endpoint(
     if not updated_alert_data:
         # This should ideally not happen if acknowledge_alert returned True
         logger.error(
-            f"Alert ID {alert_id} was acknowledged but could not be refetched by user '{current_user.get('email')}'."
+            f"Alert ID {alert_id} was acknowledged but could not be refetched by user '{current_user.email}'."
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -195,7 +195,7 @@ async def acknowledge_alert_endpoint(
         )
 
     logger.info(
-        f"Alert ID {alert_id} acknowledgement status set to {ack_request.acknowledged} by user '{current_user.get('email')}'."
+        f"Alert ID {alert_id} acknowledgement status set to {ack_request.acknowledged} by user '{current_user.email}'."
     )
 
     # Broadcast alert status update

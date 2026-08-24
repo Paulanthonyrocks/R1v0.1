@@ -84,6 +84,17 @@ def _deep_copy_for_ema(obj: Any) -> Any:
 # after 300 detect-frames, see audit finding #1). These keys must carry the
 # LATEST observed value instead of an EMA.
 _NON_SMOOTHED_METRIC_KEYS = frozenset({
+    # WorkerMetrics ops keys (audit 2026-08-23): combined_metrics merges
+    # WorkerMetrics.to_dict(), and every key below is monotonic or already a
+    # rolling window — EMA at alpha=1/window_seconds made them lag ~30s behind
+    # truth in latest_metrics and the per-frame m payload.
+    "frames_processed",           # monotonic counter
+    "frames_dropped",             # monotonic counter
+    "errors",                     # monotonic counter
+    "shm_leaks",                  # monotonic counter
+    "uptime_seconds",             # monotonically increasing
+    "fps",                        # already a rolling window (mark_frame)
+    "lifetime_fps",               # cumulative average — never smooth an average
     "total_vehicles",             # instantaneous active headcount (snapshot, not a rate)
     "total_vehicles_cumulative",  # monotonic ever-seen count (must never be smoothed)
     "vehicles_per_lane",          # per-lane integer counts

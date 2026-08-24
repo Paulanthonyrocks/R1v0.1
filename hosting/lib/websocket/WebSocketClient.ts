@@ -2,6 +2,7 @@ import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
 import { appendTunnelPassword } from '../api/backendBaseUrl';
+import { resetFeedSubscriptionState } from './feedSubscriptionState';
 
 interface WebSocketErrorEvent extends Event {
     message?: string;
@@ -532,6 +533,11 @@ export class WebSocketClient implements IWebSocketClient {
                     }
 
                     this.setState(ConnectionState.DISCONNECTED, reason);
+                    // AUDIT (2026-08-23): clear module-level subscription tracking so a
+                    // reconnect re-subscribes everything cleanly. Hooks also re-subscribe
+                    // on 'authenticated', but feeds whose hooks unmounted mid-outage
+                    // would otherwise stay marked subscribed forever.
+                    resetFeedSubscriptionState();
                     if (this.shouldReconnect && !wasClean && this.isInstanceActive()) {
                         this.attemptReconnect(reason);
                     }
@@ -719,35 +725,34 @@ export class WebSocketClient implements IWebSocketClient {
                     if (!f_id) return;
 
                     // Frame backpressure: NEVER silently drop the newest frame on a
-                    // permanent gate. The previous `return` here pinned pendingFrames at
-                    // MAX_PENDING_FRAMES once the worker stalled and dropped 100% of
-                    // frames forever -> frozen canvas (rAF only repaints on index
-                    // change, so dropping pre-listener = no repaint, ever).
-                    //
-                    // Delegate to gateFrameForWorker, which:
+                    // permanent gate. Delegate to gateFrameForWorker, which:
                     //   - reclaims the OLDEST in-flight slot when saturated so the
                     //     newest frame always flows;
                     //   - (re)arms a per-feed watchdog that force-clears the counter
                     //     if the worker hasn't acked within PENDING_FRAME_TIMEOUT_MS,
                     //     so a permanently stalled worker can never deadlock the feed.
-                    // NOTE: gateFrameForWorker is called EXACTLY ONCE per frame.
-                    // The `videoWorker` branch below does NOT call it again; the
-                    // shared `if (true)` path (formerly line 733) handles the gate
-                    // for both binary and JSON frames.
                     //
-                    // CRITICAL FIX: always route VIDEO_FRAME through exactly ONE path.
-                    // Previously, if the worker existed but `frameData.frame` was not
-                    // a base64 string (e.g. an ImageBitmap already, or an ArrayBuffer
-                    // payload), the JSON branch above fell through and was dropped —
-                    // while the binary branch kept streaming the same feed. The user
-                    // observed a flood of "DROPPING stale frame" warnings exactly
-                    // because the two paths interleaved. We now route both binary and
-                    // JSON into the worker when available; falling back to direct
-                    // notification only when the worker has been terminated.
+                    // AUDIT FIX (2026-08-23): the JSON branch previously posted to the
+                    // worker WITHOUT calling gateFrameForWorker (the old comment here
+                    // claimed a "shared path" handled it — no such path exists), and
+                    // without forwarding frame_index, so the worker's monotonic guard
+                    // pinned at index 0 and accepted exactly one frame per feed. The
+                    // backend currently sends only binary (msgpack) VIDEO_FRAMEs, but
+                    // this path must stay correct for mixed/JSON fallback: same gate,
+                    // same index passthrough as the binary branch below.
                     if (this.videoWorker) {
+                        const jsonIndex = typeof (message.data as any)?.i === 'number'
+                            ? (message.data as any).i
+                            : typeof (frameData as any)?.frame_index === 'number'
+                                ? (frameData as any).frame_index
+                                : 0;
+                        if (!this.gateFrameForWorker(f_id)) {
+                            return; // congestion control: drop newest
+                        }
                         this.videoWorker.postMessage({
                             frameData: typeof frameData.frame === 'string' ? frameData.frame : null,
                             feed_id: f_id,
+                            originalFrameIndex: jsonIndex,
                             originalData: message.data
                         });
                     } else {

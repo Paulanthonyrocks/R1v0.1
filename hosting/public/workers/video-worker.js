@@ -22,13 +22,20 @@ const processingState = new Map(); // feed_id → { isProcessing: boolean, lates
  * Older indexes are silently dropped to prevent stale-frame surfacing on
  * the main thread. When the gap implies a loop/restart we reset the
  * watermark so the new sequence can flow through.
+ *
+ * LOOP_RESET_BACKJUMP must MATCH lib/useVideoSocket.ts (100). The worker
+ * previously reset at 256 while the hooks reset at 100, so any wrap whose
+ * backward jump landed in (100, 256] passed the hook guards but wedged THIS
+ * guard forever — frozen feed with a clean-looking console (audit 2026-08-23).
  */
+const LOOP_RESET_BACKJUMP = 100;
+
 function shouldAccept(feed_id, frame_index) {
     if (typeof frame_index !== 'number' || frame_index < 0) return true;
     const state = processingState.get(feed_id);
     if (!state) return true;
 
-    if (frame_index + 256 < state.highestAcceptedIndex) {
+    if (frame_index + LOOP_RESET_BACKJUMP < state.highestAcceptedIndex) {
         // Loop / restart detected: reset and accept anything.
         // TELEMETRY: log every loop/restart so we can distinguish "file is
         // looping normally" from "worker lost state" in the console.
@@ -129,6 +136,17 @@ async function processFeedQueue(feed_id) {
     }
 }
 
+// AUDIT (2026-08-23): without onerror, an uncaught worker-script exception
+// kills decoding silently — the only backstop was the client's pending-frame
+// watchdog. Surface it so the console shows the real cause.
+self.onerror = function (event) {
+    self.postMessage({
+        error: event.message || 'worker script error',
+        feed_id: null,
+        frame_index: null
+    });
+};
+
 self.onmessage = async function (e) {
     const data = e.data;
     const command = data.command;
@@ -201,8 +219,16 @@ self.onmessage = async function (e) {
         const binaryFrame = data.binaryFrame;
         const frameData = data.frameData;
 
+        // AUDIT FIX (2026-08-23): the client now forwards the real frame index as
+        // originalFrameIndex. Previously this path pinned frame_index at 0, so
+        // shouldAccept accepted exactly ONE frame and dropped every later one as a
+        // duplicate — a one-frame-then-wedge feed whenever the JSON fallback ran.
+        const rawIndex = typeof data.originalFrameIndex === 'number'
+            ? data.originalFrameIndex
+            : (binaryFrame ? (binaryFrame.i || 0) : 0);
+
         let metadata = {
-            frame_index: 0,
+            frame_index: rawIndex,
             metrics: null,
             vehicles: [],
             lanes: null,
@@ -211,7 +237,7 @@ self.onmessage = async function (e) {
 
         if (binaryFrame) {
             metadata = {
-                frame_index: binaryFrame.i || 0,
+                frame_index: binaryFrame.i || rawIndex,
                 metrics: binaryFrame.m,
                 vehicles: binaryFrame.v,
                 lanes: binaryFrame.ln,

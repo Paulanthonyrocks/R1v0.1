@@ -169,12 +169,32 @@ class AnalyticsService:
                 }
 
         # 3. Final Fallback: Statistical Rule-based prediction
-        result = await asyncio.to_thread(
-            self._traffic_predictor._rule_based_prediction,
-            location, prediction_time, pd.DataFrame(recent_traffic_data)
+        # Audit M5 (2026-08-23): _traffic_predictor returns None when
+        # prediction_scheduler.enabled=false (the shipped default), so this line
+        # was a guaranteed AttributeError — exactly when prediction is disabled.
+        # Degrade to the anomaly-proxy result shape instead of crashing.
+        predictor = self._traffic_predictor
+        if predictor is not None:
+            result = await asyncio.to_thread(
+                predictor._rule_based_prediction,
+                location, prediction_time, pd.DataFrame(recent_traffic_data)
+            )
+            result["prediction_source"] = "fallback-rule-based"
+            return result
+
+        logger.warning(
+            "predict_incident_likelihood: no traffic predictor available "
+            "(prediction_scheduler.enabled=false); returning neutral likelihood."
         )
-        result["prediction_source"] = "fallback-rule-based"
-        return result
+        return {
+            "location": location,
+            "prediction_time": prediction_time.isoformat(),
+            "incident_likelihood": 0.0,
+            "confidence_score": 0.0,
+            "contributing_factors": ["prediction disabled"],
+            "recommendations": [],
+            "prediction_source": "unavailable-prediction-disabled"
+        }
 
     async def process_feed_metrics(self, feed_id: str, metrics: Dict[str, Any], vehicles: List[Dict[str, Any]] = None):
         # Placeholder for processing feed metrics

@@ -19,7 +19,7 @@ async def get_current_events(
     event_service: EventService = Depends(get_event_service_api),
 ):
     logger.info(
-        f"GET /events/current endpoint called by user: {current_user.get('email')}"
+        f"GET /events/current endpoint called by user: {current_user.email}"
     )
     try:
         return await event_service.get_events()
@@ -41,7 +41,7 @@ async def get_event_impacts(
     event_service: EventService = Depends(get_event_service_api),
 ):
     logger.info(
-        f"GET /events/impacts endpoint called by user: {current_user.get('email')}"
+        f"GET /events/impacts endpoint called by user: {current_user.email}"
     )
     try:
         return await event_service.get_event_impacts()

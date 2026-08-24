@@ -21,7 +21,7 @@ async def get_current_weather(
     current_user: dict = Depends(get_current_active_user),
 ):
     logger.info(
-        f"GET /weather/current endpoint called by user: {current_user.get('email')} for lat: {lat}, lon: {lon}"
+        f"GET /weather/current endpoint called by user: {current_user.email} for lat: {lat}, lon: {lon}"
     )
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)

@@ -86,6 +86,12 @@ class GlobalReIDManager:
     def shutdown(self):
         """Gracefully shuts down the ReID manager and persists state."""
         self._stop_sub = True
+        # Audit M4: join the listener so "shutdown" is actually shutdown. The
+        # thread spends up to 5s in its retry sleep, so bound the wait there;
+        # it is a daemon anyway, so a timeout is safe.
+        thread = getattr(self, "_sub_thread", None)
+        if thread and thread.is_alive():
+            thread.join(timeout=6.0)
         self.save_state()
         logger.info("GlobalReIDManager shutdown complete.")
 
@@ -345,11 +351,16 @@ class GlobalReIDManager:
     def _listen_for_updates(self):
         if not self.redis: return
         while not self._stop_sub:
+            pubsub = None
             try:
+                # Audit M4 (2026-08-23): the pubsub object is created OUTSIDE the
+                # retry loop's scope and closed in `finally`. Previously a fresh
+                # pubsub() was created per reconnect attempt without closing the
+                # old one — every Redis disconnect leaked a socket + subscription.
                 pubsub = self.redis.pubsub()
                 pubsub.subscribe("reid:new_identity", "reid:update_identity")
                 logger.info("Subscribed to ReID sync channels.")
-                
+
                 for message in pubsub.listen():
                     if self._stop_sub: break
                     if message['type'] == 'message':
@@ -367,6 +378,14 @@ class GlobalReIDManager:
                     time.sleep(5)
                 else:
                     break
+            finally:
+                # Always release the socket, whether we exited by stop-flag,
+                # exception, or clean listen() termination.
+                try:
+                    if pubsub is not None:
+                        pubsub.close()
+                except Exception:
+                    pass
 
     def _update_single_id_from_redis(self, gid: str, emb_bytes: bytes):
         if not self.redis or not gid: return

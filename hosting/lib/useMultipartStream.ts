@@ -111,7 +111,13 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
                    // Convert Uint8Array to Data URL
                    const blob = new Blob([imagePart], { type: 'image/jpeg' }); // Assuming JPEG format
                    const dataUrl = URL.createObjectURL(blob);
-                   setFrameData(dataUrl);
+                   setFrameData((prev: string | null) => {
+                       // AUDIT FIX (2026-08-23): revoke the PREVIOUS frame's object URL —
+                       // one leaked blob per JPEG frame otherwise grows memory without
+                       // bound on long-running MJPEG sessions.
+                       if (prev) URL.revokeObjectURL(prev);
+                       return dataUrl;
+                   });
                    setRawFrameData(imagePart);
                 }
               }

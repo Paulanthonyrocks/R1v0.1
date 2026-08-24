@@ -55,7 +55,7 @@ async def get_current_config(
     Sensitive keys like API keys will be masked.
     """
     logger.info(
-        f"Admin user {current_user.get('uid', 'unknown_admin_uid')} retrieved configuration."
+        f"Admin user {current_user.username} retrieved configuration."
     )
     # IMPORTANT: Filter sensitive data before returning
     return APIResponse.success(

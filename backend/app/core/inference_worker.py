@@ -684,6 +684,19 @@ def inference_worker(
                         batch_tasks.append((msg_id, task, central_input_queue[slot_id]))
                 except (queue.Empty, IndexError):
                     continue
+                except Exception as poll_err:
+                    # Audit M3 (2026-08-23): RedisStreamQueue.get_nowait can raise
+                    # redis.ConnectionError/TimeoutError from xreadgroup. Those used
+                    # to escape to the outermost handler and KILL the worker ->
+                    # watchdog respawn -> full YOLO+ReID reload churn per transient
+                    # Redis blip. A transient poll failure just means this tick
+                    # finds nothing; back off briefly and retry next loop.
+                    logger.warning(
+                        f"[Worker {worker_id}] Transient slot-{slot_id} poll error "
+                        f"({type(poll_err).__name__}: {poll_err}); skipping this tick."
+                    )
+                    time.sleep(0.05)
+                    continue
 
             if not batch_tasks:
                 time.sleep(0.01)
@@ -721,6 +734,15 @@ def inference_worker(
                         batch_tasks.append((msg_id, task, slot_q))
                     except (queue.Empty, IndexError):
                         continue
+                    except Exception as poll_err:
+                        # Audit M3: transient Redis error during batch fill — same
+                        # treatment as the initial poll above. Log, back off, keep
+                        # the worker alive with whatever the batch already holds.
+                        logger.warning(
+                            f"[Worker {worker_id}] Transient slot poll error during "
+                            f"batch fill ({type(poll_err).__name__}); using partial batch."
+                        )
+                        break
                 time.sleep(0.0005)
 
             # --- Process batch ---

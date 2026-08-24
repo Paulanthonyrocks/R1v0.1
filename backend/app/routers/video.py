@@ -4,7 +4,7 @@ import os
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import logging
 
 from app.config import get_current_config
@@ -20,6 +20,20 @@ class StartRecordingRequest(BaseModel):
     stream_id: str
     output_filename: str
     frame_rate: float = 10.0
+
+    @field_validator("output_filename")
+    @classmethod
+    def _no_path_traversal(cls, v: str) -> str:
+        """Audit H3 (2026-08-23): client-controlled output_filename was joined with
+        os.path.join(output_directory, ...) unsanitized, letting '../../' escape the
+        recordings dir (authenticated arbitrary file write). Restrict to a bare
+        filename; strip any directory components entirely."""
+        name = os.path.basename(v.replace("\\", "/")).strip()
+        if not name or name in {".", ".."} or name.startswith("."):
+            raise ValueError("output_filename must be a bare file name (no paths)")
+        if not name.endswith(".mp4"):
+            name += ".mp4"
+        return name
 
 
 class ProcessedVideoResponse(BaseModel):
@@ -55,7 +69,7 @@ async def stream_video(stream_id: str, current_user: dict = Depends(get_current_
     clients fail fast instead of silently hanging on an unreachable queue.
     """
     logger.info(
-        f"GET /video/stream/{stream_id} endpoint called by user: {current_user.get('email')} "
+        f"GET /video/stream/{stream_id} endpoint called by user: {current_user.email} "
         f"(deprecated path)"
     )
     raise HTTPException(

@@ -35,7 +35,7 @@ from app.services.health_service import SystemHealthService
 from app.websocket.connection_manager import ConnectionManager
 from app.utils.file_watcher import FileSystemWatcher
 from app.core.feature_flags import FeatureFlags
-from app.dependency_injection import get_container
+from app.dependency_injection import get_container, get_current_active_user
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitConfig
 from app.middleware.security_middleware import SecurityHeadersMiddleware
@@ -121,13 +121,16 @@ def setup_cors(app: FastAPI, config: dict):
     allow_origin_regex = r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
     
     if env == "development":
-        # No wildcard origins — rely solely on the regex matcher.
+        # No wildcard origins — rely solely on the regex matcher. Note: Starlette
+        # applies allow_origin_regex with re.fullmatch, so the pattern is anchored
+        # by construction (https://localhost.evil.com does NOT match). The real
+        # hardening here is item 2 below: production no longer uses the matcher
+        # at all (audit H4, 2026-08-23 — revised after verifying fullmatch).
         allow_origins: list = []
-        logger.info(f"CORS configured (dev): regex-only matcher, no wildcard origins.")
     else:
-        # Production: explicit allow-list wins; regex stays as a fallback for
-        # dynamic tunnel URLs that operators whitelist via ALLOWED_ORIGINS /
-        # cors.allowed_origins. Never fallback to "*".
+        # Production: explicit allow-list wins; NO regex fallback. Previously the
+        # unanchored tunnel regex was active in production too, giving any origin
+        # whose host contained e.g. "loca.lt" credentialed cross-origin access.
         allowed_origins_env = [o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o]
         cors_config = config.get("cors", {})
         specific_origins = list(set(allowed_origins_env + cors_config.get("allowed_origins", [])))
@@ -137,7 +140,7 @@ def setup_cors(app: FastAPI, config: dict):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
-        allow_origin_regex=allow_origin_regex,
+        allow_origin_regex=allow_origin_regex if env == "development" else "",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID", "X-Tunnel-Password"],
@@ -499,10 +502,22 @@ app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(ws_monitoring.router, prefix="/api/v1/websocket", tags=["WebSocket Monitoring"])
 
 # --- Secure File Serving ---
-@app.get("/api/v1/snapshots/{file_path:path}", tags=["Snapshots"])
+# Auth required: these are camera snapshots; serving them unauthenticated exposed
+# surveillance imagery through the tunnel (audit H2, 2026-08-23).
+@app.get(
+    "/api/v1/snapshots/{file_path:path}",
+    tags=["Snapshots"],
+    dependencies=[Depends(get_current_active_user)],
+)
 async def serve_snapshot(file_path: str):
     safe_path = (SNAPSHOT_DIR / file_path).resolve()
-    if not str(safe_path).startswith(str(SNAPSHOT_DIR.resolve())):
+    # os.sep suffix prevents sibling-dir escapes (e.g. .../snapshots_backup/x.jpg
+    # passing a bare-prefix startswith check).
+    snapshot_root = str(SNAPSHOT_DIR.resolve())
+    if not (
+        safe_path.is_relative_to(snapshot_root)
+        and safe_path != Path(snapshot_root)
+    ):
         raise HTTPException(status_code=403, detail="Access denied")
     if not safe_path.exists() or not safe_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
