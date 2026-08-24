@@ -1015,12 +1015,26 @@ class FeedManager:
             current_config = entry.get("config_info")
             if current_config:
                 update_data = updates.copy()
+                # CONTRACT CORRECTION (2026-08-24 run): roi is a POLYGON of points
+                # (FeedConfigInfo.roi = List[Dict[str,float]]; CoreModule feeds it
+                # to cv2.fillPoly; the dashboard sends [{x, y}, ...]). The old
+                # 4-tuple box rule here rejected every legitimate ROI save.
                 if "roi" in update_data and isinstance(update_data["roi"], list):
-                    if not all(
-                        isinstance(roi, (list, tuple)) and len(roi) == 4
-                        for roi in update_data["roi"]
-                    ):
-                        raise ValueError("ROI must be a list of [x1, y1, x2, y2] coordinates.")
+                    for pt in update_data["roi"]:
+                        is_point = (
+                            (isinstance(pt, dict) and "x" in pt and "y" in pt)
+                            or (isinstance(pt, (list, tuple)) and len(pt) == 2)
+                        )
+                        if not is_point:
+                            raise ValueError(
+                                "ROI must be a polygon: a list of at least 3 "
+                                "{'x': float, 'y': float} points."
+                            )
+                    if len(update_data["roi"]) < 3:
+                        raise ValueError(
+                            "ROI must be a polygon: a list of at least 3 "
+                            "{'x': float, 'y': float} points."
+                        )
 
                 entry["config_info"] = current_config.model_copy(update=update_data)
                 self._save_persisted_feeds()

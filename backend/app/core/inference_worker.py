@@ -143,6 +143,12 @@ def _exit_worker_fatal(worker_id: int, feed_id: str, err: str) -> None:
     os._exit(42)
 
 
+# Last known decoded-frame dimensions per feed, set by the detect path. Skip/
+# passthrough frames re-serialize persisted tracks and need the same dims to
+# normalize bbox coordinates consistently.
+_FRAME_DIMS_BY_FEED: Dict[str, tuple] = {}
+
+
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
     """Forward a frame's raw bytes downstream without running detection.
 
@@ -221,9 +227,11 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
                         if isinstance(track, dict) and track.get("status") in _LIVE_TRACK_STATUSES
                     }
                     if live_tracks:
+                        _fw, _fh = _FRAME_DIMS_BY_FEED.get(meta.get("feed_id"), (None, None))
                         serialized_v = serialize_tracked_vehicles(
                             live_tracks,
                             vehicle_type_map=getattr(core, "vehicle_type_map", None),
+                            norm_width=_fw, norm_height=_fh,
                         )
             except Exception:
                 # Tracker access must never raise out of the forwarder --
@@ -1197,8 +1205,14 @@ def inference_worker(
 
                         metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps
 
+                        # NORMALIZED wire contract: the frontend multiplies bbox
+                        # values by canvas size, so ship 0..1 coords (audit
+                        # 2026-08-24 — pixel-space boxes rendered off-canvas).
+                        _fh, _fw = frame.shape[:2]
+                        _FRAME_DIMS_BY_FEED[meta["feed_id"]] = (_fw, _fh)
                         serialized_v = serialize_tracked_vehicles(
-                            vis_tracks, vehicle_type_map=core.vehicle_type_map
+                            vis_tracks, vehicle_type_map=core.vehicle_type_map,
+                            norm_width=_fw, norm_height=_fh,
                         )
 
                         extra = {}

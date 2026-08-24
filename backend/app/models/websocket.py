@@ -159,15 +159,37 @@ class UpdateFeedConfigData(BaseModel):
         fire-and-forget create_task and was logged-and-lost (asyncio
         "Task exception was never retrieved"). Validating here turns a silent
         failure into a concrete client-facing error.
+
+        CONTRACT CORRECTION (2026-08-24 run): the real ROI wire format is a
+        POLYGON of points — FeedConfigInfo.roi is List[Dict[str, float]],
+        CoreModule._initialize_roi_mask feeds the points to cv2.fillPoly, and
+        the dashboard sends [{x: float, y: float}, ...]. The original 4-tuple
+        box rule here (and in feed_manager) was written against an imagined
+        contract and rejected every legitimate ROI save. Validate the actual
+        shape: a list of >=3 {x, y} dicts or [x, y] pairs.
         """
         roi = self.updates.get("roi")
         if roi is not None:
-            if not isinstance(roi, list):
-                raise ValueError("ROI must be a list of [x1, y1, x2, y2] coordinates.")
-            for box in roi:
-                if not isinstance(box, (list, tuple)) or len(box) != 4:
+            if not isinstance(roi, list) or len(roi) < 3:
+                raise ValueError(
+                    "ROI must be a polygon: a list of at least 3 "
+                    "{'x': float, 'y': float} points."
+                )
+            for pt in roi:
+                if isinstance(pt, dict):
+                    if "x" not in pt or "y" not in pt:
+                        raise ValueError(
+                            "ROI points must be {'x': float, 'y': float} dicts."
+                        )
+                elif isinstance(pt, (list, tuple)):
+                    if len(pt) != 2:
+                        raise ValueError(
+                            "ROI points must be [x, y] pairs with exactly 2 values."
+                        )
+                else:
                     raise ValueError(
-                        "ROI must be a list of [x1, y1, x2, y2] coordinates."
+                        "ROI must be a polygon: a list of at least 3 "
+                        "{'x': float, 'y': float} points."
                     )
         return self
 

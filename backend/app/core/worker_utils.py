@@ -91,7 +91,9 @@ def serialize_tracked_vehicles(
     tracked_vehicles: Dict[str, Dict[str, Any]], 
     scale_x: float = 1.0, 
     scale_y: float = 1.0,
-    vehicle_type_map: Optional[Dict[int, str]] = None
+    vehicle_type_map: Optional[Dict[int, str]] = None,
+    norm_width: Optional[float] = None,
+    norm_height: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
     Serialize tracked vehicle data for JSON transmission.
@@ -101,6 +103,12 @@ def serialize_tracked_vehicles(
         scale_x: X scaling factor for bbox coordinates
         scale_y: Y scaling factor for bbox coordinates
         vehicle_type_map: Optional mapping of class_id to class_name
+        norm_width: When set, bboxes are divided by this width (NORMALIZED wire
+            contract). The frontend draws boxes by multiplying bbox values by
+            canvas size, i.e. it expects [x1,y1,x2,y2] in 0..1 — pixel-space
+            coords made every box render far off-canvas (invisible overlays,
+            audit 2026-08-24).
+        norm_height: See norm_width.
         
     Returns:
         List of serialized vehicle dictionaries
@@ -125,6 +133,13 @@ def serialize_tracked_vehicles(
                     bbox[2] * scale_x,
                     bbox[3] * scale_y
                 ]
+                if norm_width and norm_height:
+                    scaled_bbox = [
+                        scaled_bbox[0] / norm_width,
+                        scaled_bbox[1] / norm_height,
+                        scaled_bbox[2] / norm_width,
+                        scaled_bbox[3] / norm_height,
+                    ]
             elif bbox is not None:
                 logger.warning(f"Malformed bbox for vehicle {vehicle_id}: {bbox}")
 
