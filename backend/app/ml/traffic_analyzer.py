@@ -98,7 +98,7 @@ def identify_traffic_pattern(db_collection: Any, sensor_id: str, time_range: str
     elif time_range == 'midnight':
          # Example: Look at the same time window for the past 7 days
         for i in range(1, 8):
-            past_day = now - datetime.timedelta(days=i)
+            past_day = now - timedelta(days=i)  # AUDIT FIX: datetime.timedelta raised AttributeError; timedelta is imported
             start_midnight = past_day.replace(hour=0, minute=0, second=0, microsecond=0)
             end_midnight = past_day.replace(hour=1, minute=0, second=0, microsecond=0)
             historical_windows.append((start_midnight, end_midnight))

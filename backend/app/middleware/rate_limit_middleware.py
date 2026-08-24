@@ -77,6 +77,60 @@ class RateLimitMiddleware:
                 return pattern, config
         return "default", self.default_config
 
+
+    _tier_cache: Dict[str, tuple] = {}  # token-hash -> (tier, expiry_monotonic)
+
+    async def _resolve_tier(self, request: Request) -> str:
+        """Resolve the caller's tier from their Firebase bearer token.
+
+        AUDIT FIX (2026-08-24): this used to read request.state.user_tier, which no
+        auth layer ever populates before the middleware runs — every caller was
+        silently 'anonymous' and the authenticated/premium tiers were dead code.
+
+        Tier mapping (role claim from the verified Firebase ID token):
+          admin  -> premium      (5x base limit)
+          viewer/user/authenticated -> authenticated (2x)
+          no/invalid token          -> anonymous    (base limit)
+
+        Verification is cached per token (hash) for 5 minutes so we don't pay
+        Firebase certificate checks on every request. On any verification error the
+        caller is treated as anonymous — fail closed.
+        """
+        import hashlib
+        import time as _time
+
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            return "anonymous"
+        token = auth_header[7:].strip()
+        if not token:
+            return "anonymous"
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()[:24]
+        now = _time.monotonic()
+        cached = self._tier_cache.get(token_hash)
+        if cached and now < cached[1]:
+            return cached[0]
+
+        try:
+            from app.utils.auth_utils import verify_firebase_token
+            decoded = await asyncio.to_thread(verify_firebase_token, token)
+            role = str(decoded.get("role", "")).lower()
+            if role == "admin":
+                tier = "premium"
+            elif role in ("viewer", "user", "authenticated"):
+                tier = "authenticated"
+            else:
+                tier = "authenticated"
+        except Exception:
+            tier = "anonymous"
+
+        # Bound the cache so a flood of unique tokens can't grow it unbounded.
+        if len(self._tier_cache) > 1000:
+            self._tier_cache.clear()
+        self._tier_cache[token_hash] = (tier, now + 300.0)
+        return tier
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] != "http":
             # WebSocket or lifespan – pass through untouched
@@ -99,7 +153,7 @@ class RateLimitMiddleware:
 
         # Identify user: Use client IP as the primary identifier.
         user_id = request.client.host if request.client else "unknown"
-        user_tier = getattr(request.state, "user_tier", "anonymous")
+        user_tier = await self._resolve_tier(request)
 
         # Determine limits based on tier or path-specific config
         pattern, config = self._get_config_for_path(path)

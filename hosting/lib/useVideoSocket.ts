@@ -65,7 +65,6 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const framesSinceLastTickRef = useRef<number>(0);
   const lastDrawnIndexRef = useRef<number>(-1);
   const handleFrameRef = useRef<((data: VideoFrameMessage) => Promise<void>) | null>(null);
-  const frameClosureTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const consecutiveStaleCountRef = useRef<number>(0);
   // Holds the previous ImageBitmap waiting to be closed. The renderer's rAF
   // loop notifies us via this ref once the new frame has been painted so we
@@ -104,8 +103,13 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const { decode } = useVideoDecoder({
     onFrame: (decodedData) => {
       const { image, index, metrics: frameMetrics, vehicles: frameVehicles, lanes: frameLanes, timestamp } = decodedData;
-      // Skip vehicle data in minimal mode to reduce memory/GC pressure
-      const vehiclesToStore = minimal ? null : frameVehicles;
+      // AUDIT FIX (2026-08-24): minimal mode used to NULL out vehicle data to save
+      // GC pressure — but that stripped bboxes from every grid tile and thumbnail
+      // permanently (drawFrame draws boxes from frame.vehicles). The expensive part
+      // of overlays is per-vehicle label text + metrics readout, which drawFrame
+      // already gates via skipLabels=minimal. Vehicle arrays are small
+      // (<= max_detections_per_frame), so keep them and let boxes render everywhere.
+      const vehiclesToStore = frameVehicles;
       if (frameLanes) lanesRef.current = frameLanes;
       
       const previousIndex = lastFrameRef.current?.index ?? -1;
@@ -151,9 +155,7 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
       }
 
       if (streamId) {
-        if (!minimal) {
-          videoStreamManager.updateVehicles(streamId, frameVehicles);
-        }
+        videoStreamManager.updateVehicles(streamId, frameVehicles);
         vehiclesRef.current = vehiclesToStore;
         metricsRef.current = frameMetrics;
 
@@ -494,9 +496,6 @@ const unsubscribeFromFeed = useCallback(() => {
         clearTimeout(throttleTimerRef.current);
         throttleTimerRef.current = null;
       }
-      if (frameClosureTimeoutRef.current) {
-        clearTimeout(frameClosureTimeoutRef.current);
-      }
       if (lastFrameRef.current?.image instanceof ImageBitmap) {
         lastFrameRef.current.image.close();
       }
@@ -524,7 +523,7 @@ const unsubscribeFromFeed = useCallback(() => {
       selectedVehicleIds = new Set(),
       showAllDetections = false,
       showLaneOverlays = false,
-      minimal = false,  // Dashboard thumbnails: skip per-vehicle bboxes/metrics canvas text
+      minimal = false,  // Dashboard thumbnails: skip per-vehicle label text + metrics readout (boxes still draw)
     } = options;
 
     // ImageBitmap can be closed/detached after decoder reuses memory. If we

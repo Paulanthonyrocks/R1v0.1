@@ -201,6 +201,14 @@ class TrafficMonitor:
                 if now - last < self.hard_braking_cooldown_seconds:
                     continue
                 self._last_braking_fire[v_id] = now
+                # Evict stale cooldown entries alongside the seen-ids cap so
+                # this map tracks the same bounded cardinality (audit: the
+                # sibling map got a cap, this one didn't).
+                if len(self._last_braking_fire) > self.max_seen_ids:
+                    cutoff = now - max(self.hard_braking_cooldown_seconds * 2, 60.0)
+                    self._last_braking_fire = {
+                        k: t for k, t in self._last_braking_fire.items() if t >= cutoff
+                    }
                 self.anomalies.append({
                     "type": "hard_braking",
                     "vehicle_id": v_id,
@@ -306,7 +314,9 @@ class TrafficMonitor:
         for lane_id, count in self.lane_counts.items():
             lane_occupancy[lane_id] = min(100.0, (count * 15.0))
             lane_vehicles = [v for v in self.tracked_vehicles.values() if v.get("lane") == lane_id]
-            stopped_in_lane = [v for v in lane_vehicles if v.get("speed", 0) < self.stopped_threshold_kmh]
+            # AUDIT FIX (2026-08-24): uncalibrated cameras yield speed=None; None < threshold
+            # raised TypeError out of get_metrics() for the whole frame. Coerce to 0.
+            stopped_in_lane = [v for v in lane_vehicles if (v.get("speed") or 0) < self.stopped_threshold_kmh]
             if len(stopped_in_lane) >= 3:
                 lane_queues[lane_id] = len(stopped_in_lane) * 6.0
             else:

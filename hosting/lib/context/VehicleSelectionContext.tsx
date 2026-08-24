@@ -21,8 +21,15 @@ export const VehicleSelectionProvider: React.FC<{ children: React.ReactNode }> =
     setSelectedGlobalIdState(null);
   }, []);
 
+  // AUDIT FIX (2026-08-24): memoize the context value — a fresh object per render
+  // re-rendered every consumer on any provider render.
+  const value = React.useMemo(
+    () => ({ selectedGlobalId, setSelectedGlobalId, clearSelection }),
+    [selectedGlobalId]
+  );
+
   return (
-    <VehicleSelectionContext.Provider value={{ selectedGlobalId, setSelectedGlobalId, clearSelection }}>
+    <VehicleSelectionContext.Provider value={value}>
       {children}
     </VehicleSelectionContext.Provider>
   );

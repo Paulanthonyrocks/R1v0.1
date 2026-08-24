@@ -167,8 +167,25 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"[{self.stream_id}] _drain_frames error: {e}", exc_info=True)
         finally:
+            # AUDIT FIX (2026-08-24): if the generator died abnormally while a
+            # recording was active, clearing the event here orphaned the VideoWriter:
+            # stop_recording() early-returns on the cleared event, so the writer was
+            # never released, the .tmp never renamed, and metadata never saved.
+            _was_recording = self._recording_event.is_set()
             self._recording_event.clear()
             self._is_recording = False
+            if _was_recording:
+                logger.warning(
+                    f"[{self.stream_id}] Frame generator ended while recording; "
+                    f"finalizing recording automatically."
+                )
+                try:
+                    await self.stop_recording()
+                except Exception as e:
+                    logger.error(
+                        f"[{self.stream_id}] Failed to auto-finalize recording: {e}",
+                        exc_info=True,
+                    )
 
     async def stop_recording(self):
         if not self._recording_event.is_set():

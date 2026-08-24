@@ -8,7 +8,6 @@ import type { SurveillanceFeedProps } from '@/lib/types';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import useVideoSocket from '@/lib/useVideoSocket';
 import { useAuth } from '@/lib/auth/AuthProvider';
-import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { useVehicleSelection } from '@/lib/context/VehicleSelectionContext';
 import { UserRole } from '@/lib/auth/roles';
 import StreamOverlayControls from './StreamOverlayControls';
@@ -35,7 +34,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
   const { name: feedName, source, status } = feed;
   const { token, userRole } = useAuth();
-  const wsClient = useWebSocket();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
   // Only subscribe if the feed is in an active state
@@ -77,14 +75,6 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         exclusionZones: [] as { x: number, y: number }[][],
         currentExclusionPoints: [] as { x: number, y: number }[],
     });
-
-    // Sync selections to Backend
-    useEffect(() => {
-        if (feed_id && wsClient) {
-            console.debug(`[SurveillanceFeed] Syncing selections for ${feed_id}:`, Array.from(selectedVehicleIds));
-            wsClient.sendCommand("SET_SELECTED_IDS", feed_id, Array.from(selectedVehicleIds));
-        }
-    }, [selectedVehicleIds, feed_id, wsClient]);
 
     const [roiMode, setRoiMode] = useState<'roi' | 'exclusion' | null>(null);
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);

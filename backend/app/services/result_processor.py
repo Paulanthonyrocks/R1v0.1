@@ -176,6 +176,8 @@ class ResultProcessor:
         # the status-transition broadcast below). We re-push a lightweight
         # status update on a fixed cadence once metrics exist.
         self._feed_last_status_broadcast: Dict[str, float] = {}
+        # 1s throttle for metrics_history appends (see _process_frame_data)
+        self._last_hist_append: Dict[str, float] = {}
         self._status_broadcast_interval: float = float(
             config.get("feed_status_broadcast_interval", 1.0) if config else 1.0
         )
@@ -469,6 +471,21 @@ class ResultProcessor:
                             ema[k] = _ema_merge(ema.get(k), v, alpha)
 
                 entry["latest_metrics"] = _deep_copy_for_ema(entry["ema_metrics"])
+
+                # AUDIT dead-wiring #3 (2026-08-24): populate the per-feed
+                # metrics_history deque (created in feed_manager/registry but
+                # never written). Append a compact snapshot on the same cadence
+                # as the status re-broadcast so history resolution matches what
+                # the UI polls; deque maxlen bounds memory.
+                history = entry.get("metrics_history")
+                if history is not None and time.time() - self._last_hist_append.get(feed_id, 0.0) >= 1.0:
+                    self._last_hist_append[feed_id] = time.time()
+                    history.append({
+                        "ts": time.time(),
+                        "avg_speed_kmh": entry["latest_metrics"].get("average_speed_kmh"),
+                        "congestion": entry["latest_metrics"].get("congestion_score"),
+                        "total_vehicles": entry["latest_metrics"].get("total_vehicles"),
+                    })
 
             # 1b. Re-push a lightweight FEED_STATUS_UPDATE on a fixed cadence so
             # the frontend's ``feeds[*].latest_metrics`` actually carries the

@@ -68,7 +68,10 @@ export class TokenManager {
                 return null;
             }
         }
-        return this.currentToken;
+        // AUDIT FIX (2026-08-24): with no signed-in user, returning the stale
+        // currentToken made AUTH_FAILURE retry loops reconnect-with-the-same-bad-token
+        // forever (5s spin). Return null so callers stop retrying.
+        return null;
     }
 
     private scheduleTokenRefresh() {

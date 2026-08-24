@@ -190,7 +190,13 @@ class RedisClient:
         clients are recreated with new connection parameters.
         """
         with cls._lock:
-            for attr in ['_instance', '_raw_instance', '_async_instance', '_async_raw_instance']:
+            # AUDIT FIX (2026-08-24): with redis-py>=5, asyncio.Redis.close() is a
+            # coroutine — calling it synchronously never executes and the pool
+            # leaks. Reset() is sync (called from reload_config), so close only
+            # the SYNC clients here; async clients are just detached. Their pools
+            # are GC'd once in-flight calls finish; a full awaited teardown is
+            # available via shutdown_all().
+            for attr in ['_instance', '_raw_instance']:
                 client = getattr(cls, attr)
                 if client:
                     try:
@@ -198,12 +204,17 @@ class RedisClient:
                         logger.debug(f"Closed Redis client {attr} during reset.")
                     except Exception as e:
                         logger.error(f"Error closing {attr} during reset: {e}")
+
+            for attr in ['_async_instance', '_async_raw_instance']:
+                client = getattr(cls, attr)
+                if client:
+                    logger.debug(f"Detached async Redis client {attr} without sync close (coroutine).")
             
             cls._instance = None
             cls._raw_instance = None
             cls._async_instance = None
             cls._async_raw_instance = None
-            logger.info("RedisClient singleton instances have been reset and connections closed.")
+            logger.info("RedisClient singleton instances have been reset.")
 
 
 def get_redis_client(decode_responses: bool = True) -> redis.Redis:

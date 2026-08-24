@@ -20,6 +20,21 @@ const TrafficMap = forwardRef<any, {
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const client = useWebSocket();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // AUDIT FIX (2026-08-24): prune selections whose vehicles have TTL'd out of
+  // tracking — otherwise the Set grows unboundedly over long sessions.
+  const vehiclesRef = vehicles;
+  useEffect(() => {
+    const currentIds = new Set(
+      Object.values(vehiclesRef.current || {}).flatMap(v =>
+        [v.vehicle_id, v.global_vehicle_id].filter(Boolean)
+      )
+    );
+    setSelectedIds(prev => {
+      const next = new Set(Array.from(prev).filter(id => currentIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const leafletMapRef = useRef<any>(null);
 
@@ -114,6 +129,11 @@ const TrafficMap = forwardRef<any, {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      // AUDIT FIX (2026-08-24): dispose the GPU-side geometry/material too —
+      // renderer.dispose() alone leaked buffers on unmount/remount cycles.
+      geometry.dispose();
+      material.dispose();
+      instancedMesh.dispose();
       renderer.dispose();
       if (containerRef.current) containerRef.current.removeChild(renderer.domElement);
     };
@@ -139,8 +159,15 @@ const TrafficMap = forwardRef<any, {
           const canvasW = rendererRef.current!.domElement.width / window.devicePixelRatio;
           const canvasH = rendererRef.current!.domElement.height / window.devicePixelRatio;
 
-          const x = (v.bbox[0] + (v.vx || 0) * dt) * canvasW;
-          const y = (v.bbox[1] + (v.vy || 0) * dt) * canvasH;
+          // AUDIT FIX (2026-08-24): vx/vy arrive in PIXELS/SECOND (tracker Kalman
+          // state, clamped ±5000 px/s), but bbox is normalized 0..1. The old code
+          // added pixel-velocity*seconds straight onto a normalized coordinate,
+          // throwing the box far off-canvas. Normalize the velocity term by the
+          // reference frame size before applying dt.
+          const nx = v.bbox[0] + ((v.vx || 0) * dt) / 640;
+          const ny = v.bbox[1] + ((v.vy || 0) * dt) / 480;
+          const x = Math.max(0, Math.min(1, nx)) * canvasW;
+          const y = Math.max(0, Math.min(1, ny)) * canvasH;
           const w = (v.bbox[2] - v.bbox[0]) * canvasW;
           const h = (v.bbox[3] - v.bbox[1]) * canvasH;
 

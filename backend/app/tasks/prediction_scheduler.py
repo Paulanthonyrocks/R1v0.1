@@ -214,7 +214,7 @@ class PredictionScheduler:
         For now, this method logs the prediction and returns a placeholder action.
         """
         action_details = (
-            f"Log: High incident likelihood of {prediction['likelihood_score_percent']}% "
+            f"Log: High incident likelihood of {prediction.get('incident_likelihood', 0)} "
             f"at location ({location.latitude}, {location.longitude}). "
             "Placeholder action: Consider adjusting traffic signals and dispatching resources."
         )
@@ -251,7 +251,15 @@ class PredictionScheduler:
             likelihood_threshold = self.config.get(
                 "likelihood_threshold", 70
             )  # Configurable threshold
-            if prediction.get("likelihood_score_percent", 0) > likelihood_threshold:
+            # AUDIT FIX (2026-08-24): predict_incident_likelihood returns
+            # 'incident_likelihood' as a 0..1 float on every path — the old key
+            # 'likelihood_score_percent' never existed, so this comparison was
+            # always 0 > threshold and notifications could never fire.
+            try:
+                _likelihood_percent = float(prediction.get("incident_likelihood", 0)) * 100.0
+            except (TypeError, ValueError):
+                _likelihood_percent = 0.0
+            if _likelihood_percent > float(likelihood_threshold):
                 action_taken = self.determine_autonomous_actions(prediction, location)
                 
                 # ... (rest of notification logic)

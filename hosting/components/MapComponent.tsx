@@ -8,6 +8,16 @@ import type { Anomaly, SeverityLevel } from '@/lib/types'; // Assuming Anomaly t
 // The '_severity' parameter is kept for future extension where different icon images might be used.
 // Prefixing with an underscore signals to the linter that it's intentionally not used in the current function body.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
+// AUDIT FIX (2026-08-24): anomaly.type/description/severity are user-authored via
+// ReportAnomalyModal; interpolating them raw into bindPopup HTML is a stored-XSS sink.
+const escapeHtml = (s: unknown): string =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const createSeverityIcon = (_severity: SeverityLevel): L.DivIcon => {
   // For now, all severities use the same generic black 1-bit marker.
   return new L.DivIcon({
@@ -100,10 +110,10 @@ const MapComponent = ({ anomalies, onMarkerClick, activeAnomalyId }: MapComponen
           // Add a popup
           marker.bindPopup(`
             <div>
-              <h3 className="text-lg font-bold">${anomaly.type}</h3>
-              <p>Severity: ${anomaly.severity}</p>
-              <p>${anomaly.description}</p>
-              <p>${new Date(anomaly.timestamp).toLocaleString()}</p>
+              <h3 className="text-lg font-bold">${escapeHtml(anomaly.type)}</h3>
+              <p>Severity: ${escapeHtml(anomaly.severity)}</p>
+              <p>${escapeHtml(anomaly.description)}</p>
+              <p>${escapeHtml(new Date(anomaly.timestamp).toLocaleString())}</p>
             </div>
           `);
 
@@ -117,18 +127,52 @@ const MapComponent = ({ anomalies, onMarkerClick, activeAnomalyId }: MapComponen
       });
     }
 
-    // Cleanup function to remove the map when the component unmounts or mapId changes
+    // AUDIT FIX (2026-08-24): teardown now runs ONLY on unmount (empty deps via a
+    // separate init effect). Previously this whole effect re-ran — destroying and
+    // recreating the Leaflet map — whenever anomalies/activeAnomalyId/
+    // onMarkerClick changed, causing tile refetch flicker and lost viewport on
+    // every realtime update. Markers are refreshed by the dedicated effect below.
     return () => {
       if (leafletMapRef.current) {
-        // Clean up markers before removing the map
-        markers.forEach(marker => {
-          leafletMapRef.current?.removeLayer(marker);
+        leafletMapRef.current.eachLayer(layer => {
+          if (layer instanceof L.Marker) leafletMapRef.current?.removeLayer(layer);
         });
         leafletMapRef.current.remove();
         leafletMapRef.current = null;
       }
     };
-  }, [mapId, anomalies, activeAnomalyId, onMarkerClick]); // Depend on data, active anomaly, and click handler
+  }, [mapId]);
+
+  // Marker refresh: re-draw markers when data/selection changes WITHOUT touching
+  // the map instance (no tile refetch, no viewport reset).
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    if (!map) return;
+
+    map.eachLayer(layer => {
+      if (layer instanceof L.Marker) map.removeLayer(layer);
+    });
+
+    anomalies.forEach(anomaly => {
+      if (!anomaly.location || !Array.isArray(anomaly.location) || anomaly.location.length !== 2) return;
+      const marker = L.marker([anomaly.location[0], anomaly.location[1]], {
+        icon: activeAnomalyId === anomaly.id
+          ? createActiveAnomalyIcon()
+          : createSeverityIcon(anomaly.severity),
+      }).addTo(map);
+
+      marker.bindPopup(`
+        <div>
+          <h3 className="text-lg font-bold">${escapeHtml(anomaly.type)}</h3>
+          <p>Severity: ${escapeHtml(anomaly.severity)}</p>
+          <p>${escapeHtml(anomaly.description)}</p>
+          <p>${escapeHtml(new Date(anomaly.timestamp).toLocaleString())}</p>
+        </div>
+      `);
+
+      marker.on('click', () => onMarkerClick?.(anomaly.id));
+    });
+  }, [anomalies, activeAnomalyId, onMarkerClick]);
 
   return (
     <div ref={mapRef} key={mapId} // Key forces div remount if mapId changes

@@ -76,11 +76,29 @@ def database_writer_process(
                 if now - last_prune >= 3600:
                     if stop_event.is_set():
                         break
-                    # Create separate connection to avoid thread-safety issues
-                    with DatabaseManager(config) as prune_db:
+                    # AUDIT FIX (2026-08-24): `with DatabaseManager(config)` raised
+                    # AttributeError (no context-manager protocol), caught by the
+                    # broad except below — hourly background pruning NEVER ran and
+                    # vehicle_tracks grew unbounded between restarts. Instantiate
+                    # directly; close() releases the engines.
+                    prune_db = DatabaseManager(config)
+                    try:
                         pruned = prune_db.prune_old_data(retention_days=retention_days)
                         if pruned:
                             logger.info(f"Background prune: removed {pruned} old records.")
+                    finally:
+                        # close() is async; from this worker thread run it to
+                        # completion on a fresh loop instead of leaving an
+                        # unawaited coroutine (engines never disposed).
+                        import asyncio as _asyncio
+                        try:
+                            _loop = _asyncio.get_event_loop()
+                            if _loop.is_running():
+                                _loop.create_task(prune_db.close())
+                            else:
+                                _loop.run_until_complete(prune_db.close())
+                        except RuntimeError:
+                            _asyncio.run(prune_db.close())
                     last_prune = now
             except Exception as e:
                 logger.error(f"Background prune failed: {e}")

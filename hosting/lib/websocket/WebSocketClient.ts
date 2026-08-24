@@ -359,6 +359,13 @@ export class WebSocketClient implements IWebSocketClient {
         }
 
         this.tokenRefreshTimeout = setTimeout(async () => {
+            // AUDIT FIX (2026-08-24): an empty-string token means logout (TokenManager
+            // now signals it). Clear state instead of re-authenticating with ''.
+            if (!token) {
+                this.currentToken = null;
+                if (this.isConnected()) this.disconnect();
+                return;
+            }
             this.currentToken = token;
 
             if (!this.isInstanceActive()) {

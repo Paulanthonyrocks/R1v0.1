@@ -80,7 +80,9 @@ export class APIClient {
     }
 
     private handleTokenRefresh(token: string): void {
-        this.setAuthorizationHeader(`Bearer ${token}`);
+        // AUDIT FIX (2026-08-24): TokenManager signals logout with an empty token —
+        // setting "Bearer " kept replaying a dead credential after sign-out. Clear instead.
+        this.setAuthorizationHeader(token ? `Bearer ${token}` : null);
     }
 
     public setAuthorizationHeader(value: string | null): void {
@@ -159,7 +161,10 @@ export class APIClient {
 
         try {
             const response = await this.fetchWithTimeout(url, fetchOptions);
-            return this.handleResponse<T>(response, fetchOptions);
+            // AUDIT FIX (2026-08-24): without `await`, a rejected handleResponse
+            // promise escapes this try/catch — 502/503/504 retries and error
+            // notification were dead code for every non-OK response.
+            return await this.handleResponse<T>(response, fetchOptions);
         } catch (error: unknown) {
             // Transient upstream/tunnel blips (e.g. loca.lt 503ing a single REST
             // call, or a gateway hiccup) should not hard-fail the caller. Retry a

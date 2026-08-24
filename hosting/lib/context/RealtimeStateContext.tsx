@@ -111,6 +111,9 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
             setIsReady(status === 'authenticated');
 
             if (status === 'authenticated') {
+                // AUDIT FIX (2026-08-24): a transient WS error used to persist
+                // forever even after full recovery — clear it once we're back.
+                setError(null);
                 initializeConnection();
             }
         });

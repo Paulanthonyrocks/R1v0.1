@@ -83,7 +83,10 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
         };
 
         fetchData();
-    }, [feed_id, hours, width, height]);
+    // AUDIT FIX (2026-08-24): token + global_id were missing from deps — mounting
+        // before auth resolved left the widget spinning forever ("GENERATING
+        // HEATMAP..."), and selecting a vehicle never refetched its heatmap.
+        }, [feed_id, global_id, hours, token, width, height]);
 
     return (
         <div className="relative matrix-card overflow-hidden bg-black aspect-video flex items-center justify-center">

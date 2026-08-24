@@ -220,13 +220,14 @@ def _resolve_paths(config: AppConfig) -> None:
 _config_lock = threading.Lock()
 _config_instance: Optional[AppConfig] = None
 
-def initialize_config(config_path: Optional[str] = None) -> AppConfig:
+def initialize_config(config_path: Optional[str] = None, force: bool = False) -> AppConfig:
     """
     Loads and validates the configuration.
+    When force=True (reload path), replaces an existing instance atomically.
     """
     global _config_instance
     with _config_lock:
-        if _config_instance is not None:
+        if _config_instance is not None and not force:
             return _config_instance
 
         # Load critical secrets from SecretsManager into environment
@@ -300,19 +301,24 @@ def reload_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Forces a reload of the configuration. Use with caution, especially with multiple workers.
     Returns the newly loaded config.
+
+    AUDIT FIX (2026-08-24): the singleton was nulled OUTSIDE _config_lock, so a
+    concurrent get_current_config() could observe None and raise "Config not
+    initialized" mid-reload, and a racing initialize_config could double-init.
+    The swap now happens atomically inside initialize_config's own lock (which
+    assigns the new instance before releasing). Note: this function currently has
+    zero callers — kept as a supported admin entry point.
     """
-    global _config_instance
     logger.warning("Attempting configuration reload...")
-    _config_instance = None  # Clear current instance
     
-    # Invalidate RedisCient singletons to force reconnection with new config
+    # Invalidate RedisClient singletons to force reconnection with new config
     try:
         from app.utils.redis_client import RedisClient
         RedisClient.reset()
     except Exception as e:
         logger.error(f"Failed to reset RedisClient during config reload: {e}")
         
-    return initialize_config(config_path)  # Reload
+    return initialize_config(config_path, force=True)  # locked internally; atomic swap
 
 
 

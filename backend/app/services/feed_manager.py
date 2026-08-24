@@ -92,6 +92,11 @@ class FeedManager:
         self._connection_manager: Optional[ConnectionManager] = None
         self._prediction_scheduler: Optional[PredictionScheduler] = None
         self._analytics_service: Optional[AnalyticsService] = None
+        # Audit KPI-fix (2026-08-24): active-incident count for the global KPI,
+        # cached briefly so the frequent KPI tick doesn't hammer the incidents
+        # table on every broadcast.
+        self._active_incidents_cache: int = 0
+        self._active_incidents_cached_at: float = 0.0
         self._reid_manager = GlobalReIDManager(config)
         shm_pool_size = self.config.get('performance', {}).get('shm_pool_size', 100)
         self.logger.info(f"Initializing SharedFrameBuffer with pool_size={shm_pool_size}")
@@ -1864,6 +1869,35 @@ class FeedManager:
         """Public method to force a KPI update broadcast to all subscribed clients."""
         await self._broadcast_kpi_update()
 
+    async def _get_active_incidents_count(self) -> int:
+        """Count incidents not yet closed (NEW/ACKNOWLEDGED/INVESTIGATING/REPORTED).
+
+        Cached for 10s: the KPI broadcast fires every few seconds and a full
+        table scan per tick is waste. Replaces the hardcoded
+        active_incidents_count=0 that kept the dashboard incident KPI at zero
+        forever (audit 2026-08-24, dead-wiring #5).
+        """
+        import time as _time
+        now = _time.monotonic()
+        if now - self._active_incidents_cached_at < 10.0:
+            return self._active_incidents_cache
+
+        count = self._active_incidents_cache  # keep last value on failure
+        db = self._analytics_service._db_manager if self._analytics_service else None
+        if db is None:
+            return count
+        try:
+            open_incidents = []
+            for status in ("NEW", "ACKNOWLEDGED", "INVESTIGATING", "REPORTED"):
+                rows = await db.get_incidents(limit=500, filters={"status": status})
+                open_incidents.extend(rows or [])
+            count = len(open_incidents)
+        except Exception as e:
+            self.logger.warning(f"Failed to count active incidents: {e}")
+        self._active_incidents_cache = count
+        self._active_incidents_cached_at = now
+        return count
+
     async def _broadcast_kpi_update(self):
         if not self.broadcaster:
             return
@@ -1925,7 +1959,7 @@ class FeedManager:
                 total_flow=0,
                 average_speed_kmh=0.0,
                 congestion_index=0.0,
-                active_incidents_count=0,
+                active_incidents_count=await self._get_active_incidents_count(),
                 global_health_score=0.0,
                 feed_statuses={"active": 0, "total": len(self.process_registry)},
                 custom_metrics={"active_vehicles": 0},
@@ -1972,7 +2006,7 @@ class FeedManager:
             total_flow=total_flow,
             average_speed_kmh=round(global_avg_speed, 1),
             congestion_index=round(global_congestion_index, 1),
-            active_incidents_count=0,
+            active_incidents_count=await self._get_active_incidents_count(),
             global_health_score=health_score,
             feed_statuses={"active": active_feeds_count, "total": len(self.process_registry)},
             custom_metrics={

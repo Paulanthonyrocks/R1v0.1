@@ -402,6 +402,31 @@ async def get_specific_feed_status(
     )
 
 
+@router.get("/{feed_id}/metrics-history", summary="Get per-second metrics history for a feed")
+async def get_feed_metrics_history(
+    feed_id: str,
+    limit: int = 300,
+    fm: FeedManager = Depends(get_feed_manager),
+    current_user: User = Depends(get_current_viewer),
+):
+    """Return the in-memory metrics history (1 sample/sec, bounded deque).
+
+    Backs trend sparklines without touching the DB. Data lives only for the
+    current backend process lifetime and is capped by MAX_METRICS_HISTORY_LENGTH.
+    """
+    if current_user:
+        logger.info(f"User {current_user.username} requesting metrics history for feed {feed_id}")
+    entry = fm.process_registry.get(feed_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Feed with ID '{feed_id}' not found.")
+    history = entry.get("metrics_history") or []
+    data = list(history)[-max(1, min(limit, len(history))):]
+    return APIResponse.success(
+        data={"feed_id": feed_id, "samples": data},
+        message=f"Retrieved {len(data)} history samples for feed {feed_id}.",
+    )
+
+
 @router.get("/{feed_id}/kpis", summary="Get latest KPIs for a specific feed")
 async def get_feed_kpis(
     feed_id: str,

@@ -43,7 +43,13 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
             if (formData.latitude) body.latitude = parseFloat(formData.latitude);
             if (formData.longitude) body.longitude = parseFloat(formData.longitude);
 
-            const res = await fetch('/api/v1/feeds/', {
+            // AUDIT FIX (2026-08-24): keep the Next-rewrite path but attach ?password= so a
+            // loca.lt-tunneled deployment doesn't 503 on the interstitial (parity with
+            // withTunnelPassword used by APIClient).
+            const feedUrl = new URL('/api/v1/feeds/', window.location.origin);
+            const pw = process.env.NEXT_PUBLIC_LOCALTUNNEL_PASSWORD;
+            if (pw) feedUrl.searchParams.set('password', pw);
+            const res = await fetch(feedUrl.toString(), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -54,8 +60,16 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
             });
 
             if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.detail || 'Failed to add feed');
+                // AUDIT FIX (2026-08-24): the tunnel's 503 interstitial is HTML —
+                // res.json() threw a parse error that replaced the real message.
+                let detail = `Failed to add feed (HTTP ${res.status})`;
+                try {
+                    const data = await res.json();
+                    if (data?.detail) detail = data.detail;
+                } catch {
+                    /* non-JSON body — keep status fallback */
+                }
+                throw new Error(detail);
             }
 
             console.log("[AddFeedDialog] Success, closing dialog");

@@ -45,9 +45,18 @@ export const useVideoDecoder = (options: DecoderOptions) => {
                     } else {
                         decodedImage = await new Promise((resolve, reject) => {
                             const img = new Image();
-                            img.onload = () => resolve(img);
-                            img.onerror = reject;
-                            img.src = URL.createObjectURL(blob);
+                            const objectUrl = URL.createObjectURL(blob);
+                            img.onload = () => {
+                                // AUDIT FIX (2026-08-24): revoke after decode — the
+                                // image already holds the pixels; the handle leaks otherwise.
+                                URL.revokeObjectURL(objectUrl);
+                                resolve(img);
+                            };
+                            img.onerror = () => {
+                                URL.revokeObjectURL(objectUrl);
+                                reject(new Error('Image fallback decode failed'));
+                            };
+                            img.src = objectUrl;
                         });
                     }
                 } catch (err) {

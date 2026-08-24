@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from tenacity import (
@@ -398,6 +398,31 @@ class DatabaseManager:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_iv_last_seen ON identified_vehicles(last_seen DESC);"
         )
+        # AUDIT FIX (2026-08-24): prediction_logs was written by
+        # record_prediction_log/update_prediction_log but never created in this
+        # schema — every write failed with "no such table", killing the
+        # scheduler's logging + accuracy feedback loop on fresh DBs.
+        cursor.execute("""CREATE TABLE IF NOT EXISTS prediction_logs (
+                id TEXT PRIMARY KEY,
+                prediction_made_at TEXT,
+                location_name TEXT,
+                location_latitude REAL,
+                location_longitude REAL,
+                predicted_event_start_time TEXT,
+                predicted_event_end_time TEXT,
+                prediction_type TEXT,
+                predicted_value TEXT,
+                source_of_prediction TEXT,
+                outcome_verified INTEGER DEFAULT 0)"""
+        )
+        cursor.execute("""CREATE TABLE IF NOT EXISTS processed_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stream_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                duration REAL NOT NULL)"""
+        )
         cursor.execute("""CREATE TABLE IF NOT EXISTS reid_identities (
                 global_id TEXT PRIMARY KEY,
                 embeddings BLOB, -- Serialized numpy array
@@ -553,6 +578,49 @@ class DatabaseManager:
             return await asyncio.to_thread(self._execute_query, query, tuple(params))
         except Exception as e:
             logger.error(f"Error getting incidents: {e}")
+            return []
+
+    async def save_processed_video_metadata(self, entry) -> bool:
+        """Persist a ProcessedVideo row after a recording finishes.
+
+        AUDIT FIX (2026-08-24): video_processor.stop_recording called this method
+        but it never existed — the AttributeError was swallowed and recording
+        metadata was silently lost every time.
+        """
+        sql = """
+        INSERT INTO processed_videos (stream_id, file_path, start_time, end_time, duration)
+        VALUES (?, ?, ?, ?, ?)
+        """
+        try:
+            await asyncio.to_thread(
+                self._execute_write,
+                sql,
+                (
+                    entry.stream_id,
+                    entry.file_path,
+                    entry.start_time.isoformat() if hasattr(entry.start_time, "isoformat") else str(entry.start_time),
+                    entry.end_time.isoformat() if hasattr(entry.end_time, "isoformat") else str(entry.end_time),
+                    float(entry.duration),
+                ),
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error saving processed video metadata: {e}")
+            return False
+
+    async def get_processed_videos(self, stream_id: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict]:
+        """Retrieve processed-video metadata rows (newest first)."""
+        query = "SELECT * FROM processed_videos"
+        params: List = []
+        if stream_id:
+            query += " WHERE stream_id = ?"
+            params.append(stream_id)
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        try:
+            return await asyncio.to_thread(self._execute_query, query, tuple(params))
+        except Exception as e:
+            logger.error(f"Error getting processed videos: {e}")
             return []
 
     async def get_incident_by_id(self, incident_id: str) -> Optional[Dict]:
@@ -1431,6 +1499,19 @@ class DatabaseManager:
             finally:
                 self.async_engine = None
                 self.async_session_factory = None
+
+        # AUDIT FIX (2026-08-24): the Timescale engine was never disposed at
+        # shutdown — its Postgres connection pool leaked on every restart.
+        if getattr(self, "timescale_engine", None):
+            try:
+                await self.timescale_engine.dispose()
+                logger.info("Timescale engine disposed.")
+            except Exception as e:
+                logger.error(
+                    f"Error disposing Timescale engine: {e}", exc_info=True
+                )
+            finally:
+                self.timescale_engine = None
 
         if self.mongo_client:
             try:

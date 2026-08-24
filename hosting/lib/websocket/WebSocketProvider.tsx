@@ -66,7 +66,10 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     } else {
       if (client.getConnectionState() !== 'disconnected') {
-        console.log(`[WebSocketProvider] No token. Client will remain disconnected: ${client.getInstanceId()}`);
+        console.log(`[WebSocketProvider] No token. Disconnecting instance: ${client.getInstanceId()}`);
+        // AUDIT FIX (2026-08-24): on logout the authenticated socket stayed open
+        // with the old credential. Close it explicitly.
+        client.disconnect();
       }
     }
   };

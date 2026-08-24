@@ -72,24 +72,32 @@ class SystemHealthService:
                     "fps": entry.get("timer").get_fps("loop_total") if entry.get("timer") else 0
                 })
 
-        # Redis status check
+        # Redis status check. AUDIT FIX (2026-08-24): get_redis_client() can block
+        # for seconds on first connect (sync retries + socket timeouts) and ping()
+        # is sync I/O — all on the event loop, every 10s broadcast. Offload to a
+        # thread so a slow Redis never stalls the whole backend.
         redis_status = "disabled"
         try:
             from app.utils.redis_client import get_redis_client
-            client = get_redis_client()
-            if client.ping():
+            def _redis_probe():
+                client = get_redis_client()
+                return bool(client.ping())
+            if await asyncio.to_thread(_redis_probe):
                 redis_status = "connected"
         except Exception as e:
             redis_status = f"error: {str(e)}"
 
-        # MongoDB status check
+        # MongoDB status check (same blocking-I/O treatment)
         mongo_status = "disabled"
         try:
             from app.database import get_database_manager
             db_manager = get_database_manager()
             if db_manager.mongo_client:
-                db_manager.mongo_client.admin.command("ismaster")
-                mongo_status = "connected"
+                def _mongo_probe():
+                    db_manager.mongo_client.admin.command("ismaster")
+                    return True
+                if await asyncio.to_thread(_mongo_probe):
+                    mongo_status = "connected"
             else:
                 mongo_status = "not initialized"
         except Exception as e:
