@@ -36,6 +36,15 @@ class TrackingManager:
         self.giou_threshold = tracking_cfg.get("giou_threshold", -0.5)
         self.max_gate_dist = tracking_cfg.get("max_gate_dist", 500)
         self.embedding_dim = tracking_cfg.get("embedding_dim", 128)
+        # A track must be seen this many consecutive frames before it becomes
+        # "active" and reaches the wire. Below it the track is "tentative" and
+        # is dropped on the first miss. vehicle_detection.probation_threshold
+        # (config.yaml) and tracking.probation_threshold (tests) are both
+        # honored; default 3 = one detection is never a vehicle.
+        vd_cfg = config.get("vehicle_detection", {})
+        self.probation_threshold = tracking_cfg.get(
+            "probation_threshold", vd_cfg.get("probation_threshold", 3)
+        )
         
         # Kalman noise parameters
         self.kalman_r = tracking_cfg.get("kalman_r", 0.1)
@@ -180,6 +189,15 @@ class TrackingManager:
         final_matched = matched_tracks_1.union(matched_tracks_2)
         for tid, track in self.vehicle_data.items():
             if tid not in final_matched:
+                # Tentative tracks die on the first miss. They never graduated
+                # probation (3 consistent hits), so a one-frame detection
+                # speck is gone immediately instead of lingering as a
+                # duplicate box for track_timeout frames — that class of
+                # lingering is what rendered as multiple boxes trailing a
+                # single vehicle along its path.
+                if track.get("status") == "tentative":
+                    continue
+
                 # Maintain a frame counter for truly frame-based timeouts
                 track["frames_since_seen"] = track.get("frames_since_seen", 0) + 1
                 
@@ -341,7 +359,12 @@ class TrackingManager:
         track["prev_status"] = track.get("status", "unknown")
         track["bbox"] = bbox
         track["last_seen"] = current_time
-        track["status"] = "active"
+        # Probation: a track converges to "active" only after N consecutive
+        # hits. Until then it stays "tentative" and the consumer pipeline
+        # (core_module vis_tracks, inference_worker _LIVE_TRACK_STATUSES)
+        # excludes it from the wire, DB, and ReID collection.
+        track["hits"] = track.get("hits", 0) + 1
+        track["status"] = "active" if track["hits"] >= self.probation_threshold else "tentative"
         track["confidence"] = conf
         track["class_id"] = cls
         track["frames_since_seen"] = 0
@@ -377,7 +400,8 @@ class TrackingManager:
             "confidence": conf,
             "last_seen": current_time,
             "last_prediction_time": current_time,
-            "status": "active",
+            "status": "tentative",
+            "hits": 1,
             "prev_status": "unknown",
             "age": 1,
             "kalman_filter": self._init_kalman((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, bbox[2]-bbox[0], bbox[3]-bbox[1]),
