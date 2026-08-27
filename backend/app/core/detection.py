@@ -3,6 +3,7 @@ import os
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional, Any
+from ..utils.polygons import normalize_polygon, pixel_polygon
 
 logger = logging.getLogger("app.ml.detection")
 
@@ -140,11 +141,19 @@ class DetectionEngine:
         h, w = resolution[1], resolution[0]
         if roi_points:
             # Store NORMALIZED [0,1] points verbatim -- do NOT pre-divide.
-            self.normalized_roi_points = np.array(roi_points, dtype=np.float32)
+            # Wire polygons are [{x,y},...] dicts (or [[x,y],...] pairs);
+            # normalize_polygon also converts legacy pixel pairs. Previously a
+            # raw dict array was cast to float32 -> TypeError at mask build.
+            self.normalized_roi_points = normalize_polygon(roi_points, w, h)
         else:
             self.normalized_roi_points = None
 
-        self._exclusion_zones = exclusion_zones or []
+        # Normalize exclusion zones the same way; _apply_exclusion_zones scales
+        # by resolution at fill time.
+        self._exclusion_zones = [
+            nz for nz in (normalize_polygon(z, w, h) for z in (exclusion_zones or []))
+            if nz is not None
+        ]
         self.roi_mask = self._create_mask(h, w, self.normalized_roi_points)
         self._apply_exclusion_zones(h, w)
 

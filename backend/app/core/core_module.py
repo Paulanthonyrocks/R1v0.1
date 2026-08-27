@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .detection import DetectionEngine
 from .tracking import TrackingManager
 from .transforms import CoordinateTransformer
+from ..utils.polygons import pixel_polygon
 
 # Utility imports
 try:
@@ -292,15 +293,21 @@ class CoreModule:
         self.roi_mask = np.ones((h, w), dtype=np.uint8) * 255
 
         if self.roi_polygon_points:
-            points_np = np.array(self.roi_polygon_points, dtype=np.int32)
-            mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillPoly(mask, [points_np], 255)
-            self.roi_mask = cv2.bitwise_and(self.roi_mask, mask)
+            # Wire polygons arrive as [{x,y},...] (normalized) or [[x,y],...];
+            # legacy configs may hold pixel pairs. pixel_polygon normalizes all
+            # of them to pixel ints for cv2.fillPoly. Previously this cast the
+            # dict array straight to int32 -> TypeError, killing the feed.
+            pts = pixel_polygon(self.roi_polygon_points, w, h)
+            if pts is not None:
+                mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.fillPoly(mask, [pts], 255)
+                self.roi_mask = cv2.bitwise_and(self.roi_mask, mask)
 
         exclusion = self.config.get("roi_processing", {}).get("exclusion_zones", [])
         for zone in exclusion:
-            zone_np = (np.array(zone, dtype=np.float32) * [w, h]).astype(np.int32)
-            cv2.fillPoly(self.roi_mask, [zone_np], 0)
+            zone_np = pixel_polygon(zone, w, h)
+            if zone_np is not None:
+                cv2.fillPoly(self.roi_mask, [zone_np], 0)
 
     def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
         """
@@ -311,20 +318,21 @@ class CoreModule:
             Tuple of (processed_frame, roi_enabled, x_offset, y_offset).
         """
         if self.roi_polygon_points:
-            pts = np.array(self.roi_polygon_points)
-            x_min = int(np.min(pts[:, 0]))
-            y_min = int(np.min(pts[:, 1]))
-            x_max = int(np.max(pts[:, 0]))
-            y_max = int(np.max(pts[:, 1]))
-
-            # Clamp to frame dimensions
             h, w = frame.shape[:2]
-            x_min, y_min = max(0, x_min), max(0, y_min)
-            x_max, y_max = min(w, x_max), min(h, y_max)
+            pts = pixel_polygon(self.roi_polygon_points, w, h)
+            if pts is not None:
+                x_min = int(np.min(pts[:, 0]))
+                y_min = int(np.min(pts[:, 1]))
+                x_max = int(np.max(pts[:, 0]))
+                y_max = int(np.max(pts[:, 1]))
 
-            if x_max > x_min and y_max > y_min:
-                cropped_frame = frame[y_min:y_max, x_min:x_max]
-                return cropped_frame, True, x_min, y_min
+                # Clamp to frame dimensions
+                x_min, y_min = max(0, x_min), max(0, y_min)
+                x_max, y_max = min(w, x_max), min(h, y_max)
+
+                if x_max > x_min and y_max > y_min:
+                    cropped_frame = frame[y_min:y_max, x_min:x_max]
+                    return cropped_frame, True, x_min, y_min
 
         return frame, False, 0, 0
 

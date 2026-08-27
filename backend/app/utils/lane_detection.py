@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import logging
 from typing import List, Tuple, Dict, Any, Optional
+from ..utils.polygons import pixel_polygon
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +75,14 @@ def process_frame_for_lanes(frame: Optional[np.ndarray], config: Dict[str, Any])
             logger.debug("Using normalized ROI points from frontend for lane detection.")
             
         elif "polygon_points" in roi_cfg and roi_cfg["polygon_points"]:
-            # Use pixel points from frontend (less robust to res change, but fallback)
-            poly_points = roi_cfg["polygon_points"]
-            vertices = np.array([poly_points], dtype=np.int32)
-            logger.debug("Using pixel polygon points from frontend for lane detection.")
+            # Wire polygon ({x,y} dicts, normalized) or legacy pixel pairs.
+            # Coerce through the canonical normalizer so dicts don't reach
+            # np.array(..., int32) (TypeError) and normalized coords aren't
+            # treated as pixels.
+            poly_points = pixel_polygon(roi_cfg["polygon_points"], imshape[1], imshape[0])
+            if poly_points is not None:
+                vertices = np.array([poly_points], dtype=np.int32)
+                logger.debug("Using normalised ROI polygon points from frontend for lane detection.")
 
     # Fallback to default trapezoid if no frontend ROI used
     if vertices is None:
