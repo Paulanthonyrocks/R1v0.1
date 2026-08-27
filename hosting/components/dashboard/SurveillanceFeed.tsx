@@ -229,28 +229,15 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
         if (contentWidth === 0 || contentHeight === 0) return;
 
-        const containerWidth = rect.width;
-        const containerHeight = rect.height;
-
-        const contentRatio = contentWidth / contentHeight;
-        const containerRatio = containerWidth / containerHeight;
-
-        let actualWidth, actualHeight, offsetX, offsetY;
-
-        if (containerRatio > contentRatio) {
-            actualHeight = containerHeight;
-            actualWidth = containerHeight * contentRatio;
-            offsetX = (containerWidth - actualWidth) / 2;
-            offsetY = 0;
-        } else {
-            actualWidth = containerWidth;
-            actualHeight = containerWidth / contentRatio;
-            offsetX = 0;
-            offsetY = (containerHeight - actualHeight) / 2;
-        }
-
-        const xNormalized = (e.clientX - rect.left - offsetX) / actualWidth;
-        const yNormalized = (e.clientY - rect.top - offsetY) / actualHeight;
+        // The canvas is CSS-scaled to w-full/h-full and drawImage stretches the
+        // frame to fill the full backing store (useVideoSocket.ts drawImage uses
+        // 0,0,canvas.width,canvas.height with no letterbox). So normalized
+        // coordinates must be measured against the full rect, not a hypothetical
+        // letterboxed image area. Mixing the two made ROI clicks land in the
+        // wrong place whenever the container's aspect ratio differed from the
+        // frame's.
+        const xNormalized = (e.clientX - rect.left) / rect.width;
+        const yNormalized = (e.clientY - rect.top) / rect.height;
 
         const xClamped = Math.max(0, Math.min(1, xNormalized));
         const yClamped = Math.max(0, Math.min(1, yNormalized));

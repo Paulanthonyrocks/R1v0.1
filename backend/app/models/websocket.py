@@ -153,20 +153,10 @@ class UpdateFeedConfigData(BaseModel):
     def _validate_roi_shape(self) -> "UpdateFeedConfigData":
         """Reject malformed ROI payloads at the WS boundary.
 
-        feed_manager.update_feed_config raises ValueError("ROI must be a list
-        of [x1, y1, x2, y2] coordinates.") for a roi that is a list whose
-        elements aren't 4-tuples. Earlier that error fired inside a
-        fire-and-forget create_task and was logged-and-lost (asyncio
-        "Task exception was never retrieved"). Validating here turns a silent
-        failure into a concrete client-facing error.
-
-        CONTRACT CORRECTION (2026-08-24 run): the real ROI wire format is a
-        POLYGON of points — FeedConfigInfo.roi is List[Dict[str, float]],
-        CoreModule._initialize_roi_mask feeds the points to cv2.fillPoly, and
-        the dashboard sends [{x: float, y: float}, ...]. The original 4-tuple
-        box rule here (and in feed_manager) was written against an imagined
-        contract and rejected every legitimate ROI save. Validate the actual
-        shape: a list of >=3 {x, y} dicts or [x, y] pairs.
+        The real ROI wire format is a POLYGON of points — FeedConfigInfo.roi
+        is List[Dict[str, float]], CoreModule._initialize_roi_mask feeds the
+        points to cv2.fillPoly, and the dashboard sends [{x: float, y: float}, ...].
+        Validate the actual shape: a list of >=3 {x, y} dicts or [x, y] pairs.
         """
         roi = self.updates.get("roi")
         if roi is not None:
