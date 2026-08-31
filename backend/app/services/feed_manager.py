@@ -1025,21 +1025,26 @@ class FeedManager:
                 # to cv2.fillPoly; the dashboard sends [{x, y}, ...]). The old
                 # 4-tuple box rule here rejected every legitimate ROI save.
                 if "roi" in update_data and isinstance(update_data["roi"], list):
-                    for pt in update_data["roi"]:
-                        is_point = (
-                            (isinstance(pt, dict) and "x" in pt and "y" in pt)
-                            or (isinstance(pt, (list, tuple)) and len(pt) == 2)
-                        )
-                        if not is_point:
+                    if len(update_data["roi"]) == 0:
+                        # Explicit clear (dashboard "Clear ROI"): skip shape
+                        # validation so [] persists and clears the mask.
+                        pass
+                    else:
+                        for pt in update_data["roi"]:
+                            is_point = (
+                                (isinstance(pt, dict) and "x" in pt and "y" in pt)
+                                or (isinstance(pt, (list, tuple)) and len(pt) == 2)
+                            )
+                            if not is_point:
+                                raise ValueError(
+                                    "ROI must be a polygon: a list of at least 3 "
+                                    "{'x': float, 'y': float} points."
+                                )
+                        if len(update_data["roi"]) < 3:
                             raise ValueError(
                                 "ROI must be a polygon: a list of at least 3 "
                                 "{'x': float, 'y': float} points."
                             )
-                    if len(update_data["roi"]) < 3:
-                        raise ValueError(
-                            "ROI must be a polygon: a list of at least 3 "
-                            "{'x': float, 'y': float} points."
-                        )
 
                 entry["config_info"] = current_config.model_copy(update=update_data)
                 self._save_persisted_feeds()

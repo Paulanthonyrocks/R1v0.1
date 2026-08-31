@@ -314,6 +314,13 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     const handleClearROI = () => {
         setRoiPoints([]);
+        // Persist the clear server-side: the backend stores ROI in the feed
+        // config (feeds_config.json), so a client-only reset left the mask
+        // active across restarts (and the WS validator rejected [] before
+        // the 2026-08-27 clear-ROI wiring). Empty list == explicit clear.
+        if (feed_id) {
+            updateFeedConfig({ roi: [] });
+        }
     };
 
     const handleClearExclusionZones = () => {

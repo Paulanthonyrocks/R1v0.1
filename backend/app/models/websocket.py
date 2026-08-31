@@ -160,7 +160,15 @@ class UpdateFeedConfigData(BaseModel):
         """
         roi = self.updates.get("roi")
         if roi is not None:
-            if not isinstance(roi, list) or len(roi) < 3:
+            if not isinstance(roi, list):
+                raise ValueError(
+                    "ROI must be a polygon: a list of at least 3 "
+                    "{'x': float, 'y': float} points."
+                )
+            if len(roi) == 0:
+                # Explicit clear: the dashboard "Clear ROI" button sends [].
+                return self
+            if len(roi) < 3:
                 raise ValueError(
                     "ROI must be a polygon: a list of at least 3 "
                     "{'x': float, 'y': float} points."
