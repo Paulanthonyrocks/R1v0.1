@@ -50,7 +50,19 @@ class TrackingManager:
         self.kalman_r = tracking_cfg.get("kalman_r", 0.1)
         self.kalman_q_pos = tracking_cfg.get("kalman_q_pos", 0.01)
         self.kalman_q_vel = tracking_cfg.get("kalman_q_vel", 0.1)
-        
+
+        # Log the effective association/tracking tunables once at tracker init.
+        # These are the knobs that gate moving-car association (proximity *
+        # velocity_gate_boost) and moving-car prediction (kalman_q_vel); a
+        # deploy copy that predates a tuning change silently keeps the OLD
+        # behavior and this log makes the divergence visible in main.log.
+        logger.info(
+            f"[{self.feed_id}] Tracking tuning: proximity={self.proximity_threshold} "
+            f"velocity_gate_boost={self.velocity_gate_boost} max_gate_dist={self.max_gate_dist} "
+            f"giou_threshold={self.giou_threshold} track_timeout={self.track_timeout}{self.track_timeout_unit} "
+            f"kalman_q_vel={self.kalman_q_vel} dynamic_matching_threshold={self.dynamic_matching_threshold} "
+            f"probation_threshold={self.probation_threshold}"
+        )
         # Callback for track expiration cleanup
         self.on_track_expired: Optional[Callable] = None
 
