@@ -12,7 +12,16 @@ logger = logging.getLogger("app.services.reid")
 class GlobalReIDManager:
     def __init__(self, config: dict):
         self.config = config
-        self.reid_cfg = config.get("reid", {})
+        # reid config lives under vehicle_detection.reid in config.yaml -- SAME
+        # key as ml/reid_manager.py & ml/reid_model.py (both read
+        # vehicle_detection.reid). Reading the top-level `reid` key (absent in
+        # the shipped config) silently fell back to every default: the operator's
+        # similarity_threshold: 0.80 never applied and the effective threshold
+        # was the 0.85 default -- stricter, so a re-created track after a
+        # detection gap more often FAILED to match the gallery and was
+        # re-registered as a NEW global id (the "re-recording old vehicles as
+        # new" symptom). Honor the nested key like every sibling class does.
+        self.reid_cfg = config.get("vehicle_detection", {}).get("reid", {})
         self.similarity_threshold = self.reid_cfg.get("similarity_threshold", 0.85)
         self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 1000)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)

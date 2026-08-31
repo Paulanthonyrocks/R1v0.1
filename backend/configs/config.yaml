@@ -688,14 +688,14 @@ tracking:
   dynamic_matching_threshold: 0.5
   low_conf_association_threshold: 0.3
   giou_threshold: 0.1
-  max_gate_dist: 200
+  max_gate_dist: 260
   proximity_threshold: 80
-  track_timeout: 10
+  track_timeout: 20
   track_timeout_unit: "frames"
   kalman_r: 0.1
   kalman_q_pos: 0.01
   kalman_q_vel: 0.01
-  velocity_gate_boost: 1.2
+  velocity_gate_boost: 2.0
   base_gate_multiplier: 1.0
   appearance_weight: 0.5
   embedding_dim: 128
