@@ -1057,7 +1057,16 @@ def inference_worker(
                             x_off, y_off = meta.get("crop_offsets", (0, 0))
                             detector = meta["core"].detector
                             formatted_dets = []
+                            # Detection telemetry (debug): split WHERE detections
+                            # are lost so a free-lane vanish is attributable to
+                            # (a) the model found few, (b) class/conf floor cut
+                            # them, (c) ROI dropped them, or (d) the cap clipped
+                            # them -- instead of guessing between association vs
+                            # detection. Logged at DEBUG to stay out of steady-state.
+                            _n_raw = 0
+                            _n_vehicle_conf = 0
                             for row in boxes_data:
+                                _n_raw += 1
                                 rx1, ry1, rx2, ry2, conf, cls_id = row
                                 # Restrict to vehicle classes (parity with DetectionEngine.detect)
                                 if int(cls_id) not in vehicle_class_ids:
@@ -1071,6 +1080,7 @@ def inference_worker(
                                 # honour the higher floor here too.
                                 if float(conf) < display_conf_floor:
                                     continue
+                                _n_vehicle_conf += 1
                                 bbox = (rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off)
                                 # ROI filtering (parity with DetectionEngine.detect)
                                 if not detector.is_in_roi(np.array(bbox)):
@@ -1080,9 +1090,16 @@ def inference_worker(
                             # so busiest scenes (314+ boxes on sample traffic)
                             # do not pin the worker on serialize / ws broadcast.
                             # Sort is in-place; slicing keeps top-N.
+                            _n_after_roi = len(formatted_dets)
                             if max_detections_per_frame > 0 and len(formatted_dets) > max_detections_per_frame:
                                 formatted_dets.sort(key=lambda d: d[2], reverse=True)
                                 formatted_dets = formatted_dets[:max_detections_per_frame]
+                            if meta["frame_index"] % 25 == 0:
+                                logger.info(
+                                    f"[Worker {worker_id}][{meta['feed_id']}] det frame={meta['frame_index']} "
+                                    f"raw={_n_raw} vehicle_conf={_n_vehicle_conf} after_roi={_n_after_roi} "
+                                    f"capped={len(formatted_dets)} cap={max_detections_per_frame}"
+                                )
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
                         batch_inference_failed = True

@@ -687,7 +687,7 @@ tracking:
   use_appearance_in_tracking: true
   dynamic_matching_threshold: 0.5
   low_conf_association_threshold: 0.3
-  giou_threshold: 0.1
+  giou_threshold: -0.2
   max_gate_dist: 260
   proximity_threshold: 80
   track_timeout: 10
