@@ -36,6 +36,12 @@ class SafetyMonitor:
         self.alert_cooldowns: Dict[str, float] = {}
         self.alert_cooldown_sec = 30.0
 
+        # Diagnostic: remember last-logged flow vector per feed so we can see the
+        # learned consensus without spamming every frame. A runaway wrong-way
+        # storm is attributable to a BAD consensus (vector points the wrong way)
+        # vs a BAD velocity (mis-association flips vx/vy) -- this surfaces which.
+        self._last_flow_log: Dict[str, tuple] = {}
+
     def update(self, feed_id: str, vehicles: List[Dict], timestamp: float) -> List[Dict]:
         """
         Process a frame of vehicles and return a list of generated alerts (if any).
@@ -78,9 +84,27 @@ class SafetyMonitor:
                 source = "static"
                 
             if effective_vector:
+                # Diagnostic: surface the learned/static flow vector once per
+                # change, so a runaway wrong-way storm is attributable to a BAD
+                # consensus (vector points the wrong way) vs a BAD velocity
+                # (mis-association flips vx/vy). Logs only when it changes.
+                _flow_sig = (source, round(confidence, 2), tuple(round(float(x), 2) for x in effective_vector))
+                if self._last_flow_log.get(feed_id) != _flow_sig:
+                    self._last_flow_log[feed_id] = _flow_sig
+                    logger.info(
+                        f"[{feed_id}] wrong-way flow vector: source={source} "
+                        f"conf={confidence:.2f} lane={lane_id} vec={[round(float(x), 2) for x in effective_vector]}"
+                    )
                 alert = self._check_wrong_way(feed_id, v, effective_vector, timestamp)
                 if alert:
                     v["is_wrong_way"] = True
+                    # Diagnostic: what vehicle velocity produced this flag vs the vector?
+                    _vx, _vy = v.get("vx"), v.get("vy")
+                    logger.info(
+                        f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
+                        f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
+                        f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
+                    )
                     alert["meta"]["vector_source"] = source
                     alert["meta"]["calibration_confidence"] = confidence
                     alerts.append(alert)

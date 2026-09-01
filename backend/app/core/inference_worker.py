@@ -148,6 +148,13 @@ def _exit_worker_fatal(worker_id: int, feed_id: str, err: str) -> None:
 # normalize bbox coordinates consistently.
 _FRAME_DIMS_BY_FEED: Dict[str, tuple] = {}
 
+# Per-feed last-track-id set (churn telemetry). The aggregate vehicles_count is
+# BLIND to churn: a churned track gets re-detected next frame, so the count stays
+# flat while individual boxes flicker. Counting NEW track ids per detect frame
+# is the direct measure of the vanish/jitter churn -- a high new-per-frame with
+# a steady aggregate count is exactly the "moving car loses its track" symptom.
+_TRACK_IDS_BY_FEED: Dict[str, set] = {}
+
 
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
     """Forward a frame's raw bytes downstream without running detection.
@@ -1159,6 +1166,21 @@ def inference_worker(
                         vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
                             frame, f_idx, external_detections=detections, timestamp=meta.get("timestamp")
                         )
+
+                        # Churn telemetry: NEW track ids per detect frame (per feed).
+                        # High new-per-frame while the aggregate vehicles_count stays
+                        # flat == tracks vanishing + re-creating (the free-lane vanish).
+                        # This is the direct, count-independent measure of the churn.
+                        _feed_key = meta["feed_id"]
+                        _prev_ids = _TRACK_IDS_BY_FEED.get(_feed_key, set())
+                        _cur_ids = set(vis_tracks.keys()) if vis_tracks else set()
+                        _n_new = len(_cur_ids - _prev_ids)
+                        _TRACK_IDS_BY_FEED[_feed_key] = _cur_ids
+                        if f_idx % 25 == 0:
+                            logger.info(
+                                f"[Worker {worker_id}][{_feed_key}] churn frame={f_idx} "
+                                f"live={len(_cur_ids)} new={_n_new}"
+                            )
 
                         if vis_tracks and meta["first_detect"]:
                             core._first_detection_done = True

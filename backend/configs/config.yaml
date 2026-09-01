@@ -685,7 +685,7 @@ storage:
   report_output_dir: data/pavement_reports
 tracking:
   use_appearance_in_tracking: true
-  dynamic_matching_threshold: 0.5
+  dynamic_matching_threshold: 0.85
   low_conf_association_threshold: 0.3
   giou_threshold: -0.2
   max_gate_dist: 260
