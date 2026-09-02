@@ -659,13 +659,15 @@ export class WebSocketClient implements IWebSocketClient {
                 }
             }
 
-            // If no pong is received within 60 seconds, consider connection timed out
+            // If no pong is received within 100 seconds (tunnel RTT can be
+            // 50-67s, so a pong legitimately returns just past the old 60s),
+            // consider connection timed out. Matches server pong_timeout: 100.
             const timeSinceLastPong = Date.now() - this.lastPongTime;
-            if (timeSinceLastPong > 60000) {
+            if (timeSinceLastPong > 100000) {
                 console.warn(`[WebSocketClient ${this.instanceId}] Connection timed out. Last activity: ${timeSinceLastPong}ms ago.`);
                 this.handleConnectionTimeout();
             }
-        }, 10000);
+        }, 25000);
     }
 
     private stopPingInterval(): void {

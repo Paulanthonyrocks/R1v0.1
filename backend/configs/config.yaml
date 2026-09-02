@@ -940,8 +940,12 @@ websocket:
   max_connections: 1000
   # Aligned with frontend (WebSocketClient.ts: 10s ping, 60s pong timeout)
   # and main.py default (ping_interval=15, pong_timeout=60).
-  # With 50-67s RTT over tunnel, 60s timeout is tight; 120s was too loose.
-  ping_interval: 15
-  pong_timeout: 60
+  # With 50-67s RTT over tunnel, a PONG legitimately returns at ~67s, just past
+  # the 60s deadline -> both sides kill the connection (frontend code 1006) ->
+  # reconnect ~16-30s -> stutter. Relaxed to 25s ping / 100s pong timeout so a
+  # slow tunnel PONG clears the deadline; keepalive pings every 25s also keep
+  # the tunnel (Cloud Workstations proxy) from idling out.
+  ping_interval: 25
+  pong_timeout: 100
   token_refresh_interval: 300
 
