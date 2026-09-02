@@ -421,6 +421,12 @@ mongodb:
   uri: mongodb://localhost:27017/
 ocr_engine:
   enabled: true
+  # Gemini OCR: set use_gemini_ocr: true + a key to route plate reading through
+  # Gemini (tried first, falls back to local OCR on failure). Set gemini_model to
+  # any Flash model your account has (e.g. gemini-2.5-flash, or a newer 3.x Flash
+  # id) — it's a config flip, no code change. Requires the `google-genai` package.
+  gemini_api_key: ""
+  gemini_model: "gemini-2.5-flash"
   gemini_max_retries: 3
   gemini_retry_delay: 1.0
   max_aspect_ratio: 5.5

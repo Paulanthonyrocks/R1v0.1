@@ -38,12 +38,20 @@ class LicensePlatePreprocessor:
     def __init__(
         self, config: Dict, perspective_matrix: Optional[np.ndarray] = None
     ):  # perspective_matrix not used in current impl
-        self.config = config.get("ocr_engine", {})
+        # Accept either the FULL app config (containing an `ocr_engine` block) or
+        # the `ocr_engine` dict directly. Callers historically passed the raw
+        # API-key string here, which crashed on `config.get(...)` — treat any
+        # non-dict as empty so such a mistake degrades (no Gemini) rather than dies.
+        if not isinstance(config, dict):
+            config = {}
+        self.config = config.get("ocr_engine", config)
         self.gemini_api_key = self.config.get("gemini_api_key")
-        self.use_gemini_ocr = self.config.get("use_gemini_ocr", True) # Default to True for backward compatibility
-        self.use_tesseract = self.config.get("use_tesseract", False) # Default to False
+        self.use_gemini_ocr = self.config.get("use_gemini_ocr", True)  # Default to True for backward compatibility
+        self.use_tesseract = self.config.get("use_tesseract", False)  # Default to False
         self.client = None
-        self.model_id = "gemini-1.5-flash"
+        # Model id is configurable so switching to a newer Flash (2.x / 3.x) is a
+        # config flip, not a code change. Defaults to a broadly-available Flash.
+        self.model_id = self.config.get("gemini_model", "gemini-2.5-flash")
         if self.gemini_api_key and self.use_gemini_ocr:
             try:
                 from google import genai

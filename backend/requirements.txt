@@ -31,6 +31,7 @@ onnxruntime-gpu>=1.16.0
 nvidia-tensorrt>=8.6.1
 pycuda>=2022.1
 easyocr>=1.7.0
+google-genai>=1.0.0
 
 # Route optimization (route_optimizer.py imports networkx at module top;
 # reachable from /api/v1/routes via route_optimization_service).

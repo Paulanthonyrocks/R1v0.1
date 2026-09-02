@@ -353,19 +353,30 @@ class CoreModule:
             self.ocr_executor.shutdown(wait=False)
             self.ocr_executor = None
 
-        # FIX: Use module-level imports; removed redundant local re-imports
+        # FIX: pass the FULL config (not the raw key string) so the preprocessor
+        # — which reads ocr_engine.* itself — gets a real dict. Passing the key
+        # string here was the latent bug that surfaced the moment Gemini was
+        # enabled. Config is the single source of truth for the API key.
+        gemini_key = self.gemini_api_key or ocr_cfg.get("gemini_api_key")
         if ocr_cfg.get("use_gemini_ocr", False):
-            if self.gemini_api_key:
+            if gemini_key:
                 if LicensePlatePreprocessor is not None:
                     try:
-                        self.preprocessor = LicensePlatePreprocessor(self.gemini_api_key)
+                        self.preprocessor = LicensePlatePreprocessor(self.config)
                         initialized = True
+                        logger.info(
+                            f"[{self.feed_id}] OCR init: Gemini enabled "
+                            f"(model={self.preprocessor.model_id})"
+                        )
                     except Exception as e:
                         logger.error(f"Failed to initialize Gemini OCR: {e}")
                 else:
                     logger.warning("LicensePlatePreprocessor unavailable (import failed at startup).")
             else:
-                logger.warning(f"[{self.feed_id}] Gemini OCR enabled in config but gemini_api_key is missing. Skipping.")
+                logger.warning(
+                    f"[{self.feed_id}] Gemini OCR requested but no gemini_api_key "
+                    f"(set ocr_engine.gemini_api_key). Skipping Gemini."
+                )
 
         if ocr_cfg.get("use_local", True):
             if LocalOCR is not None:
@@ -934,7 +945,7 @@ class CoreModule:
         
             # 2. Fallback to local OCR if Gemini failed or is disabled
             if not text and self.local_ocr:
-                text = self.local_ocr.process(roi)
+                text = self.local_ocr.read_plate(roi)
 
             if text:
                 try:
