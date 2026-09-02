@@ -200,6 +200,92 @@ def serialize_tracked_vehicles(
 
     return serialized_list
 
+
+def postprocess_detections(
+    dets: List[tuple],
+    max_aspect: float = 6.0,
+    min_dim: float = 6.0,
+    merge_iou: float = 0.30,
+    merge_gap_px: float = 6.0,
+) -> List[tuple]:
+    """Post-NMS cleanup of vehicle detections (list of (bbox, cls, conf)).
+
+    Two classes of bad detection this fixes, both config-independent defaults kept
+    conservative:
+    1. Implausible geometry — a WHITE LANE MARKING (or a pole / very thin object)
+       that the model fires on every frame is a thin, elongated box. Real vehicles
+       are rarely > ~6:1, so drop dets with aspect > max_aspect OR any side <
+       min_dim (a speck). This removes the persistent "lane marking tracked as a
+       vehicle" false positive at the source.
+    2. SPLIT detection — a truck detected as TWO same-class boxes (the cab/hood
+       and the box/trailer, with little overlap so NMS did not merge them) is
+       counted as two vehicles. Union any same-class pair whose IoU >= merge_iou
+       (genuinely overlapping) OR whose edges are within merge_gap_px on both axes
+       (abutting split), keeping the higher confidence. Conservative thresholds so
+       two DISTINCT cars in traffic (larger gap) are not over-merged.
+    """
+    if not dets:
+        return dets
+
+    # 1) geometry filter
+    kept: List[tuple] = []
+    for bbox, cls, conf in dets:
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        if w < min_dim or h < min_dim:
+            continue
+        aspect = max(w, h) / max(1.0, min(w, h))
+        if aspect > max_aspect:
+            continue
+        kept.append((bbox, cls, conf))
+
+    if len(kept) <= 1:
+        return kept
+
+    # 2) same-class split merge (greedy, by confidence desc)
+    kept.sort(key=lambda d: d[2], reverse=True)
+
+    def _iou(a, b):
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+        return inter / u if u > 1e-9 else 0.0
+
+    def _edge_gap(a, b):
+        gx = max(0.0, max(a[0], b[0]) - min(a[2], b[2]))
+        gy = max(0.0, max(a[1], b[1]) - min(a[3], b[3]))
+        return gx, gy
+
+    merged: List[tuple] = []
+    used = [False] * len(kept)
+    for i, (bbox, cls, conf) in enumerate(kept):
+        if used[i]:
+            continue
+        used[i] = True
+        bx1, by1, bx2, by2 = bbox
+        best_conf = float(conf)
+        for j in range(i + 1, len(kept)):
+            if used[j]:
+                continue
+            b2, c2, c2conf = kept[j]
+            if c2 != cls:
+                continue
+            io = _iou(bbox, b2)
+            gx, gy = _edge_gap(bbox, b2)
+            if io >= merge_iou or (gx <= merge_gap_px and gy <= merge_gap_px):
+                bx1 = min(bx1, b2[0])
+                by1 = min(by1, b2[1])
+                bx2 = max(bx2, b2[2])
+                by2 = max(by2, b2[3])
+                best_conf = max(best_conf, float(c2conf))
+                used[j] = True
+        merged.append(((bx1, by1, bx2, by2), cls, best_conf))
+
+    return merged
+
+
 def _extract_rois(frame: np.ndarray, serialized_vehicles: List[Dict], scale: float = 1.0) -> List[Dict[str, Any]]:
     """
     Extracts bounding box crops from the frame for adaptive streaming.

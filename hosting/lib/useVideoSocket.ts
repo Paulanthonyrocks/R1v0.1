@@ -586,7 +586,7 @@ const unsubscribeFromFeed = useCallback(() => {
     // toggle (showVehicleDetails), so it works in grid/thumbnail view too.
     const skipLabels = !showVehicleDetails;
 
-    if (vehicles && showBoundingBoxes && vehicles.length > 0) {
+    if (vehicles && (showBoundingBoxes || showVehicleDetails) && vehicles.length > 0) {
       // Color system: box outline = class-type color, overridden by safety state
       // (wrong-way / stopped) and selection; a `predicting` (missed-frame hold) or
       // `tentative` box is dashed/dimmed so a real car is visually distinct from a
@@ -635,15 +635,17 @@ const unsubscribeFromFeed = useCallback(() => {
             const isPredicting = status === 'predicting';
             const isTentative = status === 'tentative';
 
-            ctx.save();
-            ctx.strokeStyle = boxColor(vehicle, isSelected);
-            ctx.lineWidth = isSelected ? 3 : 2;
-            if (isPredicting || isTentative) {
-              ctx.setLineDash(isPredicting ? [6, 4] : [2, 3]);
-              ctx.globalAlpha = isTentative ? 0.4 : 0.7;
+            if (showBoundingBoxes) {
+              ctx.save();
+              ctx.strokeStyle = boxColor(vehicle, isSelected);
+              ctx.lineWidth = isSelected ? 3 : 2;
+              if (isPredicting || isTentative) {
+                ctx.setLineDash(isPredicting ? [6, 4] : [2, 3]);
+                ctx.globalAlpha = isTentative ? 0.4 : 0.7;
+              }
+              ctx.strokeRect(x, y, width, height);
+              ctx.restore();
             }
-            ctx.strokeRect(x, y, width, height);
-            ctx.restore();
 
             if (showVehicleDetails) {
               const spd = (typeof speed === 'number' && Number.isFinite(speed)) ? speed : 0;
@@ -669,7 +671,7 @@ const unsubscribeFromFeed = useCallback(() => {
               ctx.fillText(spdTxt, lx + 8 + clsW + 6, ly + 12);
               ctx.restore();
 
-              if (license_plate) {
+              if (license_plate && license_plate !== 'Unknown' && license_plate !== '') {
                 ctx.save();
                 ctx.font = 'bold 11px monospace';
                 const pw = ctx.measureText(license_plate).width;

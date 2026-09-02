@@ -420,7 +420,7 @@ mongodb:
   enabled: false
   uri: mongodb://localhost:27017/
 ocr_engine:
-  enabled: false
+  enabled: true
   gemini_max_retries: 3
   gemini_retry_delay: 1.0
   max_aspect_ratio: 5.5
@@ -454,6 +454,17 @@ ocr_engine:
   - - -1
     - -1
     - -1
+  # Plate-crop: the OCR (EasyOCR) does NOT localize plates -- it reads whatever
+  # crop it's handed. At 640x480 a plate is ~20-60px inside the FULL vehicle box,
+  # so we crop the bottom-center band of the box (where plates sit) and upscale it
+  # to a readable size before OCR. Pre-filter by min width + aspect to drop junk
+  # crops (bumper/road/person) and not waste EasyOCR work.
+  plate_crop_bottom_factor: 0.42
+  plate_crop_width_factor: 0.70
+  plate_upscale: 2.5
+  plate_min_width: 15
+  plate_min_aspect: 0.6
+  plate_max_aspect: 10.0
   use_gemini_ocr: false
   use_gpu_ocr: true
   use_tesseract: true

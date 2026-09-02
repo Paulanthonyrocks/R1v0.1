@@ -874,8 +874,50 @@ class CoreModule:
             with self._ocr_lock:
                 self._ocr_in_flight.discard(tid)
             return
+
+        # PLATE-CROP: EasyOCR (app.utils.local_ocr) does NOT localize plates — it
+        # OCRs whatever crop it's handed. At 640x480 the plate is a ~20-60px sliver
+        # inside the FULL car crop, which EasyOCR reads as bumper stickers/logos or
+        # misses entirely. Crop the bottom-center band of the vehicle box (where a
+        # plate sits) and upscale it so the OCR gets a plate-sized image. Pre-filter
+        # by min width + aspect ratio to drop junk crops (road texture, tall band =
+        # person, tiny speck) so we don't waste EasyOCR work.
+        ocr_cfg = self.config.get("ocr_engine", {})
+        plate = roi
         try:
-            self.ocr_executor.submit(self._run_ocr, tid, roi)
+            rh, rw = roi.shape[:2]
+            if rh > 8 and rw > 8:
+                bottom_frac = float(ocr_cfg.get("plate_crop_bottom_factor", 0.42))
+                width_frac = float(ocr_cfg.get("plate_crop_width_factor", 0.70))
+                upscale = float(ocr_cfg.get("plate_upscale", 2.5))
+                min_w = float(ocr_cfg.get("plate_min_width", 15))
+                min_aspect = float(ocr_cfg.get("plate_min_aspect", 0.6))
+                max_aspect = float(ocr_cfg.get("plate_max_aspect", 10.0))
+                band_h = max(1, int(rh * bottom_frac))
+                band_w = max(1, int(rw * width_frac))
+                y0 = rh - band_h
+                x0 = max(0, (rw - band_w) // 2)
+                band = roi[y0:rh, x0:x0 + band_w]
+                if band.size > 0:
+                    bh, bw = band.shape[:2]
+                    aspect = bw / max(1.0, bh)
+                    if bw >= min_w and min_aspect <= aspect <= max_aspect:
+                        if upscale > 1.0:
+                            # Cap upscaled width so EasyOCR isn't handed a giant image
+                            tgt_w = min(int(bw * upscale), 480)
+                            tgt_h = max(1, int(tgt_w * bh / max(1.0, bw)))
+                            band = cv2.resize(band, (tgt_w, tgt_h), interpolation=cv2.INTER_CUBIC)
+                        plate = band
+                    else:
+                        # junk crop -> skip OCR entirely (no executor waste)
+                        with self._ocr_lock:
+                            self._ocr_in_flight.discard(tid)
+                        return
+        except Exception as e:
+            logger.debug(f"plate-crop failed [{self.feed_id}] {tid}: {e}; using full-vehicle crop")
+
+        try:
+            self.ocr_executor.submit(self._run_ocr, tid, plate)
         except OCRQueueFull:
             # Executor saturated: drop this submission, keep the track out of
             # the in-flight set so it can be retried next frame.

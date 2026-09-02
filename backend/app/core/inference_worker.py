@@ -17,7 +17,7 @@ from app.config import initialize_config
 from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
 from app.utils.process import start_parent_monitor
-from .worker_utils import WorkerMetrics, serialize_tracked_vehicles
+from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, postprocess_detections
 
 logger = logging.getLogger("Inference")
 
@@ -1101,6 +1101,11 @@ def inference_worker(
                             if max_detections_per_frame > 0 and len(formatted_dets) > max_detections_per_frame:
                                 formatted_dets.sort(key=lambda d: d[2], reverse=True)
                                 formatted_dets = formatted_dets[:max_detections_per_frame]
+                            # Post-NMS cleanup: drop implausible geometry (thin/
+                            # elongated lane-marker false positives) and merge
+                            # same-class SPLIT detections (a truck seen as cab +
+                            # trailer) so one vehicle is not counted twice.
+                            formatted_dets = postprocess_detections(formatted_dets)
                             if meta["frame_index"] % 25 == 0:
                                 logger.info(
                                     f"[Worker {worker_id}][{meta['feed_id']}] det frame={meta['frame_index']} "
@@ -1171,15 +1176,29 @@ def inference_worker(
                         # High new-per-frame while the aggregate vehicles_count stays
                         # flat == tracks vanishing + re-creating (the free-lane vanish).
                         # This is the direct, count-independent measure of the churn.
+                        # Also log WHERE new tracks FIRST appear (normalized bbox
+                        # center) so the "detected only halfway into the lane" report
+                        # is attributable: new tracks at the frame EDGE (x/y near 0/1)
+                        # = detection reaches the entry; new tracks ONLY near the
+                        # center = the ROI-crop / edge-detectability is cutting them.
                         _feed_key = meta["feed_id"]
                         _prev_ids = _TRACK_IDS_BY_FEED.get(_feed_key, set())
                         _cur_ids = set(vis_tracks.keys()) if vis_tracks else set()
-                        _n_new = len(_cur_ids - _prev_ids)
+                        _new_ids = _cur_ids - _prev_ids
+                        _n_new = len(_new_ids)
                         _TRACK_IDS_BY_FEED[_feed_key] = _cur_ids
                         if f_idx % 25 == 0:
+                            _cx, _cy = [], []
+                            if vis_tracks:
+                                _fh, _fw = frame.shape[:2]
+                                for _ntid in _new_ids:
+                                    _tb = vis_tracks.get(_ntid, {}).get("bbox")
+                                    if _tb and len(_tb) == 4 and _fw and _fh:
+                                        _cx.append(round(((_tb[0] + _tb[2]) / 2) / _fw, 2))
+                                        _cy.append(round(((_tb[1] + _tb[3]) / 2) / _fh, 2))
                             logger.info(
                                 f"[Worker {worker_id}][{_feed_key}] churn frame={f_idx} "
-                                f"live={len(_cur_ids)} new={_n_new}"
+                                f"live={len(_cur_ids)} new={_n_new} new_cx={_cx[:8]} new_cy={_cy[:8]}"
                             )
 
                         if vis_tracks and meta["first_detect"]:
