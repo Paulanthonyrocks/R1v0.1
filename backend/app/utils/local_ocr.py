@@ -47,14 +47,22 @@ class LocalOCR:
             if not results:
                 return None
             
-            # Combine results, usually it's just one or two snippets for a plate
-            # Clean up non-alphanumeric chars often found in plates
+            # Combine results, usually it's just one or two snippets for a plate.
+            # Clean up non-alphanumeric chars often found in plates.
             combined = "".join(results).replace(" ", "").upper()
-            
-            # Basic validation: plates usually have at least 3 chars
-            if len(combined) >= 3:
-                return combined
-            return None
+            # Plate-shape validation: reject garbage reads (vehicle decals / logos
+            # like "MITCHELLLINCC" or "DEMARR" that EasyOCR picks up from the body)
+            # by requiring a real plate shape -- alphanumeric, 4-9 chars, and at
+            # least one digit. This stops non-plate text being stored as a plate.
+            allowed = set(self.allowlist)
+            combined = "".join(ch for ch in combined if ch in allowed)
+            if (
+                len(combined) < 4
+                or len(combined) > 9
+                or not any(ch.isdigit() for ch in combined)
+            ):
+                return None
+            return combined
             
         except Exception as e:
             logger.error(f"EasyOCR read failed: {e}")

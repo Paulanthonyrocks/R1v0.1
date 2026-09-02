@@ -234,6 +234,13 @@ class CoreModule:
         self.speed_limit = b_cfg.get("speed_limit", 60)             # was 'speed_limit_kmh' (nonexistent)
         self.accel_threshold_mps2 = b_cfg.get("accel_threshold_mps2", 2.0)  # was 'acceleration_threshold_mps2'
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
+        # False-hard-braking guards (traffic_monitor consumes acceleration for the
+        # "Sudden deceleration" anomaly). A raw per-frame speed delta flags a
+        # "hard brake" from (a) slow-crawl decel, (b) frame-closeness noise, and
+        # (c) track-churn spikes. These tune how far we trust that signal.
+        self.min_speed_for_accel_kmh = float(b_cfg.get("min_speed_for_accel_kmh", 15.0))
+        self.min_accel_dt_seconds = float(b_cfg.get("min_accel_dt_seconds", 0.15))
+        self.min_physical_accel_mps2 = float(b_cfg.get("min_physical_accel_mps2", -15.0))
 
         # Session Metrics
         # 300 frames is NOT 5 minutes: the deque holds the most recent 300
@@ -822,11 +829,22 @@ class CoreModule:
                 prev_speed_t = track.get("prev_speed_t")
                 if prev_speed_accel is not None and prev_speed_t is not None:
                     a_dt = current_time - prev_speed_t
-                    if a_dt > 1e-3:
-                        # km/h -> m/s delta over dt
-                        track["acceleration"] = (
-                            (track["speed"] - prev_speed_accel) / 3.6
-                        ) / a_dt
+                    # Only trust acceleration when it reflects REAL motion: the
+                    # prior speed had to be above a floor (a slow crawl easing off
+                    # isn't "hard braking"), the time step is meaningful (frame-close
+                    # noise), and the magnitude is physically plausible (anything
+                    # more negative than ~-15 m/s^2 is a track-churn / bbox-jump
+                    # artifact, not a car braking). This kills the false "Sudden
+                    # deceleration" incident storm while preserving real hard-brakes.
+                    raw_accel = 0.0
+                    if (
+                        a_dt > self.min_accel_dt_seconds
+                        and prev_speed_accel >= self.min_speed_for_accel_kmh
+                    ):
+                        raw_accel = (track["speed"] - prev_speed_accel) / 3.6 / a_dt
+                        if raw_accel < self.min_physical_accel_mps2:
+                            raw_accel = 0.0  # physics-impossible spike = tracking noise
+                    track["acceleration"] = raw_accel
                 track["prev_speed_for_accel"] = track["speed"]
                 track["prev_speed_t"] = current_time
 

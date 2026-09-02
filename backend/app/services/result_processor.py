@@ -419,7 +419,7 @@ class ResultProcessor:
         Updates metrics and broadcasts the frame to subscribers using Msgpack for binary efficiency.
         """
         try:
-            logger.info(f"[RESULT_PROC] Processing frame data: feed={feed_id}, frame_idx={frame_idx}, frame_bytes_size={len(frame_bytes) if frame_bytes else 0}")
+            logger.debug(f"[RESULT_PROC] Processing frame data: feed={feed_id}, frame_idx={frame_idx}, frame_bytes_size={len(frame_bytes) if frame_bytes else 0}")
 
             # 0. Resolve feed geo-coordinates. The inference worker does not
             # embed latitude/longitude into the per-frame metrics dict, but the
@@ -550,7 +550,7 @@ class ResultProcessor:
             else:
                 small_data = full_data
 
-            logger.info(
+            logger.debug(
                 f"[RESULT_PROC] Msgpack packed: feed={feed_id}, frame_idx={frame_idx}, "
                 f"full={len(full_data)}, small={len(small_data)}, vehicles_count={len(vehicles) if vehicles else 0}"
             )

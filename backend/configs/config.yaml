@@ -13,7 +13,17 @@ anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
 behavior_analysis:
-  accel_threshold_mps2: 4.0
+  # Hard-braking alert threshold; monitoring.py negates this (a decel more
+  # negative than -abs(this) fires the "Sudden deceleration" anomaly). 4.0 was
+  # far too lenient (a normal brake = alert); raise to a real hard-braking value.
+  accel_threshold_mps2: 6.0
+  # False-hard-braking guards (core_module.py computes acceleration). A raw
+  # per-frame speed delta flags "sudden deceleration" from track-churn / slow-
+  # crawl noise; these suppress it unless the vehicle was genuinely moving fast
+  # enough (floor), over a meaningful dt, and within a physical decel range.
+  min_speed_for_accel_kmh: 15
+  min_accel_dt_seconds: 0.15
+  min_physical_accel_mps2: -15.0
   # Same vehicle must not re-fire a hard-braking anomaly within this window
   # (monitoring.py reads it); without it the anomaly list floods on dense
   # scenes where speed wobble is tracking noise, not braking.
