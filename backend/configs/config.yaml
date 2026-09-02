@@ -445,7 +445,11 @@ detection_postprocess:
   merge_gap_px: 4.0
   merge_gap_classes: [5, 7]
 ocr_engine:
-  enabled: true
+  # Disabled (2026-09-02): at the 640x480 source resolution the ~20-60px plates
+  # aren't legible to EasyOCR even after plate localization -- every read is
+  # empty and it burns ~1.2 CPU reads/sec/feed. Flip to true only with a
+  # plate-specific recognizer or higher-resolution source frames.
+  enabled: false
   # Gemini OCR: set use_gemini_ocr: true + a key to route plate reading through
   # Gemini (tried first, falls back to local OCR on failure). Set gemini_model to
   # any Flash model your account has (e.g. gemini-2.5-flash, or a newer 3.x Flash
@@ -582,6 +586,13 @@ performance:
   # Raised from 4000 to 6000 to provide more headroom for 3 feeds at 8fps
   # with decode-skip backpressure at 20%.
   shm_pool_size: 6000
+  # SHM segment size in bytes. MUST match the actual frame footprint (640x480
+  # RGB = ~0.92MB; 1.5MB covers any color format + header). The old 10MB default
+  # made shm_pool_size 6000 plan 60GB > /dev/shm (14GB), so only ~1400 segments
+  # materialized and the shed valve computed free_fraction against an unreachable
+  # 6000 denominator -> perpetually below the resume floor -> "skip decode"
+  # stalls. Frame-sized segments let the whole 6000-slot pool fit in /dev/shm.
+  shm_frame_size: 1500000
   # Decode-side throttle floor (F1/F3 fix). When the SHM free pool drops below
   # this fraction, the ingestion decoder SKIPS reading/decoding the frame
   # entirely (instead of decoding it and dropping it at acquire()). Lets the

@@ -393,6 +393,12 @@ def inference_worker(
     if frame_buffer is None:
         frame_buffer = SharedFrameBuffer(
             pool_size=config.get("performance", {}).get("shm_pool_size", 100),
+            # Size segments to the FRAME (~1.5MB for 640x480 RGB) instead of the
+            # 10MB default. With 10MB, shm_pool_size 6000 plans 60GB (> /dev/shm),
+            # so only ~1400 segments materialize and the shed valve computes
+            # free_fraction against an unreachable 6000 denominator -> perpetually
+            # under the resume floor -> "skip decode" stalls (0.1 fps).
+            max_frame_size=int(config.get("performance", {}).get("shm_frame_size", 1500000)),
             read_only=False,
         )
 

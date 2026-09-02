@@ -116,6 +116,9 @@ def ingestion_worker(
     if frame_buffer is None:
         frame_buffer = SharedFrameBuffer(
             pool_size=config.get("performance", {}).get("shm_pool_size", 100),
+            # Frame-sized segments (see inference_worker for the rationale): the
+            # 10MB default under-sizes the pool vs /dev/shm and trips the shed.
+            max_frame_size=int(config.get("performance", {}).get("shm_frame_size", 1500000)),
             read_only=False,
         )
 
