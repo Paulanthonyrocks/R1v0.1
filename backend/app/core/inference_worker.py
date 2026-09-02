@@ -154,6 +154,11 @@ _FRAME_DIMS_BY_FEED: Dict[str, tuple] = {}
 # is the direct measure of the vanish/jitter churn -- a high new-per-frame with
 # a steady aggregate count is exactly the "moving car loses its track" symptom.
 _TRACK_IDS_BY_FEED: Dict[str, set] = {}
+# Normalized bbox center per track id, persisted per feed, so when a track
+# vanishes we know WHERE its last detection was (the "detected only halfway to
+# the exit" diagnostic): vanish at frame center == detection stops mid-frame;
+# vanish at the edge == association/timing, not detectability.
+_TRACK_CENTERS_BY_FEED: Dict[str, Dict[str, tuple]] = {}
 
 
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
@@ -1201,20 +1206,42 @@ def inference_worker(
                         _prev_ids = _TRACK_IDS_BY_FEED.get(_feed_key, set())
                         _cur_ids = set(vis_tracks.keys()) if vis_tracks else set()
                         _new_ids = _cur_ids - _prev_ids
+                        _vanish_ids = _prev_ids - _cur_ids
                         _n_new = len(_new_ids)
+                        # Current-frame normalized centers, persisted per feed so we
+                        # can report the LAST position of tracks that vanish next
+                        # frame (the "detected only halfway to the exit" probe).
+                        _center_map: Dict[str, tuple] = {}
+                        _frm = frame
+                        if vis_tracks and _frm is not None:
+                            _fh, _fw = _frm.shape[:2]
+                            for _tid, _tr in vis_tracks.items():
+                                _tb = _tr.get("bbox")
+                                if _tb and len(_tb) == 4 and _fw and _fh:
+                                    _center_map[_tid] = (
+                                        round(((_tb[0] + _tb[2]) / 2) / _fw, 2),
+                                        round(((_tb[1] + _tb[3]) / 2) / _fh, 2),
+                                    )
+                        _vx, _vy = [], []
+                        _prev_centers = _TRACK_CENTERS_BY_FEED.get(_feed_key, {})
+                        for _vtid in _vanish_ids:
+                            _c = _prev_centers.get(_vtid)
+                            if _c:
+                                _vx.append(_c[0])
+                                _vy.append(_c[1])
                         _TRACK_IDS_BY_FEED[_feed_key] = _cur_ids
+                        _TRACK_CENTERS_BY_FEED[_feed_key] = _center_map
                         if f_idx % 25 == 0:
                             _cx, _cy = [], []
-                            if vis_tracks:
-                                _fh, _fw = frame.shape[:2]
-                                for _ntid in _new_ids:
-                                    _tb = vis_tracks.get(_ntid, {}).get("bbox")
-                                    if _tb and len(_tb) == 4 and _fw and _fh:
-                                        _cx.append(round(((_tb[0] + _tb[2]) / 2) / _fw, 2))
-                                        _cy.append(round(((_tb[1] + _tb[3]) / 2) / _fh, 2))
+                            for _ntid in _new_ids:
+                                _c = _center_map.get(_ntid)
+                                if _c:
+                                    _cx.append(_c[0])
+                                    _cy.append(_c[1])
                             logger.info(
                                 f"[Worker {worker_id}][{_feed_key}] churn frame={f_idx} "
-                                f"live={len(_cur_ids)} new={_n_new} new_cx={_cx[:8]} new_cy={_cy[:8]}"
+                                f"live={len(_cur_ids)} new={_n_new} new_cx={_cx[:8]} new_cy={_cy[:8]} "
+                                f"vanish={len(_vanish_ids)} vx={_vx[:8]} vy={_vy[:8]}"
                             )
 
                         if vis_tracks and meta["first_detect"]:

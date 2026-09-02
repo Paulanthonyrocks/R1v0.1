@@ -473,7 +473,7 @@ ocr_engine:
   # crops (bumper/road/person) and not waste EasyOCR work.
   plate_crop_bottom_factor: 0.42
   plate_crop_width_factor: 0.70
-  plate_upscale: 2.5
+  plate_upscale: 3.0
   plate_min_width: 15
   plate_min_aspect: 0.6
   plate_max_aspect: 10.0

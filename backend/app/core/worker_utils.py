@@ -275,17 +275,15 @@ def postprocess_detections(
                 continue
             io = _iou(bbox, b2)
             gx, gy = _edge_gap(bbox, b2)
-            # gap-merge is CLASS-AWARE: only merge abutting splits of big vehicles
-            # (bus/truck) so DISTINCT cars driving close together are never grouped.
-            gap_ok = (
-                merge_gap_px > 0
-                and merge_gap_classes
-                and cls in merge_gap_classes
-                and c2 in merge_gap_classes
-                and gx <= merge_gap_px
-                and gy <= merge_gap_px
-            )
-            if io >= merge_iou or gap_ok:
+            # Merge is CLASS-AWARE and restricted to big vehicles (bus/truck):
+            # both the IoU overlap and the gap path only fire when BOTH boxes are
+            # in merge_gap_classes. This is what stops distinct CARS (or small
+            # vehicles with high visual overlap in a jam) from being grouped.
+            same_big_class = bool(merge_gap_classes) and cls in merge_gap_classes and c2 in merge_gap_classes
+            if same_big_class and (
+                io >= merge_iou
+                or (merge_gap_px > 0 and gx <= merge_gap_px and gy <= merge_gap_px)
+            ):
                 bx1 = min(bx1, b2[0])
                 by1 = min(by1, b2[1])
                 bx2 = max(bx2, b2[2])

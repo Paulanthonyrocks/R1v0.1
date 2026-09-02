@@ -602,15 +602,16 @@ const unsubscribeFromFeed = useCallback(() => {
       const boxColor = (v: VehicleFrontendData, sel: boolean) =>
         v.is_wrong_way ? '#d946ef' : v.is_stopped ? '#fb923c' : sel ? '#00ff00' : clsColor(v.class_name);
 
-      // When nothing is selected, show every tracked vehicle so the feed is
-      // never blank on first load. Once the operator selects a vehicle AND
-      // "Show All Detections" is OFF, narrow the view to the selection only.
-      const vehiclesToShow = showAllDetections
-        ? vehicles
-        : vehicles.filter(v => {
-            const id = v.global_vehicle_id || v.vehicle_id;
-            return selectedVehicleIds.size === 0 || selectedVehicleIds.has(id);
-          });
+      // Ghost boxes (broken/dashed lines) = a track that is NOT a live detection:
+      // `predicting` = a missed-frame hold (drawn at its Kalman forecast), and
+      // `tentative` = a not-yet-active new track. Those clutter the feed and drew
+      // labels too. Only render LIVE `active` detections (box + label). If you want
+      // to see occlusion holds again, add a toggle that admits these statuses.
+      const isLive = (v: VehicleFrontendData) => v.status === 'active';
+      const vehiclesToShow = (showAllDetections ? vehicles : vehicles.filter(v => {
+        const id = v.global_vehicle_id || v.vehicle_id;
+        return selectedVehicleIds.size === 0 || selectedVehicleIds.has(id);
+      })).filter(isLive);
 
       vehiclesToShow.forEach(vehicle => {
         const {

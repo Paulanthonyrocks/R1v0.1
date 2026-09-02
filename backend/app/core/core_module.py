@@ -843,7 +843,7 @@ class CoreModule:
                 # Filtering for visualisation
                 if track["status"] == "active":
                     vis_tracks[tid] = track
-                    if (self.local_ocr or self.preprocessor) and track.get("confidence", 0) > 0.7:
+                    if (self.local_ocr or self.preprocessor) and track.get("confidence", 0) > 0.5:
                         self._maybe_submit_ocr(tid, frame, track.get("bbox"))
                 elif track["status"] == "predicting":
                     if (current_time - track["last_seen"]) < self.predict_timeout:
@@ -942,10 +942,27 @@ class CoreModule:
             # 1. Try Gemini OCR via preprocessor if available
             if self.preprocessor:
                 text = self.preprocessor.preprocess_and_ocr(roi)
-        
+
             # 2. Fallback to local OCR if Gemini failed or is disabled
             if not text and self.local_ocr:
                 text = self.local_ocr.read_plate(roi)
+
+            # OCR diagnostic: log crop size + result so we can see WHY nothing is
+            # read (tiny/blurred band → empty, vs a real read). Reads always log;
+            # empties are throttled to avoid a flood across 25 vehicles/frame.
+            try:
+                rh, rw = roi.shape[:2]
+            except Exception:
+                rh = rw = -1
+            if text:
+                logger.info(f"[{self.feed_id}] OCR {tid}: {rw}x{rh} -> '{text}'")
+            else:
+                self._ocr_empty_log = getattr(self, "_ocr_empty_log", 0) + 1
+                if self._ocr_empty_log <= 15 or self._ocr_empty_log % 100 == 0:
+                    logger.info(
+                        f"[{self.feed_id}] OCR {tid}: {rw}x{rh} -> <empty> "
+                        f"(empty_count={self._ocr_empty_log})"
+                    )
 
             if text:
                 try:
