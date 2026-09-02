@@ -106,21 +106,6 @@ ingestion:
   shared_memory_ipc: true
 interface:
   camera_warmup_time: 0.5
-kalman_filter_params:
-  base_gate_multiplier: 5.0
-  init_covariance_dim: 100
-  init_covariance_pos: 25
-  init_covariance_vel: 2000
-  kf_sigma_md: 10.0
-  kf_sigma_mx: 10.0
-  kf_sigma_my: 10.0
-  kf_sigma_pd: 0.5
-  kf_sigma_pvw: 1.0
-  kf_sigma_pvx: 15.0
-  kf_sigma_pvy: 15.0
-  kf_sigma_px: 5.0
-  kf_sigma_py: 5.0
-  velocity_gate_boost: 1.5
 lane_detection:
   canny_high_threshold: 150
   canny_low_threshold: 50
@@ -690,7 +675,7 @@ tracking:
   giou_threshold: -0.2
   max_gate_dist: 260
   proximity_threshold: 80
-  track_timeout: 10
+  track_timeout: 20
   track_timeout_unit: "frames"
   kalman_r: 0.1
   kalman_q_pos: 0.01
@@ -769,7 +754,6 @@ vehicle_detection:
     min_track_age_for_appearance: 5
     model_path: ''
     similarity_threshold: 0.80
-    use_appearance_in_tracking: true
     use_openvino: false
     # Full sync interval (seconds): throttle the expensive full Redis gallery
     # re-pull to prevent the "Syncing N new identities" storm (observed: 55
@@ -793,7 +777,6 @@ vehicle_detection:
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
-  track_timeout: 10
   # NOTE (crack #5): flag drift resolved. The predictor is gated by
   # analytics_service.traffic_prediction.enabled (read by services.py and
   # analytics_service.py). This nested copy is the SAME flag — keep its value

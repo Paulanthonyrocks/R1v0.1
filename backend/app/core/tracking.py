@@ -243,11 +243,41 @@ class TrackingManager:
                         self.on_track_expired(track)
 
 
-        # 6. Initialize New Tracks
+        # 6. Initialize New Tracks (with duplicate-box prevention)
+        # A leftover unmatched HIGH-CONF detection is frequently a RE-detection of
+        # a car whose track missed a frame (-> predicting) but whose association
+        # cost stayed above dynamic_matching_threshold. Naively spawning a new
+        # track here draws a SECOND box on the same car ("new box on an
+        # already-detected vehicle") -- and with a longer track_timeout the stale
+        # predicting box lingers beside it. Before creating a new track, try a
+        # pure centroid re-association: if the detection CENTER falls inside an
+        # existing UNMATCHED track's predicted bbox, update that track (keeps its
+        # vehicle_id AND its global_vehicle_id / ReID identity) instead of
+        # creating a duplicate. This is a strong same-car signal: a genuinely new
+        # car rarely centers exactly inside another track's predicted box.
+        matched_dedup: set = set()
+        unmatched_tracks = [
+            t for tid, t in self.vehicle_data.items() if tid not in final_matched
+        ]
         for det in unmatched_dets_1:
-            new_track = self._create_new_track(det, current_time)
-            new_or_updated_tracks[new_track["vehicle_id"]] = new_track
-            
+            db = det[0]
+            dcx, dcy = (db[0] + db[2]) / 2.0, (db[1] + db[3]) / 2.0
+            reassigned = False
+            for t in unmatched_tracks:
+                if t["vehicle_id"] in matched_dedup:
+                    continue
+                tb = t.get("predicted_bbox") or t.get("bbox")
+                if tb and len(tb) == 4 and tb[0] <= tb[2] and tb[1] <= tb[3]:
+                    if tb[0] <= dcx <= tb[2] and tb[1] <= dcy <= tb[3]:
+                        self._update_track(t, det, current_time)
+                        matched_dedup.add(t["vehicle_id"])
+                        new_or_updated_tracks[t["vehicle_id"]] = t
+                        reassigned = True
+                        break
+            if not reassigned:
+                new_track = self._create_new_track(det, current_time)
+                new_or_updated_tracks[new_track["vehicle_id"]] = new_track
+
         self.vehicle_data.clear()
         self.vehicle_data.update(new_or_updated_tracks)
         return self.vehicle_data
