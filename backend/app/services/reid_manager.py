@@ -30,6 +30,15 @@ class GlobalReIDManager:
         # Embedding smoothing factor (centroid update)
         self.alpha = self.reid_cfg.get("embedding_smoothing", 0.1)
         self.counter_key = "reid:global_counter"
+        # ReID churn telemetry: a MATCH = a re-detected/returning vehicle mapped
+        # to an EXISTING global id (good); a REG = a brand-new id. On a looped
+        # feed, regs >> matches means re-entering vehicles keep getting NEW ids
+        # (re-registration), i.e. the similarity threshold is too strict or the
+        # embedding is unstable. Logged periodically with the gallery size.
+        self._reid_matches = 0
+        self._reid_regs = 0
+        self._reid_last_log = 0.0
+        self._reid_log_period = float(self.reid_cfg.get("log_interval_seconds", 60.0))
 
         # Thread safety lock
         self._lock = RLock()
@@ -264,6 +273,7 @@ class GlobalReIDManager:
                 best_idx = np.argmax(scores)
                 if scores[best_idx] > self.similarity_threshold:
                     global_id = self.gallery_ids[best_idx]
+                    self._reid_matches += 1
                     self.metadata_store[global_id]["last_seen"] = now
                     # Update centroid
                     updated_emb = self._normalize((1.0 - self.alpha) * self.gallery_matrix[best_idx] + self.alpha * embedding)
@@ -295,6 +305,7 @@ class GlobalReIDManager:
                 
                 self.gallery_ids.append(global_id)
                 self.metadata_store[global_id] = {"last_seen": now, "metadata": metadata, "confidence": confidence}
+                self._reid_regs += 1
                 sync_emb = embedding
                 new_reg = True
                 self._last_redis_status = redis_available
@@ -354,7 +365,19 @@ class GlobalReIDManager:
 
         if now - self.last_cleanup_time > 60:
             self._cleanup(now)
-        
+
+        # ReID churn telemetry (throttled): expose match vs register so we can
+        # distinguish re-registration of re-entering vehicles from genuinely new
+        # ones. regs >> matches on a looped feed => threshold too strict / embed
+        # unstable => re-record old vehicles as new global ids.
+        if now - self._reid_last_log >= self._reid_log_period:
+            self._reid_last_log = now
+            logger.info(
+                f"[ReID] gallery={len(self.gallery_ids)} "
+                f"matches={self._reid_matches} regs={self._reid_regs} "
+                f"threshold={self.similarity_threshold}"
+            )
+
         return global_id
 
     def _listen_for_updates(self):

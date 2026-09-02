@@ -811,7 +811,15 @@ vehicle_detection:
     - 256
     min_track_age_for_appearance: 5
     model_path: ''
-    similarity_threshold: 0.80
+    # ReID match threshold. 0.80 was too strict for mobilenet_v3_small embeddings
+    # on small 640x480-detected crops: re-entering vehicles (embedding drifts with
+    # crop/pose) often scored just under 0.80 and were RE-REGISTERED as new global
+    # ids -- observed 832 identities on a LOOPED sample feed. 0.70 sits in the
+    # typical same-vehicle band (0.70-0.85) so returning cars match their existing
+    # id instead of churning. Lower it further if regs still >> matches.
+    similarity_threshold: 0.70
+    # Interval (s) for the [ReID] gallery/matches/regs churn telemetry.
+    log_interval_seconds: 60.0
     use_openvino: false
     # Full sync interval (seconds): throttle the expensive full Redis gallery
     # re-pull to prevent the "Syncing N new identities" storm (observed: 55
