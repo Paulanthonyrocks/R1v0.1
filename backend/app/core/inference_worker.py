@@ -1128,9 +1128,26 @@ def inference_worker(
                                     ),
                                 )
                             if meta["frame_index"] % 25 == 0:
+                                # Detection reachability probe: the furthest-right
+                                # detection center (post-ROI). If a feed's detections
+                                # never pass ~0.66 here, the MODEL isn't firing at the
+                                # periphery (detection-reachability problem); if they
+                                # reach ~0.9+, the periphery IS being detected and the
+                                # vanish is elsewhere (tracking/association).
+                                _xmax = 0.0
+                                if formatted_dets and frame is not None:
+                                    _fh2, _fw2 = frame.shape[:2]
+                                    for _dd in formatted_dets:
+                                        _db = _dd[0]
+                                        if len(_db) == 4 and _fw2:
+                                            _xmax = max(
+                                                _xmax,
+                                                ((_db[0] + _db[2]) / 2.0) / _fw2,
+                                            )
                                 logger.info(
                                     f"[Worker {worker_id}][{meta['feed_id']}] det frame={meta['frame_index']} "
                                     f"raw={_n_raw} vehicle_conf={_n_vehicle_conf} after_roi={_n_after_roi} "
+                                    f"xmax={_xmax:.2f} "
                                     f"capped={_n_capped} postproc={len(formatted_dets)} cap={max_detections_per_frame}"
                                 )
                             batch_detections_map[meta_idx] = formatted_dets

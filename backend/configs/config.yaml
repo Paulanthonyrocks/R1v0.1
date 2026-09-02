@@ -478,11 +478,13 @@ ocr_engine:
     - -1
   # Plate-crop: the OCR (EasyOCR) does NOT localize plates -- it reads whatever
   # crop it's handed. At 640x480 a plate is ~20-60px inside the FULL vehicle box,
-  # so we crop the bottom-center band of the box (where plates sit) and upscale it
-  # to a readable size before OCR. Pre-filter by min width + aspect to drop junk
-  # crops (bumper/road/person) and not waste EasyOCR work.
-  plate_crop_bottom_factor: 0.42
-  plate_crop_width_factor: 0.70
+  # so we FIRST try to LOCALIZE the plate (plate_localize, a classical-CV
+  # low-center high-contrast rectangle) and OCR that; if none is found we fall back
+  # to a narrow bottom-center band (bumper region, not the mid-body logo that
+  # EasyOCR reads as decals). Upscale to a readable width before OCR.
+  plate_localize: true
+  plate_crop_bottom_factor: 0.28
+  plate_crop_width_factor: 0.60
   plate_upscale: 3.0
   plate_min_width: 15
   plate_min_aspect: 0.6

@@ -879,6 +879,67 @@ class CoreModule:
 
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
 
+    def _locate_plate_region(self, roi) -> Optional[tuple]:
+        """Locate the license-plate sub-rectangle inside a vehicle crop.
+
+        EasyOCR does NOT localize plates — it reads whatever crop it's handed, so
+        feeding the whole vehicle made it read body decals/logos ("MITCHELLLINCC",
+        "DEMARR") instead of the plate. Classical-CV heuristic: a plate is a
+        high-contrast, roughly 1.4-6:1 rectangle in the LOWER-CENTER of the vehicle.
+        Returns (x, y, w, h) in roi coords, or None if nothing plate-like is found
+        (caller falls back to a bottom-center band). Never raises.
+        """
+        try:
+            import cv2 as _cv
+            gray = _cv.cvtColor(roi, _cv.COLOR_RGB2GRAY)
+            rh, rw = gray.shape[:2]
+            if rh < 24 or rw < 24:
+                return None
+            # Plates sit in the lower half of the vehicle body; skip the top half
+            # (that's where windows/decals/logos live).
+            y_start = int(rh * 0.5)
+            region = gray[y_start:, :]
+            rr_h, rr_w = region.shape[:2]
+            best = None
+            best_score = 0.0
+            for inv in (False, True):  # dark-on-light AND light-on-dark plates
+                th = _cv.threshold(region, 0, 255, _cv.THRESH_BINARY + _cv.THRESH_OTSU)[1]
+                if inv:
+                    th = _cv.bitwise_not(th)
+                # close gaps between characters so the plate forms one blob
+                k = _cv.getStructuringElement(_cv.MORPH_RECT, (max(3, int(rr_w * 0.04)), 3))
+                th = _cv.morphologyEx(th, _cv.MORPH_CLOSE, k)
+                cnts, _ = _cv.findContours(th, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_SIMPLE)
+                for c in cnts:
+                    x, y, cw, ch = _cv.boundingRect(c)
+                    if cw < rr_w * 0.22 or ch < 10:          # too small
+                        continue
+                    if cw > rr_w * 0.99 or ch > rr_h * 0.85:  # too big
+                        continue
+                    aspect = cw / max(1.0, ch)
+                    if not (1.4 <= aspect <= 6.0):
+                        continue
+                    cx = (x + cw / 2.0) / rr_w
+                    cy = (y + ch / 2.0) / rr_h
+                    # reward a horizontally-centered, low candidate (a real plate)
+                    center_bonus = (1.0 - abs(cx - 0.5)) * (0.6 + 0.4 * cy)
+                    score = (cw * ch) * center_bonus
+                    if score > best_score:
+                        best_score = score
+                        best = (x, y_start + y, cw, ch)
+            if best is None:
+                return None
+            bx, by, bw2, bh2 = best
+            pad_x = int(bw2 * 0.12)
+            pad_y = int(bh2 * 0.18)
+            bx = max(0, bx - pad_x)
+            by = max(0, by - pad_y)
+            bw2 = min(rw - bx, bw2 + 2 * pad_x)
+            bh2 = min(rh - by, bh2 + 2 * pad_y)
+            return (bx, by, bw2, bh2)
+        except Exception:
+            return None
+
     def _maybe_submit_ocr(self, tid: str, frame: np.ndarray, bbox):
         """Submit an OCR job for a track, de-duplicating in-flight requests.
 
@@ -914,38 +975,54 @@ class CoreModule:
         ocr_cfg = self.config.get("ocr_engine", {})
         plate = roi
         try:
-            rh, rw = roi.shape[:2]
-            if rh > 8 and rw > 8:
-                bottom_frac = float(ocr_cfg.get("plate_crop_bottom_factor", 0.42))
-                width_frac = float(ocr_cfg.get("plate_crop_width_factor", 0.70))
-                upscale = float(ocr_cfg.get("plate_upscale", 2.5))
-                min_w = float(ocr_cfg.get("plate_min_width", 15))
-                min_aspect = float(ocr_cfg.get("plate_min_aspect", 0.6))
-                max_aspect = float(ocr_cfg.get("plate_max_aspect", 10.0))
-                band_h = max(1, int(rh * bottom_frac))
-                band_w = max(1, int(rw * width_frac))
-                y0 = rh - band_h
-                x0 = max(0, (rw - band_w) // 2)
-                band = roi[y0:rh, x0:x0 + band_w]
-                if band.size > 0:
-                    bh, bw = band.shape[:2]
-                    aspect = bw / max(1.0, bh)
-                    if bw >= min_w and min_aspect <= aspect <= max_aspect:
-                        if upscale > 1.0:
-                            # Target a READABLE width (~140px) so a tiny 30px band
-                            # isn't handed straight to EasyOCR (which needs that
-                            # much for reliable recognition), but cap at 480 so a big
-                            # band isn't blown up into a huge, slow image.
+            # 1) LOCALIZE the actual plate (a low-center, high-contrast rectangle)
+            # instead of OCRing the whole vehicle -- EasyOCR can't localize, and
+            # the whole-vehicle crop reads body decals/logos ("MITCHELLLINCC").
+            plate_box = None
+            if ocr_cfg.get("plate_localize", True):
+                plate_box = self._locate_plate_region(roi)
+            if plate_box:
+                px, py, pw, ph = (int(v) for v in plate_box)
+                pw = max(pw, 1)
+                ph = max(ph, 1)
+                sub = roi[py:py + ph, px:px + pw]
+                if sub.size > 0:
+                    sb_h, sb_w = sub.shape[:2]
+                    upscale = float(ocr_cfg.get("plate_upscale", 3.0))
+                    min_readable = float(ocr_cfg.get("plate_min_target_w", 160))
+                    tgt_w = int(min(max(int(sb_w * upscale), min_readable), 480))
+                    tgt_h = max(1, int(tgt_w * sb_h / max(1.0, sb_w)))
+                    plate = cv2.resize(sub, (tgt_w, tgt_h), interpolation=cv2.INTER_CUBIC)
+            else:
+                # 2) Fallback: narrow bottom-center band (bumper region, NOT the
+                # mid-body logo), upscaled to a readable width.
+                rh, rw = roi.shape[:2]
+                if rh > 8 and rw > 8:
+                    bottom_frac = float(ocr_cfg.get("plate_crop_bottom_factor", 0.28))
+                    width_frac = float(ocr_cfg.get("plate_crop_width_factor", 0.60))
+                    upscale = float(ocr_cfg.get("plate_upscale", 3.0))
+                    min_w = float(ocr_cfg.get("plate_min_width", 15))
+                    min_aspect = float(ocr_cfg.get("plate_min_aspect", 0.6))
+                    max_aspect = float(ocr_cfg.get("plate_max_aspect", 10.0))
+                    band_h = max(1, int(rh * bottom_frac))
+                    band_w = max(1, int(rw * width_frac))
+                    y0 = rh - band_h
+                    x0 = max(0, (rw - band_w) // 2)
+                    band = roi[y0:rh, x0:x0 + band_w]
+                    if band.size > 0:
+                        bh, bw = band.shape[:2]
+                        aspect = bw / max(1.0, bh)
+                        if bw >= min_w and min_aspect <= aspect <= max_aspect:
                             min_readable = float(ocr_cfg.get("plate_min_target_w", 140))
                             tgt_w = int(min(max(int(bw * upscale), min_readable), 480))
                             tgt_h = max(1, int(tgt_w * bh / max(1.0, bw)))
                             band = cv2.resize(band, (tgt_w, tgt_h), interpolation=cv2.INTER_CUBIC)
-                        plate = band
-                    else:
-                        # junk crop -> skip OCR entirely (no executor waste)
-                        with self._ocr_lock:
-                            self._ocr_in_flight.discard(tid)
-                        return
+                            plate = band
+                        else:
+                            # junk crop -> skip OCR entirely (no executor waste)
+                            with self._ocr_lock:
+                                self._ocr_in_flight.discard(tid)
+                            return
         except Exception as e:
             logger.debug(f"plate-crop failed [{self.feed_id}] {tid}: {e}; using full-vehicle crop")
 
