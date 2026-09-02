@@ -21,7 +21,7 @@ bleach>=6.1.0
 
 # ML/CV
 ultralytics>=8.0.0
-opencv-python-headless==4.8.0.74
+opencv-python-headless>=4.8.1.78
 scipy>=1.8.0
 filterpy>=1.4.5
 numpy<2.0
