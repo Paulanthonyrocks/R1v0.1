@@ -110,16 +110,14 @@ const StreamOverlayControls: React.FC<StreamOverlayControlsProps> = ({
             </div>
           )}
 
-          {!hidePerVehicleToggles && (
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Vehicle Details</Label>
-              <MatrixCheckbox
-                id={`toggle-details-${controlId}`}
-                checked={showVehicleDetails}
-                onCheckedChange={setShowVehicleDetails}
-              />
-            </div>
-          )}
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor={`toggle-details-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Vehicle Details (Labels)</Label>
+            <MatrixCheckbox
+              id={`toggle-details-${controlId}`}
+              checked={showVehicleDetails}
+              onCheckedChange={setShowVehicleDetails}
+            />
+          </div>
 
           <div className="flex items-center justify-between gap-4">
             <Label htmlFor={`toggle-roi-${controlId}`} className="text-lcd-bg/80 text-sm cursor-pointer uppercase tracking-wide">Region of Interest</Label>

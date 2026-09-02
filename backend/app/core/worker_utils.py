@@ -166,6 +166,38 @@ def serialize_tracked_vehicles(
             serialized_list.append({"vehicle_id": str(vehicle_id), "serialization_error": True})
             continue
     
+    # Remove duplicate/ghost boxes from the wire. A track that MISSES a frame
+    # goes to status "predicting" and is drawn at its Kalman-predicted bbox. When
+    # it is re-detected, the tracker may spawn a fresh "active" track alongside
+    # the still-predicting one (association cost above the threshold) -> TWO
+    # overlapping boxes on one car. Drop a predicting entry whose bbox overlaps an
+    # active entry (IoU > 0.5) so exactly one box per car reaches the frontend.
+    # Genuine holds (predicting with NO overlapping active) are kept so the box
+    # stays on a momentarily-occluded car until track_timeout.
+    if len(serialized_list) > 1:
+        active_boxes = [
+            d["bbox"]
+            for d in serialized_list
+            if d.get("status") == "active" and len(d.get("bbox") or []) == 4
+        ]
+        if active_boxes:
+            def _iou_boxes(a, b):
+                ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+                ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+                inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                a_area = (a[2] - a[0]) * (a[3] - a[1])
+                b_area = (b[2] - b[0]) * (b[3] - b[1])
+                union = a_area + b_area - inter
+                return inter / union if union > 1e-9 else 0.0
+            serialized_list = [
+                d for d in serialized_list
+                if not (
+                    d.get("status") == "predicting"
+                    and len(d.get("bbox") or []) == 4
+                    and any(_iou_boxes(d["bbox"], ab) > 0.5 for ab in active_boxes)
+                )
+            ]
+
     return serialized_list
 
 def _extract_rois(frame: np.ndarray, serialized_vehicles: List[Dict], scale: float = 1.0) -> List[Dict[str, Any]]:

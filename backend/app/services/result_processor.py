@@ -14,14 +14,16 @@ logger = logging.getLogger("app.services.result_processor")
 # Fields the frontend actually renders from each vehicle on a video frame
 # (see hosting/lib/useVideoSocket.ts drawBoundingBoxes). Everything else in
 # serialize_tracked_vehicles (embedding, ground_coordinates, vx/vy, lane,
-# confidence, class_id, status) is only used server-side (recording, DB) and
+# confidence, class_id) is only used server-side (recording, DB) and
 # was being re-sent on every frame -- an embedding alone is ~1-2KB/vehicle, so
 # 47 vehicles added ~50-90KB of pure waste per frame, which is what forced the
 # ~2fps over a tunnel. Trim at the wire boundary; the full record is still
-# available to the opt-in subscriber pump via the `vehicles` arg.
+# available to the opt-in subscriber pump via the `vehicles` arg. `status`
+# (active/predicting/tentative) is kept because the frontend colors holds/predicts
+# differently from confirmed detections (the "ghost box" disambiguation).
 _WIRE_VEHICLE_KEYS = (
     "vehicle_id", "global_vehicle_id", "bbox", "speed",
-    "license_plate", "class_name", "is_wrong_way", "is_stopped",
+    "license_plate", "class_name", "is_wrong_way", "is_stopped", "status",
 )
 
 def _to_native(o: Any) -> Any:

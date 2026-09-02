@@ -523,7 +523,6 @@ const unsubscribeFromFeed = useCallback(() => {
       selectedVehicleIds = new Set(),
       showAllDetections = false,
       showLaneOverlays = false,
-      minimal = false,  // Dashboard thumbnails: skip per-vehicle label text + metrics readout (boxes still draw)
     } = options;
 
     // ImageBitmap can be closed/detached after decoder reuses memory. If we
@@ -582,11 +581,27 @@ const unsubscribeFromFeed = useCallback(() => {
 
     // Minimal/thumbnail mode used to `return` here and skip ALL overlay
     // drawing, which made bounding boxes vanish on the surveillance grid and
-    // dashboard tiles. We now keep drawing boxes (cheap) but skip the heavier
-    // per-vehicle label text + the corner metrics readout for performance.
-    const skipLabels = minimal;
+    // dashboard tiles. We now keep drawing boxes everywhere (cheap). Labels and
+    // the corner metrics readout are gated by the "Vehicle Details (Labels)"
+    // toggle (showVehicleDetails), so it works in grid/thumbnail view too.
+    const skipLabels = !showVehicleDetails;
 
     if (vehicles && showBoundingBoxes && vehicles.length > 0) {
+      // Color system: box outline = class-type color, overridden by safety state
+      // (wrong-way / stopped) and selection; a `predicting` (missed-frame hold) or
+      // `tentative` box is dashed/dimmed so a real car is visually distinct from a
+      // stale "ghost" hold. Labels get a dark chip, white bold text, a class swatch
+      // and a speed-band-colored speed readout for visibility over the camera image.
+      const CLASS_COLORS: Record<string, string> = {
+        car: '#00e5ff', truck: '#ff9f43', bus: '#ffd93d',
+        motorcycle: '#6ee7b7', bicycle: '#6ee7b7', person: '#f6ad55',
+      };
+      const clsColor = (cn?: string) => CLASS_COLORS[(cn || '').toLowerCase()] || '#f1f5f9';
+      const speedColor = (s: number) =>
+        (s < 15 ? '#ff6b6b' : s < 40 ? '#ffd93d' : s < 70 ? '#4ade80' : '#38bdf8');
+      const boxColor = (v: VehicleFrontendData, sel: boolean) =>
+        v.is_wrong_way ? '#d946ef' : v.is_stopped ? '#fb923c' : sel ? '#00ff00' : clsColor(v.class_name);
+
       // When nothing is selected, show every tracked vehicle so the feed is
       // never blank on first load. Once the operator selects a vehicle AND
       // "Show All Detections" is OFF, narrow the view to the selection only.
@@ -604,7 +619,8 @@ const unsubscribeFromFeed = useCallback(() => {
           speed,
           license_plate,
           global_vehicle_id,
-          vehicle_id
+          vehicle_id,
+          status,
         } = vehicle;
 
         if (bbox && Array.isArray(bbox) && bbox.length === 4) {
@@ -616,17 +632,54 @@ const unsubscribeFromFeed = useCallback(() => {
 
           if (width > 0 && height > 0) {
             const isSelected = selectedVehicleIds.has(global_vehicle_id || vehicle_id);
+            const isPredicting = status === 'predicting';
+            const isTentative = status === 'tentative';
 
-            ctx.strokeStyle = isSelected ? '#00ff00' : '#ff0000';
+            ctx.save();
+            ctx.strokeStyle = boxColor(vehicle, isSelected);
             ctx.lineWidth = isSelected ? 3 : 2;
+            if (isPredicting || isTentative) {
+              ctx.setLineDash(isPredicting ? [6, 4] : [2, 3]);
+              ctx.globalAlpha = isTentative ? 0.4 : 0.7;
+            }
             ctx.strokeRect(x, y, width, height);
+            ctx.restore();
 
-            if (showVehicleDetails && !skipLabels) {
-              ctx.fillStyle = isSelected ? 'rgba(0, 255, 0, 0.3)' : 'rgba(255, 0, 0, 0.3)';
-              ctx.font = '12px monospace';
-              ctx.fillText(`${class_name} ${speed.toFixed(1)} km/h`, x, y - 10);
+            if (showVehicleDetails) {
+              const spd = (typeof speed === 'number' && Number.isFinite(speed)) ? speed : 0;
+              const clsTxt = (class_name || '?').toUpperCase();
+              const spdTxt = `${spd.toFixed(0)} km/h`;
+              // Label chip (class name + speed) above the box, clamped on-canvas.
+              ctx.save();
+              ctx.font = 'bold 12px monospace';
+              const clsW = ctx.measureText(clsTxt).width;
+              const spdW = ctx.measureText(spdTxt).width;
+              const chipW = clsW + 6 + spdW + 12;
+              const lx = Math.max(2, Math.min(x, ctx.canvas.width - chipW - 2));
+              const ly = Math.max(2, y - 22);
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+              ctx.fillRect(lx, ly, chipW, 16);
+              // class swatch
+              ctx.fillStyle = boxColor(vehicle, isSelected);
+              ctx.fillRect(lx, ly, 4, 16);
+              ctx.fillStyle = '#ffffff';
+              ctx.fillText(clsTxt, lx + 8, ly + 12);
+              // speed in its band color
+              ctx.fillStyle = speedColor(spd);
+              ctx.fillText(spdTxt, lx + 8 + clsW + 6, ly + 12);
+              ctx.restore();
+
               if (license_plate) {
-                ctx.fillText(license_plate, x, y + height + 15);
+                ctx.save();
+                ctx.font = 'bold 11px monospace';
+                const pw = ctx.measureText(license_plate).width;
+                const px2 = Math.max(2, Math.min(x, ctx.canvas.width - pw - 10));
+                const py2 = Math.min(ctx.canvas.height - 18, y + height + 6);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+                ctx.fillRect(px2, py2, pw + 10, 15);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(license_plate, px2 + 8, py2 + 11);
+                ctx.restore();
               }
             }
           }
@@ -634,9 +687,9 @@ const unsubscribeFromFeed = useCallback(() => {
       });
     }
 
-    if (metrics && showVehicleDetails && !skipLabels) {
-      ctx.fillStyle = '#00ff00';
-      ctx.font = '14px monospace';
+    if (metrics && showVehicleDetails) {
+      ctx.fillStyle = '#00e5ff';
+      ctx.font = 'bold 14px monospace';
       if (metrics.total_vehicles !== undefined) {
         ctx.fillText(`Vehicles: ${metrics.total_vehicles}`, 10, 20);
       }
