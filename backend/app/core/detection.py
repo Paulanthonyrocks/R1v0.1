@@ -254,4 +254,23 @@ class DetectionEngine:
                     # Warn if detections exist but none match the filtered vehicle classes
                     logger.debug(f"Detection found class {cls}, but it is not in vehicle_class_ids {vehicle_class_ids}")
         
+        # Consistency with the batch path (inference_worker): apply the same
+        # post-NMS cleanup (geometry filter + class-aware split-merge) here so the
+        # per-frame fallback and the batched path produce identical detections.
+        pp_cfg = self.config.get("detection_postprocess", {}) or {}
+        if pp_cfg.get("enabled", True):
+            from .worker_utils import postprocess_detections
+            det_3 = [(d[0], d[1], d[2]) for d in detections]  # (bbox, cls, conf)
+            det_3 = postprocess_detections(
+                det_3,
+                max_aspect=float(pp_cfg.get("max_aspect", 6.0)),
+                min_dim=float(pp_cfg.get("min_dim", 6.0)),
+                merge_iou=float(pp_cfg.get("merge_iou", 0.50)),
+                merge_gap_px=float(pp_cfg.get("merge_gap_px", 0.0)),
+                merge_gap_classes=set(pp_cfg.get("merge_gap_classes", []) or []),
+            )
+            # Re-attach the 4th field (alignment embedding / profile) — always None
+            # on this path, mirroring how these detections are built.
+            detections = [(d[0], d[1], d[2], None) for d in det_3]
+
         return detections

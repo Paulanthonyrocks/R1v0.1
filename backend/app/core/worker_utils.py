@@ -205,8 +205,9 @@ def postprocess_detections(
     dets: List[tuple],
     max_aspect: float = 6.0,
     min_dim: float = 6.0,
-    merge_iou: float = 0.30,
-    merge_gap_px: float = 6.0,
+    merge_iou: float = 0.50,
+    merge_gap_px: float = 0.0,
+    merge_gap_classes: Optional[set] = None,
 ) -> List[tuple]:
     """Post-NMS cleanup of vehicle detections (list of (bbox, cls, conf)).
 
@@ -274,7 +275,17 @@ def postprocess_detections(
                 continue
             io = _iou(bbox, b2)
             gx, gy = _edge_gap(bbox, b2)
-            if io >= merge_iou or (gx <= merge_gap_px and gy <= merge_gap_px):
+            # gap-merge is CLASS-AWARE: only merge abutting splits of big vehicles
+            # (bus/truck) so DISTINCT cars driving close together are never grouped.
+            gap_ok = (
+                merge_gap_px > 0
+                and merge_gap_classes
+                and cls in merge_gap_classes
+                and c2 in merge_gap_classes
+                and gx <= merge_gap_px
+                and gy <= merge_gap_px
+            )
+            if io >= merge_iou or gap_ok:
                 bx1 = min(bx1, b2[0])
                 by1 = min(by1, b2[1])
                 bx2 = max(bx2, b2[2])

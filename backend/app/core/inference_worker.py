@@ -1101,16 +1101,32 @@ def inference_worker(
                             if max_detections_per_frame > 0 and len(formatted_dets) > max_detections_per_frame:
                                 formatted_dets.sort(key=lambda d: d[2], reverse=True)
                                 formatted_dets = formatted_dets[:max_detections_per_frame]
+                            _n_capped = len(formatted_dets)  # true post-cap count, pre-postprocess
                             # Post-NMS cleanup: drop implausible geometry (thin/
                             # elongated lane-marker false positives) and merge
                             # same-class SPLIT detections (a truck seen as cab +
                             # trailer) so one vehicle is not counted twice.
-                            formatted_dets = postprocess_detections(formatted_dets)
+                            # Conservative by default: gap-merge OFF (merge_gap_px=0)
+                            # and a strong IoU (0.5) so DISTINCT cars driving close
+                            # together are NOT grouped into one box. Tune via the
+                            # `detection_postprocess` config block.
+                            _pp = config.get("detection_postprocess", {}) or {}
+                            if _pp.get("enabled", True):
+                                formatted_dets = postprocess_detections(
+                                    formatted_dets,
+                                    max_aspect=float(_pp.get("max_aspect", 6.0)),
+                                    min_dim=float(_pp.get("min_dim", 6.0)),
+                                    merge_iou=float(_pp.get("merge_iou", 0.50)),
+                                    merge_gap_px=float(_pp.get("merge_gap_px", 0.0)),
+                                    merge_gap_classes=set(
+                                        _pp.get("merge_gap_classes", []) or []
+                                    ),
+                                )
                             if meta["frame_index"] % 25 == 0:
                                 logger.info(
                                     f"[Worker {worker_id}][{meta['feed_id']}] det frame={meta['frame_index']} "
                                     f"raw={_n_raw} vehicle_conf={_n_vehicle_conf} after_roi={_n_after_roi} "
-                                    f"capped={len(formatted_dets)} cap={max_detections_per_frame}"
+                                    f"capped={_n_capped} postproc={len(formatted_dets)} cap={max_detections_per_frame}"
                                 )
                             batch_detections_map[meta_idx] = formatted_dets
                     except Exception as e:
