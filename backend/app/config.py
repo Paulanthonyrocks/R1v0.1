@@ -75,7 +75,10 @@ class PerformanceConfig(BaseModel):
     skip_factor_increase_step: float = 0.1
     use_shared_memory: bool = True
     use_shm: bool = True
-    shm_pool_size: int = 2000
+    # Aligned to config.yaml (6000). The runtime never reads this field -- workers
+    # use config.get("performance", {}).get("shm_pool_size", 100) -- but keep the
+    # schema default consistent with the shipped tune instead of the stale 2000.
+    shm_pool_size: int = 6000
 
 
 class WebSocketRateLimitConfig(BaseModel):
@@ -98,7 +101,10 @@ class AppConfig(BaseSettings):
     firebase_admin: Dict[str, Any] = {"auth_enabled": False}
     video_input: Dict[str, Any] = {"sample_videos": []}
     video_output: Dict[str, Any] = {"enabled": False, "output_directory": "backend/data/recordings", "fps": 10}
-    reid: Dict[str, Any] = {"similarity_threshold": 0.85, "persistence_path": "backend/data/reid_gallery.pkl"}
+    # Top-level `reid` is read ONLY for persistence_path (config.py:191-198).
+    # similarity_threshold is dead here: the live ReID gate reads
+    # vehicle_detection.reid.similarity_threshold (reid_manager.py:25).
+    reid: Dict[str, Any] = {"persistence_path": "backend/data/reid_gallery.pkl"}
     prediction_scheduler: Dict[str, Any] = {"enabled": True}
     # Base default aligned to the shipped config.yaml intent + main.py fallback
     # (crack #6): a caller that skips the yaml must still auto-start feed
