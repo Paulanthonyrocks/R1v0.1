@@ -12,6 +12,12 @@ class LocalOCR:
         self.languages = self.ocr_cfg.get("languages", ["en"])
         # Prioritize OCR specific GPU flag, fallback to global performance flag
         self.gpu = self.ocr_cfg.get("use_gpu_ocr", config.get("performance", {}).get("gpu_acceleration", False))
+        # EasyOCR's default recognizer tokenizes text as WORDS, which drops
+        # license-plate-format strings. Constrain it to plate characters so it
+        # reads "ABC123" / "AB-123" style plates instead of rejecting them.
+        self.allowlist = self.ocr_cfg.get(
+            "plate_allowlist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+        )
         
         logger.info(f"Initializing EasyOCR with languages {self.languages} (GPU: {self.gpu})")
         try:
@@ -34,8 +40,9 @@ class LocalOCR:
 
         try:
             # EasyOCR works best with BGR or RGB. Our CoreModule provides RGB.
-            # We'll use detail=0 to just get the text strings
-            results = self.reader.readtext(image, detail=0)
+            # We'll use detail=0 to just get the text strings; the allowlist
+            # constrains recognition to plate characters (A-Z0-9-).
+            results = self.reader.readtext(image, detail=0, allowlist=self.allowlist)
             
             if not results:
                 return None

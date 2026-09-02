@@ -477,6 +477,12 @@ ocr_engine:
   plate_min_width: 15
   plate_min_aspect: 0.6
   plate_max_aspect: 10.0
+  # EasyOCR doesn't tokenize plate-format strings by default -- constrain it to
+  # alphanumerics + dash so it reads "ABC123" instead of returning empty.
+  plate_allowlist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+  # Ensure every crop is upscaled to at least this width before OCR (EasyOCR needs
+  # ~140px for reliable recognition); capped at 480.
+  plate_min_target_w: 140
   use_gemini_ocr: false
   # EasyOCR GPU contends for the same 2 T4s already running YOLO+ReID (CUDA
   # thrash / throughput drop). CPU is the safe default: OCR runs in a bounded

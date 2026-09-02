@@ -914,8 +914,12 @@ class CoreModule:
                     aspect = bw / max(1.0, bh)
                     if bw >= min_w and min_aspect <= aspect <= max_aspect:
                         if upscale > 1.0:
-                            # Cap upscaled width so EasyOCR isn't handed a giant image
-                            tgt_w = min(int(bw * upscale), 480)
+                            # Target a READABLE width (~140px) so a tiny 30px band
+                            # isn't handed straight to EasyOCR (which needs that
+                            # much for reliable recognition), but cap at 480 so a big
+                            # band isn't blown up into a huge, slow image.
+                            min_readable = float(ocr_cfg.get("plate_min_target_w", 140))
+                            tgt_w = int(min(max(int(bw * upscale), min_readable), 480))
                             tgt_h = max(1, int(tgt_w * bh / max(1.0, bw)))
                             band = cv2.resize(band, (tgt_w, tgt_h), interpolation=cv2.INTER_CUBIC)
                         plate = band
