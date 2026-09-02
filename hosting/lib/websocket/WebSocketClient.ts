@@ -603,9 +603,13 @@ export class WebSocketClient implements IWebSocketClient {
         }
 
         this.reconnectAttempts++;
-        // Add exponential backoff with jitter (±20%)
+        // Add exponential backoff with jitter (±20%), hard-capped LOW (5s).
+        // The Cloud Workstations web-preview proxy drops the WebSocket (code
+        // 1006) intermittently; the old 30s cap meant a transport blip froze
+        // the feed for up to 30s. A 5s cap recovers in seconds once the tunnel
+        // is back, and reconnectAttempts/reconnectDelay reset on successful open.
         const jitter = 0.8 + Math.random() * 0.4;
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 30000);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 5000);
 
         console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
 
