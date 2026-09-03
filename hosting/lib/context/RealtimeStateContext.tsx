@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { WebSocketClient, WebSocketMessageType } from '../websocket/WebSocketClient';
 import { useWebSocket } from '../websocket/WebSocketProvider';
-import { KpiData, AlertData, FeedStatusData } from '../types';
+import { KpiData, AlertData, FeedStatusData, SeverityLevel } from '../types';
 
 interface RealtimeState {
     kpis: KpiData | null;
@@ -27,6 +27,18 @@ const RealtimeStateContext = createContext<RealtimeStateContextType | null>(null
 interface RealtimeStateProviderProps {
     children: React.ReactNode;
 }
+
+// Backend emits all-caps severities (AlertSeverityEnum: INFO/WARNING/CRITICAL/
+// ERROR) while the frontend SeverityLevel uses title case for Critical/Warning.
+// Normalize at ingestion so badges, filters, and maps agree on one vocabulary.
+const normalizeSeverity = (raw: unknown): SeverityLevel => {
+    const v = String(raw ?? '').toUpperCase();
+    if (v === 'CRITICAL') return 'Critical';
+    if (v === 'WARNING') return 'Warning';
+    if (v === 'ERROR') return 'ERROR';
+    if (v === 'INFO') return 'INFO';
+    return 'Anomaly';
+};
 
 export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) => {
     const client = useWebSocket();
@@ -194,9 +206,10 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
         const unsubAlert = typeof client?.subscribe === 'function' 
             ? client.subscribe(WebSocketMessageType.NEW_ALERT, (data: { alert_data: AlertData }) => {
                 if (data?.alert_data) {
+                    const incoming = { ...data.alert_data, severity: normalizeSeverity(data.alert_data.severity) };
                     setAlerts((prevAlerts: AlertData[]) => {
-                        if (prevAlerts.some((a: AlertData) => a.id === data.alert_data.id)) return prevAlerts;
-                        return [...prevAlerts, data.alert_data].slice(-20);
+                        if (prevAlerts.some((a: AlertData) => a.id === incoming.id)) return prevAlerts;
+                        return [...prevAlerts, incoming].slice(-20);
                     });
                 }
             }) 
@@ -209,7 +222,7 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
                     const newIncident: AlertData = {
                         id: data.incident_id,
                         timestamp: new Date(),
-                        severity: data.severity,
+                        severity: normalizeSeverity(data.severity),
                         feed_id: data.feed_id,
                         message: data.title || "New Incident",
                         description: data.message,

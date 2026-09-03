@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import AuthGuard from "@/components/auth/AuthGuard";
 import { UserRole } from "@/lib/auth/roles";
-import { BarChart3, TrendingUp, TrendingDown, Users, Zap, Activity, ArrowRightLeft, Map as MapIcon, Camera, Info } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, Users, Zap, Activity, ArrowRightLeft, Map as MapIcon, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import FlowAnalysisChart from '@/components/dashboard/FlowAnalysisChart';

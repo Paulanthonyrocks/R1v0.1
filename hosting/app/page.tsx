@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   Map,
@@ -36,9 +36,6 @@ const NokiaHomeScreen = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const hoverSoundRef = useRef<HTMLAudioElement | null>(null);
-  const confirmSoundRef = useRef<HTMLAudioElement | null>(null);
-
   const handleLogout = async () => {
     const auth = getAuth();
     try {
@@ -53,9 +50,6 @@ const NokiaHomeScreen = () => {
 
   useEffect(() => {
     const handleFirstInteraction = () => {
-      
-      // const bootJingle = new Audio('/audio/boot-jingle.mp3');
-      // bootJingle.play();
       window.removeEventListener('click', handleFirstInteraction);
       window.removeEventListener('keydown', handleFirstInteraction);
     };
@@ -66,9 +60,6 @@ const NokiaHomeScreen = () => {
     setTimeout(() => {
       setBooting(false);
     }, 2500);
-
-    // hoverSoundRef.current = new Audio('/audio/hover-tick.mp3');
-    // confirmSoundRef.current = new Audio('/audio/confirm-bleep.mp3');
 
     const timer = setInterval(() => {
       setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -91,14 +82,12 @@ const NokiaHomeScreen = () => {
       } else if (e.key === 'ArrowLeft') {
         newIndex = (activeIndex - 1 + menuItems.length) % menuItems.length;
       } else if (e.key === 'Enter') {
-        confirmSoundRef.current?.play();
         // Navigate to the selected item
         window.location.href = menuItems[activeIndex].href;
       }
 
       if (newIndex !== activeIndex) {
         setActiveIndex(newIndex);
-        hoverSoundRef.current?.play();
       }
     };
 
@@ -148,9 +137,7 @@ const NokiaHomeScreen = () => {
                 }`}
                 onMouseEnter={() => {
                   setActiveIndex(index);
-                  // hoverSoundRef.current?.play();
                 }}
-                onClick={() => { /* confirmSoundRef.current?.play() */ }}
               >
                 {item.icon}
                 <span className="mt-2 text-sm font-bold">{item.label}</span>

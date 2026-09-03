@@ -1,5 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
-import { useAuth } from '../../lib/auth/AuthProvider';
+import { createElement, ReactNode } from 'react';
+import { useAuth, AuthProvider } from '../../lib/auth/AuthProvider';
 import { auth } from '../../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { TokenManager } from '../../lib/auth/TokenManager';
@@ -23,6 +24,11 @@ const mockTokenManagerInstance = {
 };
 (TokenManager as unknown as { getInstance: jest.Mock }).getInstance = jest.fn().mockReturnValue(mockTokenManagerInstance);
 
+// The hook reads context — it must render inside the real provider,
+// otherwise it returns the default context and the effect never runs.
+const wrapper = ({ children }: { children: ReactNode }) =>
+  createElement(AuthProvider, null, children);
+
 describe('useAuth Hook', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -31,7 +37,7 @@ describe('useAuth Hook', () => {
   });
 
   it('should be in a loading state initially', () => {
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper });
     expect(result.current.loading).toBe(true);
     expect(result.current.user).toBeNull();
     expect(result.current.token).toBeNull();
@@ -52,7 +58,7 @@ describe('useAuth Hook', () => {
       return () => {};
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper });
 
     await act(async () => {
       authCallback(mockUser);
@@ -72,7 +78,7 @@ describe('useAuth Hook', () => {
       return () => {};
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper });
 
     await act(async () => {
       authCallback(mockUser);
@@ -107,7 +113,7 @@ describe('useAuth Hook', () => {
       return () => {};
     });
 
-    const { result } = renderHook(() => useAuth());
+    const { result } = renderHook(() => useAuth(), { wrapper });
 
     await act(async () => {
       authCallback(mockUser);

@@ -6,7 +6,6 @@ import AuthGuard from "@/components/auth/AuthGuard";
 import { Activity, Zap, AlertTriangle, Users, TrendingDown, TrendingUp, CheckCircle2, ShieldCheck, ChevronRight, Loader2, BarChart2, Terminal, Cpu, Globe } from 'lucide-react';
 import { UserRole } from "@/lib/auth/roles";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
-import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -26,12 +25,10 @@ import IncidentCommandCenter from '@/components/dashboard/IncidentCommandCenter'
 
 const DashboardPage: React.FC = () => {
   const { kpis, alerts, feeds, isConnected, isReady } = useRealtimeUpdates();
-  const { vehicles, version: vehicleVersion } = useVehicleTracking();
   const [activeTab, setActiveTab] = useState<'overview' | 'incidents'>('overview');
   const [kpiHistory, setKpiHistory] = useState<TrendDataPoint[]>([]);
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
-  const [isDemoMode, setIsDemoMode] = useState(false);
   const [showLazyWidgets, setShowLazyWidgets] = useState(false);
   const hasAttemptedHistoryLoad = useRef(false);
   const feedRefs = useRef<Map<string, HTMLDivElement>>(new Map());

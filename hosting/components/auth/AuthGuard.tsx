@@ -10,6 +10,23 @@ interface AuthGuardProps {
   requiredRole?: UserRole;
 }
 
+// Role hierarchy, lowest privilege first. A user at a given level may access
+// anything requiring their level or below (ADMIN bypasses everything).
+const ROLE_RANK: Record<UserRole, number> = {
+  [UserRole.VIEWER]: 1,
+  [UserRole.PLANNER]: 2,
+  [UserRole.OPERATOR]: 3,
+  [UserRole.AGENCY]: 4,
+  [UserRole.DRIVER]: 2,
+  [UserRole.ADMIN]: 99,
+};
+
+const hasAccess = (userRole: UserRole, requiredRole?: UserRole): boolean => {
+  if (!requiredRole) return true;
+  if (userRole === UserRole.ADMIN) return true;
+  return (ROLE_RANK[userRole] ?? 0) >= (ROLE_RANK[requiredRole] ?? 0);
+};
+
 const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
   const { user, loading, userRole } = useUser();
   const pathname = usePathname();
@@ -31,17 +48,11 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
       return;
     }
 
-    // User is authenticated, check roles if required
-    if (requiredRole) {
-      const hasAccess = 
-        userRole === UserRole.ADMIN || 
-        userRole === requiredRole || 
-        (requiredRole === UserRole.VIEWER && userRole === UserRole.VIEWER);
-      
-      if (!hasAccess) {
-        console.warn(`AuthGuard: User with role ${userRole} attempted to access content requiring role ${requiredRole}. Redirecting to unauthorized.`);
-        router.push('/unauthorized');
-      }
+    // User is authenticated, check roles if required (hierarchy: higher roles
+    // inherit access to lower-role pages, ADMIN bypasses everything)
+    if (requiredRole && !hasAccess(userRole, requiredRole)) {
+      console.warn(`AuthGuard: User with role ${userRole} attempted to access content requiring role ${requiredRole}. Redirecting to unauthorized.`);
+      router.push('/unauthorized');
     }
   }, [user, loading, userRole, requiredRole, router, pathname]);
 
@@ -51,7 +62,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
   }
 
   // If authenticated and (no required role or has access), render children
-  if (user && (!requiredRole || userRole === UserRole.ADMIN || userRole === requiredRole || (requiredRole === UserRole.VIEWER && userRole === UserRole.VIEWER))) {
+  if (user && hasAccess(userRole, requiredRole)) {
     return <>{children}</>;
   }
 

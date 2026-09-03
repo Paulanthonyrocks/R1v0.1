@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import DashboardShell from '@/components/dashboard/DashboardShell';
+import AuthGuard from '@/components/auth/AuthGuard';
 import { LineChart, TrendingUp, AlertCircle, BarChart3, Clock, MapPin } from 'lucide-react';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import PredictiveFlowChart from '@/components/dashboard/PredictiveFlowChart';
@@ -54,6 +55,7 @@ export default function PredictivePage() {
     };
 
     return (
+        <AuthGuard>
         <DashboardShell>
             <div className="retro-title-container">
                 <div className="flex flex-col md:flex-row justify-between items-end gap-6">
@@ -154,5 +156,6 @@ export default function PredictivePage() {
                 </div>
             </div>
         </DashboardShell>
+        </AuthGuard>
     );
 }

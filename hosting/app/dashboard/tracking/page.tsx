@@ -16,6 +16,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import AuthGuard from '@/components/auth/AuthGuard';
+import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const API_BASE_URL = getBackendBaseURL();
@@ -50,16 +52,9 @@ export default function TrackingPage() {
     const fetchVehicles = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/list`, {
-                headers: {
-                    'Bypass-Tunnel-Reminder': 'true',
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setVehicles(data);
-            }
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            const data = await apiClient.get<GlobalVehicle[]>('/api/v1/vehicles/global/list');
+            setVehicles(data);
         } catch (error) {
             console.error("Failed to fetch vehicles:", error);
         } finally {
@@ -71,16 +66,9 @@ export default function TrackingPage() {
         setHistoryLoading(true);
         setSelectedId(id);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/vehicles/global/${id}/history`, {
-                headers: {
-                    'Bypass-Tunnel-Reminder': 'true',
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setHistory(data);
-            }
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            const data = await apiClient.get<TrackPoint[]>(`/api/v1/vehicles/global/${id}/history`);
+            setHistory(data);
         } catch (error) {
             console.error("Failed to fetch history:", error);
         } finally {
@@ -106,6 +94,7 @@ export default function TrackingPage() {
     }, [] as any[]);
 
     return (
+        <AuthGuard>
         <DashboardShell>
             <div className="retro-title-container">
                 <div className="flex flex-col md:flex-row justify-between items-end gap-4">
@@ -267,5 +256,6 @@ export default function TrackingPage() {
                 </div>
             </div>
         </DashboardShell>
+        </AuthGuard>
     );
 }

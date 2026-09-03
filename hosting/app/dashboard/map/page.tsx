@@ -87,6 +87,25 @@ const LiveMapPage: React.FC = () => {
               <span className="font-bold uppercase tracking-widest">Intelligence Layers</span>
               <X size={14} className="cursor-pointer hover:text-white" onClick={() => setShowLayerControl(false)} />
             </div>
+            <div className="flex flex-col gap-1 pb-1 border-b border-lcd-green/20">
+              <span className="font-bold uppercase tracking-widest opacity-60 text-[10px]">Base Layer</span>
+              <div className="flex gap-1">
+                {(['satellite', 'vector', 'thermal'] as const).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setActiveLayer(l)}
+                    className={cn(
+                      "flex-1 px-2 py-1 text-[10px] uppercase tracking-widest border transition-all",
+                      activeLayer === l
+                        ? "bg-lcd-green text-industrial-bg border-lcd-green font-bold"
+                        : "border-lcd-green/30 opacity-50 hover:opacity-100"
+                    )}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
             {[
               { id: 'feeds', icon: Video, label: 'Surveillance Nodes' },
               { id: 'congestion', icon: Activity, label: 'Congestion Heat' },
@@ -176,12 +195,12 @@ const LiveMapPage: React.FC = () => {
           >
             <ZoomIn size={18} />
           </button>
-          <button 
+          <button
             onClick={() => mapRef.current?.zoomOut()}
-            className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm" 
+            className="p-2 bg-industrial-panel/80 border border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all shadow-lg backdrop-blur-sm"
             title="Zoom Out"
           >
-            <ZoomIn size={18} />
+            <ZoomOut size={18} />
           </button>
           <button 
             onClick={() => mapRef.current?.center()}

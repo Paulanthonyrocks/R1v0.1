@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import { Incident, IncidentStatus, IncidentSeverity } from '@/lib/types/incident';
-import { AlertTriangle, Calendar, Camera, Maximize2, Trash2, X } from 'lucide-react';
+import { Calendar, Camera, Maximize2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +15,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
+import AuthGuard from '@/components/auth/AuthGuard';
+import { APIClient } from '@/lib/api/APIClient';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
@@ -29,20 +31,15 @@ export default function GalleryPage() {
     const fetchIncidentsWithSnapshots = async () => {
         setLoading(true);
         try {
-            // Fetch all incidents that have snapshots
-            const res = await fetch(`${API_BASE_URL}/api/v1/incidents`, {
-                headers: {
-                    'Bypass-Tunnel-Reminder': 'true'
-                }
-            });
-            if (res.ok) {
-                const data: Incident[] = await res.json();
-                // Filter incidents that have a snapshot path
-                const withSnapshots = data
-                    .filter(inc => inc.snapshot_path)
-                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-                setIncidents(withSnapshots);
-            }
+            // Authenticated + tunnel-aware: APIClient attaches Bearer, retries
+            // transient 502/503/504, and refreshes expired tokens (401).
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            const data = await apiClient.get<Incident[]>('/api/v1/incidents');
+            // Filter incidents that have a snapshot path
+            const withSnapshots = data
+                .filter(inc => inc.snapshot_path)
+                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            setIncidents(withSnapshots);
         } catch (error) {
             console.error("Failed to fetch gallery items:", error);
         } finally {
@@ -82,6 +79,7 @@ export default function GalleryPage() {
     };
 
     return (
+        <AuthGuard>
         <DashboardShell>
             <div className="flex flex-col space-y-6">
                 <div className="flex justify-between items-center">
@@ -219,5 +217,6 @@ export default function GalleryPage() {
                 </div>
             )}
         </DashboardShell>
+        </AuthGuard>
     );
 }

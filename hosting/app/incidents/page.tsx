@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import { Incident, IncidentStatus, IncidentSeverity } from '@/lib/types/incident';
 import { AlertTriangle, CheckCircle, Clock, Search, Filter, RefreshCw, Loader2, ShieldCheck, MapPin } from 'lucide-react';
@@ -23,12 +24,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { incidentService } from '@/lib/services/incidentService';
+import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const API_BASE_URL = getBackendBaseURL();
 
 export default function IncidentsPage() {
+    const router = useRouter();
     const [incidents, setIncidents] = useState<Incident[]>([]);
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState<string>("ALL");
@@ -61,12 +64,15 @@ export default function IncidentsPage() {
 
     const handleUpdateStatus = async (id: string, newStatus: IncidentStatus) => {
         try {
-            // Use a generic PATCH since incidentService lacks a simple updateStatus
-            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
-            await apiClient.put(`/api/v1/incidents/${id}`, { status: newStatus });
-            
+            // Route through incidentService: acknowledge/resolve hit the real
+            // backend endpoints (the old generic PUT matched no route).
+            const ok = newStatus === IncidentStatus.ACKNOWLEDGED
+                ? await incidentService.acknowledgeIncident(id)
+                : await incidentService.resolveIncident(id);
+            if (!ok) return;
+
             // Optimistic update
-            setIncidents(prev => prev.map(inc => 
+            setIncidents(prev => prev.map(inc =>
                 inc.id === id ? { ...inc, status: newStatus } : inc
             ));
         } catch (error) {
@@ -104,6 +110,7 @@ export default function IncidentsPage() {
     );
 
     return (
+        <AuthGuard>
         <DashboardShell>
             <div className="retro-title-container">
                 <div className="flex flex-col md:flex-row justify-between items-end gap-4">
@@ -242,8 +249,9 @@ export default function IncidentsPage() {
                                                 <CheckCircle className="mr-2 h-4 w-4" /> Resolve & Archive
                                             </Button>
                                         )}
-                                        <Button 
+                                        <Button
                                             variant="outline"
+                                            onClick={() => router.push('/logs')}
                                             className="matrix-btn-sleek h-10 border-lcd-text/30 text-lcd-text/50 hover:text-lcd-text px-4"
                                         >
                                             View Logs
@@ -256,5 +264,6 @@ export default function IncidentsPage() {
                 )}
             </div>
         </DashboardShell>
+        </AuthGuard>
     );
 }
