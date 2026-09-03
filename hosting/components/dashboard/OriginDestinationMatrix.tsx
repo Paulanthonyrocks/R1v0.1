@@ -41,6 +41,7 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
 
     useEffect(() => {
         if (token) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- mount fetch + 30s polling subscription; the sanctioned effect use
             fetchData();
         }
         

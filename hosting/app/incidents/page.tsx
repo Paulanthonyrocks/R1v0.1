@@ -56,6 +56,7 @@ export default function IncidentsPage() {
     };
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial backend load on mount + 30s polling subscription; the sanctioned effect use
         fetchIncidents();
         // Refresh every 30s
         const interval = setInterval(fetchIncidents, 30000);

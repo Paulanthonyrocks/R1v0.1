@@ -30,6 +30,11 @@ import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const API_BASE_URL = getBackendBaseURL();
 
+// Generated once at module load, not per render: these are static display
+// labels, and regenerating them every render made the IDs flicker.
+const NODE_ID_LABEL = Math.random().toString(16).slice(2, 8).toUpperCase();
+const BUFFER_LOAD_LABEL = Math.floor(Math.random() * 10);
+
 interface IncidentCommandCenterProps {
   alerts: AlertData[];
   onIncidentUpdated?: (incidentId: string, status: IncidentStatus) => void;
@@ -56,6 +61,7 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
 
   useEffect(() => {
     if (alerts.length > 0 && !selectedIncidentId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- selects the first alert once async alert data arrives; no render-time equivalent for async data
       setSelectedIncidentId(alerts[0].id || null);
     }
   }, [alerts, selectedIncidentId]);
@@ -154,7 +160,7 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
               Incident Command Center
               <span className="bg-red-600 text-white text-[8px] px-1 animate-pulse">LIVE</span>
             </span>
-            <span className="text-[8px] font-mono opacity-70 tracking-widest">PROTOCOL: R1_TACTICAL_OVERVIEW // NODE_ID: {Math.random().toString(16).slice(2, 8).toUpperCase()}</span>
+            <span className="text-[8px] font-mono opacity-70 tracking-widest">PROTOCOL: R1_TACTICAL_OVERVIEW // NODE_ID: {NODE_ID_LABEL}</span>
           </div>
         </div>
         <div className="flex items-center gap-6">
@@ -442,7 +448,7 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
         <div className="flex items-center gap-4 text-[8px] font-mono opacity-50 uppercase tracking-widest">
           <div className="flex items-center gap-1"><div className="h-1 w-1 rounded-full bg-green-500" /> SYNC_ESTABLISHED</div>
           <div className="flex items-center gap-1"><div className="h-1 w-1 rounded-full bg-green-500" /> SECURE_ENCRYPTION_AES256</div>
-          <div>BUFFER_LOAD: {Math.floor(Math.random() * 10)}%</div>
+          <div>BUFFER_LOAD: {BUFFER_LOAD_LABEL}%</div>
         </div>
         <div className="text-[8px] font-mono opacity-50 uppercase">
           SESSION_UPTIME: 04:12:44

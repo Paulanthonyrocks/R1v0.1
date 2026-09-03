@@ -263,3 +263,4 @@ const TrafficMap = forwardRef<any, {
 });
 
 export default TrafficMap;
+TrafficMap.displayName = 'TrafficMap';

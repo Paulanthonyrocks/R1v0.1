@@ -1,8 +1,9 @@
 "use client";
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
 import { CloudSun, MapPin, Calendar, Wind, Droplets, Thermometer, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface WeatherData {
   temperature: number;
@@ -35,19 +36,23 @@ const WeatherEventImpactPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const getSeverityFromWeather = (weather: WeatherData): string => {
+    if (weather.precipitation_chance > 70 || weather.wind_speed > 50) return 'High';
+    if (weather.precipitation_chance > 30 || weather.wind_speed > 30) return 'Medium';
+    return 'Low';
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const defaultLat = 34.0522;
         const defaultLon = -118.2437;
 
-        const [weatherResponse, eventsResponse] = await Promise.all([
-          axios.get(`/api/v1/weather/current?lat=${defaultLat}&lon=${defaultLon}`),
-          axios.get('/api/v1/events/current')
+        const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+        const [weatherData, eventsData] = await Promise.all([
+          apiClient.get<WeatherData>(`/api/v1/weather/current?lat=${defaultLat}&lon=${defaultLon}`),
+          apiClient.get<EventData[]>('/api/v1/events/current')
         ]);
-
-        const weatherData = weatherResponse.data;
-        const eventsData = eventsResponse.data;
 
         const weatherImpact: WeatherEventImpact = {
           type: 'weather',
@@ -79,12 +84,6 @@ const WeatherEventImpactPanel: React.FC = () => {
 
     fetchData();
   }, []);
-
-  const getSeverityFromWeather = (weather: WeatherData): string => {
-    if (weather.precipitation_chance > 70 || weather.wind_speed > 50) return 'High';
-    if (weather.precipitation_chance > 30 || weather.wind_speed > 30) return 'Medium';
-    return 'Low';
-  };
 
   if (loading) return <div className="text-center py-20 uppercase font-bold animate-pulse tracking-widest opacity-50">Polling Environmental Sensors...</div>;
   if (error) return (

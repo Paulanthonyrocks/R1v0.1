@@ -194,7 +194,7 @@ const SignalsPage = () => {
                                     <div className="p-4 bg-lcd-text/5 border-2 border-lcd-text/10 flex gap-4">
                                         <Info className="text-lcd-text/50 shrink-0" size={20} />
                                         <p className="text-[10px] font-bold uppercase leading-relaxed opacity-60">
-                                            System interlocks prevent "Green-Green" conflict states. 
+                                            System interlocks prevent &quot;Green-Green&quot; conflict states. 
                                             All commands are validated against local controller logic.
                                         </p>
                                     </div>

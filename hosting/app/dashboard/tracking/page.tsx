@@ -45,10 +45,6 @@ export default function TrackingPage() {
     const [historyLoading, setHistoryLoading] = useState(false);
     const { token } = useAuth();
 
-    useEffect(() => {
-        if (token) fetchVehicles();
-    }, [token]);
-
     const fetchVehicles = async () => {
         setLoading(true);
         try {
@@ -61,6 +57,11 @@ export default function TrackingPage() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- mount fetch on auth token arrival; the sanctioned effect use
+        if (token) fetchVehicles();
+    }, [token]);
 
     const fetchHistory = async (id: string) => {
         setHistoryLoading(true);
@@ -223,7 +224,7 @@ export default function TrackingPage() {
                                                             {group.feed_id.toUpperCase().replace('_', ' ')}
                                                         </span>
                                                         <div className="text-[9px] font-bold opacity-40 group-hover:opacity-60 group-hover:text-lcd-bg">
-                                                            ENTRY: {new Date(group.startTime * 1000).toLocaleTimeString()} // EXIT: {new Date(group.endTime * 1000).toLocaleTimeString()}
+                                                            ENTRY: {new Date(group.startTime * 1000).toLocaleTimeString()} {'// EXIT:'} {new Date(group.endTime * 1000).toLocaleTimeString()}
                                                         </div>
                                                     </div>
                                                     <div className="text-right">

@@ -1,21 +1,13 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { APIClient } from '../api/APIClient';
-import { useUser } from '../auth/UserContext';
 import { getBackendBaseURL } from '../api/backendBaseUrl';
 
 export function useAPI() {
-    const { token } = useUser();
-
+    // Authorization is injected per-request by APIClient from TokenManager
+    // (Bearer + 401 refresh). No manual header sync needed here.
     const api = useMemo(() => APIClient.getInstance({
         baseURL: getBackendBaseURL()
     }), []);
-
-    useEffect(() => {
-        if (token) {
-            // Token updates are handled automatically by TokenManager
-            api.setAuthorizationHeader(`Bearer ${token}`);
-        }
-    }, [token, api]);
 
     return api;
 }

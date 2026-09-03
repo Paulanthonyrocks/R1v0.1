@@ -12,8 +12,7 @@ import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
 // Fix for default marker icons in Leaflet with Next.js
 const fixLeafletIcons = () => {
-  // @ts-ignore
-  delete L.Icon.Default.prototype._getIconUrl;
+  delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
   L.Icon.Default.mergeOptions({
     iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
     iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
@@ -543,3 +542,4 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
 });
 
 export default LeafletMap;
+LeafletMap.displayName = 'LeafletMap';

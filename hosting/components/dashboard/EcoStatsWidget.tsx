@@ -21,7 +21,7 @@ const EcoStatsWidget: React.FC<EcoStatsWidgetProps> = ({ vehicles, className }) 
     
     const stats = useMemo(() => {
         let totalCO2Rate = 0; // kg/km for the local fleet
-        let vehicleCounts: Record<string, number> = {};
+        const vehicleCounts: Record<string, number> = {};
 
         vehicles.forEach(v => {
             const type = v.class_name || 'unknown';

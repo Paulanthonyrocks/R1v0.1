@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import { WebSocketMessageType, WebSocketMessage } from './websocket/WebSocketClient';
 import { useWebSocket } from './websocket/WebSocketProvider';
 import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData, VideoFrameSnapshot, LaneOverlayData } from './types';
@@ -13,7 +13,9 @@ import {
 } from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string, minimal: boolean = false) => {
-  const hookId = useRef(Math.random().toString(36).substring(2, 7));
+  // Stable per-hook log label. useId is the sanctioned render-safe source;
+  // useRef(Math.random()) re-evaluated the impure call every render.
+  const hookId = useRef(useId().replace(/:/g, '').slice(0, 7));
   const client = useWebSocket();
   
   // --- State Management ---
@@ -56,7 +58,9 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   const smoothedFrameTimeRef = useRef<number>(0);
   const lastFpsUpdateRef = useRef<number>(0);
   const lastStateUpdateRef = useRef<number>(0);
-  const lastSuccessfulFrameTimeRef = useRef<number>(performance.now());
+  // Initialized to 0 ("no frame yet"); the staleness tick guards on > 0,
+  // so this is equivalent to performance.now() here without the impure call.
+  const lastSuccessfulFrameTimeRef = useRef<number>(0);
   const lastProcessedIndexRef = useRef<number>(-1);
   const frameCountRef = useRef<number>(0);
   // TELEMETRY: per-feed frame counter sampled on the 5s staleness tick so we

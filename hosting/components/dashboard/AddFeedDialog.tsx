@@ -16,7 +16,7 @@ import { useAuth } from '@/lib/auth/AuthProvider';
 import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
-const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open: boolean) => void }) => {
+const AddFeedForm = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [formData, setFormData] = useState({
@@ -130,7 +130,7 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
 };
 
 const AddFeedDialog = React.memo(function AddFeedDialog() {
-    const { token, user, userRole } = useAuth();
+    const { user, userRole } = useAuth();
     const [open, setOpen] = useState(false);
 
     // Only Admins should be able to add feeds
@@ -157,7 +157,7 @@ const AddFeedDialog = React.memo(function AddFeedDialog() {
                             Enter the source details for the new traffic monitoring node.
                         </DialogDescription>
                     </DialogHeader>
-                    {open && <AddFeedForm token={token} setOpen={setOpen} />}
+                    {open && <AddFeedForm setOpen={setOpen} />}
                 </DialogContent>
             </Dialog>
         </>

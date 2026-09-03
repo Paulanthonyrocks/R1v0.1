@@ -31,6 +31,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     if (!auth) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time auth-unavailable fast path on mount; no external subscription to attach to
       setLoading(false);
       return;
     }

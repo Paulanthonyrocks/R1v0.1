@@ -10,16 +10,7 @@ interface SurveillanceSummaryProps {
   feeds: FeedStatusData[];
 }
 
-const SurveillanceSummary: React.FC<SurveillanceSummaryProps> = ({ feeds }) => {
-  const onlineFeeds = feeds.filter(f => f.status === 'running').length;
-  const offlineFeeds = feeds.length - onlineFeeds;
-  const systemHealth = feeds.length > 0 ? (onlineFeeds / feeds.length) * 100 : 100;
-
-  let healthColor = 'text-lcd-green';
-  if (systemHealth < 75) healthColor = 'text-yellow-500';
-  if (systemHealth < 50) healthColor = 'text-red-500';
-
-  const StatBox = ({ label, value, icon: Icon, colorClass, subtext }: any) => (
+const StatBox = ({ label, value, icon: Icon, colorClass, subtext }: any) => (
     <Card className={cn(
         "relative overflow-hidden p-4 flex flex-col justify-between border-lcd-text/30 bg-industrial-panel text-lcd-text font-lcd",
         "shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-none"
@@ -42,6 +33,15 @@ const SurveillanceSummary: React.FC<SurveillanceSummaryProps> = ({ feeds }) => {
         </div>
     </Card>
   );
+
+const SurveillanceSummary: React.FC<SurveillanceSummaryProps> = ({ feeds }) => {
+  const onlineFeeds = feeds.filter(f => f.status === 'running').length;
+  const offlineFeeds = feeds.length - onlineFeeds;
+  const systemHealth = feeds.length > 0 ? (onlineFeeds / feeds.length) * 100 : 100;
+
+  let healthColor = 'text-lcd-green';
+  if (systemHealth < 75) healthColor = 'text-yellow-500';
+  if (systemHealth < 50) healthColor = 'text-red-500';
 
   return (
     <div className="space-y-4 mb-8">

@@ -21,21 +21,6 @@ export default function PredictivePage() {
     const [comparisonData, setComparisonData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        if (feeds.length > 0 && !selectedFeed) {
-            setSelectedFeed(feeds[0].feed_id);
-        }
-    }, [feeds]);
-
-    useEffect(() => {
-        if (selectedFeed) {
-            const feed = feeds.find(f => f.feed_id === selectedFeed);
-            if (feed && feed.config && feed.config.latitude) {
-                fetchComparisonData(feed.config.latitude, feed.config.longitude);
-            }
-        }
-    }, [selectedFeed]);
-
     const fetchComparisonData = async (lat: number, lon: number) => {
         setLoading(true);
         try {
@@ -50,6 +35,23 @@ export default function PredictivePage() {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (feeds.length > 0 && !selectedFeed) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect -- selects the first feed once async feed metadata arrives; no render-time equivalent for async data
+            setSelectedFeed(feeds[0].feed_id);
+        }
+    }, [feeds]);
+
+    useEffect(() => {
+        if (selectedFeed) {
+            const feed = feeds.find(f => f.feed_id === selectedFeed);
+            if (feed && feed.config && feed.config.latitude) {
+                // eslint-disable-next-line react-hooks/set-state-in-effect -- mount/subscription fetch on feed select; the sanctioned effect use
+                fetchComparisonData(feed.config.latitude, feed.config.longitude);
+            }
+        }
+    }, [selectedFeed]);
 
     return (
         <AuthGuard>

@@ -13,7 +13,9 @@ export const useVehicleRegistry = (
 ) => {
     const vehicleRegistryRef = useRef<Map<string, VehicleFrontendData>>(new Map());
     const lastSeenVehicleTimeRef = useRef<Map<string, number>>(new Map());
-    const lastVehiclesUpdateTimeRef = useRef<number>(performance.now());
+    // Throttle anchor; 0 is equivalent here (first update always passes the
+    // interval check) and avoids the impure performance.now() call in render.
+    const lastVehiclesUpdateTimeRef = useRef<number>(0);
     const STATE_UPDATE_INTERVAL = 200;
 
     const clear = useCallback(() => {

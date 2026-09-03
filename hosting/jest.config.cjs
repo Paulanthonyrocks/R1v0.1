@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- jest.config.cjs is CommonJS by necessity; require() is the correct import style here. */
 const nextJest = require('next/jest');
 
 const createJestConfig = nextJest({

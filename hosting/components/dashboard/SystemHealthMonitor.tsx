@@ -7,6 +7,9 @@ import { Activity, Cpu, Database, HardDrive, Server, ShieldAlert } from 'lucide-
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from '@/lib/utils';
 
+// Static display label, generated once: per-render regeneration flickered it.
+const HASH_LABEL = Math.random().toString(16).slice(2, 6).toUpperCase();
+
 interface HealthStats {
     system: {
         cpu_percent: number;
@@ -139,7 +142,7 @@ export const SystemHealthMonitor: React.FC = () => {
                             <div className="h-2 w-2 rounded-full bg-lcd-green animate-pulse" />
                             <span className="text-[9px] font-black uppercase opacity-60">Neural Engine Heartbeat: Nominal</span>
                         </div>
-                        <span className="text-[8px] opacity-30 font-mono uppercase">HASH: 0x{Math.random().toString(16).slice(2, 6).toUpperCase()}</span>
+                        <span className="text-[8px] opacity-30 font-mono uppercase">HASH: 0x{HASH_LABEL}</span>
                     </div>
                 </div>
             </CardContent>

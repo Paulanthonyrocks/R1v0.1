@@ -24,15 +24,14 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
   const { feeds, startFeed, stopFeed, restartFeed } = useRealtimeUpdates();
   const feed = React.useMemo(() => feeds.find(f => f.feed_id === feed_id), [feeds, feed_id]);
 
-  if (!feed) {
-    return (
-      <div className="bg-black aspect-video flex items-center justify-center">
-        <Loader2 className="animate-spin h-10 w-10 text-lcd-text/20" />
-      </div>
-    );
-  }
-
-  const { name: feedName, source, status } = feed;
+  // Hooks must run unconditionally (same order every render). The !feed
+  // loader return lives just before the main JSX return below — previously
+  // it sat here, so a feed arriving after mount changed the hook count
+  // mid-life (fewer-hooks render followed by more-hooks render), which
+  // React forbids. All initializers below tolerate an undefined feed.
+  const feedName = feed?.name;
+  const source = feed?.source;
+  const status = feed?.status;
   const { token, userRole } = useAuth();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
 
@@ -45,16 +44,16 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     const [isToggling, setIsToggling] = useState<boolean>(false);
     const [showOverlays, setShowOverlays] = useState<boolean>(true);
-    const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(feed.config?.show_bounding_boxes ?? true);
-    const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(feed.config?.show_vehicle_details ?? true);
-    const [showTrajectories, setShowTrajectories] = useState<boolean>(feed.config?.show_trajectories ?? true);
+    const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(feed?.config?.show_bounding_boxes ?? true);
+    const [showVehicleDetails, setShowVehicleDetails] = useState<boolean>(feed?.config?.show_vehicle_details ?? true);
+    const [showTrajectories, setShowTrajectories] = useState<boolean>(feed?.config?.show_trajectories ?? true);
     const [showROI, setShowROI] = useState<boolean>(false);
     const [showExclusionZones, setShowExclusionZones] = useState<boolean>(true);
     const [showLaneOverlays, setShowLaneOverlays] = useState<boolean>(false);
     const [showAllDetections, setShowAllDetections] = useState<boolean>(false);
     const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
     const [showControlsPanel, setShowControlsPanel] = useState<boolean>(false);
-    const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed.config?.static_object_filter_enabled ?? false);
+    const [staticFilterEnabled, setStaticFilterEnabled] = useState<boolean>(feed?.config?.static_object_filter_enabled ?? false);
 
     // Refs for the render loop to avoid effect restarts
     const renderOptionsRef = useRef({
@@ -78,7 +77,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
 
     const [roiMode, setRoiMode] = useState<'roi' | 'exclusion' | null>(null);
     const [roiPoints, setRoiPoints] = useState<{ x: number, y: number }[]>([]);
-    const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed.config?.exclusion_zones ?? []);
+    const [exclusionZones, setExclusionZones] = useState<{ x: number, y: number }[][]>(feed?.config?.exclusion_zones ?? []);
     const [currentExclusionPoints, setCurrentExclusionPoints] = useState<{ x: number, y: number }[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -585,6 +584,14 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
             />
         </>
     );
+
+    if (!feed) {
+      return (
+        <div className="bg-black aspect-video flex items-center justify-center">
+          <Loader2 className="animate-spin h-10 w-10 text-lcd-text/20" />
+        </div>
+      );
+    }
 
     return (
         <Card

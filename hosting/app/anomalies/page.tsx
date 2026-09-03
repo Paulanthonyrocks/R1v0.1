@@ -136,9 +136,9 @@ const AnomaliesPage = () => {
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                {filteredAlerts.map((alert) => (
+                                {filteredAlerts.map((alert, i) => (
                                     <AnomalyItem
-                                        key={alert.id || (alert.timestamp instanceof Date ? alert.timestamp.toISOString() : alert.timestamp) + Math.random()}
+                                        key={alert.id || `${alert.timestamp instanceof Date ? alert.timestamp.toISOString() : alert.timestamp}-${i}`}
                                         {...alert}
                                         onSelect={() => handleSelect(alert)}
                                     />

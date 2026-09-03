@@ -109,6 +109,7 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
     useEffect(() => {
         const subscriptions: (() => void)[] = [];
 
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- WS subscription setup reads connection state on mount; the sanctioned effect use
         updateConnectionState();
 
         // Only initialize if already authenticated on mount

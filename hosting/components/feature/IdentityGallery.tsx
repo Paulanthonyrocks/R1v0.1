@@ -121,7 +121,6 @@ const IdentityGallery: React.FC<IdentityGalleryProps> = ({ globalId, onClose }) 
                                 <div key={idx} className="p-2 border border-lcd-bg/10 bg-white/[0.02] space-y-2">
                                     <div className="flex justify-between items-center text-[8px] opacity-40 uppercase">
                                         <span>Sample #{idx + 1}</span>
-                                        <span>Confidence: {(Math.random() * 0.1 + 0.85).toFixed(3)}</span>
                                     </div>
                                     <div className="h-8 w-full flex items-end gap-[1px]">
                                         {/* Visualize a subset of the embedding vector for display */}

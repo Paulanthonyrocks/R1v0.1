@@ -29,7 +29,8 @@ const DashboardPage: React.FC = () => {
   const [kpiHistory, setKpiHistory] = useState<TrendDataPoint[]>([]);
   const [selectedAnomaly, setSelectedAnomaly] = useState<AlertData | null>(null);
   const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
-  const [showLazyWidgets, setShowLazyWidgets] = useState(false);
+  const [lazyReady, setLazyReady] = useState(false);
+  const showLazyWidgets = lazyReady && activeTab === 'overview';
   const hasAttemptedHistoryLoad = useRef(false);
   const feedRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -49,6 +50,7 @@ const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     if (kpis) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- appends a new point when fresh KPIs arrive over WS; event-sourced history, not derivable during render
       setKpiHistory(prev => {
         // No client-side re-smoothing: the backend already EMA-windows the
         // per-feed metrics (metrics_averaging_window_seconds) and averages the
@@ -110,13 +112,14 @@ const DashboardPage: React.FC = () => {
     }
   }, [isReady, feeds, kpiHistory.length]);
 
-  // Lazy-load non-critical widgets after dashboard is ready
+  // Lazy-load non-critical widgets after dashboard is ready. lazyReady is
+  // the timer gate; visibility is derived during render so leaving the
+  // overview tab hides widgets without a sync setState in the effect.
   useEffect(() => {
     if (isReady && activeTab === 'overview') {
-      const timer = setTimeout(() => setShowLazyWidgets(true), 500);
+      const timer = setTimeout(() => setLazyReady(true), 500);
       return () => clearTimeout(timer);
     }
-    if (activeTab !== 'overview') setShowLazyWidgets(false);
   }, [isReady, activeTab]);
 
   const calculateTrend = (history: TrendDataPoint[], key: keyof TrendDataPoint) => {
@@ -224,7 +227,7 @@ const DashboardPage: React.FC = () => {
                           <div className="flex items-center gap-2">
                               <Terminal size={12} className="text-lcd-text/60" />
                               <span className="terminal-text text-[10px]">OS.TRAFFIC_HUB.SYS.01 // SESSION_ACTIVE</span>
-                              <span className="text-[10px] opacity-40">// 128-BIT ENCRYPTION</span>
+                              <span className="text-[10px] opacity-40">{'// 128-BIT ENCRYPTION'}</span>
                           </div>
                           <div className="flex gap-1 h-6">
                               <button 
@@ -405,9 +408,9 @@ const DashboardPage: React.FC = () => {
                             )}
                             
                             <div className="space-y-4">
-                                {alerts.slice().reverse().map((alert) => (
+                                {alerts.slice().reverse().map((alert, i) => (
                                 <AnomalyItem
-                                    key={alert.id || new Date(alert.timestamp).toISOString() + Math.random()}
+                                    key={alert.id || `${new Date(alert.timestamp).toISOString()}-${i}`}
                                     timestamp={new Date(alert.timestamp).toLocaleTimeString()}
                                     severity={alert.severity || 'info'}
                                     message={alert.message}

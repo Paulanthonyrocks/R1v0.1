@@ -49,6 +49,7 @@ const ReportAnomalyModal = ({ open, onOpenChange, onSubmit }: ReportAnomalyModal
   // Reset form when modal opens/closes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form reset on open/close transition; prop-change reset has no render-time equivalent
       setFormData(initialFormData);
       setError(null);
     }

@@ -23,7 +23,11 @@ function legacyGetWsUrl(path: string): string {
   return getBackendWsURL(path);
 }
 
-const WS_BASE_URL = legacyGetWsUrl('/api/v1/ws');
+// Resolved lazily (not at module load) so the value honors the runtime env
+// rather than whatever was set when the module graph first evaluated.
+function getWsBaseUrl(): string {
+  return legacyGetWsUrl('/api/v1/ws');
+}
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
  const { token, loading } = useAuth();
@@ -32,7 +36,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
  // Initialize the WebSocket client exactly once on mount.
  // This ensures a fresh instance per mount cycle and avoids singleton state issues.
  useEffect(() => {
-   const clientInstance = getOrCreateWebSocketClient(WS_BASE_URL);
+   const clientInstance = getOrCreateWebSocketClient(getWsBaseUrl());
+   // eslint-disable-next-line react-hooks/set-state-in-effect -- stores the singleton client on mount; one-time initialization, not derived state
    setClient(clientInstance);
    clientInstance.activate();
    

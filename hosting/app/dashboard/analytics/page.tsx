@@ -21,6 +21,7 @@ const AnalyticsPage = () => {
 
   useEffect(() => {
     if (kpis) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- appends a new point when fresh KPIs arrive over WS; event-sourced history, not derivable during render
       setKpiHistory(prev => {
         const newPoint: TrendDataPoint = {
           timestamp: new Date().toISOString(),

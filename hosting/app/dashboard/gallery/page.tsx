@@ -48,6 +48,7 @@ export default function GalleryPage() {
     };
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial backend load on mount + WS subscription; the sanctioned effect use
         fetchIncidentsWithSnapshots();
 
         if (!client) return;

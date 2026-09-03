@@ -28,6 +28,7 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
 
   useEffect(() => {
     if (!url) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stream reset when the URL is cleared; prop-change reset has no render-time equivalent
       setFrameData(null);
       setError(null);
       setIsLoading(false);

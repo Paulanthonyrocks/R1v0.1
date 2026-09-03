@@ -59,22 +59,14 @@ export class APIClient {
         if (!APIClient.instance) {
             APIClient.instance = new APIClient(options);
             APIClient._options = options; // Store the options used for the first instance
-        } else {
-            // If an instance already exists, ensure the options are the same
-            if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
-                console.log(`APIClient.getInstance called with different options. Updating instance...`);
-                
-                // Always use the provided baseURL from options
-                APIClient.instance.baseURL = options.baseURL;
-                console.log(`APIClient baseURL updated to: ${APIClient.instance.baseURL}`);
-                
-                // Update timeout if it changed
-                if (options.timeout !== undefined && options.timeout !== APIClient._options.timeout) {
-                    APIClient.instance.timeout = options.timeout;
-                }
-                
-                APIClient._options = options;
+        } else if (JSON.stringify(options) !== JSON.stringify(APIClient._options)) {
+            // If an instance already exists, ensure the options are the same.
+            // Always use the provided baseURL from options.
+            APIClient.instance.baseURL = options.baseURL;
+            if (options.timeout !== undefined && options.timeout !== APIClient._options.timeout) {
+                APIClient.instance.timeout = options.timeout;
             }
+            APIClient._options = options;
         }
         return APIClient.instance;
     }
@@ -218,16 +210,5 @@ export class APIClient {
 
     async delete<T>(path: string): Promise<T> {
         return this.request<T>(path, { method: 'DELETE' });
-    }
-
-    // Token status check
-    async checkTokenStatus(): Promise<boolean> {
-        try {
-            await this.get('/api/v1/token/status');
-            return true;
-        } catch {
-            // Ignore error details, just return false if status check fails
-            return false;
-        }
     }
 }
