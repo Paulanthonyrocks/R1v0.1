@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const API_BASE_URL = getBackendBaseURL();
@@ -25,20 +26,14 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
             if (!token) return;
             setLoading(true);
             try {
-                let url = `${API_BASE_URL}/api/v1/analytics/heatmap?hours=${hours}`;
-                if (feed_id) url += `&feed_id=${feed_id}`;
-                if (global_id) url += `&global_id=${global_id}`;
-                
-                const res = await fetch(url, {
-                    headers: {
-                        'Bypass-Tunnel-Reminder': 'true',
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                if (res.ok) {
-                    const points = await res.json();
-                    drawHeatmap(points);
-                }
+                const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+                const params: Record<string, string> = { hours: String(hours) };
+                if (feed_id) params.feed_id = feed_id;
+                if (global_id) params.global_id = global_id;
+                const points = await apiClient.get<{center_x: number, center_y: number}[]>(
+                    '/api/v1/analytics/heatmap', params
+                );
+                drawHeatmap(points);
             } catch (e) {
                 console.error("Heatmap fetch failed:", e);
             } finally {

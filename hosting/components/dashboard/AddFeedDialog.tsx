@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open: boolean) => void }) => {
     const [loading, setLoading] = useState(false);
@@ -43,33 +45,12 @@ const AddFeedForm = ({ token, setOpen }: { token: string | null, setOpen: (open:
             if (formData.latitude) body.latitude = parseFloat(formData.latitude);
             if (formData.longitude) body.longitude = parseFloat(formData.longitude);
 
-            // AUDIT FIX (2026-08-24): keep the Next-rewrite path but attach ?password= so a
-            // loca.lt-tunneled deployment doesn't 503 on the interstitial (parity with
-            // withTunnelPassword used by APIClient).
-            const feedUrl = new URL('/api/v1/feeds/', window.location.origin);
-            const pw = process.env.NEXT_PUBLIC_LOCALTUNNEL_PASSWORD;
-            if (pw) feedUrl.searchParams.set('password', pw);
-            const res = await fetch(feedUrl.toString(), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                    'Bypass-Tunnel-Reminder': 'true'
-                },
-                body: JSON.stringify(body)
-            });
-
-            if (!res.ok) {
-                // AUDIT FIX (2026-08-24): the tunnel's 503 interstitial is HTML —
-                // res.json() threw a parse error that replaced the real message.
-                let detail = `Failed to add feed (HTTP ${res.status})`;
-                try {
-                    const data = await res.json();
-                    if (data?.detail) detail = data.detail;
-                } catch {
-                    /* non-JSON body — keep status fallback */
-                }
-                throw new Error(detail);
+            const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+            try {
+                await apiClient.post('/api/v1/feeds/', body);
+            } catch (err: any) {
+                const detail = err?.data?.detail || err?.message || 'Failed to add feed';
+                throw new Error(typeof detail === 'string' ? detail : 'Failed to add feed');
             }
 
             console.log("[AddFeedDialog] Success, closing dialog");

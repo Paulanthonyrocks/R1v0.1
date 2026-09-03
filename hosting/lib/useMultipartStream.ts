@@ -47,8 +47,9 @@ const useMultipartStream = (url: string | null, token: string | null): Multipart
         const headers: HeadersInit = {
             'Bypass-Tunnel-Reminder': 'true'
         };
-        // Only add Authorization header for relative URLs and if token is provided
-        if (url && url.startsWith('/') && token) {
+        // Attach Bearer whenever we have one: relative URLs need it for the
+        // backend, absolute tunnel URLs need it too (previously skipped).
+        if (token) {
           headers['Authorization'] = `Bearer ${token}`;
         }
 

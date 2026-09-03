@@ -1,0 +1,51 @@
+R1v0.1 Full-Stack Audit 2026-08-23 — consolidated (4 agents + manual verification)
+=====================================================================
+
+CONFIRMED HIGH (verified in source by ox-alpha):
+H1. routers dict-get on pydantic User -> AttributeError -> 500 on whole endpoint classes.
+    config.py:58 (GET /config always 500s), alerts.py:115/169 (delete+ack broken),
+    events.py, weather.py, signals.py set_phase, video.py:58. Mechanical fix: attribute access.
+H2. GET /api/v1/snapshots/{path} (main.py:502) has NO auth; startswith() path guard
+    misses os.sep suffix (sibling-dir escape). Camera snapshots public.
+H3. video.py recording output_filename -> os.path.join unsanitized -> ../../ arbitrary
+    mp4 write (authenticated). video_processor.py:125.
+H4. CORS origin regex unanchored ('contains localhost') + allow_credentials=True in prod.
+F1(frontend). Loop-reset threshold mismatch: video-worker resets at 256-backjump,
+    hooks at 100. Wrap jumps in (100,256] pass hooks but wedge worker guard forever
+    -> frozen feed with clean-looking console. VERIFIED thresholds differ.
+F2(frontend). JSON VIDEO_FRAME branch bypasses gateFrameForWorker entirely
+    (WebSocketClient.ts:747) despite comment claiming otherwise; legacy JSON path also
+    pins frame_index=0 -> one-frame-then-wedge if that path is ever exercised.
+F5(frontend). useMultipartStream.ts:113 object URL per JPEG frame never revoked -> leak.
+
+CONFIRMED MEDIUM:
+M-a. result_processor.py:300-318 ACK loop: latent UnboundLocalError on non-Redis backend;
+     falsy msg_id double-appends item. Prod path (RedisStreamQueue 2-tuple) safe today.
+M-b. Ops metrics EMA'd: combined_metrics = WorkerMetrics.to_dict()+traffic keys;
+     frames_processed/dropped/errors/uptime/lifetime_fps NOT in _NON_SMOOTHED_METRIC_KEYS
+     -> alpha=1/30 lag on ops telemetry (VERIFIED keys missing from exclusion set).
+M-c. inference_worker batch-fill catches only Empty/IndexError; redis.ConnectionError
+     escapes to fatal -> worker respawn + model reload churn per Redis blip.
+M-d. reid_manager pub/sub listener recreates pubsub without closing old socket on retry;
+     shutdown never joins _sub_thread. (VERIFIED source.)
+M-e. analytics_service fallback calls self._traffic_predictor._rule_based_prediction
+     when predictor property returns None (prediction_scheduler.enabled=false in shipped
+     yaml) -> AttributeError. analysis.py:150 caller has no try/except.
+M-f. feed_manager KPI broadcasts hardcode active_incidents_count=0 (:1891/:1938).
+M-g. central_output stream now carries frame bytes (~50KB) with maxlen=10000 default
+     = ~500MB steady Redis usage post Option-A fix. Bounded but new ceiling.
+M-h. _per_worker_feed_count never decremented on feed stop -> slot routing drifts.
+M-i. monitoring._last_braking_fire per-vehicle map never pruned.
+M-j. Frontend AUTH_FAILURE retry loop can spin 5s-forever with stale token; stale
+     Authorization header after logout; RealtimeStateContext re-subscribes all feeds
+     each reconnect bypassing ref-counting.
+
+LOW / hygiene:
+- SurveillanceFeed conditional early-return before hooks (crash class if feed vanishes mid-render).
+- exclusion zones drawn from stale state in rAF loop; roiStateRef exists but unused in draw.
+- videoStreamManager.clearRegistry + resetFeedSubscriptionState + destroyWebSocketClient: dead cleanup.
+- video-worker.js has no onerror handler.
+- config drift: shm_resume_fraction/shm_shed_max_age_seconds/feed_status_broadcast_interval
+  undocumented in yaml; SLOT_COUNT comments stale (6 vs 4); speed_limit duplicate nesting.
+- connection_manager.shutdown() partial cleanup; encryption fails open; TunnelSecretMiddleware
+  re-exposes password into query_string logs; rate-limit tiers dead code.

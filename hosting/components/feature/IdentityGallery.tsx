@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Fingerprint, Clock, Tag, Database } from 'lucide-react';
+import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface IdentityGalleryProps {
     globalId: string;
@@ -27,10 +29,10 @@ const IdentityGallery: React.FC<IdentityGalleryProps> = ({ globalId, onClose }) 
         const fetchGallery = async () => {
             setLoading(true);
             try {
-                // Assuming API_BASE_URL is handled by your fetch wrapper or relative
-                const response = await fetch(`/api/v1/vehicles/global/${globalId}/gallery`);
-                if (!response.ok) throw new Error('Failed to fetch identity gallery');
-                const result = await response.json();
+                const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+                const result = await apiClient.get<GalleryData>(
+                    `/api/v1/vehicles/global/${globalId}/gallery`
+                );
                 setData(result);
             } catch (err: any) {
                 setError(err.message);

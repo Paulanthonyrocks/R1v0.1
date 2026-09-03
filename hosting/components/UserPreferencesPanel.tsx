@@ -27,22 +27,42 @@ interface UserPreferences {
   };
 }
 
+const STORAGE_KEY = 'r1v01.user-preferences.v1';
+
+const DEFAULT_PREFS: UserPreferences = {
+  routePreferences: {
+    preferHighways: true,
+    preferScenicRoutes: false,
+    avoidTolls: false,
+    commonDestinations: [],
+  },
+  trafficAlerts: {
+    notifyAheadMinutes: 10,
+    severityThreshold: 2,
+    includeWeather: true,
+    includeEvents: true,
+  },
+};
+
 const UserPreferencesPanel: React.FC = () => {
   const { userRole } = useAuth();
   const isAdmin = userRole === UserRole.ADMIN;
-  const [prefs, setPrefs] = useState<UserPreferences | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch('/api/v1/user-preferences', {
-      headers: { 'Bypass-Tunnel-Reminder': 'true' }
-    })
-      .then(res => res.json())
-      .then(setPrefs)
-      .catch(() => setError('Failed to load preferences'))
-      .finally(() => setLoading(false));
-  }, []);
+  // No backend route exists for user preferences (verified: no matches in
+  // backend/app for user-preferences). Persist locally so the panel is real
+  // functionality, not a fetch to a 404. Lazy initializer keeps the read
+  // out of an effect (no set-state-in-effect). When a backend endpoint
+  // lands, swap for APIClient calls.
+  const [prefs, setPrefs] = useState<UserPreferences | null>(() => {
+    if (typeof window === 'undefined') return DEFAULT_PREFS;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw) } : DEFAULT_PREFS;
+    } catch {
+      return DEFAULT_PREFS;
+    }
+  });
+  const [loading, setLoading] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     if (!prefs) return;
@@ -69,25 +89,18 @@ const UserPreferencesPanel: React.FC = () => {
   };
 
   const handleSave = async () => {
+    if (!prefs) return;
     setLoading(true);
-    setError(null);
     try {
-      await fetch('/api/v1/user-preferences', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Bypass-Tunnel-Reminder': 'true'
-        },
-        body: JSON.stringify(prefs),
-      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+      setSavedAt(new Date().toLocaleTimeString());
     } catch {
-      setError('Failed to save preferences');
+      setSavedAt(null);
     }
     setLoading(false);
   };
 
   if (loading && !prefs) return <div className="text-center py-20 uppercase font-bold animate-matrix-pulse text-lcd-bg">Accessing Profile Data...</div>;
-  if (error) return <div className="text-red-500 border border-red-500 p-4 uppercase font-bold">{error}</div>;
   if (!prefs) return null;
 
   return (
@@ -101,6 +114,7 @@ const UserPreferencesPanel: React.FC = () => {
           >
             <Save size={18} className="mr-2" /> Save Config
           </Button>
+          {savedAt && <span className="text-[10px] uppercase opacity-60">Saved {savedAt} (local)</span>}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

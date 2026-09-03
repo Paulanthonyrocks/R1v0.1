@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 const API_BASE_URL = getBackendBaseURL();
@@ -38,15 +39,11 @@ export default function PredictivePage() {
     const fetchComparisonData = async (lat: number, lon: number) => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/analytics/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`, {
-                headers: {
-                    'Bypass-Tunnel-Reminder': 'true'
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setComparisonData(data);
-            }
+            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+            const data = await apiClient.get<any[]>(
+                `/api/v1/analytics/forecast-vs-actual?lat=${lat}&lon=${lon}&hours=24`
+            );
+            setComparisonData(data);
         } catch (e) {
             console.error("Failed to fetch comparison:", e);
         } finally {
