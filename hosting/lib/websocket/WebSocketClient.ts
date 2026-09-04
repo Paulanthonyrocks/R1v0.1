@@ -146,6 +146,8 @@ export class WebSocketClient implements IWebSocketClient {
     private statusListeners: Set<(status: string, message?: string) => void> = new Set();
     private shouldReconnect: boolean = true;
     private unsubscribeTokenRefresh: (() => void) | null = null;
+    // Sampled frame-heartbeat counters per feed (see onmessage handler).
+    private frameHeartbeatCount: Record<string, number> = {};
     private connectionPromise: Promise<void> | null = null;
     private resolveConnection: (() => void) | null = null;
     private rejectConnection: ((reason: any) => void) | null = null;
@@ -222,7 +224,16 @@ export class WebSocketClient implements IWebSocketClient {
                         this.releasePendingFrame(feedId);
                     }
                 } else {
-                    console.log(`[WebSocketClient] Worker returned frame for feed: ${feedId}`);
+                    // Heartbeat, sampled: per-frame success at 5fps/feed wrote
+                    // ~7k lines/32min to the persisted log, and demoting to
+                    // debug doesn't help (the forwarder persists debug too --
+                    // video-worker.js:42 proves it). One line per 300 frames
+                    // per feed (~1/min) keeps the liveness signal.
+                    const n = ((this.frameHeartbeatCount[feedId] || 0) + 1);
+                    this.frameHeartbeatCount[feedId] = n;
+                    if (n === 1 || n % 300 === 0) {
+                        console.log(`[WebSocketClient] Worker frame heartbeat for feed: ${feedId} (frames=${n})`);
+                    }
                     
                     // Decrement pending frames counter
                     if (feedId) {
