@@ -1,14 +1,10 @@
 # NOTE: accel_threshold_mps2 lives ONLY under behavior_analysis (the
 # monitoring module reads it there). A top-level copy previously sat at the
 # top of this file and silently drifted -- removed 2026-08-17.
-advanced_analytics:
-  enabled: false
 analytics_service:
   node_congestion_broadcast:
     enabled: false
     interval: 300
-  traffic_prediction:
-    enabled: false
 anomaly_detection:
   enabled: false
   model_path: models/anomaly_detector_model.h5
@@ -627,8 +623,6 @@ performance:
   # above is the relief, not pool growth.
   shm_stale_timeout: 60.0
   video_gpu_acceleration: true
-personalized_routing:
-  enabled: false
 perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
 pixels_per_meter: 30
@@ -724,8 +718,6 @@ roi_processing:
   - 480
   enabled: false
   polygon_points: null
-route_optimization:
-  enabled: false
 safety_analytics:
   # Wrong-way cosine threshold (SafetyMonitor._check_wrong_way): dot of vehicle
   # velocity vs lane flow vector below this flags wrong-way. Default -0.8.
@@ -739,8 +731,6 @@ safety_analytics:
   # Flow-vector diagnostic log throttle (seconds): on-change logs alone wrote
   # 841 lines/34min from ~0.01/frame vector jitter.
   flow_log_interval_sec: 60.0
-simulation:
-  enabled: false
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:
@@ -862,12 +852,6 @@ vehicle_detection:
   static_movement_threshold: 25
   static_object_filter_enabled: true
   static_object_timeout: 20
-  # NOTE (crack #5): flag drift resolved. The predictor is gated by
-  # analytics_service.traffic_prediction.enabled (read by services.py and
-  # analytics_service.py). This nested copy is the SAME flag — keep its value
-  # synced to that canonical one (false) so operators see one source of truth.
-  traffic_prediction:
-    enabled: false
   traffic_predictor:
     model_path: models/traffic_predictor_model.h5
   use_openvino: true

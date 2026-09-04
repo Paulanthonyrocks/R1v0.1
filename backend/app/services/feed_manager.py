@@ -886,7 +886,10 @@ class FeedManager:
         self._startup_ready.set() # Allow scaling monitor to resume
 
         if self._prediction_scheduler:
-            if self.config.get("prediction_scheduler", {}).get("enabled", True):
+            # Single authority is prediction_scheduler.enabled (default False,
+            # matching services.py and analytics_service.py). A missing key
+            # must not start the scheduler.
+            if self.config.get("prediction_scheduler", {}).get("enabled", False):
                 await self._prediction_scheduler.start()
                 self.logger.info("Prediction scheduler started.")
             else:
