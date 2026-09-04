@@ -123,8 +123,16 @@ class GlobalReIDManager:
                     "gallery_ids": self.gallery_ids,
                     "gallery_matrix": self.gallery_matrix
                 }
-            with open(self.persistence_path, 'wb') as f:
+            # Atomic write: every inference worker process owns a manager
+            # pointed at this same path and saves on its own cadence, so a
+            # direct pickle.dump can interleave into a torn file that fails
+            # to unpickle on restart. Write tmp + os.replace instead. The tmp
+            # name carries the pid: a shared tmp path lets concurrent writers
+            # steal/rename each other's temp file (ENOENT + torn renames).
+            tmp_path = "%s.%d.tmp" % (self.persistence_path, os.getpid())
+            with open(tmp_path, 'wb') as f:
                 pickle.dump(state, f)
+            os.replace(tmp_path, self.persistence_path)
             logger.info(f"ReID state saved to {self.persistence_path}")
         except Exception as e:
             logger.error(f"Failed to save ReID state: {e}")

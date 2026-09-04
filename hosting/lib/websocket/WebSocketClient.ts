@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
-import { appendTunnelPassword } from '../api/backendBaseUrl';
+import { appendTunnelPassword, sanitizeTunnelUrl } from '../api/backendBaseUrl';
 import { resetFeedSubscriptionState } from './feedSubscriptionState';
 
 interface WebSocketErrorEvent extends Event {
@@ -485,7 +485,7 @@ export class WebSocketClient implements IWebSocketClient {
                 // the URL already carries one.
                 this.appendTunnelPassword(url);
 
-                console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, url.toString());
+                console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, sanitizeTunnelUrl(url.toString()));
 
                 this.ws = new WebSocket(url.toString());
                 this.ws.binaryType = 'arraybuffer';

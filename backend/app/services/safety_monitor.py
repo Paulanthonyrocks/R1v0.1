@@ -36,10 +36,18 @@ class SafetyMonitor:
         self.alert_cooldowns: Dict[str, float] = {}
         self.alert_cooldown_sec = 30.0
 
+        # Lane gate (Sep-03 run: 20/20 wrong-way flags on Feed_2, all lane=-1).
+        # With no lane model output the consensus is one global direction per
+        # feed, so the opposite carriageway of a two-way road always reads as
+        # wrong-way. Skip flagging until a real lane id is present.
+        self.wrong_way_require_lane = self.safety_config.get("wrong_way_require_lane", True)
+        self._lane_skip_warned: set = set()
+
         # Diagnostic: remember last-logged flow vector per feed so we can see the
-        # learned consensus without spamming every frame. A runaway wrong-way
-        # storm is attributable to a BAD consensus (vector points the wrong way)
-        # vs a BAD velocity (mis-association flips vx/vy) -- this surfaces which.
+        # learned consensus without spamming every frame. The vector jitters
+        # ~0.01/frame, and log-on-change alone wrote 841 lines/34min, so a
+        # change is logged at most every flow_log_interval_sec.
+        self.flow_log_interval_sec = float(self.safety_config.get("flow_log_interval_sec", 60.0))
         self._last_flow_log: Dict[str, tuple] = {}
 
     def update(self, feed_id: str, vehicles: List[Dict], timestamp: float) -> List[Dict]:
@@ -84,32 +92,48 @@ class SafetyMonitor:
                 source = "static"
                 
             if effective_vector:
-                # Diagnostic: surface the learned/static flow vector once per
-                # change, so a runaway wrong-way storm is attributable to a BAD
-                # consensus (vector points the wrong way) vs a BAD velocity
-                # (mis-association flips vx/vy). Logs only when it changes.
+                # Diagnostic: surface the learned/static flow vector throttled
+                # (on change, at most every flow_log_interval_sec), so a
+                # runaway wrong-way storm stays attributable to a BAD consensus
+                # vs a BAD velocity without flooding the log.
                 _flow_sig = (source, round(confidence, 2), tuple(round(float(x), 2) for x in effective_vector))
-                if self._last_flow_log.get(feed_id) != _flow_sig:
-                    self._last_flow_log[feed_id] = _flow_sig
+                _now_mono = time.monotonic()
+                _last = self._last_flow_log.get(feed_id)
+                if _last is None or (_last[0] != _flow_sig and _now_mono - _last[1] >= self.flow_log_interval_sec):
+                    self._last_flow_log[feed_id] = (_flow_sig, _now_mono)
                     logger.info(
                         f"[{feed_id}] wrong-way flow vector: source={source} "
                         f"conf={confidence:.2f} lane={lane_id} vec={[round(float(x), 2) for x in effective_vector]}"
                     )
-                alert = self._check_wrong_way(feed_id, v, effective_vector, timestamp)
-                if alert:
-                    v["is_wrong_way"] = True
-                    # Diagnostic: what vehicle velocity produced this flag vs the vector?
-                    _vx, _vy = v.get("vx"), v.get("vy")
-                    logger.info(
-                        f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
-                        f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
-                        f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
-                    )
-                    alert["meta"]["vector_source"] = source
-                    alert["meta"]["calibration_confidence"] = confidence
-                    alerts.append(alert)
-                else:
+                # Lane gate: lane=-1 means no lane model output, so the
+                # consensus is global-per-feed and oncoming traffic would
+                # always flag. Skip flagging (one-time note per feed).
+                if lane_id == -1 and self.wrong_way_require_lane:
+                    if feed_id not in self._lane_skip_warned:
+                        self._lane_skip_warned.add(feed_id)
+                        logger.info(
+                            f"[{feed_id}] wrong-way check skipped: lane=-1 "
+                            f"(uncalibrated lanes, global consensus would flag "
+                            f"oncoming traffic)"
+                        )
                     v["is_wrong_way"] = False
+                    alert = None
+                else:
+                    alert = self._check_wrong_way(feed_id, v, effective_vector, timestamp)
+                    if alert:
+                        v["is_wrong_way"] = True
+                        # Diagnostic: what vehicle velocity produced this flag vs the vector?
+                        _vx, _vy = v.get("vx"), v.get("vy")
+                        logger.info(
+                            f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
+                            f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
+                            f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
+                        )
+                        alert["meta"]["vector_source"] = source
+                        alert["meta"]["calibration_confidence"] = confidence
+                        alerts.append(alert)
+                    else:
+                        v["is_wrong_way"] = False
                     
             # Set stopped flag if applicable
             v["is_stopped"] = False

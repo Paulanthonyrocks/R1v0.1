@@ -83,6 +83,30 @@ export function appendTunnelPassword(url: URL): void {
 }
 
 /**
+ * Redact the tunnel password for logging. The `?password=` query param is
+ * mandatory for tunnel deployments (browsers can't set headers on the WS
+ * handshake, and loca.lt only honours the query form at its edge), so the
+ * secret WILL be in request URLs by design -- but it must never reach logs:
+ * console output is persisted to backend/logs and forwarded. Chrome's native
+ * "WebSocket connection to '...' failed" line can't be redacted; everything
+ * the app itself logs can and must go through here.
+ */
+export function sanitizeTunnelUrl(url: string): string {
+  if (!url || url.indexOf('password=') === -1) return url;
+  try {
+    const isAbsolute = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
+    const urlObj = new URL(url, 'http://redact.local');
+    if (urlObj.searchParams.has('password')) {
+      urlObj.searchParams.set('password', 'REDACTED');
+    }
+    const out = urlObj.toString();
+    return isAbsolute ? out : out.replace('http://redact.local', '');
+  } catch {
+    return url.replace(/([?&]password=)[^&#]*/g, '$1REDACTED');
+  }
+}
+
+/**
  * HTTP base URL used for REST + snapshot asset URLs.
  *
  * Strict env-first semantic: if NEXT_PUBLIC_API_BASE_URL is set we use it
