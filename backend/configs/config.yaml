@@ -153,9 +153,11 @@ lane_bands:
   # Position-derived lane ids (CoreModule._assign_lane_band). The CV lane
   # detector is disabled and nothing else assigns track["lane"], so without
   # this every vehicle rides lane=-1. N vertical bands over the ROI x-range
-  # (frame width when no ROI); lane ids 0..N-1, -1 = unknown/off.
+  # (frame width when no ROI); lane ids 0..N-1, -1 = unknown/off. N=6 matches
+  # a 3+3 two-way road (one band per real lane); a band that still straddles
+  # both directions trips the two-way verdict instead of storming.
   enabled: true
-  num_bands: 3
+  num_bands: 6
 log_files:
   allowed_log_files:
   - backend_main.log
