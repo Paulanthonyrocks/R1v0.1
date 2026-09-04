@@ -820,7 +820,10 @@ class AnalyticsService:
         return self._traffic_predictor
 
     async def start_background_tasks(self):
-        if self.config.get("node_congestion_broadcast", {}).get("enabled", True):
+        # Broadcast flag lives under analytics_service (config.yaml) and
+        # defaults False. (A previous read hit a top-level key that does not
+        # exist, so the task started unconditionally.)
+        if self.config.get("analytics_service", {}).get("node_congestion_broadcast", {}).get("enabled", False):
             if self._node_congestion_task is None or self._node_congestion_task.done():
                 self._node_congestion_task = asyncio.create_task(
                     self._broadcast_node_congestion_updates_loop()

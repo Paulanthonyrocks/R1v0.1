@@ -81,7 +81,11 @@ incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
 inference:
-  batch_size: 8
+  # Batch 2: at a 50ms fill timeout ~1-2 tasks arrive per tick per worker, so
+  # batch 8 never filled (GPU ran batch-1/2 forwards paying launch overhead
+  # with none of the amortization). Keep 1 for static-batch TRT engines
+  # (forced in-code). Raise only with timeout + depth evidence.
+  batch_size: 2
   detection_model: models/yolov8n.pt
   device: cuda:0
   # 2 T4 GPUs: start with `num_workers` (=2) — one Worker per GPU at
@@ -346,7 +350,7 @@ logging:
       handlers:
       - consoleHandler
       - mainFileHandler
-      level: DEBUG
+      level: INFO
       propagate: false
     app.services.personalized_routing_service:
       handlers:
@@ -382,7 +386,7 @@ logging:
       handlers:
       - consoleHandler
       - mainFileHandler
-      level: DEBUG
+      level: INFO
       propagate: false
     fastapi:
       handlers:

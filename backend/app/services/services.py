@@ -190,13 +190,19 @@ class ServiceRegistry:
             )
             logger.info("NotificationService initialized.")
 
-            # Weather Service
-            self._weather_service = WeatherService(
-                api_url=config.get("weather_service", {}).get("api_url", ""),
-                api_key=config.get("weather_service", {}).get("api_key", "demo-key"),
-                cache_ttl_minutes=config.get("weather_service", {}).get("cache_ttl_minutes", 10),
-            )
-            logger.info("WeatherService initialized.")
+            # Weather Service (gated: no enabled flag + api_url means no
+            # provider; previously constructed unconditionally and failed
+            # on every call against the empty URL).
+            _weather_cfg = config.get("weather_service", {})
+            if _weather_cfg.get("enabled", False) and _weather_cfg.get("api_url"):
+                self._weather_service = WeatherService(
+                    api_url=_weather_cfg.get("api_url", ""),
+                    api_key=_weather_cfg.get("api_key", "demo-key"),
+                    cache_ttl_minutes=_weather_cfg.get("cache_ttl_minutes", 10),
+                )
+                logger.info("WeatherService initialized.")
+            else:
+                logger.info("WeatherService skipped (disabled or no api_url).")
 
             # Incident Manager
             self._incident_manager = IncidentManager(
@@ -327,13 +333,20 @@ class ServiceRegistry:
     ) -> None:
         """Initialize optional services that can fail without breaking the app."""
         
-        # Event Service
+        # Event Service (gated: no event_service.api_url in config means no
+        # provider; previously constructed unconditionally with an empty URL
+        # and failed on every call).
         try:
-            self._event_service = EventService(
-                api_url=config.get("event_service", {}).get("api_url", ""),
-                cache_ttl_minutes=config.get("event_service", {}).get("cache_ttl_minutes", 30),
-            )
-            logger.info("EventService initialized.")
+            _event_cfg = config.get("event_service", {})
+            if not _event_cfg.get("api_url"):
+                logger.info("EventService skipped (no event_service.api_url).")
+                self._event_service = None
+            else:
+                self._event_service = EventService(
+                    api_url=_event_cfg.get("api_url", ""),
+                    cache_ttl_minutes=_event_cfg.get("cache_ttl_minutes", 30),
+                )
+                logger.info("EventService initialized.")
         except Exception as e:
             logger.warning(f"EventService initialization failed (non-critical): {e}")
             self._event_service = None

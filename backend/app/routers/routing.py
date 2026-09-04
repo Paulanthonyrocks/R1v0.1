@@ -231,18 +231,13 @@ async def optimize_route(
 ) -> Dict[str, Any]:
     logger.info(f"POST /optimize endpoint called by user: {current_user.username}")
     """Get an optimized route with traffic predictions"""
-    try:
-        return await optimization_service.get_optimized_route(
-            start_location=request.start_location,
-            end_location=request.end_location,
-            departure_time=request.departure_time,
-            preferences=request.preferences,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Route optimization failed: {str(e)}",
-        )
+    # Honest refusal: the engine underneath runs on a fake 5x5 grid with
+    # dummy sensor inputs (route_optimizer.py) and no road network. Serving
+    # that as an "AI-optimized route" would be fabricated directions.
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Route optimization is not available: no road network is wired up.",
+    )
 
 
 @router.get(
@@ -255,18 +250,9 @@ async def get_supported_areas(
     _: Dict = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """Get areas where route optimization is available"""
+    # Honest emptiness: the previous hardcoded "Downtown Area" bounds were not
+    # derived from any road network or config. Empty until coverage is real.
     return {
-        "supported_areas": [
-            {
-                "name": "Downtown Area",
-                "bounds": {
-                    "north": 34.0522 + 0.1,
-                    "south": 34.0522 - 0.1,
-                    "east": -118.2437 + 0.1,
-                    "west": -118.2437 - 0.1,
-                },
-                "coverage_level": "high",
-            }
-        ],
+        "supported_areas": [],
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }

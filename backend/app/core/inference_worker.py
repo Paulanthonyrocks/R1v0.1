@@ -1150,7 +1150,7 @@ def inference_worker(
                                                 _xmax,
                                                 ((_db[0] + _db[2]) / 2.0) / _fw2,
                                             )
-                                logger.info(
+                                logger.debug(
                                     f"[Worker {worker_id}][{meta['feed_id']}] det frame={meta['frame_index']} "
                                     f"raw={_n_raw} vehicle_conf={_n_vehicle_conf} after_roi={_n_after_roi} "
                                     f"xmax={_xmax:.2f} "
@@ -1261,7 +1261,7 @@ def inference_worker(
                                 if _c:
                                     _cx.append(_c[0])
                                     _cy.append(_c[1])
-                            logger.info(
+                            logger.debug(
                                 f"[Worker {worker_id}][{_feed_key}] churn frame={f_idx} "
                                 f"live={len(_cur_ids)} new={_n_new} new_cx={_cx[:8]} new_cy={_cy[:8]} "
                                 f"vanish={len(_vanish_ids)} vx={_vx[:8]} vy={_vy[:8]}"

@@ -48,7 +48,7 @@ const RouteHistoryPanel: React.FC = () => {
           start.setMonth(start.getMonth() - 1);
         }
 
-        const response = await axios.get('/api/v1/route-history/analytics', {
+        const response = await axios.get('/api/v1/routes/history/analytics', {
           params: {
             start_date: start.toISOString(),
             end_date: end.toISOString()
