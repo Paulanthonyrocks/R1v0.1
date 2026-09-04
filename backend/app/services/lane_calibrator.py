@@ -11,10 +11,25 @@ class LaneCalibrator:
     Uses a running consensus of normalized velocity vectors.
     """
     
-    def __init__(self, min_samples: int = 20, max_samples: int = 100, confidence_threshold: float = 0.8):
+    def __init__(self, min_samples: int = 20, max_samples: int = 100, confidence_threshold: float = 0.8,
+                 two_way_opposed_fraction: float = 0.03, two_way_min_samples: int = 40,
+                 two_way_sustain_calls: int = 2000):
         self.min_samples = min_samples
         self.max_samples = max_samples
         self.confidence_threshold = confidence_threshold
+        # Two-way verdict: a lane whose samples sustainably oppose the consensus
+        # is bidirectional (or straddles two carriageways), so "wrong-way" is
+        # meaningless there. Legs: enough samples, a non-trivial opposed share
+        # of the CURRENT window (so a resolved distribution clears the verdict),
+        # and that share sustained over enough consecutive add_sample calls to
+        # prove a real stream. The sustain leg is what separates an oncoming
+        # stream from a 2-second lane-changer: calls arrive per vehicle per
+        # frame, so a brief event contributes ~100 calls and never trips 2000,
+        # while a live stream trips it in under a minute. Resets the moment
+        # the window fraction drops under the bar -- no stale verdicts.
+        self.two_way_opposed_fraction = two_way_opposed_fraction
+        self.two_way_min_samples = two_way_min_samples
+        self.two_way_sustain_calls = two_way_sustain_calls
         
         # { feed_id: { lane_id: { "vectors": [], "consensus": list, "confidence": float } } }
         self.lane_data: Dict[str, Dict[int, Dict]] = {}
@@ -62,13 +77,37 @@ class LaneCalibrator:
         alignment = math.sqrt(avg_x**2 + avg_y**2)
         
         if alignment < 0.1:
-            # Random directions, no consensus
+            # Random directions, no consensus (and no two-way verdict either --
+            # leave no stale flag from an earlier distribution).
             data["consensus"] = None
             data["confidence"] = 0.0
+            data["opposed_fraction"] = 0.0
+            data["two_way"] = False
             return
             
         # Normalize consensus vector
         data["consensus"] = [avg_x / alignment, avg_y / alignment]
+
+        # Opposed fraction: share of samples pointing against the consensus.
+        # A real direction-of-travel minority (e.g. a lighter oncoming stream
+        # sharing the band) holds this over the bar across thousands of calls;
+        # a lane-changer clears it in ~2s. NOTE (Sep-04 live): imbalanced
+        # streams (5% opposed, conf 0.9+) still flag the whole minority, so
+        # the fraction bar sits low (0.03) and the sustain leg proves the
+        # stream. Do NOT accumulate opposed counts across recomputes: the
+        # recompute runs per sample, so a 10-sample lane-change would inflate
+        # past any absolute tripwire while sitting in the rolling window.
+        cx, cy = data["consensus"]
+        opposed = sum(1 for v in vectors if v[0] * cx + v[1] * cy < 0)
+        data["opposed_fraction"] = opposed / len(vectors)
+        if data["opposed_fraction"] >= self.two_way_opposed_fraction:
+            data["over_streak"] = data.get("over_streak", 0) + 1
+        else:
+            data["over_streak"] = 0
+        data["two_way"] = (
+            len(vectors) >= self.two_way_min_samples
+            and data["over_streak"] >= self.two_way_sustain_calls
+        )
         
         # Confidence score scales with alignment and sample count
         sample_multiplier = min(1.0, len(vectors) / self.min_samples)
@@ -94,6 +133,24 @@ class LaneCalibrator:
             
         return data["consensus"], data["confidence"]
 
+    def is_two_way(self, feed_id: str, lane_id: int) -> bool:
+        """True when the lane's samples materially oppose its own consensus.
+
+        Mirrors get_flow_vector's lane=-1 fallback so the verdict covers the
+        same consensus SafetyMonitor would judge against.
+        """
+        lane_map = self.lane_data.get(feed_id)
+        if not lane_map:
+            return False
+        data = lane_map.get(lane_id)
+        if (not data or not data["consensus"]) and lane_id != -1 and -1 in lane_map:
+            fallback = lane_map[-1]
+            if fallback["confidence"] > 0.9:
+                data = fallback
+        if not data or not data["consensus"]:
+            return False
+        return bool(data.get("two_way", False))
+
     def is_calibrated(self, feed_id: str, lane_id: int) -> bool:
         """Returns True if the lane has reached the calibration confidence threshold."""
         _, confidence = self.get_flow_vector(feed_id, lane_id)
@@ -108,7 +165,10 @@ class LaneCalibrator:
             lane_id: {
                 "calibrated": data["confidence"] >= self.confidence_threshold,
                 "confidence": round(data["confidence"], 2),
-                "samples": len(data["vectors"])
+                "samples": len(data["vectors"]),
+                "two_way": bool(data.get("two_way", False)),
+                "opposed_fraction": round(data.get("opposed_fraction", 0.0), 3),
+                "over_streak": int(data.get("over_streak", 0)),
             }
             for lane_id, data in self.lane_data[feed_id].items()
         }

@@ -742,6 +742,15 @@ safety_analytics:
   # Flow-vector diagnostic log throttle (seconds): on-change logs alone wrote
   # 841 lines/34min from ~0.01/frame vector jitter.
   flow_log_interval_sec: 60.0
+  # Two-way lane verdict (LaneCalibrator.is_two_way): a lane whose samples
+  # sustainably oppose its own consensus is bidirectional, so wrong-way is
+  # meaningless there and flagging is skipped. Fraction bar sits low because
+  # live imbalanced streams (5% opposed, conf 0.9+) still flag the minority;
+  # the sustain leg (consecutive over-bar add_sample calls) proves a stream
+  # vs a 2-second lane-changer and resets the moment the share drops.
+  two_way_opposed_fraction: 0.03
+  two_way_min_samples: 40
+  two_way_sustain_calls: 2000
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:

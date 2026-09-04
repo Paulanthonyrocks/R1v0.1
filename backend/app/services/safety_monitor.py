@@ -24,8 +24,12 @@ class SafetyMonitor:
         
         # Lane Calibrator (Operational Autonomy)
         self.lane_calibrator = LaneCalibrator(
-            confidence_threshold=self.safety_config.get("calibration_confidence", 0.8)
+            confidence_threshold=self.safety_config.get("calibration_confidence", 0.8),
+            two_way_opposed_fraction=float(self.safety_config.get("two_way_opposed_fraction", 0.03)),
+            two_way_min_samples=int(self.safety_config.get("two_way_min_samples", 40)),
+            two_way_sustain_calls=int(self.safety_config.get("two_way_sustain_calls", 2000)),
         )
+        self._twoway_warned: set = set()
         
         # State Tracking
         # { vehicle_id: { "stopped_since": timestamp, "last_speed": float } }
@@ -105,10 +109,23 @@ class SafetyMonitor:
                         f"[{feed_id}] wrong-way flow vector: source={source} "
                         f"conf={confidence:.2f} lane={lane_id} vec={[round(float(x), 2) for x in effective_vector]}"
                     )
+                # Two-way lane: the band's own samples materially oppose its
+                # consensus (e.g. an oncoming stream sharing the band), so
+                # "wrong-way" is meaningless here. Skip with a one-time note.
+                if self.lane_calibrator.is_two_way(feed_id, lane_id):
+                    _tw_key = (feed_id, lane_id)
+                    if _tw_key not in self._twoway_warned:
+                        self._twoway_warned.add(_tw_key)
+                        logger.info(
+                            f"[{feed_id}] wrong-way check skipped: lane {lane_id} "
+                            f"is two-way (opposed samples share the band)"
+                        )
+                    v["is_wrong_way"] = False
+                    alert = None
                 # Lane gate: lane=-1 means no lane model output, so the
                 # consensus is global-per-feed and oncoming traffic would
                 # always flag. Skip flagging (one-time note per feed).
-                if lane_id == -1 and self.wrong_way_require_lane:
+                elif lane_id == -1 and self.wrong_way_require_lane:
                     if feed_id not in self._lane_skip_warned:
                         self._lane_skip_warned.add(feed_id)
                         logger.info(
