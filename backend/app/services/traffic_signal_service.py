@@ -53,6 +53,14 @@ class TrafficSignalService:
             "default_signals", []
         )
         if not default_signals_config:
+            if self.external_api_url == EXTERNAL_CONTROLLER_API_URL:
+                # No real controller: don't seed fictional intersections.
+                # get_all_signal_states serves [] in this state, so the
+                # dashboard honestly reports "No Controllers Detected".
+                logger.warning(
+                    "No traffic signal controller configured; skipping mock signal seeding."
+                )
+                return
             default_signals_config = [
                 {"signal_id": "sig_101", "location_description": "Main St & First Ave"},
                 {
@@ -106,7 +114,24 @@ class TrafficSignalService:
             f"Broadcasted signal state update for {signal_id} to topic {topic}"
         )
 
+    @property
+    def _has_controller(self) -> bool:
+        # The default external URL is a documentation placeholder (nothing
+        # listens on localhost:8082). Without a configured controller there
+        # is no hardware to read or command, so serve honest emptiness/errors
+        # instead of the seeded mock signals.
+        return self.external_api_url != EXTERNAL_CONTROLLER_API_URL
+
     async def get_all_signal_states(self) -> List[SignalState]:
+        if not self._has_controller:
+            if not getattr(self, "_unconfigured_warned", False):
+                self._unconfigured_warned = True
+                logger.warning(
+                    "No traffic signal controller configured "
+                    "(traffic_signal_controller.api_base_url unset); "
+                    "returning empty signal list."
+                )
+            return []
         return list(self._signal_states.values())
 
     async def get_signal_state(self, signal_id: str) -> Optional[SignalState]:
@@ -185,6 +210,14 @@ class TrafficSignalService:
         phase: SignalPhaseEnum,
         duration_seconds: Optional[int] = None,
     ) -> SignalControlCommandResponse:
+        # The router passes a validated phase string; internal callers
+        # (suggest_signal_adjustment) pass the enum. Accept both.
+        if isinstance(phase, str):
+            phase = SignalPhaseEnum(phase.lower())
+        if not self._has_controller:
+            raise TrafficSignalControlError(
+                f"No traffic signal controller configured; cannot set phase for {signal_id}."
+            )
         logger.info(f"Attempting to set phase for signal {signal_id} to {phase.value}")
         command_payload = {"phase": phase.value}
         if duration_seconds is not None:

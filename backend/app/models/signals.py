@@ -22,6 +22,7 @@ class SignalControlStatusEnum(str, enum.Enum):
     PENDING = "pending"
     NOT_SUPPORTED = "not_supported"
     ERROR = "error"
+    ACCEPTED = "accepted"
     TIMEOUT = "timeout"
 
 

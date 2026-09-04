@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import AuthGuard from '@/components/auth/AuthGuard';
-import { LineChart, TrendingUp, AlertCircle, BarChart3, Clock, MapPin } from 'lucide-react';
+import { LineChart, TrendingUp, BarChart3, Clock, MapPin } from 'lucide-react';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import PredictiveFlowChart from '@/components/dashboard/PredictiveFlowChart';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,33 @@ export default function PredictivePage() {
     const [selectedFeed, setSelectedFeed] = useState<string>("");
     const [comparisonData, setComparisonData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+
+    // Sidebar stats are computed from the live forecast-vs-actual series,
+    // never hardcoded: MAPE over rows with a nonzero actual, confidence as
+    // its complement. Null when there is nothing to measure.
+    const varianceStats = React.useMemo(() => {
+        const rows = (comparisonData || []).filter(
+            (r) => Number(r?.actual) > 0 && Number.isFinite(Number(r?.forecasted))
+        );
+        if (rows.length === 0) return null;
+        const mape =
+            rows.reduce(
+                (acc, r) =>
+                    acc + Math.abs((Number(r.forecasted) - Number(r.actual)) / Number(r.actual)),
+                0
+            ) / rows.length;
+        return { mapePct: mape * 100, confidencePct: Math.max(0, Math.min(100, 100 - mape * 100)), n: rows.length };
+    }, [comparisonData]);
+
+    // Next peak is the argmax of the forecasted series, not a fixed time.
+    const nextPeak = React.useMemo(() => {
+        const rows = (comparisonData || []).filter((r) => Number.isFinite(Number(r?.forecasted)));
+        if (rows.length === 0) return null;
+        const peak = rows.reduce((a, b) => (Number(b.forecasted) > Number(a.forecasted) ? b : a));
+        const t = new Date(peak.timestamp);
+        if (Number.isNaN(t.getTime())) return null;
+        return t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }, [comparisonData]);
 
     const fetchComparisonData = async (lat: number, lon: number) => {
         setLoading(true);
@@ -110,14 +137,12 @@ export default function PredictivePage() {
                             <span>Model Drift</span>
                         </div>
                         <div className="p-6">
-                            <div className="text-5xl font-black font-lcd text-red-600 tracking-tighter">±4.2%</div>
-                            <p className="text-[10px] font-black opacity-40 uppercase mt-2 tracking-widest">Variance from ground truth</p>
-                            <div className="mt-4 pt-4 border-t-2 border-lcd-text/10">
-                                <div className="flex justify-between items-center text-[8px] font-black uppercase opacity-60">
-                                    <span>Training Epochs</span>
-                                    <span>4,200</span>
-                                </div>
+                            <div className="text-5xl font-black font-lcd text-red-600 tracking-tighter">
+                                {varianceStats ? `±${varianceStats.mapePct.toFixed(1)}%` : '—'}
                             </div>
+                            <p className="text-[10px] font-black opacity-40 uppercase mt-2 tracking-widest">
+                                {varianceStats ? `Mean abs % error over ${varianceStats.n} logged points` : 'No comparison data logged'}
+                            </p>
                         </div>
                     </Card>
 
@@ -126,9 +151,11 @@ export default function PredictivePage() {
                             <span>Confidence Interval</span>
                         </div>
                         <div className="p-6">
-                            <div className="text-5xl font-black font-lcd text-primary tracking-tighter">92%</div>
+                            <div className="text-5xl font-black font-lcd text-primary tracking-tighter">
+                                {varianceStats ? `${varianceStats.confidencePct.toFixed(0)}%` : '—'}
+                            </div>
                             <div className="h-4 w-full bg-lcd-text/10 border-2 border-lcd-text/20 mt-4 overflow-hidden">
-                                <div className="h-full bg-primary shadow-[0_0_10px_var(--lcd-text)]" style={{ width: '92%' }} />
+                                <div className="h-full bg-primary shadow-[0_0_10px_var(--lcd-text)]" style={{ width: `${varianceStats ? varianceStats.confidencePct : 0}%` }} />
                             </div>
                         </div>
                     </Card>
@@ -141,13 +168,11 @@ export default function PredictivePage() {
                             <div className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
                                 <Clock size={18} className="text-primary shrink-0" />
                                 <p className="text-[10px] font-black uppercase leading-relaxed">
-                                    Next congestion peak expected at <span className="text-primary">17:45</span> (+/- 10m)
-                                </p>
-                            </div>
-                            <div className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
-                                <AlertCircle size={18} className="text-yellow-600 shrink-0" />
-                                <p className="text-[10px] font-black uppercase leading-relaxed opacity-60">
-                                    Historical variance increasing due to local event correlation.
+                                    {nextPeak ? (
+                                        <>Next congestion peak expected at <span className="text-primary">{nextPeak}</span> (forecast argmax)</>
+                                    ) : (
+                                        <>No forecast peak available</>
+                                    )}
                                 </p>
                             </div>
                         </div>

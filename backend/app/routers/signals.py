@@ -5,13 +5,14 @@ from app.services.traffic_signal_service import (
     TrafficSignalService,
     TrafficSignalControlError,
 )
+from app.models.signals import SignalControlStatusEnum
 
 from fastapi import status
 
 router = APIRouter()
 
 
-@router.get("/signals")
+@router.get("/")
 async def get_signals(
     current_user: dict = Depends(get_current_active_user),
     tss: TrafficSignalService = Depends(get_traffic_signal_service),
@@ -19,7 +20,7 @@ async def get_signals(
     """Endpoint to retrieve the list of traffic signals. Requires authentication."""
 
     try:
-        signals = await tss.get_all_signals()
+        signals = await tss.get_all_signal_states()
         return signals
     except TrafficSignalControlError as e:
         # logger.error(f"Error retrieving signals for user {user_email}: {e}", exc_info=True)
@@ -34,7 +35,7 @@ async def get_signals(
         )
 
 
-@router.post("/signals/{signal_id}/set_phase")
+@router.post("/{signal_id}/set_phase")
 async def set_signal_phase(
     signal_id: str,
     phase: str,
@@ -60,8 +61,8 @@ async def set_signal_phase(
     # logger.info(f"User {user_email} attempting to set phase for signal {signal_id}.")
 
     try:
-        success = await tss.set_signal_phase(signal_id, phase.lower())
-        if success:
+        resp = await tss.set_signal_phase(signal_id, phase.lower())
+        if resp.status == SignalControlStatusEnum.ACCEPTED:
             return {
                 "message": f"Signal {signal_id} phase change to {phase.lower()} initiated successfully by user {user_email}"
             }

@@ -17,7 +17,10 @@ const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ metrics, feedName, cl
     const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('low');
 
     useEffect(() => {
-        const generateMockInsight = () => {
+        // Rule-based insight templated on LIVE metrics (speed/count), not a
+        // model: keep the text to what the data supports. There is no signal
+        // controller wired up, so never prescribe signal-timing changes.
+        const generateInsight = () => {
             if (!metrics) return;
 
             const speed = metrics.average_speed_kmh || 50;
@@ -25,7 +28,7 @@ const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ metrics, feedName, cl
             const displayFeedName = formatFeedName(feedName);
 
             if (speed < 20 && count > 10) {
-                setInsight(`Congestion spike detected at ${displayFeedName}. Recommend adjusting signal timings at the upstream intersection to flush the queue.`);
+                setInsight(`Congestion spike detected at ${displayFeedName}. Queue forming at ${speed.toFixed(0)} km/h over ${count} tracked vehicles — monitor for incident escalation.`);
                 setPriority('high');
             } else if (count > 50) {
                 setInsight(`High volume trend observed at ${displayFeedName}. Flow is stable but approaching saturation. No immediate intervention required.`);
@@ -36,7 +39,7 @@ const AIInsightsPanel: React.FC<AIInsightsPanelProps> = ({ metrics, feedName, cl
             }
         };
 
-        const timer = setTimeout(generateMockInsight, 2000);
+        const timer = setTimeout(generateInsight, 2000);
         return () => clearTimeout(timer);
     }, [metrics, feedName]);
 // ... (rest of file)

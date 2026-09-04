@@ -20,7 +20,10 @@ class RetentionService:
         self.monitored_directories = self.retention_config.get("directories", [
             "backend/data/processed_videos",
             "backend/data/pavement_images",
-            "backend/data/pavement_reports"
+            "backend/data/pavement_reports",
+            # Incident snapshots: every incident mints a JPEG with no other
+            # janitor (was unbounded on a 9.8GB disk). Age cap bounds them.
+            "backend/data/snapshots",
         ])
         
         self._cleanup_task: Optional[asyncio.Task] = None

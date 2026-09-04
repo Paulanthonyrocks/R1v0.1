@@ -95,10 +95,10 @@ async def update_incident(
         
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    success = await db.update_incident(incident_id, update_data)
+    success = await manager._db_manager.update_incident(incident_id, update_data)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update incident")
         
     # Fetch updated record
-    updated_record = await db.get_incident_by_id(incident_id)
+    updated_record = await manager._db_manager.get_incident_by_id(incident_id)
     return updated_record
