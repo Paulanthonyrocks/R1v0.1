@@ -73,5 +73,10 @@
     "tailwindcss-animate": "^1.0.7",
     "ts-jest": "^29.1.2",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "@firebase/util@1.12.1": true,
+    "protobufjs@7.6.5": true,
+    "unrs-resolver@1.11.1": true
   }
 }
