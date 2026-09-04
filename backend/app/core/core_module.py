@@ -164,6 +164,16 @@ class CoreModule:
 
         res = v_cfg.get("frame_resolution", [640, 480])
         self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
+        # Lane bands (position-derived lane ids). Nothing in the pipeline
+        # assigns track["lane"] -- CV lane detection is disabled and its
+        # boundaries are unconsumed -- so every vehicle rode lane=-1 and
+        # per-lane analytics + wrong-way judging stayed dark. Splitting the
+        # ROI x-range (or frame width when no ROI) into N vertical bands
+        # gives stable, calibration-free lane ids 0..N-1 that LaneCalibrator
+        # and SafetyMonitor consume unchanged. -1 still means unknown/off.
+        _lb_cfg = self.config.get("lane_bands", {})
+        self.lane_bands_enabled = _lb_cfg.get("enabled", True)
+        self.lane_bands_n = max(1, int(_lb_cfg.get("num_bands", 3)))
         # Pass exclusion zones through so DetectionEngine actually filters
         # them (audit finding #7) -- previously only the polygon reached the
         # detector and exclusion_zones were dead config.
@@ -315,6 +325,36 @@ class CoreModule:
             zone_np = pixel_polygon(zone, w, h)
             if zone_np is not None:
                 cv2.fillPoly(self.roi_mask, [zone_np], 0)
+
+    def _assign_lane_band(self, track: Dict, frame_width: int, frame_height: int) -> None:
+        """Set track["lane"] from vertical x-position bands.
+
+        Range is the ROI polygon's x-extent when an ROI is configured, else
+        the full frame width. Center-x outside the range clamps to the edge
+        band. No-ops when disabled or when the bbox is missing/malformed
+        (lane stays -1 = unknown).
+        """
+        if not self.lane_bands_enabled:
+            return
+        bbox = track.get("bbox")
+        if not bbox or len(bbox) != 4:
+            return
+        x_min, x_max = 0.0, float(frame_width)
+        if self.roi_polygon_points:
+            try:
+                pts = pixel_polygon(self.roi_polygon_points, frame_width, frame_height)
+                if pts is not None and len(pts):
+                    x_min, x_max = float(pts[:, 0].min()), float(pts[:, 0].max())
+            except Exception:
+                pass
+        if x_max <= x_min:
+            return
+        try:
+            cx = (float(bbox[0]) + float(bbox[2])) / 2.0
+        except (TypeError, ValueError):
+            return
+        frac = min(1.0, max(0.0, (cx - x_min) / (x_max - x_min)))
+        track["lane"] = min(self.lane_bands_n - 1, int(frac * self.lane_bands_n))
 
     def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
         """
@@ -857,6 +897,10 @@ class CoreModule:
                         track["direction"] = "North" if vy < 0 else "South"
                     else:
                         track["direction"] = "East" if vx > 0 else "West"
+
+                # Lane id from x-position bands (see __init__ note). Runs on
+                # every finalize so ROI updates apply immediately.
+                self._assign_lane_band(track, frame.shape[1], frame.shape[0])
 
                 # Filtering for visualisation
                 if track["status"] == "active":

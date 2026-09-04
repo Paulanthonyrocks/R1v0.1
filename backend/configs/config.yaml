@@ -149,6 +149,13 @@ lane_detection:
   # CoreModule uses this (seconds) to throttle its own lane CV recompute.
   # Default 1.0s = lanes refreshed at most once per second.
   detection_interval_seconds: 1.0
+lane_bands:
+  # Position-derived lane ids (CoreModule._assign_lane_band). The CV lane
+  # detector is disabled and nothing else assigns track["lane"], so without
+  # this every vehicle rides lane=-1. N vertical bands over the ROI x-range
+  # (frame width when no ROI); lane ids 0..N-1, -1 = unknown/off.
+  enabled: true
+  num_bands: 3
 log_files:
   allowed_log_files:
   - backend_main.log
