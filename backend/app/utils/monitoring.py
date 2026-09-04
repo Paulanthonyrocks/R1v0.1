@@ -135,6 +135,28 @@ class TrafficMonitor:
         self.hard_braking_accel_threshold_mps2: float = -abs(
             behavior_cfg.get("accel_threshold_mps2", 8.0)
         )
+        # False-hard-braking guards (Sep-04 fix): the config keys existed but
+        # were never read, so stationary vehicles whose per-frame speed delta
+        # happened to read -8.0 m/s² from numerical noise fired the alert
+        # (Sep-04: 17 events on Feed_2 sample_traffic_2 at the same ~13s/58s
+        # marks of every minute -- a single recurring loop scene, not real
+        # braking). Require the vehicle to be moving AND the acceleration to
+        # be within a physically plausible range. Defaults match the config
+        # values so behavior is unchanged for callers that don't override.
+        # NOTE: ``core_module.py`` already applies these guards BEFORE writing
+        # ``track["acceleration"]`` (sets it to 0.0 if any fails), so for most
+        # paths these gates are belt-and-suspenders. They remain useful as a
+        # defense-in-depth if a future caller writes acceleration directly
+        # into a vehicle dict without going through core_module.
+        self.hard_braking_min_speed_kmh: float = float(
+            behavior_cfg.get("min_speed_for_accel_kmh", 15.0)
+        )
+        self.hard_braking_min_dt_seconds: float = float(
+            behavior_cfg.get("min_accel_dt_seconds", 0.15)
+        )
+        self.hard_braking_min_physical_accel_mps2: float = -abs(
+            behavior_cfg.get("min_physical_accel_mps2", 15.0)
+        )
         # Per-vehicle cooldown for hard-braking anomalies. Without this, the
         # SAME vehicle re-fires every frame while its accel stays under the
         # threshold (common with 130+ tracked vehicles where speed wobble is
@@ -192,6 +214,21 @@ class TrafficMonitor:
         now = time.time()
         for v_id, data in vehicles.items():
             accel = data.get("acceleration", 0.0)
+            # Defense-in-depth (Sep-04): even though ``core_module.py`` already
+            # zeroes ``track["acceleration"]`` when speed/dt/physical bounds
+            # fail, apply the same gates here in case a future caller writes
+            # acceleration directly into a vehicle dict. Without this, a
+            # stationary vehicle's per-frame speed delta is tracking noise,
+            # not braking; the magnitude check rules out numerical spikes
+            # (single-frame -100 m/s² = bbox-jump artifact).
+            speed_kmh = data.get("speed", 0.0) or 0.0
+            dt_seconds = data.get("acceleration_dt_seconds", 0.0) or 0.0
+            if speed_kmh < self.hard_braking_min_speed_kmh:
+                continue
+            if dt_seconds > 0 and dt_seconds < self.hard_braking_min_dt_seconds:
+                continue
+            if accel < self.hard_braking_min_physical_accel_mps2:
+                continue
             if accel < self.hard_braking_accel_threshold_mps2:
                 # Cooldown: same vehicle must not re-fire until the window
                 # elapses -- the anomaly list is consumed per-frame and creates

@@ -524,6 +524,23 @@ class SharedFrameBuffer:
         """Return buffer statistics for diagnostics."""
         with self._lock:
             in_flight = len(self._in_flight)
+        # Cross-process counts: every acquire/release calls srem/sadd on the
+        # shared Redis SETs, so the SET sizes are the authoritative GLOBAL
+        # state across all worker processes. The instance counters
+        # (``_acquired_count``, ``_release_count``) above are process-local
+        # (the feed_manager process doesn't see worker acquire/release) and
+        # stay at 0 in the SHM-STATS log -- misleading. Read the SET sizes
+        # instead so a real orphan leak across worker processes is visible.
+        # A Redis call is cheap and SHM-STATS logs every 30s, well below the
+        # rate at which this dominates.
+        global_acquired = 0
+        global_free = 0
+        try:
+            r = get_redis_client()
+            global_acquired = int(r.scard(self._acquired_set_key) or 0)
+            global_free = int(r.scard(self._free_set_key) or 0)
+        except Exception:
+            pass
         return {
             'pool_size': self.pool_size,
             'acquired_count': self._acquired_count,
@@ -536,6 +553,11 @@ class SharedFrameBuffer:
             # delta is the trustworthy indicator.
             'orphan_count': max(0, self._acquired_count - self._release_count - in_flight),
             'free_pool_size': self._free_pool.qsize() if self._free_pool else 0,
+            # Cross-process counters (Redis SET sizes) -- see above. These
+            # are what the SHM-STATS log should report: worker acquire/release
+            # is invisible to the feed_manager's process-local counters.
+            'global_acquired': global_acquired,
+            'global_free': global_free,
             'last_acquire_ago': time.monotonic() - self._last_acquire_time if self._last_acquire_time > 0 else None,
             'last_release_ago': time.monotonic() - self._last_release_time if self._last_release_time > 0 else None,
         }

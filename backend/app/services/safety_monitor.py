@@ -21,6 +21,17 @@ class SafetyMonitor:
         self.stopped_speed_threshold = self.safety_config.get("stopped_speed_kmh", 5.0)
         self.stopped_duration_threshold = self.safety_config.get("stopped_duration_sec", 10.0)
         self.wrong_way_cosine_threshold = self.safety_config.get("wrong_way_cosine_threshold", -0.8)
+        # Wrong-way minimum speed (px/s). The previous floor of 1.0 px/s let
+        # tracker-id jitter on stopped/slow vehicles dominate the velocity
+        # vector, producing confident-but-spurious wrong-way flags
+        # (Sep-04: 850 flags in 19 min, 62% at |speed| < 10 px/s, dot clustered
+        # at -0.96 from micro-motion in the lane's reverse direction). A
+        # genuine wrong-way driver is moving; require > ``wrong_way_min_speed_pxs``
+        # pixels/sec before flagging. Default 10.0 px/s ≈ 1 frame of jitter is
+        # well below a 5 fps moving vehicle's natural pixel/frame displacement.
+        self.wrong_way_min_speed_pxs = float(
+            self.safety_config.get("wrong_way_min_speed_pxs", 10.0)
+        )
         
         # Lane Calibrator (Operational Autonomy)
         self.lane_calibrator = LaneCalibrator(
@@ -215,12 +226,19 @@ class SafetyMonitor:
         vy = vehicle.get("vy")
         if vx is None or vy is None:
             return None
-        
+
         # Normalize vehicle vector
         mag = math.sqrt(vx*vx + vy*vy)
-        if mag < 1.0:
-            return None # Too slow to determine direction accurately
-        
+        # Speed-floor: a stopped/slow vehicle's velocity is tracker-id jitter,
+        # not a directional choice. Flag only vehicles actually moving enough
+        # that their motion dominates the noise floor (Sep-04: the 1.0 px/s
+        # floor passed 850/850 jitter-driven flags with dot products near
+        # -1.00). ``wrong_way_min_speed_pxs`` (default 10) sits well above
+        # typical 1-2 px jitter and well below a 5 fps moving vehicle's
+        # natural per-second displacement.
+        if mag < max(self.wrong_way_min_speed_pxs, 1.0):
+            return None
+
         norm_vx, norm_vy = vx/mag, vy/mag
         
         # Dot product

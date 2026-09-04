@@ -14,7 +14,11 @@ behavior_analysis:
   # far too lenient (a normal brake = alert); 6.0 still sat in the noise floor
   # (Sep-03 run: 57 events/34min spread uniformly -6.0..-8.5, heaviest at the
   # threshold edge). 8.0 keeps the tail (~6/34min) -- real hard-braking only.
-  accel_threshold_mps2: 8.0
+  # 10.0 (Sep-04): the sample-loop brake scene fires a -8.0 m/s² event every
+  # minute per feed; raising to -10.0 puts sample-loop noise below the
+  # threshold while preserving real hard-brakes (a genuine panic stop is
+  # typically -8 to -10 m/s², and a real accident-grade brake is -12 to -15).
+  accel_threshold_mps2: 10.0
   # False-hard-braking guards (core_module.py computes acceleration). A raw
   # per-frame speed delta flags "sudden deceleration" from track-churn / slow-
   # crawl noise; these suppress it unless the vehicle was genuinely moving fast
@@ -80,6 +84,23 @@ fps: 5
 incident_detection:
   congestion_speed_threshold: 20
   density_threshold: 10
+  # Per-(feed, anomaly type) rate-limit window for creating incidents (s).
+  # 60 = at most one incident per anomaly type per feed per minute.
+  anomaly_incident_min_interval_seconds: 60
+incident_management:
+  # Cross-incident debounce window for the SAME feed+subtype (s). Default 300
+  # = the same wrong-way/sppeded_vehicle alert from the same feed will not
+  # create a NEW incident for 5 minutes -- the existing one is reused. Set
+  # lower for faster re-notification, higher for quieter incident panels.
+  debounce_interval: 300
+  # Per-vehicle snapshot cooldown (s). The incident itself is rate-limited
+  # by (feed, subtype) above; this gates the DISK WRITE only, so a wrong-way
+  # storm producing N distinct vehicles still creates N incidents (one per
+  # vehicle), but only one snapshot per vehicle per episode. Sep-04 storm:
+  # 850 incidents -> 850 jpg writes in 19 min; with this + the upstream
+  # speed floor (safety_analytics.wrong_way_min_speed_pxs) the write rate
+  # drops to one snapshot per vehicle per 5 min.
+  snapshot_cooldown_sec: 300
 inference:
   # Batch 2: at a 50ms fill timeout ~1-2 tasks arrive per tick per worker, so
   # batch 8 never filled (GPU ran batch-1/2 forwards paying launch overhead
@@ -735,6 +756,14 @@ safety_analytics:
   # Wrong-way cosine threshold (SafetyMonitor._check_wrong_way): dot of vehicle
   # velocity vs lane flow vector below this flags wrong-way. Default -0.8.
   wrong_way_cosine_threshold: -0.8
+  # Wrong-way minimum speed (px/s): a stopped/slow vehicle's velocity is
+  # tracker-id jitter, not a directional choice. The previous floor of 1.0
+  # px/s let jitter dominate and produced confident-but-spurious wrong-way
+  # flags (Sep-04: 850 flags in 19 min, 62% at |speed| < 10 px/s, dot clustered
+  # at -0.96 from micro-motion in the lane's reverse direction). 10 px/s sits
+  # well above typical 1-2 px jitter and below a 5 fps moving vehicle's
+  # natural per-second displacement; a genuine wrong-way driver is moving.
+  wrong_way_min_speed_pxs: 10.0
   # Lane-calibrator confidence required before the learned flow vector is used.
   calibration_confidence: 0.8
   # Require a real lane id for wrong-way flagging. All Sep-03 samples rode

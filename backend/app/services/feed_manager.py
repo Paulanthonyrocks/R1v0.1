@@ -1757,21 +1757,51 @@ class FeedManager:
                         timeout_seconds=stale_timeout, odd_timeout=stale_timeout / 6.0
                     )
                     
-                    # Log SHM stats to detect throughput issues early
+                    # Log SHM stats to detect throughput issues early.
+                    # Sep-04 fix: read the cross-process acquire/free SET
+                    # sizes from Redis (worker acquire/release is invisible
+                    # to the feed_manager's process-local counters, which
+                    # is why the SHM-STATS line used to show acq=0/rel=0
+                    # while the free pool drifted down 99.4%->76.3%). The
+                    # ``global_acquired`` delta vs the previous tick exposes
+                    # a real orphan leak across worker processes; the
+                    # ``free + global_acquired`` vs ``pool_size`` delta is
+                    # the trustworthy "missing" count (the free pool qsize
+                    # can lie if /dev/shm backing is gone).
                     stats = self.frame_buffer.get_stats()
                     free_pct = (stats['free_pool_size'] / stats['pool_size'] * 100) if stats['pool_size'] > 0 else 0
                     drop_rate = stats['drop_count'] / max(1, stats['acquired_count'])
                     in_flight = stats.get('in_flight', 0)
                     orphan = stats.get('orphan_count', max(0, stats['acquired_count'] - stats['release_count'] - in_flight))
+                    global_acquired = stats.get('global_acquired', 0)
+                    global_free = stats.get('global_free', 0)
+                    # Cross-process view: total accounted = free + acquired; missing
+                    # segments = pool - (free + acquired) tells us how many segments
+                    # are in neither the free pool nor the acquired set (stale,
+                    # mid-recovery, or actually leaked).
+                    accounted = stats['free_pool_size'] + global_acquired
+                    missing = max(0, stats['pool_size'] - accounted)
                     self.logger.info(
                         f"[SHM-STATS] free={stats['free_pool_size']}/{stats['pool_size']} ({free_pct:.1f}%), "
-                        f"acq={stats['acquired_count']}, rel={stats['release_count']}, "
-                        f"in_flight={in_flight}, orphan={orphan}, "
+                        f"acq={global_acquired} (gbl), rel_set={global_free} (gbl), "
+                        f"in_flight={in_flight}, orphan={orphan}, missing={missing}, "
                         f"drops={stats['drop_count']} ({drop_rate:.1%})"
                     )
 
-                    # Apply backpressure if pool is running low
-                    if free_pct < 20:
+                    # Orphan-leak detection (Sep-04): the process-local
+                    # ``acq=0`` in the old log masked a real cross-process
+                    # leak. Now we see the global acquired count; if it
+                    # climbs past the pool's expected steady-state (one
+                    # segment per active worker + one per in-flight frame),
+                    # flag it as a real leak.
+                    expected_in_flight = 16  # rough: 1 per active slot
+                    if global_acquired > expected_in_flight * 2:
+                        self.logger.warning(
+                            f"[SHM-PRESSURE] Global acquired count {global_acquired} "
+                            f"exceeds expected steady-state (~{expected_in_flight}); "
+                            f"orphan leak suspected — investigate release() symmetry."
+                        )
+                    elif free_pct < 20:
                         self.logger.warning(f"[SHM-PRESSURE] Pool at {free_pct:.1f}% free - inference cannot keep up with ingestion")
                     elif orphan > stats['pool_size'] * 0.1:
                         self.logger.warning(

@@ -29,6 +29,17 @@ class IncidentManager:
         # Debouncing: { "feed_id_anomaly_details": timestamp }
         self._active_alerts = {}
         self._debounce_interval = self.config.get("incident_management", {}).get("debounce_interval", 300) # 5 mins
+
+        # Snapshot dedup: { "feed_id:vehicle_id": last_snapshot_unix_ts }.
+        # Gates the disk write only — incidents themselves are still logged
+        # at the upstream rate-limit. Cooldown is generous (default 5 min, same
+        # as the upstream alert debounce) so a wrong-way storm on one vehicle
+        # produces one snapshot per episode, not one per detection. See
+        # create_incident() for the gate site.
+        self._snapshot_last_fire: Dict[str, float] = {}
+        self._snapshot_cooldown_sec: float = float(
+            self.config.get("incident_management", {}).get("snapshot_cooldown_sec", 300.0)
+        )
         
         logger.info("IncidentManager initialized.")
 
@@ -126,12 +137,40 @@ class IncidentManager:
                 # Run in background to not block the pipeline
                 asyncio.create_task(self._notification_service.notify_incident(incident_data))
 
-            # 7. Request Snapshot
-            if source_feed_id and self._feed_manager:
-                try:
-                    await self._feed_manager.request_snapshot(source_feed_id, incident_id)
-                except Exception as e:
-                    logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
+            # 7. Request Snapshot (with per-vehicle dedup)
+            # The incident itself is rate-limited by (feed_id, subtype) upstream,
+            # but a wrong-way storm that produces N distinct vehicles still spawns
+            # N incidents, each requesting a snapshot, and N jpg writes per minute
+            # (Sep-04: 850 incidents -> 850 snapshot jpg writes in 19 min). Each
+            # vehicle only needs ONE snapshot for the active wrong-way episode;
+            # gate the snapshot on per-vehicle cooldown so the storm doesn't
+            # multiply into a snapshot storm. The incident log itself is preserved
+            # (rate-limit above), only the disk write is deduplicated.
+            if source_feed_id and self._feed_manager and details:
+                _veh = details.get("vehicle_id") or details.get("meta", {}).get("vehicle_id")
+                if _veh:
+                    _snap_key = f"{source_feed_id}:{_veh}"
+                    _now_snap = time.time()
+                    _last_snap = self._snapshot_last_fire.get(_snap_key, 0.0)
+                    if _now_snap - _last_snap < self._snapshot_cooldown_sec:
+                        logger.debug(
+                            f"Snapshot suppressed for {_snap_key} "
+                            f"(within {self._snapshot_cooldown_sec}s cooldown, "
+                            f"last={_last_snap:.1f})"
+                        )
+                    else:
+                        self._snapshot_last_fire[_snap_key] = _now_snap
+                        try:
+                            await self._feed_manager.request_snapshot(source_feed_id, incident_id)
+                        except Exception as e:
+                            logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
+                else:
+                    # No vehicle_id available (e.g. congestion incidents) — snapshot
+                    # as before. The (feed_id, subtype) rate-limit still applies.
+                    try:
+                        await self._feed_manager.request_snapshot(source_feed_id, incident_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
 
             logger.info(f"Successfully created incident {incident_id}: {description}")
             return incident_id

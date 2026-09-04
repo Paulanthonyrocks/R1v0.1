@@ -58,12 +58,17 @@ export function getTunnelPassword(): string | null {
   return _cachedTunnelPassword;
 }
 
-/** REST helper: append `?password=` to a URL string. Idempotent. */
+/** REST helper: append `?password=` to a URL string. Idempotent.
+ *
+ * Host-gated: only appends for loca.lt hosts. Other tunnels (cloudworkstations.dev,
+ * ngrok-with-auth, etc.) have their own auth model and reject or mishandle a
+ * stray password query param. See ``isLocaLtHost`` for the rationale. */
 export function withTunnelPassword(url: string): string {
   const pw = getTunnelPassword();
   if (!pw) return url;
   try {
     const urlObj = new URL(url);
+    if (!isLocaLtHost(urlObj)) return url;
     if (!urlObj.searchParams.has('password')) {
       urlObj.searchParams.set('password', pw);
     }
@@ -73,10 +78,17 @@ export function withTunnelPassword(url: string): string {
   }
 }
 
-/** WebSocket helper: append `?password=` to a URL object in place. Idempotent. */
+/** WebSocket helper: append `?password=` to a URL object in place. Idempotent.
+ *
+ * Host-gated: only appends for loca.lt hosts (see ``isLocaLtHost``).
+ * Unconditional append was sending the configured secret to non-loca.lt
+ * providers (Sep-04: cloudworkstations.dev WS upgrades carried
+ * `?password=34.42.239.203` which is the configured env value, not
+ * cloudworkstations.dev's auth token -- it should never have been sent). */
 export function appendTunnelPassword(url: URL): void {
   const pw = getTunnelPassword();
   if (!pw) return;
+  if (!isLocaLtHost(url)) return;
   if (!url.searchParams.has('password')) {
     url.searchParams.set('password', pw);
   }
@@ -103,6 +115,33 @@ export function sanitizeTunnelUrl(url: string): string {
     return isAbsolute ? out : out.replace('http://redact.local', '');
   } catch {
     return url.replace(/([?&]password=)[^&#]*/g, '$1REDACTED');
+  }
+}
+
+/**
+ * Returns true when the URL host is a loca.lt tunnel — the only provider
+ * that gates unauthenticated requests behind a password query param. Other
+ * tunnel providers (cloudworkstations.dev, ngrok with -auth flag, etc.) have
+ * their own auth model and will reject or mishandle a stray `?password=`
+ * appended to the URL.
+ *
+ * Without this gate, an env-configured `NEXT_PUBLIC_LOCALTUNNEL_PASSWORD` is
+ * unconditionally appended to every WS upgrade URL regardless of host, which:
+ *   (a) sends the configured secret to providers that don't expect it
+ *       (cloudworkstations.dev: forwards the query to the backend, which may
+ *        fail validation or simply ignore it; loca.lt: returns ECONNRESET on
+ *        the WS upgrade when the password doesn't match its own session pw).
+ *   (b) leaks the secret into logs (Chrome's native ws-failed log can't be
+ *       redacted, so the raw password value lands in console output every
+ *       reconnect attempt -- observed Sep-04: `?password=34.42.239.203`
+ *       appearing 50+ times across one session's reconnect storm).
+ */
+export function isLocaLtHost(url: URL | string): boolean {
+  try {
+    const u = typeof url === 'string' ? new URL(url) : url;
+    return u.host.endsWith('.loca.lt') || u.host === 'loca.lt';
+  } catch {
+    return false;
   }
 }
 
