@@ -40,6 +40,14 @@ class IncidentManager:
         self._snapshot_cooldown_sec: float = float(
             self.config.get("incident_management", {}).get("snapshot_cooldown_sec", 300.0)
         )
+        # Per-feed snapshot rate cap (Sep-05: Feed_1 wrote ~10 jpgs in 15s --
+        # distinct vehicles, so the per-vehicle cooldown above never gated
+        # it). Rolling window: at most N snapshots per feed per 60s; excess
+        # incidents are still logged, only the disk write is shed.
+        self._snapshot_feed_window: Dict[str, list] = {}
+        self._snapshot_max_per_feed_per_min: int = int(
+            self.config.get("incident_management", {}).get("snapshot_max_per_feed_per_min", 6)
+        )
         
         logger.info("IncidentManager initialized.")
 
@@ -47,6 +55,32 @@ class IncidentManager:
         """Sets the feed manager to avoid circular imports."""
         self._feed_manager = feed_manager
         logger.info("FeedManager set in IncidentManager.")
+
+    async def _request_snapshot_gated(self, feed_id: str, incident_id: str) -> bool:
+        """Request a snapshot subject to the per-feed rate cap.
+
+        Returns True when the snapshot was requested, False when shed by
+        the cap. The incident itself is unaffected -- only the jpg write.
+        """
+        if self._snapshot_max_per_feed_per_min > 0:
+            now = time.time()
+            window = self._snapshot_feed_window.get(feed_id, [])
+            window = [t for t in window if now - t < 60.0]
+            if len(window) >= self._snapshot_max_per_feed_per_min:
+                logger.debug(
+                    f"Snapshot shed for feed {feed_id} "
+                    f"({len(window)} in the last 60s, cap {self._snapshot_max_per_feed_per_min})"
+                )
+                self._snapshot_feed_window[feed_id] = window
+                return False
+            window.append(now)
+            self._snapshot_feed_window[feed_id] = window
+        try:
+            await self._feed_manager.request_snapshot(feed_id, incident_id)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
+            return False
 
     async def create_incident(
         self,
@@ -160,17 +194,11 @@ class IncidentManager:
                         )
                     else:
                         self._snapshot_last_fire[_snap_key] = _now_snap
-                        try:
-                            await self._feed_manager.request_snapshot(source_feed_id, incident_id)
-                        except Exception as e:
-                            logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
+                        await self._request_snapshot_gated(source_feed_id, incident_id)
                 else:
                     # No vehicle_id available (e.g. congestion incidents) — snapshot
                     # as before. The (feed_id, subtype) rate-limit still applies.
-                    try:
-                        await self._feed_manager.request_snapshot(source_feed_id, incident_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
+                    await self._request_snapshot_gated(source_feed_id, incident_id)
 
             logger.info(f"Successfully created incident {incident_id}: {description}")
             return incident_id

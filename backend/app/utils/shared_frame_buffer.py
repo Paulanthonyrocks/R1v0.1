@@ -145,19 +145,34 @@ class SharedFrameBuffer:
         except Exception as e:
             logger.warning(f'Orphan pruning failed: {e}')
 
-    def prune_stale_segments(self, timeout_seconds: float, odd_timeout: float = None):
-        """
-        Returns abandoned segments (those not in the free pool and not recently accessed) 
-        back to the free pool.
+    def prune_stale_segments(self, timeout_seconds: float, odd_timeout: Optional[float] = None,
+                             hard_timeout: Optional[float] = None):
+        """Reclaim abandoned segments, plus force-reclaim long-dead checkouts.
+
+        Args:
+            timeout_seconds: normal stale age for segments nobody owns.
+            odd_timeout: stuck-writer age (odd version) for unowned segments.
+            hard_timeout: last-resort age for segments STILL in the acquired
+                set. These are checkouts whose owner died or whose release
+                path was skipped (Sep-05: acquired-set limbo climbing ~3/sec
+                with zero drops -- the in-flight guard skipped them forever,
+                so the pool bled dry with no recovery). A live segment's
+                heartbeat (write/read) refreshes last_used continuously, so
+                anything unheartbeated for hard_timeout (default 300s, far
+                above any healthy queue wait) is dead. Reclaimed by clearing
+                its acquired-set claim first, then freeing as normal.
         """
         if self.read_only or self._free_pool is None:
             return
 
         if odd_timeout is None:
             odd_timeout = self._odd_timeout
+        if hard_timeout is None:
+            hard_timeout = 300.0
 
         now = time.monotonic()
         stale_count = 0
+        hard_reclaimed = 0
         skipped_uninitialised = 0
         skipped_in_flight = 0
 
@@ -201,8 +216,25 @@ class SharedFrameBuffer:
 
                 # Skip segments still logically in flight. Compare both str
                 # and bytes forms because the Redis set may hold either.
+                # UNLESS they are long-dead checkouts (see hard_timeout):
+                # those are reclaimed below instead of skipped forever.
                 if name in acquired_set or name.encode() in acquired_set:
-                    skipped_in_flight += 1
+                    if hard_timeout > 0 and (now - last_used > hard_timeout):
+                        try:
+                            r = get_redis_client()
+                            r.srem(self._acquired_set_key, name)
+                            was_free = r.srem(self._free_set_key, name)
+                            r.sadd(self._free_set_key, name)
+                            if not was_free:
+                                try:
+                                    self._free_pool.put_nowait(name)
+                                except queue.Full:
+                                    pass
+                            hard_reclaimed += 1
+                        except Exception:
+                            pass
+                    else:
+                        skipped_in_flight += 1
                     continue
 
                 # Reclaim if:
@@ -233,15 +265,19 @@ class SharedFrameBuffer:
                         r.sadd(self._free_set_key, name)
                         if not was_free:
                             self._free_pool.put_nowait(name)
+                            # Count only genuine re-enqueues. Segments already
+                            # free (idle, old heartbeat) need no recovery --
+                            # counting them inflated "Recovered N" into the
+                            # thousands on every tick and hid real signal.
+                            stale_count += 1
                     except queue.Full:
                         # Pool is full (segment already returned twice) - safe to drop
                         logger.debug(f"SHM free pool full, dropping duplicate release of {name}")
-                    stale_count += 1
             except Exception as e:
                 logger.debug(f"Could not read header for {name}, might be stale: {e}")
 
-        if stale_count > 0:
-            logger.info(f"Recovered {stale_count} stale SHM segments (skipped {skipped_uninitialised} uninitialised, {skipped_in_flight} in-flight).")
+        if stale_count > 0 or hard_reclaimed > 0:
+            logger.info(f"Recovered {stale_count} stale SHM segments (hard-reclaimed {hard_reclaimed} dead checkouts, skipped {skipped_uninitialised} uninitialised, {skipped_in_flight} in-flight).")
 
     def _read_version(self, name: str) -> Optional[int]:
         """Best-effort read of a segment's current header version.
@@ -336,6 +372,15 @@ class SharedFrameBuffer:
         buf[24:32] = struct.pack('<d', now)
         # Finally, update version to EVEN to signal completion
         buf[0:4] = struct.pack('<I', current_version + 2)
+        # Refresh this process's acquire-time version snapshot: release()
+        # compares the live header against the snapshot, and a legitimate
+        # acquire -> write -> release cycle (e.g. the ingestion queue-Full
+        # path) bumps the version by +2. Without this the snapshot is stale
+        # pre-write, release() mistakes our own write for a recycle, no-ops,
+        # and the acquired-set entry leaks forever (Sep-05: acq 1360->1692).
+        with self._lock:
+            if name in self._in_flight_version:
+                self._in_flight_version[name] = current_version + 2
 
     def read(self, name: Union[str, bytes], expected_feed_id: Optional[str] = None) -> Optional[Tuple[bytes, Tuple[int, int, int]]]:
         """Returns (data_view, (w, h, c)) or None if a stable frame could not be read or feed ID mismatch."""

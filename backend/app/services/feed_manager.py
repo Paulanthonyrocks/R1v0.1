@@ -1753,8 +1753,12 @@ class FeedManager:
                     stale_timeout = float(
                         self.config.get("performance", {}).get("shm_stale_timeout", 60.0)
                     )
+                    hard_timeout = float(
+                        self.config.get("performance", {}).get("shm_hard_reclaim_timeout", 300.0)
+                    )
                     self.frame_buffer.prune_stale_segments(
-                        timeout_seconds=stale_timeout, odd_timeout=stale_timeout / 6.0
+                        timeout_seconds=stale_timeout, odd_timeout=stale_timeout / 6.0,
+                        hard_timeout=hard_timeout,
                     )
                     
                     # Log SHM stats to detect throughput issues early.

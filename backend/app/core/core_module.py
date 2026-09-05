@@ -327,11 +327,21 @@ class CoreModule:
                 cv2.fillPoly(self.roi_mask, [zone_np], 0)
 
     def _assign_lane_band(self, track: Dict, frame_width: int, frame_height: int) -> None:
-        """Set track["lane"] from vertical x-position bands.
+        """Set track["lane"] from lateral position within the ROI at the
+        vehicle's own depth row.
 
-        Range is the ROI polygon's x-extent when an ROI is configured, else
-        the full frame width. Center-x outside the range clamps to the edge
-        band. No-ops when disabled or when the bbox is missing/malformed
+        The old code split the ROI's GLOBAL x-extent into N vertical bands.
+        On a perspective road that is wrong: real lanes converge with depth,
+        so one vertical band covers different real lanes at the top vs the
+        bottom of the frame, and a vehicle changes bands as it approaches
+        (Sep-05: Feed_1 lane2 consensus [+0.95y] vs lane4 [-0.67y] -- the
+        same carriageway binned into opposing bands, storming wrong-way).
+        Instead, intersect the ROI polygon with the horizontal row at the
+        bbox BOTTOM (the road contact point -- center-y floats with vehicle
+        height) and split THAT row's x-extent. Bands then follow the road's
+        perspective instead of cutting across it. Falls back to the global
+        x-range when there is no ROI or the row misses the polygon.
+        No-ops when disabled or when the bbox is missing/malformed
         (lane stays -1 = unknown).
         """
         if not self.lane_bands_enabled:
@@ -339,19 +349,34 @@ class CoreModule:
         bbox = track.get("bbox")
         if not bbox or len(bbox) != 4:
             return
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return
+        cx = (x1 + x2) / 2.0
+        row_y = min(max(y2, 0.0), float(frame_height))
         x_min, x_max = 0.0, float(frame_width)
         if self.roi_polygon_points:
             try:
                 pts = pixel_polygon(self.roi_polygon_points, frame_width, frame_height)
-                if pts is not None and len(pts):
+                if pts is not None and len(pts) >= 3:
+                    row_xs = []
+                    n = len(pts)
+                    for i in range(n):
+                        ax, ay = float(pts[i][0]), float(pts[i][1])
+                        bx, by = float(pts[(i + 1) % n][0]), float(pts[(i + 1) % n][1])
+                        if (ay <= row_y < by) or (by <= row_y < ay):
+                            t = (row_y - ay) / (by - ay)
+                            row_xs.append(ax + t * (bx - ax))
+                    if len(row_xs) >= 2:
+                        x_min, x_max = min(row_xs), max(row_xs)
+                    else:
+                        x_min, x_max = float(pts[:, 0].min()), float(pts[:, 0].max())
+                elif pts is not None and len(pts):
                     x_min, x_max = float(pts[:, 0].min()), float(pts[:, 0].max())
             except Exception:
                 pass
         if x_max <= x_min:
-            return
-        try:
-            cx = (float(bbox[0]) + float(bbox[2])) / 2.0
-        except (TypeError, ValueError):
             return
         frac = min(1.0, max(0.0, (cx - x_min) / (x_max - x_min)))
         track["lane"] = min(self.lane_bands_n - 1, int(frac * self.lane_bands_n))

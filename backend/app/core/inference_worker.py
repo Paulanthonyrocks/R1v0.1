@@ -903,6 +903,16 @@ def inference_worker(
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                                 acked_msgs.add(msg_id)
+                            # SHM read already succeeded above, so this segment
+                            # is still ours -- release it (Sep-05: missing
+                            # releases on post-read continues fed the
+                            # acquired-set limbo the in-flight guard then
+                            # skipped forever).
+                            if frame_buffer:
+                                try:
+                                    frame_buffer.release(shm_ref)
+                                except Exception:
+                                    pass
                             continue
                         try:
                             core_modules[feed_id] = CoreModule(
@@ -935,6 +945,13 @@ def inference_worker(
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                                 acked_msgs.add(msg_id)
+                            # Same ownership as the backoff path above: the
+                            # frame was read successfully, so release it.
+                            if frame_buffer:
+                                try:
+                                    frame_buffer.release(shm_ref)
+                                except Exception:
+                                    pass
                             continue
 
                     core = core_modules[feed_id]
@@ -985,6 +1002,14 @@ def inference_worker(
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                                 acked_msgs.add(msg_id)
+                            # Read succeeded (frame_bytes came from it), so the
+                            # segment is ours and the finally-block below never
+                            # sees it (no meta_entry) -- release here.
+                            if frame_buffer:
+                                try:
+                                    frame_buffer.release(shm_ref)
+                                except Exception:
+                                    pass
                             continue
 
                         if isinstance(frame_bytes, memoryview):

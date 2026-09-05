@@ -38,7 +38,7 @@ class SafetyMonitor:
             confidence_threshold=self.safety_config.get("calibration_confidence", 0.8),
             two_way_opposed_fraction=float(self.safety_config.get("two_way_opposed_fraction", 0.03)),
             two_way_min_samples=int(self.safety_config.get("two_way_min_samples", 40)),
-            two_way_sustain_calls=int(self.safety_config.get("two_way_sustain_calls", 2000)),
+            two_way_sustain_calls=int(self.safety_config.get("two_way_sustain_calls", 400)),
         )
         self._twoway_warned: set = set()
         
@@ -116,9 +116,12 @@ class SafetyMonitor:
                 _last = self._last_flow_log.get(feed_id)
                 if _last is None or (_last[0] != _flow_sig and _now_mono - _last[1] >= self.flow_log_interval_sec):
                     self._last_flow_log[feed_id] = (_flow_sig, _now_mono)
+                    _lane_stats = self.lane_calibrator.get_lane_stats(feed_id, lane_id)
                     logger.info(
                         f"[{feed_id}] wrong-way flow vector: source={source} "
-                        f"conf={confidence:.2f} lane={lane_id} vec={[round(float(x), 2) for x in effective_vector]}"
+                        f"conf={confidence:.2f} lane={lane_id} vec={[round(float(x), 2) for x in effective_vector]} "
+                        f"opposed={_lane_stats['opposed_fraction']} streak={_lane_stats['over_streak']} "
+                        f"two_way={_lane_stats['two_way']} samples={_lane_stats['samples']}"
                     )
                 # Two-way lane: the band's own samples materially oppose its
                 # consensus (e.g. an oncoming stream sharing the band), so

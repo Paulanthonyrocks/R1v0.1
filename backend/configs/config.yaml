@@ -101,6 +101,11 @@ incident_management:
   # speed floor (safety_analytics.wrong_way_min_speed_pxs) the write rate
   # drops to one snapshot per vehicle per 5 min.
   snapshot_cooldown_sec: 300
+  # Per-feed snapshot rate cap (rolling 60s window). The per-vehicle
+  # cooldown above never gates a storm of DISTINCT vehicles (Sep-05:
+  # Feed_1 wrote ~10 jpgs in 15s). 6/min keeps disk writes bounded; the
+  # incidents themselves are still logged, only the jpg is shed. 0 disables.
+  snapshot_max_per_feed_per_min: 6
 inference:
   # Batch 2: at a 50ms fill timeout ~1-2 tasks arrive per tick per worker, so
   # batch 8 never filled (GPU ran batch-1/2 forwards paying launch overhead
@@ -173,8 +178,11 @@ lane_detection:
 lane_bands:
   # Position-derived lane ids (CoreModule._assign_lane_band). The CV lane
   # detector is disabled and nothing else assigns track["lane"], so without
-  # this every vehicle rides lane=-1. N vertical bands over the ROI x-range
-  # (frame width when no ROI); lane ids 0..N-1, -1 = unknown/off. N=6 matches
+  # this every vehicle rides lane=-1. N bands over the ROI x-range AT THE
+  # VEHICLE'S OWN DEPTH ROW (bbox bottom, scanline-interpolated through the
+  # ROI polygon; full frame width when no ROI); lane ids 0..N-1, -1 =
+  # unknown/off. Row-interpolation matters: vertical bands cut across real
+  # lanes on a perspective road (Sep-05 storm root cause). N=6 matches
   # a 3+3 two-way road (one band per real lane); a band that still straddles
   # both directions trips the two-way verdict instead of storming.
   enabled: true
@@ -656,6 +664,13 @@ performance:
   # first 'free pool empty' at ~50s in both Aug-17 runs) -- the skip valve
   # above is the relief, not pool growth.
   shm_stale_timeout: 60.0
+  # Last-resort reclaim age for segments still checked out in the acquired
+  # set (Sep-05: acquired-set limbo climbed ~3/sec with zero drops -- dead
+  # checkouts the in-flight guard skipped forever). Heartbeats refresh on
+  # every write/read, so anything unheartbeated this long is dead. 300s is
+  # far above any healthy queue wait; reclaimed segments are freed as normal.
+  # 0 disables (leak becomes unbounded again).
+  shm_hard_reclaim_timeout: 300.0
   video_gpu_acceleration: true
 perspective_calibration:
   matrix_path: configs/perspective_matrix.npy
@@ -779,9 +794,13 @@ safety_analytics:
   # live imbalanced streams (5% opposed, conf 0.9+) still flag the minority;
   # the sustain leg (consecutive over-bar add_sample calls) proves a stream
   # vs a 2-second lane-changer and resets the moment the share drops.
+  # Sep-05: 2000 never tripped in 9 min (147 flags, 4 skips) -- sustained
+  # opposition flickers under the bar and the hard reset wiped the streak.
+  # 400 trips in ~15s at ~25 calls/sec/lane, and the streak now decays
+  # instead of resetting, so flickering streams still accumulate.
   two_way_opposed_fraction: 0.03
   two_way_min_samples: 40
-  two_way_sustain_calls: 2000
+  two_way_sustain_calls: 400
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:

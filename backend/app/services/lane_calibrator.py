@@ -13,7 +13,7 @@ class LaneCalibrator:
     
     def __init__(self, min_samples: int = 20, max_samples: int = 100, confidence_threshold: float = 0.8,
                  two_way_opposed_fraction: float = 0.03, two_way_min_samples: int = 40,
-                 two_way_sustain_calls: int = 2000):
+                 two_way_sustain_calls: int = 400):
         self.min_samples = min_samples
         self.max_samples = max_samples
         self.confidence_threshold = confidence_threshold
@@ -24,9 +24,11 @@ class LaneCalibrator:
         # and that share sustained over enough consecutive add_sample calls to
         # prove a real stream. The sustain leg is what separates an oncoming
         # stream from a 2-second lane-changer: calls arrive per vehicle per
-        # frame, so a brief event contributes ~100 calls and never trips 2000,
-        # while a live stream trips it in under a minute. Resets the moment
-        # the window fraction drops under the bar -- no stale verdicts.
+        # frame (~25/sec/lane at 5fps x 5 vehicles), so a brief event
+        # contributes ~100 calls and never trips 400, while a live stream
+        # trips it in ~15s. The streak DECAYS (not resets) when the window
+        # fraction dips under the bar, so a flickering imbalanced stream still
+        # accumulates while a resolved one drains back to zero in seconds.
         self.two_way_opposed_fraction = two_way_opposed_fraction
         self.two_way_min_samples = two_way_min_samples
         self.two_way_sustain_calls = two_way_sustain_calls
@@ -103,7 +105,11 @@ class LaneCalibrator:
         if data["opposed_fraction"] >= self.two_way_opposed_fraction:
             data["over_streak"] = data.get("over_streak", 0) + 1
         else:
-            data["over_streak"] = 0
+            # Decay, not reset: a flickering stream (over, under, over)
+            # keeps accumulating toward the verdict, while a truly resolved
+            # distribution drains to zero within seconds. A hard reset let a
+            # noisy imbalanced band (Sep-05: 147 flags, 4 skips) never trip.
+            data["over_streak"] = max(0, data.get("over_streak", 0) - 1)
         data["two_way"] = (
             len(vectors) >= self.two_way_min_samples
             and data["over_streak"] >= self.two_way_sustain_calls
@@ -155,6 +161,22 @@ class LaneCalibrator:
         """Returns True if the lane has reached the calibration confidence threshold."""
         _, confidence = self.get_flow_vector(feed_id, lane_id)
         return confidence >= self.confidence_threshold
+
+    def get_lane_stats(self, feed_id: str, lane_id: int) -> Dict:
+        """Per-lane two-way diagnostics for the flow-vector log line.
+
+        Lets the next wrong-way storm stay attributable: opposed_fraction /
+        over_streak show whether the verdict is approaching or the band is
+        clean and the flag is a genuine opposition.
+        """
+        lane_map = self.lane_data.get(feed_id, {})
+        data = lane_map.get(lane_id, {})
+        return {
+            "samples": len(data.get("vectors", [])),
+            "opposed_fraction": round(data.get("opposed_fraction", 0.0), 3),
+            "over_streak": int(data.get("over_streak", 0)),
+            "two_way": bool(data.get("two_way", False)),
+        }
 
     def get_calibration_status(self, feed_id: str) -> Dict:
         """Returns a summary of calibration status for a feed."""
