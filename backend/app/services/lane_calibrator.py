@@ -102,8 +102,17 @@ class LaneCalibrator:
         cx, cy = data["consensus"]
         opposed = sum(1 for v in vectors if v[0] * cx + v[1] * cy < 0)
         data["opposed_fraction"] = opposed / len(vectors)
+        # Fast-attack / bounded-release accumulator (Sep-05 live: symmetric
+        # +/-1 let streaks balloon to 31000, blinding a tripped lane for
+        # minutes after the evidence cleared, while hover-at-bar lanes took
+        # 28 min to trip). Over-bar steps +2 so a solid stream trips in
+        # ~200 calls (~8s) and a hover (51% over) in ~750 (~30s); a
+        # 100-call lane-change burst reaches only ~+200 < 400. The cap
+        # (2x sustain) bounds post-clear blindness to ~400 calls (~15-30s).
+        # Under-bar still decays -1/call, so a resolved lane clears fully.
+        _streak_cap = self.two_way_sustain_calls * 2
         if data["opposed_fraction"] >= self.two_way_opposed_fraction:
-            data["over_streak"] = data.get("over_streak", 0) + 1
+            data["over_streak"] = min(_streak_cap, data.get("over_streak", 0) + 2)
         else:
             # Decay, not reset: a flickering stream (over, under, over)
             # keeps accumulating toward the verdict, while a truly resolved

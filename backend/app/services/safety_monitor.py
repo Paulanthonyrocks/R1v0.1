@@ -199,7 +199,7 @@ class SafetyMonitor:
                             logger.info(
                                 f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
                                 f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
-                                f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
+                                f"flow={[round(float(x), 2) for x in effective_vector]} source={source} lane={lane_id}"
                             )
                             alert["meta"]["vector_source"] = source
                             alert["meta"]["calibration_confidence"] = confidence
