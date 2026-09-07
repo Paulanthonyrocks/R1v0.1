@@ -32,6 +32,23 @@ class SafetyMonitor:
         self.wrong_way_min_speed_pxs = float(
             self.safety_config.get("wrong_way_min_speed_pxs", 10.0)
         )
+        # Wrong-way maximum speed (px/s). A track-ID switch (one track's
+        # history teleported onto a distant detection) produces a one-frame
+        # velocity of hundreds of px/s opposing the flow (Sep-07: max 383,
+        # p99 204 px/s). No tracked vehicle crosses a 480px frame in <2s at
+        # 5 fps inference; above this ceiling the vector is tracker noise,
+        # not a directional choice. Default 250.0.
+        self.wrong_way_max_speed_pxs = float(
+            self.safety_config.get("wrong_way_max_speed_pxs", 250.0)
+        )
+        # Wrong-way confirmation frames. A genuine wrong-way driver opposes
+        # the flow for seconds; an ID-switch spike does it for 1-2 frames
+        # then vanishes or corrects. Require N consecutive flagging updates
+        # before minting the alert (Sep-07: 324 flags, every one a distinct
+        # vehicle_id, ~5/min across all feeds). Default 3.
+        self.wrong_way_confirm_frames = int(
+            self.safety_config.get("wrong_way_confirm_frames", 3)
+        )
         
         # Lane Calibrator (Operational Autonomy)
         self.lane_calibrator = LaneCalibrator(
@@ -152,19 +169,47 @@ class SafetyMonitor:
                 else:
                     alert = self._check_wrong_way(feed_id, v, effective_vector, timestamp)
                     if alert:
-                        v["is_wrong_way"] = True
-                        # Diagnostic: what vehicle velocity produced this flag vs the vector?
-                        _vx, _vy = v.get("vx"), v.get("vy")
-                        logger.info(
-                            f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
-                            f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
-                            f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
-                        )
-                        alert["meta"]["vector_source"] = source
-                        alert["meta"]["calibration_confidence"] = confidence
-                        alerts.append(alert)
+                        # Confirmation gate: single-frame opposed vectors are
+                        # usually ID-switch spikes. Count consecutive flagging
+                        # updates per vehicle; emit only at N. A passing check
+                        # (or a vanished track, via the state cleanup below)
+                        # resets the streak.
+                        _st = self.vehicle_states.setdefault(vid, {})
+                        _streak = int(_st.get("ww_streak", 0)) + 1
+                        _st["ww_streak"] = _streak
+                        self.vehicle_states[vid] = _st
+                        if _streak >= self.wrong_way_confirm_frames:
+                            # Cooldown gates emission, not evaluation: a
+                            # still-flagging vehicle re-emits once the 30s
+                            # window passes; the streak keeps counting.
+                            if not self._should_alert(vid, "wrong_way", timestamp):
+                                v["is_wrong_way"] = True
+                                alert = None
+                            else:
+                                v["is_wrong_way"] = True
+                        else:
+                            # Still confirming: not yet a reportable event.
+                            # (No continue: the is_stopped block below must
+                            # still run for this vehicle.)
+                            v["is_wrong_way"] = False
+                            alert = None
+                        if alert:
+                            # Diagnostic: what vehicle velocity produced this flag vs the vector?
+                            _vx, _vy = v.get("vx"), v.get("vy")
+                            logger.info(
+                                f"[{feed_id}] WRONG_WAY {vid}: vel=({round(_vx, 2) if _vx is not None else None},"
+                                f"{round(_vy, 2) if _vy is not None else None}) dot={alert['meta']['alignment']:.2f} "
+                                f"flow={[round(float(x), 2) for x in effective_vector]} source={source}"
+                            )
+                            alert["meta"]["vector_source"] = source
+                            alert["meta"]["calibration_confidence"] = confidence
+                            alerts.append(alert)
                     else:
                         v["is_wrong_way"] = False
+                        # Passing check breaks the confirmation streak.
+                        _st = self.vehicle_states.get(vid)
+                        if _st is not None:
+                            _st.pop("ww_streak", None)
                     
             # Set stopped flag if applicable
             v["is_stopped"] = False
@@ -241,6 +286,11 @@ class SafetyMonitor:
         # natural per-second displacement.
         if mag < max(self.wrong_way_min_speed_pxs, 1.0):
             return None
+        # Ceiling: hundreds of px/s in one update is a teleported track
+        # (ID switch onto a distant detection), not driving. Skip before
+        # the dot product so it never starts a confirmation streak.
+        if mag > self.wrong_way_max_speed_pxs:
+            return None
 
         norm_vx, norm_vy = vx/mag, vy/mag
         
@@ -249,8 +299,11 @@ class SafetyMonitor:
         dot = norm_vx * lane_vector[0] + norm_vy * lane_vector[1]
         
         if dot < self.wrong_way_cosine_threshold:
-             if self._should_alert(vehicle["vehicle_id"], "wrong_way", timestamp):
-                 return {
+             # NOTE: no cooldown here. The confirmation gate in update()
+             # needs every consecutive flag evaluation; cooldown applies to
+             # EMITTED alerts only (a 30s cooldown here would eat the 2nd
+             # and 3rd confirming flags and the streak could never reach N).
+             return {
                     "type": "safety_alert",
                     "subtype": "wrong_way",
                     "severity": "critical",

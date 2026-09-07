@@ -779,6 +779,16 @@ safety_analytics:
   # well above typical 1-2 px jitter and below a 5 fps moving vehicle's
   # natural per-second displacement; a genuine wrong-way driver is moving.
   wrong_way_min_speed_pxs: 10.0
+  # Wrong-way maximum speed (px/s): one-update velocities above this are
+  # track-ID-switch teleports, not driving (Sep-07: max 383, p99 204 px/s
+  # across 324 flags). Checked before the dot product so absurd vectors
+  # never start a confirmation streak.
+  wrong_way_max_speed_pxs: 250.0
+  # Wrong-way confirmation frames: consecutive flagging updates required
+  # before minting the incident. Genuine wrong-way driving persists for
+  # seconds; ID-switch spikes last 1-2 frames. Sep-07 fired 324 incidents
+  # (one per distinct vehicle, ~5/min) with zero persistence.
+  wrong_way_confirm_frames: 3
   # Lane-calibrator confidence required before the learned flow vector is used.
   calibration_confidence: 0.8
   # Require a real lane id for wrong-way flagging. All Sep-03 samples rode
