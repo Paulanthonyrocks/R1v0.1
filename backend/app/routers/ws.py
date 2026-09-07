@@ -173,7 +173,9 @@ async def message_receiver(
                     try:
                         await websocket.send_text(pong_msg)
                     except Exception as e:
-                        logger.error(f"Direct PONG send failed: {e}")
+                        # Benign race: client disconnected between PING and
+                        # PONG (common at shutdown). Not an error.
+                        logger.debug(f"Direct PONG send skipped (client gone): {e}")
                 elif msg_type == WebSocketMessageTypeEnum.PONG:
                     # Client responded to a server PING
                     logger.debug(f"Received PONG from {client_id}")

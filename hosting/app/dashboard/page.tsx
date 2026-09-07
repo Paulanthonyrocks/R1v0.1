@@ -100,7 +100,9 @@ const DashboardPage: React.FC = () => {
           });
         }
       } catch (err) {
-        console.error("Failed to load feed history:", err);
+        // History is optional/eventually-consistent (backend returns [] when
+        // the DB has no data yet); a fetch failure is routine, not an error.
+        console.warn("Feed history unavailable, retrying:", err);
         setTimeout(() => {
             hasAttemptedHistoryLoad.current = false;
         }, 30000);

@@ -625,7 +625,11 @@ export class WebSocketClient implements IWebSocketClient {
         console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
 
         this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`);
-        this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Reconnecting...`);
+        // Notify once per outage: every attempt spams the notification
+        // channel (observed: 10 identical ERROR lines per disconnect).
+        if (this.reconnectAttempts === 1) {
+            this.notifyError('connection_closed', `Connection closed unexpectedly (${reason}). Reconnecting...`);
+        }
 
         this.reconnectTimeout = setTimeout(() => {
             if (this.isInstanceActive()) {

@@ -1792,25 +1792,29 @@ class FeedManager:
                         f"drops={stats['drop_count']} ({drop_rate:.1%})"
                     )
 
-                    # Orphan-leak detection (Sep-04): the process-local
-                    # ``acq=0`` in the old log masked a real cross-process
-                    # leak. Now we see the global acquired count; if it
-                    # climbs past the pool's expected steady-state (one
-                    # segment per active worker + one per in-flight frame),
-                    # flag it as a real leak.
+                    # Pressure detection: the free-pool fraction is the true
+                    # pressure signal. ``global_acquired`` counts every
+                    # segment checked out across the distributed queues
+                    # (ingestion -> inference -> result reader) plus entries
+                    # awaiting hard-reclaim, so it legitimately sits in the
+                    # thousands on a healthy 6000-slot pool (Sep-05: acq~2600
+                    # at 56% free, zero drops). The old check warned on
+                    # global_acquired > 32 every tick and masked the real
+                    # free-pool branch below. Warn on free fraction first;
+                    # report the global count at info for capacity tracking.
                     expected_in_flight = 16  # rough: 1 per active slot
-                    if global_acquired > expected_in_flight * 2:
-                        self.logger.warning(
-                            f"[SHM-PRESSURE] Global acquired count {global_acquired} "
-                            f"exceeds expected steady-state (~{expected_in_flight}); "
-                            f"orphan leak suspected — investigate release() symmetry."
-                        )
-                    elif free_pct < 20:
+                    if free_pct < 20:
                         self.logger.warning(f"[SHM-PRESSURE] Pool at {free_pct:.1f}% free - inference cannot keep up with ingestion")
                     elif orphan > stats['pool_size'] * 0.1:
                         self.logger.warning(
                             f"[SHM-PRESSURE] Orphan segment count {orphan} > 10% of pool. SHM recycling is leaking; "
                             f"check that release() is being called for every acquire()."
+                        )
+                    elif global_acquired > expected_in_flight * 2:
+                        self.logger.info(
+                            f"[SHM] Global acquired count {global_acquired} "
+                            f"(segments in distributed queues + reclaim window); "
+                            f"healthy while free pool is {free_pct:.1f}%."
                         )
             except ResourceLimitError as e:
                 logger.error(f"Resource limit exceeded during operation: {e}")
