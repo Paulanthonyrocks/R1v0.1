@@ -244,9 +244,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (roiMode) {
             const point = { x: xClamped, y: yClamped };
             if (roiMode === 'roi') {
-                const newPoints = [...roiPoints, point];
-                setRoiPoints(newPoints);
-                if (newPoints.length === 4) setRoiMode(null);
+                // Stay in edit mode after the 4th point so the
+                // Save/Clear/Cancel toolbar stays visible. Cap at 4
+                // points; extra clicks are ignored until Clear.
+                if (roiPoints.length >= 4) return;
+                setRoiPoints([...roiPoints, point]);
             } else if (roiMode === 'exclusion') {
                 setCurrentExclusionPoints([...currentExclusionPoints, point]);
             }
@@ -619,12 +621,12 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">
-                            {roiMode === 'roi' ? 'Set Inclusion ROI' : 'Add Exclusion Zone'}
+                            {roiMode === 'roi' ? `Set Inclusion ROI (${roiPoints.length}/4)` : `Add Exclusion Zone (${currentExclusionPoints.length} pts)`}
                         </span>
                         {roiMode === 'roi' ? (
                             <>
                                 <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
-                                <button onClick={handleSaveROI} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700">Save ROI</button>
+                                <button onClick={handleSaveROI} disabled={roiPoints.length !== 4} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed">Save ROI</button>
                             </>
                         ) : (
                             <>
