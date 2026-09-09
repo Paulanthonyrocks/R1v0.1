@@ -102,12 +102,7 @@ def async_test(f):
     return wrapper
 
 
-TestPersonalizedRoutingService.test_proactively_suggest_route_suggestion_generated = async_test(
-    TestPersonalizedRoutingService.test_proactively_suggest_route_suggestion_generated
-)
-TestPersonalizedRoutingService.test_proactively_suggest_route_no_common_destination = async_test(
-    TestPersonalizedRoutingService.test_proactively_suggest_route_no_common_destination
-)
+# (async_test wrappers live at EOF, after TestPersonalizedRoutingServiceWithDb.)
 
 
 if __name__ == "__main__":
@@ -712,3 +707,13 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             patterns[0].start_location_summary["longitude"], -118.0001, places=4
         )
+
+
+# Wrapped at EOF (not at first use): the targets live on
+# TestPersonalizedRoutingServiceWithDb, defined below the helper.
+TestPersonalizedRoutingServiceWithDb.test_proactively_suggest_route_suggestion_generated = async_test(
+    TestPersonalizedRoutingServiceWithDb.test_proactively_suggest_route_suggestion_generated
+)
+TestPersonalizedRoutingServiceWithDb.test_proactively_suggest_route_no_common_destination = async_test(
+    TestPersonalizedRoutingServiceWithDb.test_proactively_suggest_route_no_common_destination
+)

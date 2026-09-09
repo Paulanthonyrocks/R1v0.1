@@ -103,7 +103,7 @@ class TrafficSignalService:
 
         ws_payload = SignalStateUpdate(signal_data=signal_data_dto)
         message = WebSocketMessage(
-            type=WebSocketMessageTypeEnum.SIGNAL_STATE_UPDATE, 
+            type=WebSocketMessageTypeEnum.SIGNAL_UPDATE, 
             data=ws_payload.model_dump()
         )
         topic = f"signal:{signal_id}"

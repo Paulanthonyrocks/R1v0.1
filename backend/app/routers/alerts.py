@@ -115,8 +115,6 @@ async def delete_alert_endpoint(
         f"User '{current_user.email}' attempting to delete alert ID: {alert_id}"
     )
 
-    # TODO: Add role-based access control if needed, e.g., only admins can delete.
-
     deleted = await db.delete_alert(alert_id)
     if not deleted:
         logger.warning(
@@ -168,8 +166,6 @@ async def acknowledge_alert_endpoint(
     logger.info(
         f"User '{current_user.email}' attempting to set_acknowledge for alert ID: {alert_id} to {ack_request.acknowledged}"
     )
-
-    # TODO: Add role-based access control if needed.
 
     success = await db.acknowledge_alert(
         alert_id=alert_id, acknowledge=ack_request.acknowledged

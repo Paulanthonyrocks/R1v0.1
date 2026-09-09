@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { computeVarianceStats } from '@/lib/predictive/varianceStats';
 
 const API_BASE_URL = getBackendBaseURL();
 
@@ -22,21 +23,8 @@ export default function PredictivePage() {
     const [loading, setLoading] = useState(false);
 
     // Sidebar stats are computed from the live forecast-vs-actual series,
-    // never hardcoded: MAPE over rows with a nonzero actual, confidence as
-    // its complement. Null when there is nothing to measure.
-    const varianceStats = React.useMemo(() => {
-        const rows = (comparisonData || []).filter(
-            (r) => Number(r?.actual) > 0 && Number.isFinite(Number(r?.forecasted))
-        );
-        if (rows.length === 0) return null;
-        const mape =
-            rows.reduce(
-                (acc, r) =>
-                    acc + Math.abs((Number(r.forecasted) - Number(r.actual)) / Number(r.actual)),
-                0
-            ) / rows.length;
-        return { mapePct: mape * 100, confidencePct: Math.max(0, Math.min(100, 100 - mape * 100)), n: rows.length };
-    }, [comparisonData]);
+    // never hardcoded (see lib/predictive/varianceStats.ts, unit-tested).
+    const varianceStats = React.useMemo(() => computeVarianceStats(comparisonData), [comparisonData]);
 
     // Next peak is the argmax of the forecasted series, not a fixed time.
     const nextPeak = React.useMemo(() => {

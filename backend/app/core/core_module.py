@@ -174,6 +174,15 @@ class CoreModule:
         _lb_cfg = self.config.get("lane_bands", {})
         self.lane_bands_enabled = _lb_cfg.get("enabled", True)
         self.lane_bands_n = max(1, int(_lb_cfg.get("num_bands", 3)))
+        # Per-track lane hysteresis (Sep-09: the two-way verdict flapped
+        # True<->False per band over minutes on perspective feeds -- bands
+        # straddle real lanes, so a boundary-riding vehicle flickers bands
+        # every frame and feeds noisy vectors to the calibrator). A lane
+        # change only commits after this many CONSECUTIVE frames disagreeing;
+        # single-frame flicker never reaches track["lane"]. Missing bbox
+        # (occlusion) leaves the committed lane untouched by construction.
+        self.lane_hysteresis_frames = max(1, int(_lb_cfg.get("hysteresis_frames", 3)))
+        self._lane_votes: Dict[str, list] = {}
         # Pass exclusion zones through so DetectionEngine actually filters
         # them (audit finding #7) -- previously only the polygon reached the
         # detector and exclusion_zones were dead config.
@@ -326,7 +335,8 @@ class CoreModule:
             if zone_np is not None:
                 cv2.fillPoly(self.roi_mask, [zone_np], 0)
 
-    def _assign_lane_band(self, track: Dict, frame_width: int, frame_height: int) -> None:
+    def _assign_lane_band(self, track: Dict, frame_width: int, frame_height: int,
+                          tid: Optional[str] = None) -> None:
         """Set track["lane"] from lateral position within the ROI at the
         vehicle's own depth row.
 
@@ -379,7 +389,28 @@ class CoreModule:
         if x_max <= x_min:
             return
         frac = min(1.0, max(0.0, (cx - x_min) / (x_max - x_min)))
-        track["lane"] = min(self.lane_bands_n - 1, int(frac * self.lane_bands_n))
+        raw = min(self.lane_bands_n - 1, int(frac * self.lane_bands_n))
+        if tid is None:
+            track["lane"] = raw
+            return
+        # Hysteresis vote: [committed, pending, pending_count]. Flicker that
+        # doesn't sustain never reaches the committed lane the calibrator and
+        # SafetyMonitor consume.
+        st = self._lane_votes.get(tid)
+        if st is None or st[0] == raw:
+            self._lane_votes[tid] = [raw, raw, 0]
+            track["lane"] = raw
+            return
+        if st[1] == raw:
+            st[2] += 1
+        else:
+            st[1] = raw
+            st[2] = 1
+        if st[2] >= self.lane_hysteresis_frames:
+            st[0] = raw
+            st[1] = raw
+            st[2] = 0
+        track["lane"] = st[0]
 
     def _preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, bool, int, int]:
         """
@@ -924,8 +955,9 @@ class CoreModule:
                         track["direction"] = "East" if vx > 0 else "West"
 
                 # Lane id from x-position bands (see __init__ note). Runs on
-                # every finalize so ROI updates apply immediately.
-                self._assign_lane_band(track, frame.shape[1], frame.shape[0])
+                # every finalize so ROI updates apply immediately. tid carries
+                # the hysteresis vote; stale tids pruned below the loop.
+                self._assign_lane_band(track, frame.shape[1], frame.shape[0], tid)
 
                 # Filtering for visualisation
                 if track["status"] == "active":
@@ -935,6 +967,10 @@ class CoreModule:
                 elif track["status"] == "predicting":
                     if (current_time - track["last_seen"]) < self.predict_timeout:
                         vis_tracks[tid] = track
+
+        # Drop hysteresis votes for dead tracks so a recycled tid starts clean.
+        if self._lane_votes:
+            self._lane_votes = {k: v for k, v in self._lane_votes.items() if k in vehicle_data}
 
         # Compute feed-level metrics (average speed, congestion)
         feed_metrics = self._compute_feed_metrics(vis_tracks)

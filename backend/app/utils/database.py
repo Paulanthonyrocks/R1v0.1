@@ -365,6 +365,28 @@ class DatabaseManager:
                 except sqlite3.Error as e:
                     logger.error(f"Failed to add column {col_name}: {e}")
 
+        # Alerts table shipped narrow (no geo/ack columns) while the code reads
+        # and writes the wide schema. Backfill existing databases in place.
+        cursor.execute("PRAGMA table_info(alerts)")
+        alert_columns = [row[1] for row in cursor.fetchall()]
+
+        required_alert_columns = [
+            ("latitude", "REAL"),
+            ("longitude", "REAL"),
+            ("acknowledged_by", "TEXT"),
+            ("acknowledged_at", "REAL"),
+            ("source_component", "TEXT"),
+            ("tags", "TEXT"),
+        ]
+
+        for col_name, col_type in required_alert_columns:
+            if col_name not in alert_columns:
+                logger.info(f"Adding missing column '{col_name}' to alerts table.")
+                try:
+                    cursor.execute(f"ALTER TABLE alerts ADD COLUMN {col_name} {col_type}")
+                except sqlite3.Error as e:
+                    logger.error(f"Failed to add column {col_name}: {e}")
+
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
         # ... (This method remains unchanged)
         cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
@@ -435,8 +457,9 @@ class DatabaseManager:
                 timestamp REAL NOT NULL, -- Store as Unix timestamp (float)
                 severity TEXT NOT NULL CHECK(severity IN ('INFO', 'WARNING', 'CRITICAL', 'ERROR')),
                 feed_id TEXT, -- Allow NULL for system alerts
-                
-                message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)))""")
+                message TEXT NOT NULL, details TEXT, acknowledged INTEGER DEFAULT 0 NOT NULL CHECK(acknowledged IN (0, 1)),
+                latitude REAL, longitude REAL, acknowledged_by TEXT, acknowledged_at REAL,
+                source_component TEXT, tags TEXT)""")
         
         cursor.execute("""CREATE TABLE IF NOT EXISTS incidents (
                 id TEXT PRIMARY KEY,
@@ -1276,6 +1299,62 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error during _execute_save_alert: {e}", exc_info=True)
             raise
+
+    def _execute_acknowledge_alert(self, alert_id: int, acknowledge: bool) -> bool:
+        """Synchronous UPDATE of an alert's acknowledgement state. Returns True if the row exists."""
+        acknowledged_at = time.time() if acknowledge else None
+        sql = "UPDATE alerts SET acknowledged = ?, acknowledged_at = ? WHERE id = ?"
+        params = (1 if acknowledge else 0, acknowledged_at, alert_id)
+        self._validate_query(sql, params)
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                conn.commit()
+                return cursor.rowcount > 0
+
+    async def acknowledge_alert(self, alert_id: int, acknowledge: bool) -> bool:
+        """Sets an alert's acknowledgement state. Returns False when the id is unknown."""
+        try:
+            return await asyncio.to_thread(self._execute_acknowledge_alert, alert_id, acknowledge)
+        except Exception as e:
+            logger.error(f"Error acknowledging alert {alert_id}: {e}", exc_info=True)
+            return False
+
+    def _execute_get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
+        sql = "SELECT id, timestamp, severity, feed_id, message, latitude, longitude, details, acknowledged, acknowledged_by, acknowledged_at, source_component, tags FROM alerts WHERE id = ?"
+        self._validate_query(sql, (alert_id,))
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (alert_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_alert_by_id(self, alert_id: int) -> Optional[Dict]:
+        """Fetches a single alert row by id, or None when unknown."""
+        try:
+            return await asyncio.to_thread(self._execute_get_alert_by_id, alert_id)
+        except Exception as e:
+            logger.error(f"Error fetching alert {alert_id}: {e}", exc_info=True)
+            return None
+
+    def _execute_delete_alert(self, alert_id: int) -> bool:
+        sql = "DELETE FROM alerts WHERE id = ?"
+        self._validate_query(sql, (alert_id,))
+        with self.lock:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, (alert_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+
+    async def delete_alert(self, alert_id: int) -> bool:
+        """Deletes an alert by id. Returns False when the id is unknown."""
+        try:
+            return await asyncio.to_thread(self._execute_delete_alert, alert_id)
+        except Exception as e:
+            logger.error(f"Error deleting alert {alert_id}: {e}", exc_info=True)
+            return False
 
     async def get_vehicle_tracks(self, limit: int = 500, offset: int = 0, filters: Dict = None) -> List[Dict]:
         """Returns raw vehicle tracking data with optional filtering."""

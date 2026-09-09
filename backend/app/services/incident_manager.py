@@ -12,6 +12,11 @@ from app.services.notification_service import NotificationService
 
 logger = logging.getLogger("app.services.incident_manager")
 
+# Snapshot severity gate: only these severities may trigger a jpg write.
+# Rank order mirrors IncidentSeverityEnum. Threshold itself comes from
+# config (incident_management.snapshot_min_severity, default HIGH).
+_SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
 class IncidentManager:
     def __init__(
         self,
@@ -48,6 +53,22 @@ class IncidentManager:
         self._snapshot_max_per_feed_per_min: int = int(
             self.config.get("incident_management", {}).get("snapshot_max_per_feed_per_min", 6)
         )
+        # Snapshot severity gate (backlog item 3): only incidents at or above
+        # this severity trigger a jpg write. The incident itself is always
+        # logged + broadcast; only the disk write is shed. Default HIGH, so
+        # MEDIUM congestion/info anomalies stop writing snapshots while
+        # HIGH/CRITICAL safety alerts still do. Accepts enum or string.
+        _min_sev = self.config.get("incident_management", {}).get(
+            "snapshot_min_severity", "HIGH"
+        )
+        _min_sev = _min_sev.value if hasattr(_min_sev, "value") else str(_min_sev)
+        self._snapshot_min_severity = _min_sev.upper()
+        if self._snapshot_min_severity not in _SEVERITY_RANK:
+            logger.warning(
+                f"Unknown snapshot_min_severity {self._snapshot_min_severity!r}, "
+                "falling back to HIGH"
+            )
+            self._snapshot_min_severity = "HIGH"
         
         logger.info("IncidentManager initialized.")
 
@@ -171,7 +192,7 @@ class IncidentManager:
                 # Run in background to not block the pipeline
                 asyncio.create_task(self._notification_service.notify_incident(incident_data))
 
-            # 7. Request Snapshot (with per-vehicle dedup)
+            # 7. Request Snapshot (severity gate + per-vehicle dedup + rate cap)
             # The incident itself is rate-limited by (feed_id, subtype) upstream,
             # but a wrong-way storm that produces N distinct vehicles still spawns
             # N incidents, each requesting a snapshot, and N jpg writes per minute
@@ -181,24 +202,34 @@ class IncidentManager:
             # multiply into a snapshot storm. The incident log itself is preserved
             # (rate-limit above), only the disk write is deduplicated.
             if source_feed_id and self._feed_manager and details:
-                _veh = details.get("vehicle_id") or details.get("meta", {}).get("vehicle_id")
-                if _veh:
-                    _snap_key = f"{source_feed_id}:{_veh}"
-                    _now_snap = time.time()
-                    _last_snap = self._snapshot_last_fire.get(_snap_key, 0.0)
-                    if _now_snap - _last_snap < self._snapshot_cooldown_sec:
-                        logger.debug(
-                            f"Snapshot suppressed for {_snap_key} "
-                            f"(within {self._snapshot_cooldown_sec}s cooldown, "
-                            f"last={_last_snap:.1f})"
-                        )
-                    else:
-                        self._snapshot_last_fire[_snap_key] = _now_snap
-                        await self._request_snapshot_gated(source_feed_id, incident_id)
+                # Severity gate first: LOW/MEDIUM incidents are logged +
+                # broadcast but never touch the disk (no cooldown bookkeeping).
+                _sev = severity.value if hasattr(severity, "value") else str(severity)
+                _sev = _sev.upper()
+                if _SEVERITY_RANK.get(_sev, 0) < _SEVERITY_RANK[self._snapshot_min_severity]:
+                    logger.debug(
+                        f"Snapshot shed for incident {incident_id} "
+                        f"(severity {_sev} < {self._snapshot_min_severity})"
+                    )
                 else:
-                    # No vehicle_id available (e.g. congestion incidents) — snapshot
-                    # as before. The (feed_id, subtype) rate-limit still applies.
-                    await self._request_snapshot_gated(source_feed_id, incident_id)
+                    _veh = details.get("vehicle_id") or details.get("meta", {}).get("vehicle_id")
+                    if _veh:
+                        _snap_key = f"{source_feed_id}:{_veh}"
+                        _now_snap = time.time()
+                        _last_snap = self._snapshot_last_fire.get(_snap_key, 0.0)
+                        if _now_snap - _last_snap < self._snapshot_cooldown_sec:
+                            logger.debug(
+                                f"Snapshot suppressed for {_snap_key} "
+                                f"(within {self._snapshot_cooldown_sec}s cooldown, "
+                                f"last={_last_snap:.1f})"
+                            )
+                        else:
+                            self._snapshot_last_fire[_snap_key] = _now_snap
+                            await self._request_snapshot_gated(source_feed_id, incident_id)
+                    else:
+                        # No vehicle_id available (e.g. congestion incidents) — snapshot
+                        # as before. The (feed_id, subtype) rate-limit still applies.
+                        await self._request_snapshot_gated(source_feed_id, incident_id)
 
             logger.info(f"Successfully created incident {incident_id}: {description}")
             return incident_id

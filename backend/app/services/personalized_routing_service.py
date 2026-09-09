@@ -304,7 +304,9 @@ class PersonalizedRoutingService:
     async def proactively_suggest_route(self, user_id: str) -> Optional[str]:
         """
         Proactively suggests a route to the user based on their most common destination.
-        For now, simulates this by logging a placeholder suggestion.
+        Frequency-based nudge, not traffic-aware: the message does not consult
+        live congestion. Skipped when there is no history or recent negative
+        feedback for the same destination.
         """
         async with self._db_manager.get_session() as session:
             try:

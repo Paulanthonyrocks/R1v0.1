@@ -481,28 +481,54 @@ class GlobalReIDManager:
             new_ids = new_ids[:capacity]
             if not new_ids: return
             
-            # Only log when we actually pulled something new. Under the throttled
-            # full-sync this is now rare (the pub/sub path does steady-state
-            # upkeep), so the log line is informative rather than spam.
-            if new_ids:
-                logger.info(f"Syncing {len(new_ids)} new identities from Redis.")
-            for gid in new_ids:
-                meta = self.redis.hgetall(f"reid:meta:{gid}")
-                if not meta: continue
-                emb_bytes = self.redis.get(f"reid:emb:{gid}")
-                if not emb_bytes: continue
-                embedding = self._normalize(np.frombuffer(emb_bytes, dtype=np.float32))
-                with self._lock:
-                    if gid not in self.gallery_ids:
-                        self.gallery_ids.append(gid)
-                        if self.gallery_matrix is None:
-                            self.gallery_matrix = embedding.reshape(1, -1)
-                        else:
-                            self.gallery_matrix = np.vstack([self.gallery_matrix, embedding])
-                        self.metadata_store[gid] = {
-                            "last_seen": float(meta.get(b"last_seen", time.time())),
-                            "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
-                        }
+            # Batched fetch: ONE pipeline round-trip for every missing id
+            # instead of 2 sequential round-trips (hgetall + get) per id.
+            # Previously a full-sized pull cost ~2N round-trips (the observed
+            # ~100k round-trips/run). Network stays outside the lock; the merge
+            # below takes it once and vstacks once (was: one full-matrix copy
+            # per id, O(N^2) per sync).
+            try:
+                pipe = self.redis.pipeline()
+                for gid in new_ids:
+                    pipe.hgetall(f"reid:meta:{gid}")
+                    pipe.get(f"reid:emb:{gid}")
+                results = pipe.execute()
+            except Exception as e:
+                logger.error(f"Redis sync error: {e}")
+                return
+            fetched = []
+            for i, gid in enumerate(new_ids):
+                meta = results[2 * i]
+                emb_bytes = results[2 * i + 1]
+                if not meta or not emb_bytes:
+                    continue
+                try:
+                    embedding = self._normalize(np.frombuffer(emb_bytes, dtype=np.float32))
+                except Exception:
+                    continue
+                fetched.append((gid, embedding, meta))
+            if not fetched:
+                return
+            logger.info(f"Syncing {len(fetched)} new identities from Redis.")
+            with self._lock:
+                known = set(self.gallery_ids)
+                new_rows = []
+                for gid, embedding, meta in fetched:
+                    if gid in known:
+                        continue
+                    known.add(gid)
+                    self.gallery_ids.append(gid)
+                    new_rows.append(embedding)
+                    self.metadata_store[gid] = {
+                        "last_seen": float(meta.get(b"last_seen", time.time())),
+                        "metadata": {"class_name": meta.get(b"class_name", b"unknown").decode('utf-8')}
+                    }
+                if new_rows:
+                    batch = np.vstack(new_rows)
+                    if self.gallery_matrix is None:
+                        self.gallery_matrix = batch
+                    else:
+                        self.gallery_matrix = np.vstack([self.gallery_matrix, batch])
         except Exception as e:
             logger.error(f"Redis sync error: {e}")
 

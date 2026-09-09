@@ -106,6 +106,12 @@ incident_management:
   # Feed_1 wrote ~10 jpgs in 15s). 6/min keeps disk writes bounded; the
   # incidents themselves are still logged, only the jpg is shed. 0 disables.
   snapshot_max_per_feed_per_min: 6
+  # Snapshot severity gate: only incidents at or above this severity write a
+  # jpg (LOW < MEDIUM < HIGH < CRITICAL). The incident itself is always logged
+  # + broadcast; only the disk write is shed. HIGH keeps safety alerts (wrong-
+  # way CRITICAL, sudden-decel HIGH) snapshotting while MEDIUM congestion/info
+  # anomalies stop touching disk. Lower to MEDIUM if operators miss those jpgs.
+  snapshot_min_severity: HIGH
 inference:
   # Batch 2: at a 50ms fill timeout ~1-2 tasks arrive per tick per worker, so
   # batch 8 never filled (GPU ran batch-1/2 forwards paying launch overhead
@@ -187,6 +193,11 @@ lane_bands:
   # both directions trips the two-way verdict instead of storming.
   enabled: true
   num_bands: 6
+  # Per-track lane hysteresis: a lane change commits only after this many
+  # CONSECUTIVE frames disagree with the committed lane (Sep-09: boundary
+  # flicker fed noisy vectors to the calibrator and flapped the two-way
+  # verdict). 3 at ~5fps inference ~= 0.6s lag; real lane changes take seconds.
+  hysteresis_frames: 3
 log_files:
   allowed_log_files:
   - backend_main.log

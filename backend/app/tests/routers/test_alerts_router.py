@@ -165,8 +165,9 @@ class TestAlertsRouter(unittest.TestCase):
         # Verify WebSocket broadcast
         mock_connection_manager.broadcast.assert_awaited_once()
         args, _ = mock_connection_manager.broadcast.call_args
-        sent_message: WebSocketMessage = args[0]
-        self.assertEqual(sent_message.data.status, "unacknowledged")
+        sent_message = WebSocketMessage.model_validate_json(args[0])
+        self.assertIsInstance(sent_message.data, dict)
+        self.assertEqual(sent_message.data['status'], "unacknowledged")
 
     def test_acknowledge_alert_not_found(self):
         alert_id_to_ack = 999
