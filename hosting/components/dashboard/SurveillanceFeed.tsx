@@ -244,10 +244,11 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         if (roiMode) {
             const point = { x: xClamped, y: yClamped };
             if (roiMode === 'roi') {
-                // Stay in edit mode after the 4th point so the
-                // Save/Clear/Cancel toolbar stays visible. Cap at 4
-                // points; extra clicks are ignored until Clear.
-                if (roiPoints.length >= 4) return;
+                // Polygon ROI: any N >= 3 points (matches backend validation,
+                // feed_manager/websocket reject only < 3). No upper cap —
+                // complex intersections need more than 4 vertices; the mask
+                // (detection.py _create_mask) and lane ROI path both handle
+                // N-gons. Save is gated at >= 3 in the toolbar.
                 setRoiPoints([...roiPoints, point]);
             } else if (roiMode === 'exclusion') {
                 setCurrentExclusionPoints([...currentExclusionPoints, point]);
@@ -291,7 +292,7 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
     };
 
     const handleSaveROI = async () => {
-        if (!feed_id) return;
+        if (!feed_id || roiPoints.length < 3) return;
         try {
             updateFeedConfig({ roi: roiPoints });
             setRoiMode(null);
@@ -621,12 +622,12 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                 {isAdmin && roiMode && (
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-black/80 p-2 rounded flex gap-2 z-50">
                         <span className="text-white text-xs self-center mr-2">
-                            {roiMode === 'roi' ? `Set Inclusion ROI (${roiPoints.length}/4)` : `Add Exclusion Zone (${currentExclusionPoints.length} pts)`}
+                            {roiMode === 'roi' ? `Set Inclusion ROI (${roiPoints.length}${roiPoints.length < 3 ? '/3+' : ''} pts)` : `Add Exclusion Zone (${currentExclusionPoints.length} pts)`}
                         </span>
                         {roiMode === 'roi' ? (
                             <>
                                 <button onClick={handleClearROI} className="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">Clear</button>
-                                <button onClick={handleSaveROI} disabled={roiPoints.length !== 4} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed">Save ROI</button>
+                                <button onClick={handleSaveROI} disabled={roiPoints.length < 3} className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed">Save ROI</button>
                             </>
                         ) : (
                             <>
