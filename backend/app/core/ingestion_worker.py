@@ -460,6 +460,7 @@ def ingestion_worker(
 
                 if cached_pressure > 0.7:
                     metrics.frames_dropped += 1
+                    metrics.drops_other += 1
                     if metrics.frames_dropped % 100 == 0:
                         logger.warning(
                             f"[{feed_id}] Pipeline pressure high ({cached_pressure:.2f}). "
@@ -502,6 +503,7 @@ def ingestion_worker(
                         )
                     if _shedding:
                         metrics.frames_dropped += 1
+                        metrics.drops_other += 1
                         if metrics.frames_dropped % 100 == 0:
                             if _free_frac < shm_min_free_fraction:
                                 _why = (
@@ -588,6 +590,7 @@ def ingestion_worker(
                             f"[{feed_id}] Empty frame bytes, skipping frame {frame_index}"
                         )
                         metrics.frames_dropped += 1
+                        metrics.drops_other += 1
                         continue
 
                     # Secondary producer: fan JPEG bytes to the per-feed
@@ -612,6 +615,7 @@ def ingestion_worker(
                     shm_ref = frame_buffer.acquire()
                     if not shm_ref:
                         metrics.frames_dropped += 1
+                        metrics.drops_other += 1
                         # SHM pool exhausted - apply aggressive backpressure
                         # Graduated backpressure based on recent drop rate
                         drop_rate = metrics.frames_dropped / max(1, metrics.frames_processed + metrics.frames_dropped)
@@ -655,6 +659,7 @@ def ingestion_worker(
                         frame_buffer.release(shm_ref)
                         shm_ref = None
                         metrics.frames_dropped += 1
+                        metrics.drops_output_full += 1
                         # NOTE: do NOT increment consecutive_errors here. That
                         # counter is for *read/stream* failures (it breaks the
                         # loop after max_consecutive_errors). A full output

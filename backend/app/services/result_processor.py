@@ -92,6 +92,9 @@ _NON_SMOOTHED_METRIC_KEYS = frozenset({
     # truth in latest_metrics and the per-frame m payload.
     "frames_processed",           # monotonic counter
     "frames_dropped",             # monotonic counter
+    "drops_shm_recycled",         # monotonic counter (drop-cause split, Sep-09)
+    "drops_output_full",          # monotonic counter (drop-cause split, Sep-09)
+    "drops_other",                # monotonic counter (drop-cause split, Sep-09)
     "errors",                     # monotonic counter
     "shm_leaks",                  # monotonic counter
     "uptime_seconds",             # monotonically increasing

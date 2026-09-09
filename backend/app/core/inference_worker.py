@@ -259,6 +259,7 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
     except queue.Full:
         if metrics_obj is not None:
             metrics_obj.frames_dropped += 1
+            metrics_obj.drops_output_full += 1
     except Exception:
         # Forwarding must never raise out of the per-item handler.
         pass
@@ -632,6 +633,13 @@ def inference_worker(
             logger.error(f"[Worker {worker_id}] Command error: {e}")
 
     last_metrics_log = time.time()
+    # Per-stage timing accumulators (Sep-09 throughput work): seconds spent in
+    # each hot-path stage since the last METRICS log. Emitted on the same 30s
+    # cadence so a slow worker is attributable (GPU forward vs tracking vs
+    # ReID vs decode) instead of guessed at from fps alone. Reset after emit.
+    _stage_totals: Dict[str, float] = {"shm_read_decode": 0.0, "batch_infer": 0.0,
+                                       "track_post": 0.0, "reid": 0.0, "forward": 0.0}
+    _stage_frames: int = 0
 
     try:
         while True:
@@ -830,6 +838,7 @@ def inference_worker(
                         continue
 
                     # Read frame from shared memory
+                    _t0 = time.perf_counter()
                     if frame_buffer:
                         try:
                             res = frame_buffer.read(shm_ref, expected_feed_id=feed_id)
@@ -859,6 +868,7 @@ def inference_worker(
                             # cross-feed corruption). The real owner releases it.
                             if feed_id in metrics_map:
                                 metrics_map[feed_id].frames_dropped += 1
+                                metrics_map[feed_id].drops_shm_recycled += 1
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                             continue
@@ -1036,6 +1046,7 @@ def inference_worker(
 
                         core.last_activity = time.time()
 
+                    _stage_totals["shm_read_decode"] += time.perf_counter() - _t0
                     meta_entry = {
                         "msg_id": msg_id,
                         "slot_q": slot_q_ref,
@@ -1068,6 +1079,7 @@ def inference_worker(
                 # silently reported as an empty road (audit finding #5).
                 batch_inference_failed = False
                 if frames_to_infer and shared_model is not None:
+                    _t_infer = time.perf_counter()
                     try:
                         # Audit #3b: passing imgsz explicitly caps YOLO's
                         # internal letterbox at the input frame's longest
@@ -1191,6 +1203,8 @@ def inference_worker(
                         # the watchdog respawns a fresh worker.
                         if _is_cuda_fatal(str(e)):
                             _exit_worker_fatal(worker_id, "*batch*", str(e))
+                    finally:
+                        _stage_totals["batch_infer"] += time.perf_counter() - _t_infer
 
                 # Tracking & output
                 for i, meta in enumerate(batch_meta):
@@ -1237,6 +1251,7 @@ def inference_worker(
                         else:
                             detections = batch_detections_map.get(i, []) if meta["should_detect"] else []
 
+                        _t_track = time.perf_counter()
                         vis_tracks, lane_bounds, lane_lines = core.detect_and_track(
                             frame, f_idx, external_detections=detections, timestamp=meta.get("timestamp")
                         )
@@ -1296,6 +1311,9 @@ def inference_worker(
                             core._first_detection_done = True
 
                         # Re-ID matching (guarded by config)
+                        _stage_totals["track_post"] += time.perf_counter() - _t_track
+                        _stage_frames += 1
+                        _t_reid = time.perf_counter()
                         if vehicle_det_cfg.get("reid_enabled", True):
                             # Per-frame MATCH budget. With appearance tracking on,
                             # many new tracks carry embeddings every frame, and
@@ -1349,6 +1367,8 @@ def inference_worker(
                         monitor.update_vehicles(vis_tracks)
 
                         # Merge operational metrics with traffic analytics
+                        _stage_totals["reid"] += time.perf_counter() - _t_reid
+                        _t_fwd = time.perf_counter()
                         combined_metrics = metrics_obj.to_dict()
                         combined_metrics.update(monitor.get_metrics())
 
@@ -1403,6 +1423,9 @@ def inference_worker(
                             )
                         except queue.Full:
                             metrics_obj.frames_dropped += 1
+                            metrics_obj.drops_output_full += 1
+                        finally:
+                            _stage_totals["forward"] += time.perf_counter() - _t_fwd
                     except Exception as e:
                         # One frame's detection/tracking/ReID blew up. Record it
                         # and keep going so sibling feeds in this batch are not
@@ -1428,6 +1451,18 @@ def inference_worker(
                 if now - last_metrics_log > 30.0:
                     for fid, m in metrics_map.items():
                         logger.info(f"[Worker {worker_id}][{fid}] METRICS: {json.dumps(m.to_dict())}")
+                    # Stage-timing attribution: ms/frame per stage over the
+                    # same 30s window. shm_read_decode+batch_infer+track_post
+                    # +reid+forward ~= wall time per PROCESSED frame; the gap
+                    # vs 1/fps is idle/queue-wait (expected under low load).
+                    if _stage_frames > 0:
+                        _per = {k: round(v / _stage_frames * 1000.0, 1) for k, v in _stage_totals.items()}
+                        logger.info(
+                            f"[Worker {worker_id}] STAGE-TIMINGS (ms/frame over window, "
+                            f"frames={_stage_frames}): {_per}"
+                        )
+                        _stage_totals = {k: 0.0 for k in _stage_totals}
+                        _stage_frames = 0
                     last_metrics_log = now
 
             except Exception as e:

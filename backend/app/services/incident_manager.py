@@ -231,7 +231,10 @@ class IncidentManager:
                         # as before. The (feed_id, subtype) rate-limit still applies.
                         await self._request_snapshot_gated(source_feed_id, incident_id)
 
-            logger.info(f"Successfully created incident {incident_id}: {description}")
+            logger.info(
+                f"Successfully created incident {incident_id} on feed "
+                f"{source_feed_id or 'UNKNOWN'}: {description}"
+            )
             return incident_id
 
         except Exception as e:

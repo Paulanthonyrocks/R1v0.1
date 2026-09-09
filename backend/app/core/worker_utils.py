@@ -26,6 +26,16 @@ class WorkerMetrics:
         self.feed_id = feed_id
         self.frames_processed = 0
         self.frames_dropped = 0
+        # Drop-cause breakdown (Sep-09: all three funnel into frames_dropped,
+        # making worker-slow vs result-processor-slow indistinguishable in
+        # METRICS lines). frames_dropped remains the total; these three must
+        # sum to it (assert nowhere enforced; keep sites in sync):
+        #   drops_shm_recycled - SHM segment recycled under us (worker slow)
+        #   drops_output_full  - central output queue full (result processor slow)
+        #   drops_other        - ingestion pressure/shedding (ingestion_worker)
+        self.drops_shm_recycled = 0
+        self.drops_output_full = 0
+        self.drops_other = 0
         self.errors = 0
         self.shm_leaks = 0
         self.start_time = time.monotonic()
@@ -55,21 +65,15 @@ class WorkerMetrics:
             "feed_id": self.feed_id,
             "frames_processed": self.frames_processed,
             "frames_dropped": self.frames_dropped,
+            "drops_shm_recycled": self.drops_shm_recycled,
+            "drops_output_full": self.drops_output_full,
+            "drops_other": self.drops_other,
             "shm_leaks": self.shm_leaks,
             "errors": self.errors,
             "uptime_seconds": uptime,
             "fps": rolling_fps,
             "lifetime_fps": self.frames_processed / uptime if uptime > 0 else 0
         }
-    
-    def reset(self):
-        """Reset metrics while preserving feed_id."""
-        self.frames_processed = 0
-        self.frames_dropped = 0
-        self.errors = 0
-        self.shm_leaks = 0
-        self.start_time = time.monotonic()
-        self._frame_timestamps.clear()
 
 
 def make_serializable(obj: Any) -> Any:

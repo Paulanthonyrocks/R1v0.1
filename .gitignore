@@ -47,3 +47,8 @@ memory.md
 backend/scripts
 # Model weights (6.5MB binaries; re-downloadable from ultralytics)
 *.pt
+# TensorRT/ONNX artifacts (139MB engine, 12.5MB onnx — built per-GPU on the
+# Kaggle box, NEVER commit; a pushed .engine exceeds GitHub's 100MB limit and
+# breaks the auto-commit deploy loop)
+*.engine
+*.onnx
