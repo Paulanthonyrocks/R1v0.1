@@ -88,6 +88,14 @@ class ReIDEmbedder:
         self.backbone.to(self.device)
         self.backbone.eval()
         
+        # Fast cv2 preprocessing (Sep-10): the torchvision T.Compose path ran
+        # ToPILImage -> Resize(256) -> ToTensor per crop -- PIL resize in
+        # Python plus a per-crop tensor build. TRACK-SUBSTAGES measured the
+        # assoc+update embed path at 103-123 ms/frame (56-79% of all remaining
+        # track_post cost). cv2.resize + one stacked torch.from_numpy is
+        # numerically equivalent (bilinear + ImageNet normalize) and 10-30x
+        # cheaper. The PIL path is retained below as a fallback for exotic
+        # dtypes/strides cv2 can't take.
         # Standard ImageNet normalization for pre-trained models
         self.transform = T.Compose([
             T.ToPILImage(),
@@ -95,6 +103,40 @@ class ReIDEmbedder:
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
+        self._mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+        self._std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+    def _preprocess_batch(self, images: List[np.ndarray]):
+        """Fast cv2 path for a list of uint8 HWC crops.
+
+        Resize each crop (bilinear, same as T.Resize), stack ONCE in numpy
+        (uint8, single allocation), zero-copy into a torch tensor. The caller
+        moves it to the device AS UINT8 (4x smaller H2D than float32) and does
+        the float/255 + ImageNet normalize ON THE GPU -- the CPU-side float
+        conversion + per-crop tensor builds were the actual cost of the old
+        PIL path and of a naive cv2 port that still converted on CPU.
+
+        Returns (N, H, W, 3) uint8 tensor, or None when ANY crop is not a
+        uint8 ndarray (caller falls back to the PIL compose for the batch).
+        """
+        try:
+            import cv2 as _cv
+            h, w = self.input_size[1], self.input_size[0]
+            resized = []
+            for img in images:
+                if not isinstance(img, np.ndarray) or img.dtype != np.uint8:
+                    return None
+                resized.append(_cv.resize(img, (w, h), interpolation=_cv.INTER_LINEAR))
+            arr = np.stack(resized)  # (N, H, W, 3) uint8
+            return torch.from_numpy(arr)
+        except Exception:
+            return None
+
+    def _normalize_batch(self, batch: torch.Tensor) -> torch.Tensor:
+        """ImageNet normalization, batched (equivalent to T.Normalize)."""
+        mean = self._mean.to(batch.device)
+        std = self._std.to(batch.device)
+        return (batch - mean) / std
 
     @torch.no_grad()
     def get_embedding(self, image: np.ndarray) -> Optional[np.ndarray]:
@@ -105,15 +147,23 @@ class ReIDEmbedder:
             return None
             
         try:
-            # Prepare image (CoreModule provides RGB)
-            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
-            
+            # Prepare image (CoreModule provides RGB) -- same fast path as the
+            # batch embedder; PIL fallback for non-uint8 crops.
+            batched = self._preprocess_batch([image])
+            if batched is not None:
+                x = batched.to(self.device)
+                x = x.permute(0, 3, 1, 2).contiguous().float().div_(255.0)
+                input_tensor = self._normalize_batch(x)
+            else:
+                input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+                input_tensor = self._normalize_batch(input_tensor)
+
             # Forward pass
             embedding = self.backbone(input_tensor)
-            
+
             # L2 Normalize
             embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
-            
+
             return embedding.cpu().numpy()[0]
         except Exception as e:
             logger.error(f"ReID embedding failed: {e}")
@@ -143,12 +193,21 @@ class ReIDEmbedder:
             return [None] * len(images)
 
         try:
-            # Batch transform
-            batch_tensors = []
-            for img in valid_images:
-                batch_tensors.append(self.transform(img))
-            
-            input_tensor = torch.stack(batch_tensors).to(self.device)
+            # Fast path (Sep-10): resize+stack as uint8 numpy (one allocation),
+            # H2D as uint8 (4x smaller transfer), float/255 + ImageNet normalize
+            # ON THE GPU. The old per-crop PIL compose was the dominant ReID
+            # cost (TRACK-SUBSTAGES: reid_assoc 103-123 ms/frame). Falls back
+            # to the PIL compose when any crop is not a uint8 ndarray.
+            batched = self._preprocess_batch(valid_images)
+            if batched is not None:
+                x = batched.to(self.device)                       # (N,H,W,3) uint8
+                x = x.permute(0, 3, 1, 2).contiguous().float().div_(255.0)
+                input_tensor = self._normalize_batch(x)
+            else:
+                # Any non-uint8 crop -> PIL compose per crop (slow path, rare).
+                input_tensor = torch.stack(
+                    [self.transform(img) for img in valid_images]
+                ).to(self.device)
 
             # Forward pass
             embeddings = self.backbone(input_tensor)

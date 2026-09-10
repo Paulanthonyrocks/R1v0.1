@@ -593,7 +593,14 @@ performance:
   # Reduced from 8 to 4 (2 per GPU) to eliminate CUDA context thrashing
   # from 12 concurrent CUDA inits. With SLOT_COUNT=6 and 2 GPUs, 4 workers
   # = 1:1 worker:slot affinity. Each GPU runs 2 workers pinned to it.
-  inference_pool_size: 4
+  # Dropped 4 -> 3 (Sep-10): at 3 feeds (slots 0..2) the 4th worker loaded
+  # TRT engine + ReID embedder, held ~1GB VRAM + a core, and processed ZERO
+  # frames across the full 68-min run -- pure idle standby cost. 3 workers
+  # = 1:1 with current feeds; W0+W2 -> GPU0, W1 -> GPU1. Raise back to 4
+  # BEFORE adding a 4th feed (the routing `(wid + sub*pool_size) % 6` needs
+  # pool_size >= feed count for strict 1:1; overflow then fans out via the
+  # Redis consumer group, which is slower to warm).
+  inference_pool_size: 3
   # Pin the autoscaler: when true, the scaling monitor never scales the
   # inference pool up OR down (see feed_manager._scaling_monitor_loop). Each
   # scale action respawns a worker that reloads YOLO+ReID onto the GPU; under
@@ -638,9 +645,16 @@ performance:
   skip_factor_increase_step: 0.1
   use_shared_memory: true
   use_shm: true
-  # Raised from 4000 to 6000 to provide more headroom for 3 feeds at 8fps
-  # with decode-skip backpressure at 20%.
-  shm_pool_size: 6000
+  # Dropped 6000 -> 4000 (Sep-10): steady-state acq was ~3030 with free pinned
+  # at 49.5% all run -- half the pool was standing headroom. 4000 frees ~3GB
+  # of tmpfs RAM (6000x1.5MB=9GB -> 6GB). EDGE CONDITION: the decode-shed
+  # floor (shm_min_free_fraction 0.25) requires pool >= acq/0.75 = 4040 at
+  # the OBSERVED acq 3030 -- right at the edge. This rides together with the
+  # reid_assoc fast-path fix, which shrinks the backlog acq represents; the
+  # 09:13-run acq was pre-fix. TRIPWIRE: if the next run logs free= below
+  # 25% or "skip decode" warnings latch, revert to 4800 (1770 free = 37%,
+  # safe at pre-fix acq levels) -- do NOT let the shed valve starve decoders.
+  shm_pool_size: 4000
   # SHM segment size in bytes. MUST match the actual frame footprint (640x480
   # RGB = ~0.92MB; 1.5MB covers any color format + header). The old 10MB default
   # made shm_pool_size 6000 plan 60GB > /dev/shm (14GB), so only ~1400 segments
@@ -928,7 +942,13 @@ vehicle_detection:
     full_sync_interval_seconds: 30.0
   reid_enabled: true
   reid_interval_frames: 30
-  reid_timeout: 3600
+  # Raised 3600 -> 14400 (Sep-10): the gallery TTL evicts at exactly 1h, so a
+  # vehicle off-screen >1h (parking lot, slow arterial) re-registers as a NEW
+  # global id and double-counts in the cumulative-flow KPI. Observed in the
+  # Sep-10 68-min run: gallery 48 -> 35 -> 24 right at the 3600s mark. 4h
+  # covers a commute cycle; gallery memory cost is ~128 floats/vehicle
+  # (~20KB for 40 identities) -- negligible vs the counting accuracy gain.
+  reid_timeout: 14400
   # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
   # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis
   # calls, and unbounded matching on dense scenes (130+ vehicles) pinned
