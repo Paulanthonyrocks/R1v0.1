@@ -947,15 +947,27 @@ vehicle_detection:
     # bursts in ~4 min). The pub/sub listener handles steady-state upkeep;
     # full_sync is only for cold-start catch-up. Default 30s.
     full_sync_interval_seconds: 30.0
+    # Gallery TTL (seconds) -- THE key reid_manager actually reads
+    # (reid_manager.py:27 -> vehicle_detection.reid.ttl_seconds, default 3600).
+    # Raised 3600 -> 14400 (Sep-10): the TTL evicts at exactly 1h, so a
+    # vehicle off-screen >1h (parking lot, slow arterial) re-registers as a
+    # NEW global id and double-counts in the cumulative-flow KPI. Observed
+    # Sep-10: gallery 49 -> 8 right at boot+3600s in the 138-min run, and
+    # 48 -> 35 -> 24 in the 68-min run. NOTE: the earlier attempt set
+    # vehicle_detection.reid_timeout (a DIFFERENT key -- the tracker's
+    # lost-track retention in core_module, NOT the gallery TTL), which is why
+    # the eviction cliff still fired with 14400 set. 4h covers a commute
+    # cycle; gallery memory is ~128 floats/vehicle -- negligible.
+    # Persistence note: reid_gallery.pkl + DB keep state across restarts, so
+    # this TTL governs the Redis in-memory gallery view.
+    ttl_seconds: 14400
   reid_enabled: true
   reid_interval_frames: 30
-  # Raised 3600 -> 14400 (Sep-10): the gallery TTL evicts at exactly 1h, so a
-  # vehicle off-screen >1h (parking lot, slow arterial) re-registers as a NEW
-  # global id and double-counts in the cumulative-flow KPI. Observed in the
-  # Sep-10 68-min run: gallery 48 -> 35 -> 24 right at the 3600s mark. 4h
-  # covers a commute cycle; gallery memory cost is ~128 floats/vehicle
-  # (~20KB for 40 identities) -- negligible vs the counting accuracy gain.
-  reid_timeout: 14400
+  # DEAD KEY (verified Sep-10): zero readers in app/ (only test_core_module
+  # references it as a config value). The gallery TTL is vehicle_detection.reid.ttl_seconds
+  # (reid_manager.py:27) -- see the reid: block above. Left at its historical
+  # value to avoid pointless diff noise.
+  reid_timeout: 10
   # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
   # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis
   # calls, and unbounded matching on dense scenes (130+ vehicles) pinned
