@@ -639,14 +639,18 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                     </div>
                 )}
 
+                {/* Status overlays are pointer-events-none: they are indicators
+                    over the canvas, not modals. Without it the inset-0 divs
+                    swallow canvas clicks — in ROI mode on a non-live feed,
+                    points never accumulated and Save ROI could never enable. */}
                 {(isToggling || isLoading) && !isLive && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10 rounded-none">
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10 rounded-none pointer-events-none">
                         <Loader2 className="text-lcd-bg group-hover:text-lcd-text animate-spin h-10 w-10" />
                     </div>
                 )}
 
                 {error && !isToggling && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-lcd-text rounded-none">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-80 p-2 bg-lcd-text rounded-none pointer-events-none">
                         <AlertTriangle className="text-lcd-bg group-hover:text-lcd-text text-3xl mb-1" />
                         <p className="text-lcd-bg group-hover:text-lcd-text text-center tracking-normal font-lcd matrix-glow">VIDEO FEED UNAVAILABLE</p>
                     </div>
