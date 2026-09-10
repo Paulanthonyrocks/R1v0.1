@@ -1950,6 +1950,10 @@ class FeedManager:
 
         total_vehicles_active = 0
         total_vehicles_cumulative = 0
+        # Flow as TRANSITS, summed per feed (each TrafficMonitor counts its
+        # own passages; a vehicle seen in two feeds is two passages, which is
+        # what a flow card means).
+        total_vehicles_passed = 0
         total_speed_sum = 0.0
         total_speed_count = 0
         total_congestion_sum = 0.0
@@ -1968,6 +1972,7 @@ class FeedManager:
                     v_active = metrics.get("total_vehicles", 0)
                     total_vehicles_active += v_active
                     total_vehicles_cumulative += metrics.get("total_vehicles_cumulative", v_active)
+                    total_vehicles_passed += metrics.get("vehicles_passed", 0)
 
                     avg_speed = metrics.get("recent_average_speed_kmh")
                     if avg_speed is None:
@@ -2033,18 +2038,21 @@ class FeedManager:
             health_score -= 8.0
         health_score = max(0.0, min(100.0, round(health_score, 1)))
 
-        # Global distinct vehicle count (audit finding #2): summing per-feed
-        # `total_vehicles_cumulative` double-counts any vehicle seen in more
-        # than one feed (it owns one global_vehicle_id but is added to each
-        # feed's tally). The ReID manager's gallery is the authoritative
-        # system-wide unique-vehicle registry -- a vehicle seen across feeds
-        # keeps a single global_id -- so its size is the true distinct count.
-        # It is bounded by TTL + max_gallery_size, i.e. distinct vehicles within
-        # the retention window (not all-time). Falls back to the per-feed
-        # cumulative sum when the ReID manager has no entries (reid disabled).
+        # Global flow = TRANSITS (Sep-10): the ReID gallery size saturates at
+        # cast size on looping footage (36 after 1h) and reflects only one
+        # worker's rolling retention window, not traffic volume. Summed
+        # per-feed passage counts grow with actual vehicle movements:
+        # ~180/feed-hour on the sample loops, unbounded on real roads.
+        # Fall back to the distinct/cumulative numbers only when no feed has
+        # produced passages yet (e.g. all feeds idle).
         reid_mgr = getattr(self, "_reid_manager", None)
         global_distinct = reid_mgr.distinct_vehicle_count() if reid_mgr else 0
-        total_flow = global_distinct if global_distinct > 0 else int(total_vehicles_cumulative)
+        if total_vehicles_passed > 0:
+            total_flow = int(total_vehicles_passed)
+        elif global_distinct > 0:
+            total_flow = global_distinct
+        else:
+            total_flow = int(total_vehicles_cumulative)
 
         kpi_data = GlobalRealtimeMetrics(
             timestamp=datetime.now(timezone.utc).isoformat(),

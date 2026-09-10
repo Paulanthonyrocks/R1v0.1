@@ -167,13 +167,40 @@ class TrafficMonitor:
         )
         self._last_braking_fire: Dict[str, float] = {}
 
+        # Passage counting (Sep-10): "Total Flow" needs TRANSITS -- each
+        # vehicle that passes through the scene -- not the ReID gallery size.
+        # On looping sample footage the gallery saturates at cast size
+        # (~40 ids for all three feeds; matches 20,708 vs regs 25 in the
+        # Sep-10 run), so a gallery-derived number can never grow. A passage
+        # = a vehicle id ABSENT from the vehicle stream for >= the re-entry
+        # gap, then seen again (loop replay, or a real return). Every id is
+        # counted once on first sight; subsequent counts require the gap.
+        # The per-id last-seen map is bounded: on a real road it holds one
+        # entry per unique vehicle ever seen, which is exactly the
+        # bounded-dedup tradeoff `max_seen_ids` already makes. Using wall
+        # time (time.time) makes the gap robust to detect-rate wobble.
+        self.passage_count: int = 0
+        self.passage_reentry_gap_seconds: float = float(
+            config.get("traffic_monitor", {}).get("passage_reentry_gap_seconds", 5.0)
+        )
+        self._passage_last_seen: Dict[Any, float] = {}
+
     def update_vehicles(self, vehicles: Dict[str, Dict[str, Any]]):
+        now = time.time()
         self.tracked_vehicles = vehicles
         self.lane_counts.clear()
         for track_id, data in vehicles.items():
             # Use global ID if available for unique counting, otherwise fallback to local track_id
             unique_id = data.get("global_vehicle_id") or track_id
             gid = data.get("global_vehicle_id")
+            # Passage: count first sight, or re-sight after the gap. Uses the
+            # REID-resolved id when present (the physical vehicle), else the
+            # local track id (which changes per loop replay anyway).
+            pid = gid or track_id
+            last = self._passage_last_seen.get(pid)
+            if last is None or (now - last) >= self.passage_reentry_gap_seconds:
+                self.passage_count += 1
+            self._passage_last_seen[pid] = now
 
             if gid:
                 if track_id in self.seen_local_ids:
@@ -362,6 +389,10 @@ class TrafficMonitor:
         return {
             "total_vehicles": current_vehicle_count,
             "total_vehicles_cumulative": self.cumulative_vehicle_count,
+            # Flow as TRANSITS (a vehicle re-entering after a gap counts
+            # again). total_vehicles_cumulative saturates at cast size on
+            # looping footage and gallery-derived numbers inherit that cap.
+            "vehicles_passed": self.passage_count,
             "session_average_speed_kmh": round(session_avg_speed, 1),
             "session_congestion_level_percent": round(session_avg_congestion, 1),
             "session_average_congestion_score": round(session_avg_congestion_score, 1),
