@@ -51,6 +51,15 @@ class TrackingManager:
         self.kalman_q_pos = tracking_cfg.get("kalman_q_pos", 0.01)
         self.kalman_q_vel = tracking_cfg.get("kalman_q_vel", 0.1)
 
+        # Hard cap on the INTERNAL track pool (Sep-10): core_module culls its
+        # returned copy to vehicle_detection.max_active_tracks, but the
+        # tracker's own vehicle_data -- which pays Kalman predict per track
+        # per frame and a cost-matrix row per track -- was never capped, so
+        # stale predicting tracks within track_timeout still grew the
+        # per-frame O(tracks) work unbounded. Same key, same default, so both
+        # layers enforce the operator's declared cap.
+        self.max_active_tracks = int(vd_cfg.get("max_active_tracks", 50))
+
         # Log the effective association/tracking tunables once at tracker init.
         # These are the knobs that gate moving-car association (proximity *
         # velocity_gate_boost) and moving-car prediction (kalman_q_vel); a
@@ -155,11 +164,15 @@ class TrackingManager:
                 track["predicted_bbox"] = (x1, y1, x2, y2)
                 track["last_prediction_time"] = current_time
                 
-                # Update velocity from prediction for distance gate boost
-                vx_pred = np.nan_to_num(kf.x[4][0], nan=0.0)
-                vy_pred = np.nan_to_num(kf.x[5][0], nan=0.0)
-                track["vx"] = float(np.clip(vx_pred, -5000, 5000))
-                track["vy"] = float(np.clip(vy_pred, -5000, 5000))
+                # Fast NaN guard: `v != v` is true only for NaN and ~50x cheaper
+                # than np.nan_to_num, which profiled at 27% of tracker.update
+                # (4 numpy calls per matched track per frame on well-formed
+                # float scalars). np.clip on a python float likewise paid the
+                # numpy dispatch tax ~2.7ms/frame at 130-track scale.
+                vx_pred = kf.x[4][0]
+                vy_pred = kf.x[5][0]
+                track["vx"] = 0.0 if vx_pred != vx_pred else min(5000.0, max(-5000.0, float(vx_pred)))
+                track["vy"] = 0.0 if vy_pred != vy_pred else min(5000.0, max(-5000.0, float(vy_pred)))
 
         # 3. First Association: High Confidence (IoU + ReID)
         matched_tracks_1 = set()
@@ -280,6 +293,32 @@ class TrackingManager:
 
         self.vehicle_data.clear()
         self.vehicle_data.update(new_or_updated_tracks)
+
+        # Enforce the internal pool cap AFTER rebuild (Sep-10): cull the
+        # least-recently-seen tracks so Kalman-predict + cost-matrix work is
+        # bounded by max_active_tracks even when unmatched predicting tracks
+        # linger within track_timeout. Keep order: confirmed (active/predicting)
+        # tracks first, newest-seen first -- tentatives and stalest go first
+        # when over cap. (First version sorted `reverse=True` on
+        # (is_tentative, last_seen), which kept TENTATIVES and evicted
+        # actives -- caught by the cap sim: 20/20 survivors tentative.)
+        # core_module's copy-cull stays as a second belt for the wire payload.
+        if len(self.vehicle_data) > self.max_active_tracks:
+            by_keep = sorted(
+                self.vehicle_data.items(),
+                key=lambda kv: (
+                    kv[1].get("status") == "tentative",  # actives (False) sort first
+                    -kv[1].get("last_seen", 0.0),        # newest-seen first
+                ),
+            )
+            culled = dict(by_keep[: self.max_active_tracks])
+            if self.on_track_expired:
+                for tid, track in by_keep[self.max_active_tracks:]:
+                    try:
+                        self.on_track_expired(track)
+                    except Exception:
+                        pass
+            self.vehicle_data = culled
         return self.vehicle_data
 
     @staticmethod
@@ -421,11 +460,13 @@ class TrackingManager:
             w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
             try:
                 kf.update(np.array([[cx], [cy], [w], [h]]))
-                # Sanitize velocities: replace NaNs with 0 then clip to safe range
-                vx_val = np.nan_to_num(kf.x[4][0], nan=0.0)
-                vy_val = np.nan_to_num(kf.x[5][0], nan=0.0)
-                track["vx"] = float(np.clip(vx_val, -5000, 5000))
-                track["vy"] = float(np.clip(vy_val, -5000, 5000))
+                # Sanitize velocities: `v != v` NaN guard (see the predict-loop
+                # note -- np.nan_to_num/np.clip here profiled at ~27% of
+                # tracker.update; plain float clamp has identical semantics).
+                vx_val = kf.x[4][0]
+                vy_val = kf.x[5][0]
+                track["vx"] = 0.0 if vx_val != vx_val else min(5000.0, max(-5000.0, float(vx_val)))
+                track["vy"] = 0.0 if vy_val != vy_val else min(5000.0, max(-5000.0, float(vy_val)))
             except Exception as e:
                 logger.warning(f"Kalman update failed for track {track['vehicle_id']}: {e}")
 

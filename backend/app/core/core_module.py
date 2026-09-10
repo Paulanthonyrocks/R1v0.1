@@ -712,6 +712,20 @@ class CoreModule:
             return {}, self.cached_lane_boundaries, self.last_detected_lane_lines
 
         current_time = timestamp if timestamp is not None else time.time()
+        # Sub-stage timing (Sep-10): STAGE-TIMINGS showed track_post at
+        # ~200-290ms/frame while a cProfile sim of tracker.update alone ran
+        # ~21ms at 72 tracks -- most of the cost lives in this function AFTER
+        # the tracker call (per-track finalize, feed metrics, OCR drain, DB
+        # write). Attribute it so the next run points at the real line.
+        # Walls are cheap (perf_counter) and only summed, never shipped.
+        _t0 = time.perf_counter()
+        _sub = getattr(self, "_detect_stage_totals", None)
+        if _sub is None:
+            _sub = {"tracker_update": 0.0, "finalize": 0.0, "metrics_ocr_db": 0.0,
+                    "reid_assoc": 0.0, "_frames": 0}
+            self._detect_stage_totals = _sub
+        _sub["_frames"] += 1
+        _t_tracker = None
 
         # 1. Lane Detection (Periodic)
         # `enabled` is the canonical gate (audit #6). Old key
@@ -735,6 +749,7 @@ class CoreModule:
                 logger.warning(f"Lane detection failed: {e}")
 
         # 2. Detection (skip if external detections provided)
+        _t_reid_assoc = time.perf_counter()
         if external_detections is not None:
             detections = external_detections
         else:
@@ -789,7 +804,11 @@ class CoreModule:
         current_statuses = {tid: track.get("status", "unknown") 
                            for tid, track in self.tracker.vehicle_data.items()} if hasattr(self.tracker, 'vehicle_data') else {}
 
+        _t_tracker = time.perf_counter()
+        _sub["reid_assoc"] += _t_tracker - _t_reid_assoc
         vehicle_data = self.tracker.update(dets_for_tracker, current_time, frame.shape).copy()
+        _sub["tracker_update"] += time.perf_counter() - _t_tracker
+        _t_finalize = time.perf_counter()
 
         # Enforce the configured active-track cap (the key was read at init
         # but NEVER enforced -- dead). At low detection fps the frame-based
@@ -854,6 +873,7 @@ class CoreModule:
                     centroids_list.append([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2])
 
             if not centroids_list:
+                _sub["finalize"] += time.perf_counter() - _t_finalize
                 return {}, self.cached_lane_boundaries, self.last_detected_lane_lines
 
             centroids = np.array(centroids_list, dtype=np.float32)
@@ -971,8 +991,10 @@ class CoreModule:
         # Drop hysteresis votes for dead tracks so a recycled tid starts clean.
         if self._lane_votes:
             self._lane_votes = {k: v for k, v in self._lane_votes.items() if k in vehicle_data}
+        _sub["finalize"] += time.perf_counter() - _t_finalize
 
         # Compute feed-level metrics (average speed, congestion)
+        _t_tail = time.perf_counter()
         feed_metrics = self._compute_feed_metrics(vis_tracks)
 
         # Drain OCR results FIRST so any plate recognised this frame is reflected
@@ -981,6 +1003,22 @@ class CoreModule:
         self._process_ocr_results(vehicle_data)
 
         self._save_vehicle_data(vis_tracks, feed_metrics)
+        _sub["metrics_ocr_db"] += time.perf_counter() - _t_tail
+
+        # Reuse the STAGE-TIMINGS 30s cadence: log the sub-stage split here so
+        # it lands in the same log stream (worker id is not available in
+        # CoreModule; feed_id identifies the source well enough).
+        if _sub["_frames"] >= 140:  # ~30s at ~4.5fps detect rate
+            _n = _sub["_frames"]
+            logger.info(
+                f"[{self.feed_id}] TRACK-SUBSTAGES (ms/frame over window, frames={_n}): "
+                + ", ".join(
+                    f"{k}={v / _n * 1000.0:.1f}"
+                    for k, v in _sub.items()
+                    if k != "_frames"
+                )
+            )
+            self._detect_stage_totals = {k: 0.0 for k in _sub}
 
         return vis_tracks, self.cached_lane_boundaries, self.last_detected_lane_lines
 
