@@ -421,7 +421,23 @@ async def message_receiver(
         if "WebSocket is not connected" in msg or "Need to call" in msg or "accept" in msg:
             logger.info(f"Client {client_id} disconnected (socket closed before accept).")
         else:
-            logger.info(f"Client {client_id} disconnected: {e}")
+            # Close-code attribution (Sep-10): the frontend runs behind the
+            # loca.lt tunnel, whose proxy recycles live WebSockets abnormally
+            # (close code 1006, no close frame). Client-initiated closes are
+            # code 1000/1001. Logging the code turns each disconnect in
+            # backend_main.log into definitive attribution — 18 disconnects in
+            # the Sep-10 138-min run were indistinguishable between the two.
+            close_code = getattr(e, "code", None)
+            if isinstance(e, WebSocketDisconnect):
+                how = {
+                    1000: "clean close (client-initiated)",
+                    1001: "going away (client navigation)",
+                    1006: "ABNORMAL (no close frame -- tunnel/proxy drop)",
+                    1011: "server error",
+                }.get(close_code, f"code {close_code}")
+                logger.info(f"Client {client_id} disconnected [{how}].")
+            else:
+                logger.info(f"Client {client_id} disconnected: {e}")
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
 
