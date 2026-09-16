@@ -18,6 +18,7 @@ from app.services.analytics_service import AnalyticsService
 from app.services.analytics_service_pro import AdvancedAnalyticsService
 from app.services.retention import RetentionService
 from app.services.notification_service import NotificationService
+from app.services.v2x_service import V2XService
 from app.services.incident_manager import IncidentManager
 from app.services.node_manager import NodeManager
 from app.ml.traffic_predictor import TrafficPredictor
@@ -40,6 +41,7 @@ class ServiceRegistry:
         self._event_service: Optional[EventService] = None
         self._retention_service: Optional[RetentionService] = None
         self._notification_service: Optional[NotificationService] = None
+        self._v2x_service: Optional[V2XService] = None
         self._advanced_analytics_service: Optional[AdvancedAnalyticsService] = None
         self._incident_manager: Optional[IncidentManager] = None
         self._node_manager: Optional[NodeManager] = None
@@ -106,6 +108,12 @@ class ServiceRegistry:
         if self._notification_service is None:
             raise RuntimeError("NotificationService not initialized.")
         return self._notification_service
+
+    @property
+    def v2x_service(self) -> V2XService:
+        if self._v2x_service is None:
+            raise RuntimeError("V2XService not initialized.")
+        return self._v2x_service
 
     @property
     def retention_service(self) -> RetentionService:
@@ -190,6 +198,11 @@ class ServiceRegistry:
             )
             logger.info("NotificationService initialized.")
 
+            # V2X Service (disabled by default: enabled False means no socket,
+            # no broadcasts; IncidentManager checks .enabled per incident).
+            self._v2x_service = V2XService(config=config)
+            logger.info("V2XService initialized.")
+
             # Weather Service (gated: no enabled flag + api_url means no
             # provider; previously constructed unconditionally and failed
             # on every call against the empty URL).
@@ -209,7 +222,8 @@ class ServiceRegistry:
                 config=config,
                 db_manager=db_manager,
                 connection_manager=connection_manager,
-                notification_service=self._notification_service
+                notification_service=self._notification_service,
+                v2x_service=self._v2x_service
             )
             logger.info("IncidentManager initialized.")
 
@@ -371,6 +385,7 @@ class ServiceRegistry:
             ("IncidentManager", self._shutdown_incident_manager),
             ("AnalyticsService", self._shutdown_analytics_service),
             ("NotificationService", self._shutdown_notification_service),
+            ("V2XService", self._shutdown_v2x_service),
             ("TrafficSignalService", self._shutdown_traffic_signal_service),
             ("WeatherService", self._shutdown_weather_service),
             ("NodeManager", self._shutdown_node_manager),
@@ -413,6 +428,11 @@ class ServiceRegistry:
         if self._notification_service and hasattr(self._notification_service, 'close'):
             await self._notification_service.close()
             logger.info("NotificationService closed.")
+
+    async def _shutdown_v2x_service(self) -> None:
+        if self._v2x_service and hasattr(self._v2x_service, 'stop'):
+            await self._v2x_service.stop()
+            logger.info("V2XService stopped.")
 
     async def _shutdown_traffic_signal_service(self) -> None:
         if self._traffic_signal_service:

@@ -9,6 +9,7 @@ from app.models.traffic import IncidentTypeEnum, IncidentSeverityEnum, IncidentS
 from app.models.websocket import WebSocketMessage, WebSocketMessageTypeEnum
 from app.websocket.connection_manager import ConnectionManager, MessagePriority
 from app.services.notification_service import NotificationService
+from app.services.v2x_service import V2XService
 
 logger = logging.getLogger("app.services.incident_manager")
 
@@ -17,6 +18,23 @@ logger = logging.getLogger("app.services.incident_manager")
 # config (incident_management.snapshot_min_severity, default HIGH).
 _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
+# Incident type -> V2X directive mapping. Only safety-relevant types broadcast;
+# everything else returns None (logged + dashboard only). Severity gate below
+# (HIGH/CRITICAL) is the volume throttle, same as notifications.
+_V2X_DIRECTIVE_BY_TYPE = {
+    "WRONG_WAY": "LANE_CLOSED",
+    "TRAFFIC_JAM": "REDUCE_SPEED",
+    "CONGESTION": "REDUCE_SPEED",
+    "ACCIDENT": "HAZARD_ALERT",
+    "STALLED_VEHICLE": "HAZARD_ALERT",
+    "STOPPED_VEHICLE": "HAZARD_ALERT",
+    "DEBRIS": "HAZARD_ALERT",
+    "PEDESTRIAN_HAZARD": "HAZARD_ALERT",
+    "WEATHER_HAZARD": "HAZARD_ALERT",
+    "ROAD_WORK": "HAZARD_ALERT",
+    "OTHER": "HAZARD_ALERT",
+}
+
 class IncidentManager:
     def __init__(
         self,
@@ -24,11 +42,13 @@ class IncidentManager:
         db_manager,
         connection_manager: ConnectionManager,
         notification_service: Optional[NotificationService] = None,
+        v2x_service: Optional[V2XService] = None,
     ):
         self.config = config
         self._db_manager = db_manager
         self._connection_manager = connection_manager
         self._notification_service = notification_service
+        self._v2x_service = v2x_service
         self._feed_manager = None
         
         # Debouncing: { "feed_id_anomaly_details": timestamp }
@@ -191,6 +211,36 @@ class IncidentManager:
             if self._notification_service:
                 # Run in background to not block the pipeline
                 asyncio.create_task(self._notification_service.notify_incident(incident_data))
+
+            # 6b. V2X broadcast (HIGH/CRITICAL safety types only). Disabled by
+            # default (v2x.enabled False); when enabled, receivers get a UDP
+            # directive per incident. Background task, never blocks pipeline.
+            if self._v2x_service and self._v2x_service.enabled:
+                _v2x_sev = str(incident_data["severity"]).upper()
+                if _SEVERITY_RANK.get(_v2x_sev, 0) >= _SEVERITY_RANK["HIGH"]:
+                    _directive = _V2X_DIRECTIVE_BY_TYPE.get(str(incident_data["type"]).upper())
+                    if _directive:
+                        _zone = "ALL"
+                        if details:
+                            _zone = (
+                                details.get("lane")
+                                or details.get("zone_id")
+                                or (details.get("meta", {}) or {}).get("lane")
+                                or "ALL"
+                            )
+                        asyncio.create_task(
+                            self._v2x_service.broadcast_directive(
+                                feed_id=source_feed_id or "UNKNOWN",
+                                zone_id=str(_zone),
+                                directive_type=_directive,
+                                value=incident_id,
+                            )
+                        )
+                    else:
+                        logger.debug(
+                            f"V2X skipped for incident {incident_id} "
+                            f"(type {incident_data['type']} has no directive)"
+                        )
 
             # 7. Request Snapshot (severity gate + per-vehicle dedup + rate cap)
             # The incident itself is rate-limited by (feed_id, subtype) upstream,
