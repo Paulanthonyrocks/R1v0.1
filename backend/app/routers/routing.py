@@ -256,3 +256,19 @@ async def get_supported_areas(
         "supported_areas": [],
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get(
+    "/work-zones",
+    summary="Active work zones (feature 9)",
+    description="Scheduled speed/lane overrides with expiry. Empty when none active.",
+)
+async def get_work_zones(
+    feed_id: Optional[str] = None,
+    _: Dict = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    from app.services.workzone_service import WorkZoneService
+    from app.config import get_current_config
+
+    svc = WorkZoneService(config=get_current_config().model_dump())
+    return {"work_zones": svc.active(feed_id=feed_id)}

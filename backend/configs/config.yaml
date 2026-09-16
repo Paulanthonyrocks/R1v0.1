@@ -870,6 +870,39 @@ v2x:
   broadcast_port: 5005
   directive_interval_sec: 2.0
   enabled: false
+  # Feature 7 inbound: UDP listener for BSM/CAM/ACK. Off by default.
+  listen_enabled: false
+  listen_port: 5005
+# Features 1-9 (all honest-gated; hardware paths default off).
+evidence:
+  enabled: true
+  dir: backend/data/evidence
+escalation:
+  enabled: true
+  ack_timeout_sec: 300
+  overdue_multiplier: 3.0
+  levels:
+  - {name: operator, after_sec: 0}
+  - {name: supervisor, after_sec: 300}
+  - {name: command, after_sec: 900}
+privacy:
+  enabled: false
+  blur_kernel: 31
+camera_health:
+  enabled: true
+  dark_thresh: 15.0
+  frozen_diff_thresh: 0.6
+  fog_blur_thresh: 25.0
+forensic:
+  enabled: true
+  default_limit: 100
+anpr:
+  enabled: false
+  allow_list: []
+  block_list: []
+work_zones:
+  enabled: true
+  zones: []
 vehicle_detection:
   bbox_expansion_factor: 0.05
   car_classification_enabled: false

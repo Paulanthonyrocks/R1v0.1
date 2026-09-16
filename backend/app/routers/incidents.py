@@ -98,7 +98,87 @@ async def update_incident(
     success = await manager._db_manager.update_incident(incident_id, update_data)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update incident")
-        
+
     # Fetch updated record
     updated_record = await manager._db_manager.get_incident_by_id(incident_id)
     return updated_record
+
+
+@router.get("/search/results", summary="Forensic search (feature 5)")
+async def search_incidents(
+    type: Optional[str] = None,
+    severity: Optional[str] = None,
+    feed_id: Optional[str] = None,
+    lane: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    db = Depends(get_database_manager),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Attribute filter over incidents. Empty list when forensic disabled."""
+    from app.services.forensic_service import ForensicService, filter_incidents
+    from app.config import get_current_config
+
+    svc = ForensicService(config=get_current_config().model_dump())
+    if not svc.enabled:
+        return []
+    filters = {k: v for k, v in
+               {"type": type, "severity": severity, "feed_id": feed_id,
+                "lane": lane, "q": q}.items() if v is not None}
+    incidents = await db.get_incidents(limit=min(limit * 5, 1000), offset=0, filters={})
+    return filter_incidents(incidents, filters, limit)
+
+
+@router.get("/{incident_id}/evidence", summary="Evidence bundle (feature 1)")
+async def get_incident_evidence(
+    incident_id: str,
+    db = Depends(get_database_manager),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Manifest + snapshot list for an incident. 404 when no bundle yet."""
+    from app.services.evidence_service import EvidenceService
+    from app.config import get_current_config
+
+    incident = await db.get_incident_by_id(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    svc = EvidenceService(config=get_current_config().model_dump())
+    if not svc.enabled:
+        raise HTTPException(status_code=501, detail="Evidence bundles disabled")
+    bundle = svc.get_bundle(incident_id)
+    if bundle is None:
+        # No bundle minted yet: return live manifest without claiming a clip.
+        from app.services.evidence_service import build_manifest
+        return build_manifest(incident, [], None)
+    return bundle
+
+
+@router.get("/{incident_id}/escalation", summary="Escalation state (feature 2)")
+async def get_incident_escalation(
+    incident_id: str,
+    db = Depends(get_database_manager),
+    current_user: User = Depends(get_current_active_user),
+):
+    """OK/DUE/OVERDUE/ACKED computed from created/ack timestamps + config."""
+    import time
+    from app.services.escalation_service import EscalationService
+    from app.config import get_current_config
+
+    incident = await db.get_incident_by_id(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    svc = EscalationService(config=get_current_config().model_dump())
+    created = incident.get("timestamp") or incident.get("created_at") or time.time()
+    try:
+        created_ts = float(created)
+    except (TypeError, ValueError):
+        created_ts = time.time()
+    ack_ts = incident.get("acknowledged_at")
+    try:
+        ack_ts = float(ack_ts) if ack_ts is not None else None
+    except (TypeError, ValueError):
+        ack_ts = None
+    now = time.time()
+    return {"incident_id": incident_id,
+            "state": svc.state(created_ts, ack_ts, now),
+            "level": svc.level(created_ts, now)}

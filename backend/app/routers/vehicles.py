@@ -199,3 +199,26 @@ async def get_vehicle_reid_gallery(
         metadata=identity["metadata"],
         embeddings=embeddings.tolist()
     )
+
+
+@router.get("/plates/check", summary="ANPR allow/block check (feature 8)")
+async def check_plate(
+    plate: str = Query(...),
+    current_user: dict = Depends(get_current_active_user),
+):
+    """Static allow/block lookup. unconfigured=true when ANPR disabled."""
+    from app.services.anpr_service import ANPRService
+    from app.config import get_current_config
+
+    svc = ANPRService(config=get_current_config().model_dump())
+    return svc.check_plate(plate)
+
+
+@router.get("/plates/lists", summary="ANPR lists (feature 8)")
+async def plate_lists(current_user: dict = Depends(get_current_active_user)):
+    """[] when ANPR disabled (honest empty)."""
+    from app.services.anpr_service import ANPRService
+    from app.config import get_current_config
+
+    svc = ANPRService(config=get_current_config().model_dump())
+    return svc.lists()

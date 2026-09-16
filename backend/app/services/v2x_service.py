@@ -3,9 +3,24 @@ import json
 import logging
 import asyncio
 import time
+import threading
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("app.services.v2x")
+
+
+def parse_inbound_datagram(data: bytes) -> Optional[Dict[str, Any]]:
+    """Parse an inbound V2X datagram (BSM/CAM/ACK JSON). None = not our protocol."""
+    try:
+        msg = json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(msg, dict):
+        return None
+    kind = str(msg.get("v2x_msg", msg.get("type", ""))).upper()
+    if kind not in ("BSM", "CAM", "ACK", "DENM_ACK"):
+        return None
+    return msg
 
 class V2XService:
     """
@@ -19,6 +34,15 @@ class V2XService:
         self.broadcast_ip = self.v2x_cfg.get("broadcast_ip", "255.255.255.255")
         self.broadcast_port = self.v2x_cfg.get("broadcast_port", 5005)
         self.udp_socket = None
+        # Feature 7 inbound: counts + per-station last-seen. Listener thread
+        # only runs when v2x.listen_enabled true (default false).
+        self.listen_enabled = self.v2x_cfg.get("listen_enabled", False)
+        self.listen_port = self.v2x_cfg.get("listen_port", self.broadcast_port)
+        self.rx_count = 0
+        self.rx_by_station: Dict[str, float] = {}
+        self.tx_count = 0
+        self._listen_thread = None
+        self._listen_stop = threading.Event()
         
         if self.enabled:
             try:
@@ -49,9 +73,29 @@ class V2XService:
             data = json.dumps(message).encode('utf-8')
             # Standard UDP sendto is non-blocking for small payloads
             self.udp_socket.sendto(data, (self.broadcast_ip, self.broadcast_port))
+            self.tx_count += 1
             logger.debug(f"V2X Broadcast [{feed_id}]: {directive_type} -> {value}")
         except Exception as e:
             logger.error(f"V2X Broadcast failed: {e}")
+
+    def handle_inbound(self, data: bytes) -> Optional[Dict[str, Any]]:
+        """Record one inbound datagram. Returns parsed msg or None."""
+        msg = parse_inbound_datagram(data)
+        if msg is None:
+            return None
+        self.rx_count += 1
+        station = str(msg.get("station_id", msg.get("station", "unknown")))
+        self.rx_by_station[station] = time.time()
+        logger.debug(f"V2X inbound {msg.get('v2x_msg')} from {station}")
+        return msg
+
+    def inbound_stats(self) -> Dict[str, Any]:
+        return {
+            "rx_count": self.rx_count,
+            "tx_count": self.tx_count,
+            "stations_seen": len(self.rx_by_station),
+            "listening": self._listen_thread is not None and self._listen_thread.is_alive(),
+        }
 
     async def process_analytics_trigger(self, feed_id: str, metrics: dict):
         """
@@ -79,6 +123,7 @@ class V2XService:
 
     async def stop(self):
         """Cleanup sockets."""
+        self._listen_stop.set()
         if self.udp_socket:
             self.udp_socket.close()
             self.udp_socket = None
