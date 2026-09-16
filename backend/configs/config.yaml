@@ -869,7 +869,7 @@ v2x:
   broadcast_ip: 255.255.255.255
   broadcast_port: 5005
   directive_interval_sec: 2.0
-  enabled: false
+  enabled: true
   # Feature 7 inbound: UDP listener for BSM/CAM/ACK. Off by default.
   listen_enabled: false
   listen_port: 5005
