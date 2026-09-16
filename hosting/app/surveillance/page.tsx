@@ -12,10 +12,31 @@ import { Search, Play, Square, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import AddFeedDialog from '@/components/dashboard/AddFeedDialog';
+import { PlateCheck, checkPlate, fetchPlateLists } from '@/lib/safetyHub';
 
 const SurveillancePage = () => {
   const { feeds, isConnected, isReady, startFeed, stopFeed } = useRealtimeUpdates();
   const [searchQuery, setSearchQuery] = useState('');
+  // ANPR allow/block check (feature 8). Honest empty until backend enabled.
+  const [plate, setPlate] = useState('');
+  const [plateResult, setPlateResult] = useState<PlateCheck | null>(null);
+  const [plateChecking, setPlateChecking] = useState(false);
+  const [plateLists, setPlateLists] = useState<{ allow: string[]; block: string[] }>({ allow: [], block: [] });
+
+  const runPlateCheck = async () => {
+    const value = plate.trim();
+    if (!value || plateChecking) return;
+    setPlateChecking(true);
+    try {
+      setPlateResult(await checkPlate(value));
+      setPlateLists(await fetchPlateLists());
+    } catch (error) {
+      console.error('[Surveillance] Plate check failed:', error);
+      setPlateResult(null);
+    } finally {
+      setPlateChecking(false);
+    }
+  };
 
   const filteredFeeds = useMemo(() => {
     return feeds.filter(feed => 
@@ -106,6 +127,50 @@ const SurveillancePage = () => {
 
           <div className="min-h-[600px] flex flex-col">
               {renderContent()}
+          </div>
+
+          <div className="matrix-card p-0 overflow-hidden mt-8">
+              <div className="matrix-card-header bg-lcd-text/10">
+                  <div className="flex items-center gap-2">
+                      <Search size={14} />
+                      <span>ANPR Allow/Block Check // Plate Registry</span>
+                  </div>
+              </div>
+              <div className="p-6 bg-lcd-text/5 flex flex-col md:flex-row gap-4 items-stretch md:items-center">
+                  <input
+                    type="text"
+                    placeholder="ENTER PLATE..."
+                    className="bg-lcd-text/5 border-2 border-lcd-text/30 text-lcd-text rounded-none p-4 flex-1 focus:outline-none focus:border-lcd-text tracking-[0.2em] placeholder:text-lcd-text/20 font-black uppercase"
+                    value={plate}
+                    onChange={(e) => setPlate(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void runPlateCheck(); }}
+                  />
+                  <Button
+                    onClick={() => void runPlateCheck()}
+                    disabled={!plate.trim() || plateChecking}
+                    className="matrix-btn-sleek h-14 px-8"
+                  >
+                      {plateChecking ? 'CHECKING...' : 'CHECK PLATE'}
+                  </Button>
+              </div>
+              {plateResult && (
+                  <div className="px-6 pb-6 bg-lcd-text/5">
+                      <div className="p-4 border-2 border-lcd-text/20 bg-black/10 text-[11px] font-bold uppercase tracking-wider">
+                          {plateResult.unconfigured ? (
+                              <span className="opacity-60">ANPR unconfigured // recognizer disabled</span>
+                          ) : plateResult.blocked ? (
+                              <span className="text-red-600">BLOCKED // {plateResult.plate}</span>
+                          ) : plateResult.allowed ? (
+                              <span className="text-green-700">ALLOWED // {plateResult.plate}</span>
+                          ) : (
+                              <span className="opacity-60">Unknown plate // {plateResult.plate}</span>
+                          )}
+                          {(plateLists.allow.length > 0 || plateLists.block.length > 0) && (
+                              <span className="opacity-60">{' // Registry: '}{plateLists.allow.length} allow, {plateLists.block.length} block</span>
+                          )}
+                      </div>
+                  </div>
+              )}
           </div>
       </DashboardShell>
     </AuthGuard>

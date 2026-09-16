@@ -24,6 +24,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { incidentService } from '@/lib/services/incidentService';
+import {
+  EscalationInfo,
+  EvidenceManifest,
+  escalationBadgeClass,
+  evidenceSummary,
+  fetchEscalation,
+  fetchEvidence,
+  searchIncidents,
+} from '@/lib/safetyHub';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
@@ -36,18 +45,58 @@ export default function IncidentsPage() {
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState<string>("ALL");
     const [searchTerm, setSearchTerm] = useState("");
+    // Forensic server-side filters (feature 5). ALL = client-side only.
+    const [severityFilter, setSeverityFilter] = useState<string>("ALL");
+    const [typeFilter, setTypeFilter] = useState<string>("ALL");
+    // Escalation badges (feature 2) + evidence manifests (feature 1).
+    const [escalations, setEscalations] = useState<Record<string, EscalationInfo>>({});
+    const [evidenceMap, setEvidenceMap] = useState<Record<string, EvidenceManifest | null>>({});
+    const [evidenceLoading, setEvidenceLoading] = useState<Record<string, boolean>>({});
+    const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null);
+
+    const fetchEscalations = async (list: Incident[]) => {
+        try {
+            const pairs = await Promise.all(
+                list.map(async (inc) => [inc.id, await fetchEscalation(inc.id)] as const)
+            );
+            const map: Record<string, EscalationInfo> = {};
+            for (const [id, esc] of pairs) {
+                if (esc) map[id] = esc;
+            }
+            setEscalations(map);
+        } catch (error) {
+            console.error("Failed to fetch escalation states:", error);
+        }
+    };
 
     const fetchIncidents = async () => {
         setLoading(true);
         try {
-            const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
-            const url = `/api/v1/incidents`;
-            const params: Record<string, string> = {};
-            if (statusFilter !== "ALL") {
-                params["status"] = statusFilter;
+            const forensicActive = severityFilter !== "ALL" || typeFilter !== "ALL";
+            let data: Incident[];
+            if (forensicActive) {
+                // Server-side attribute search; status has no backend filter,
+                // so it stays client-side below.
+                data = await searchIncidents<Incident>({
+                    severity: severityFilter,
+                    type: typeFilter,
+                    q: searchTerm || undefined,
+                    limit: 100,
+                });
+                if (statusFilter !== "ALL") {
+                    data = data.filter((inc) => inc.status === statusFilter);
+                }
+            } else {
+                const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
+                const url = `/api/v1/incidents`;
+                const params: Record<string, string> = {};
+                if (statusFilter !== "ALL") {
+                    params["status"] = statusFilter;
+                }
+                data = await apiClient.get<Incident[]>(url, params);
             }
-            const data = await apiClient.get<Incident[]>(url, params);
             setIncidents(data);
+            void fetchEscalations(data);
         } catch (error) {
             console.error("Failed to fetch incidents:", error);
         } finally {
@@ -61,7 +110,27 @@ export default function IncidentsPage() {
         // Refresh every 30s
         const interval = setInterval(fetchIncidents, 30000);
         return () => clearInterval(interval);
-    }, [statusFilter]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchIncidents reads live filter state per poll; deps below re-arm the timer
+    }, [statusFilter, severityFilter, typeFilter]);
+
+    const toggleEvidence = async (id: string) => {
+        if (expandedEvidence === id) {
+            setExpandedEvidence(null);
+            return;
+        }
+        setExpandedEvidence(id);
+        if (evidenceMap[id] !== undefined || evidenceLoading[id]) return;
+        setEvidenceLoading((prev) => ({ ...prev, [id]: true }));
+        try {
+            const manifest = await fetchEvidence(id);
+            setEvidenceMap((prev) => ({ ...prev, [id]: manifest }));
+        } catch (error) {
+            console.error(`Failed to fetch evidence for ${id}:`, error);
+            setEvidenceMap((prev) => ({ ...prev, [id]: null }));
+        } finally {
+            setEvidenceLoading((prev) => ({ ...prev, [id]: false }));
+        }
+    };
 
     const handleUpdateStatus = async (id: string, newStatus: IncidentStatus) => {
         try {
@@ -157,6 +226,33 @@ export default function IncidentsPage() {
                             <SelectItem value={IncidentStatus.RESOLVED}>ARCHIVED (RESOLVED)</SelectItem>
                         </SelectContent>
                     </Select>
+                    <Select value={severityFilter} onValueChange={setSeverityFilter}>
+                        <SelectTrigger className="w-full md:w-[180px] bg-black/10 border-2 border-lcd-text/30 text-lcd-text font-lcd h-12 uppercase">
+                            <SelectValue placeholder="SEVERITY" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-lcd-bg border-2 border-lcd-text text-lcd-text font-lcd">
+                            <SelectItem value="ALL">ANY SEVERITY</SelectItem>
+                            <SelectItem value="CRITICAL">CRITICAL</SelectItem>
+                            <SelectItem value="HIGH">HIGH</SelectItem>
+                            <SelectItem value="MEDIUM">MEDIUM</SelectItem>
+                            <SelectItem value="LOW">LOW</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Select value={typeFilter} onValueChange={setTypeFilter}>
+                        <SelectTrigger className="w-full md:w-[200px] bg-black/10 border-2 border-lcd-text/30 text-lcd-text font-lcd h-12 uppercase">
+                            <SelectValue placeholder="TYPE" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-lcd-bg border-2 border-lcd-text text-lcd-text font-lcd">
+                            <SelectItem value="ALL">ANY TYPE</SelectItem>
+                            <SelectItem value="ACCIDENT">ACCIDENT</SelectItem>
+                            <SelectItem value="WRONG_WAY">WRONG WAY</SelectItem>
+                            <SelectItem value="CONGESTION">CONGESTION</SelectItem>
+                            <SelectItem value="TRAFFIC_JAM">TRAFFIC JAM</SelectItem>
+                            <SelectItem value="STALLED_VEHICLE">STALLED VEHICLE</SelectItem>
+                            <SelectItem value="PEDESTRIAN_HAZARD">PEDESTRIAN HAZARD</SelectItem>
+                            <SelectItem value="ROAD_WORK">ROAD WORK</SelectItem>
+                        </SelectContent>
+                    </Select>
                 </div>
             </div>
 
@@ -196,6 +292,14 @@ export default function IncidentsPage() {
                                 )}>
                                     {incident.status.toUpperCase()}
                                 </div>
+                                {escalations[incident.id] && (
+                                    <div className={cn("font-black tracking-widest text-[10px] px-3 py-1 border-2",
+                                        escalationBadgeClass(escalations[incident.id]?.state ?? "OK")
+                                    )}>
+                                        SLA_{escalations[incident.id]?.state}
+                                        {escalations[incident.id]?.level ? ` // ${escalations[incident.id]?.level?.toUpperCase()}` : ""}
+                                    </div>
+                                )}
                             </div>
                             
                             <div className="p-6 grid md:grid-cols-4 gap-8 bg-lcd-text/[0.02]">
@@ -257,9 +361,29 @@ export default function IncidentsPage() {
                                         >
                                             View Logs
                                         </Button>
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => void toggleEvidence(incident.id)}
+                                            className="matrix-btn-sleek h-10 border-lcd-text/30 text-lcd-text/50 hover:text-lcd-text px-4"
+                                        >
+                                            {expandedEvidence === incident.id ? "Hide Evidence" : "Evidence"}
+                                        </Button>
                                     </div>
                                 </div>
                             </div>
+                            {expandedEvidence === incident.id && (
+                                <div className="px-6 pb-6 bg-lcd-text/[0.02]">
+                                    <div className="p-4 border-2 border-lcd-text/20 bg-black/10 text-[11px] font-bold uppercase tracking-wider">
+                                        {evidenceLoading[incident.id] ? (
+                                            <span className="opacity-60">Fetching evidence bundle...</span>
+                                        ) : evidenceMap[incident.id] ? (
+                                            <span>{evidenceSummary(evidenceMap[incident.id] as EvidenceManifest)}</span>
+                                        ) : (
+                                            <span className="opacity-60">Evidence endpoint unreachable // bundle not minted</span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ))
                 )}

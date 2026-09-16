@@ -18,6 +18,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { APIClient } from '@/lib/api/APIClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { WorkZone, fetchWorkZones } from '@/lib/safetyHub';
 
 interface Signal {
   id: string;
@@ -32,6 +33,9 @@ const SignalsPage = () => {
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const { token } = useAuth();
+  // Work zones (feature 9): scheduled speed/lane overrides.
+  const [workZones, setWorkZones] = useState<WorkZone[]>([]);
+  const [zonesLoading, setZonesLoading] = useState(true);
 
   useEffect(() => {
     const fetchSignals = async () => {
@@ -50,6 +54,23 @@ const SignalsPage = () => {
     };
 
     fetchSignals();
+  }, [token]);
+
+  useEffect(() => {
+    const loadZones = async () => {
+      if (!token) return;
+      setZonesLoading(true);
+      try {
+        setWorkZones(await fetchWorkZones());
+      } catch (error) {
+        console.error('Error fetching work zones:', error);
+        setWorkZones([]);
+      } finally {
+        setZonesLoading(false);
+      }
+    };
+
+    loadZones();
   }, [token]);
 
   const updateSignalPhase = async () => {
@@ -194,7 +215,7 @@ const SignalsPage = () => {
                                     <div className="p-4 bg-lcd-text/5 border-2 border-lcd-text/10 flex gap-4">
                                         <Info className="text-lcd-text/50 shrink-0" size={20} />
                                         <p className="text-[10px] font-bold uppercase leading-relaxed opacity-60">
-                                            System interlocks prevent &quot;Green-Green&quot; conflict states. 
+                                            System interlocks prevent &quot;Green-Green&quot; conflict states.
                                             All commands are validated against local controller logic.
                                         </p>
                                     </div>
@@ -202,6 +223,38 @@ const SignalsPage = () => {
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <div className="matrix-card p-0 overflow-hidden mt-12">
+                <div className="matrix-card-header bg-lcd-text/10">
+                    <div className="flex items-center gap-2">
+                        <SignalIcon size={14} />
+                        <span>Scheduled Work Zones // Speed + Lane Overrides</span>
+                    </div>
+                </div>
+                <div className="p-8 bg-lcd-text/5">
+                    {zonesLoading ? (
+                        <div className="flex items-center justify-center py-10 gap-4">
+                            <Loader2 className="animate-spin text-lcd-text h-8 w-8 opacity-30" />
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em]">Loading Work Zones...</p>
+                        </div>
+                    ) : workZones.length === 0 ? (
+                        <div className="text-center py-10 border-4 border-dashed border-lcd-text/10 rounded font-black opacity-30 text-lg uppercase tracking-widest">
+                            No Active Work Zones // Normal Rules Apply
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {workZones.map((z) => (
+                                <div key={z.id} className="flex flex-wrap items-center gap-x-6 gap-y-2 p-4 bg-yellow-500/10 border-2 border-yellow-600/30 text-[11px] font-bold uppercase">
+                                    <span className="font-black">{z.id}</span>
+                                    {z.feed_id && <span>Feed: {z.feed_id}</span>}
+                                    {z.lane !== undefined && <span>Lane: {z.lane}</span>}
+                                    {z.speed_limit !== undefined && <span>Limit: {z.speed_limit}</span>}
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
         </DashboardShell>
