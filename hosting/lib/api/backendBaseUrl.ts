@@ -15,13 +15,9 @@
  * and getBackendWsURL('/api/v1/ws') for WebSocket connections.
  */
 
-const ENV_HTTP = 'NEXT_PUBLIC_API_BASE_URL';
-const ENV_WS = 'NEXT_PUBLIC_WS_URL';
-
 const DEV_DEFAULT = 'http://localhost:8000';
 
-function readEnv(name: string): string | undefined {
-  const v = process.env[name];
+function readEnv(v: string | undefined): string | undefined {
   if (typeof v === 'string' && v.trim().length > 0) return v.trim();
   return undefined;
 }
@@ -47,13 +43,12 @@ function normalize(value: string | undefined): string {
 // must apply it identically, so the value + bypass logic live here as the
 // single source of truth — otherwise the two paths drift and the WS upgrade
 // silently dies while REST keeps working.
-const ENV_TUNNEL_PASSWORD = 'NEXT_PUBLIC_LOCALTUNNEL_PASSWORD';
 
 let _cachedTunnelPassword: string | null | undefined;
 
 export function getTunnelPassword(): string | null {
   if (_cachedTunnelPassword !== undefined) return _cachedTunnelPassword;
-  const pw = process.env[ENV_TUNNEL_PASSWORD];
+  const pw = process.env.NEXT_PUBLIC_LOCALTUNNEL_PASSWORD;
   _cachedTunnelPassword = pw && pw.trim().length > 0 ? pw.trim() : null;
   return _cachedTunnelPassword;
 }
@@ -158,7 +153,7 @@ export function isLocaLtHost(url: URL | string): boolean {
  *   3. http://localhost:8000
  */
 export function getBackendBaseURL(): string {
-  const env = readEnv(ENV_HTTP);
+  const env = readEnv(process.env.NEXT_PUBLIC_API_BASE_URL);
   if (env) return normalize(env);
   const origin = sameOrigin();
   return normalize(origin);
@@ -173,7 +168,7 @@ export function getBackendBaseURL(): string {
  *   2. Derive from HTTP base by swapping http→ws / https→wss
  */
 export function getBackendWsURL(path: string): string {
-  const wsEnv = readEnv(ENV_WS);
+  const wsEnv = readEnv(process.env.NEXT_PUBLIC_WS_URL);
   if (wsEnv) {
     const trimmed = wsEnv.replace(/\/$/, '');
     return `${trimmed}${path.startsWith('/') ? path : '/' + path}`;

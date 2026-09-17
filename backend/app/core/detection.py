@@ -225,9 +225,16 @@ class DetectionEngine:
                 self.roi_mask = self._create_mask(h, w, self.normalized_roi_points)
                 self._apply_exclusion_zones(h, w)
         
-        # Fix: Add exception handling around model inference
+        v_cfg = self.config.get("vehicle_detection", {})
+        vehicle_class_ids = v_cfg.get("vehicle_class_ids", [2, 3, 5, 7])
+        max_detections = max(1, int(v_cfg.get("max_detections_per_frame", 100)))
+        # Bound recovery candidates at the model and again before quadratic
+        # postprocessing, prioritizing high-confidence detections in both paths.
         try:
-            results = self.model(frame, conf=confidence_threshold, imgsz=self.imgsz, verbose=False)  # Remove device parameter
+            results = self.model(
+                frame, conf=confidence_threshold, imgsz=self.imgsz,
+                classes=vehicle_class_ids, max_det=max_detections, verbose=False,
+            )
         except Exception as e:
             logger.warning(f"Model inference failed: {e}")
             return []
@@ -242,8 +249,7 @@ class DetectionEngine:
                 
                 # Fix: Only include vehicle classes (car, motorcycle, bus, truck, etc.)
                 # Read from config to allow adaptation without code changes
-                vehicle_class_ids = self.config.get("vehicle_detection", {}).get("vehicle_class_ids", [2, 3, 5, 7])
-                if cls in vehicle_class_ids:
+                if cls in vehicle_class_ids and conf >= confidence_threshold:
                     # Use original bbox for the result
                     orig_bbox = (b[0], b[1], b[2], b[3])
                     
@@ -254,6 +260,9 @@ class DetectionEngine:
                     # Warn if detections exist but none match the filtered vehicle classes
                     logger.debug(f"Detection found class {cls}, but it is not in vehicle_class_ids {vehicle_class_ids}")
         
+        detections.sort(key=lambda d: d[2], reverse=True)
+        detections = detections[:max_detections]
+
         # Consistency with the batch path (inference_worker): apply the same
         # post-NMS cleanup (geometry filter + class-aware split-merge) here so the
         # per-frame fallback and the batched path produce identical detections.

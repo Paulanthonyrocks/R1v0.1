@@ -233,11 +233,27 @@ def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int
                 tracker = core.tracker
                 vehicle_data = getattr(tracker, "vehicle_data", None)
                 if isinstance(vehicle_data, dict):
-                    live_tracks = {
-                        str(tid): track
-                        for tid, track in vehicle_data.items()
-                        if isinstance(track, dict) and track.get("status") in _LIVE_TRACK_STATUSES
-                    }
+                    # Use the same source timestamp as detect_and_track, not
+                    # processing time (queued frames can be substantially old).
+                    # All passthrough tracks are held estimates, even "active":
+                    # a failed tracker update may never change that status.
+                    # Expire both without advancing/mutating tracker state.
+                    current_time = meta.get("timestamp")
+                    if current_time is None:
+                        current_time = time.time()
+                    predict_timeout = getattr(core, "predict_timeout", 0.4)
+                    live_tracks = {}
+                    for tid, track in vehicle_data.items():
+                        if not isinstance(track, dict) or track.get("status") not in _LIVE_TRACK_STATUSES:
+                            continue
+                        try:
+                            age = current_time - track["last_seen"]
+                            if 0 <= age < predict_timeout:
+                                live_tracks[str(tid)] = track
+                        except (KeyError, TypeError, ValueError):
+                            # Malformed age must not hide healthy sibling tracks
+                            # or turn an unknown last_seen into an infinite hold.
+                            continue
                     if live_tracks:
                         _fw, _fh = _FRAME_DIMS_BY_FEED.get(meta.get("feed_id"), (None, None))
                         serialized_v = serialize_tracked_vehicles(
@@ -415,26 +431,17 @@ def inference_worker(
     is_trt_engine = False  # set True once a static-batch TensorRT engine is loaded
     model_path = vehicle_det_cfg.get("model_path")
 
-    # Detection filtering params (applied in the batched inference path so it
-    # matches DetectionEngine.detect(): honor the configured confidence
-    # threshold for the YOLO call, restrict to vehicle classes, and cap the
-    # per-frame detection count so busy scenes do not pin the worker
-    # (audit findings #1 / #3 -- the old config used low_confidence_threshold
-    # of 0.01 as the batch floor, 25x below the display floor 0.25, producing
-    # 500+-box frames on the sample traffic scene at 320x240 / imgsz 640).
+    # Keep ByteTrack's low-confidence recovery candidates through detection.
+    # TrackingManager alone decides which high-confidence boxes may spawn;
+    # confidence-sorted caps below bound work and prioritize those boxes.
     vehicle_class_ids = set(vehicle_det_cfg.get("vehicle_class_ids", [2, 3, 5, 7]))
     display_conf_floor = float(vehicle_det_cfg.get("confidence_threshold", 0.25))
     low_conf_floor = float(vehicle_det_cfg.get("low_confidence_threshold", 0.1))
-    # YOLO conf floor is the higher of the two: low_confidence_threshold is
-    # now ONLY a legacy fallback for ByteTrack second-association tuning, never
-    # the batch YOLO call's conf arg. Setting the batch floor lower than the
-    # display floor generated noise boxes we later threw away -- wasted YOLO
-    # cost on the busiest frames.
-    batch_conf_floor = max(display_conf_floor, low_conf_floor)
+    batch_conf_floor = min(display_conf_floor, low_conf_floor)
     # Hard cap on detections per frame after class/ROI filtering. Sorted by
     # descending confidence; the top-N win. Default 100 is a generous ceiling
     # for a 320x240 highway scene with imgsz tuned down to 320 (audit #3b).
-    max_detections_per_frame = int(vehicle_det_cfg.get("max_detections_per_frame", 100))
+    max_detections_per_frame = max(1, int(vehicle_det_cfg.get("max_detections_per_frame", 100)))
 
     # --- Shared model loading ---
     shared_reid_embedder = None
@@ -1104,7 +1111,11 @@ def inference_worker(
                             runtime_imgsz = yolo_imgsz_cap
                         else:
                             runtime_imgsz = min(max(64, yolo_imgsz_cap), max(first_h, first_w))
-                        results = shared_model(frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz, verbose=False, stream=False)
+                        results = shared_model(
+                            frames_to_infer, conf=batch_conf_floor, imgsz=runtime_imgsz,
+                            classes=sorted(vehicle_class_ids), max_det=max_detections_per_frame,
+                            verbose=False, stream=False,
+                        )
                         for i, result in enumerate(results):
                             meta_idx = inference_indices[i]
                             meta = batch_meta[meta_idx]
@@ -1126,14 +1137,9 @@ def inference_worker(
                                 # Restrict to vehicle classes (parity with DetectionEngine.detect)
                                 if int(cls_id) not in vehicle_class_ids:
                                     continue
-                                # Apply the display-level confidence floor so we
-                                # don't drag low-conf noise through ROI +
-                                # serialization (audit #1): the batch YOLO
-                                # call already used `conf=batch_conf_floor`,
-                                # but on scenes where `low_confidence_threshold`
-                                # was higher than the YOLO floor (rare now),
-                                # honour the higher floor here too.
-                                if float(conf) < display_conf_floor:
+                                # Preserve low-confidence recovery evidence; it
+                                # cannot spawn tracks in TrackingManager.
+                                if float(conf) < batch_conf_floor:
                                     continue
                                 _n_vehicle_conf += 1
                                 bbox = (rx1 + x_off, ry1 + y_off, rx2 + x_off, ry2 + y_off)
@@ -1325,6 +1331,10 @@ def inference_worker(
                             # (130-180 vehicles). Cap attempts per frame; the
                             # remaining unassigned tracks are matched on
                             # subsequent frames as earlier ones get ids.
+                            observed_ids = [str(vid) for vid, track in vis_tracks.items()
+                                            if track.get("status") == "active"]
+                            local_reid_manager.update_active_tracks(meta["feed_id"], observed_ids)
+                            local_reid_manager.touch_identities(meta["feed_id"], observed_ids)
                             match_budget = int(vehicle_det_cfg.get("reid_match_budget_per_frame", 6))
                             matched_this_frame = 0
                             for vid, track in vis_tracks.items():
@@ -1336,8 +1346,13 @@ def inference_worker(
                                 # (hget/incr/set/rpush/publish per call) that pins
                                 # the worker to ~1 fps/feed. Only match/register
                                 # tracks that have not yet been assigned an id.
-                                if track.get("global_vehicle_id"):
+                                if track.get("status") != "active":
                                     continue
+                                if track.get("global_vehicle_id"):
+                                    if local_reid_manager.get_global_id(meta["feed_id"], str(vid)):
+                                        continue
+                                    # Gallery eviction must not leave a permanently stale binding.
+                                    track.pop("global_vehicle_id", None)
                                 emb = track.get("embedding")
                                 if emb is not None:
                                     if matched_this_frame >= match_budget:

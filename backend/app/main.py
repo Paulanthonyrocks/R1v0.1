@@ -6,6 +6,7 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 # Suppress excessive TensorFlow logging
 
 import asyncio
+import inspect
 import logging
 import logging.config
 import uuid
@@ -86,6 +87,24 @@ except Exception as e:
 
 # --- Context Variables ---
 request_id_var: ContextVar[str] = ContextVar('request_id', default=None)
+
+# --- Audit Task Management ---
+# Audit middleware tracks fire-and-forget writes here (done-callbacks discard
+# finished ones); _drain_audit_tasks waits for stragglers before the DB closes.
+audit_tasks: set = set()
+
+async def _drain_audit_tasks(timeout: float = 5.0):
+    """Warn on slow writes, but never cancel a write's still-running DB thread."""
+    while audit_tasks:
+        batch = set(audit_tasks)
+        _, pending = await asyncio.wait(batch, timeout=timeout)
+        if pending:
+            logger.warning("Waiting for %d audit writes before database close", len(pending))
+        # Cancelling to_thread does not stop the underlying SQLite operation.
+        # Keep the DB alive until completion, even after the warning deadline.
+        await asyncio.gather(*batch, return_exceptions=True)
+        audit_tasks.difference_update(batch)
+
 
 # --- Background Task Management ---
 background_tasks: List[asyncio.Task] = []
@@ -216,189 +235,248 @@ class RequestIDMiddleware:
         else:
             await self.app(scope, receive, send)
 
+async def _cleanup_resource(name, close):
+    """A broken closer must not strand independently owned resources."""
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except (Exception, asyncio.CancelledError):
+        logger.exception("Failed to close %s", name)
+
+
+async def _close_rate_middleware(app):
+    """Close actual middleware instances, not Starlette's registration objects."""
+    # Starlette wraps concrete instances in registration objects that also have
+    # an .app attribute; traverse to the concrete instances without assuming a
+    # fixed nesting depth. `seen` stops the walk on unexpected cycles.
+    middleware = app.middleware_stack
+    seen = set()
+    while middleware is not None and id(middleware) not in seen:
+        seen.add(id(middleware))
+        if isinstance(middleware, RateLimitMiddleware):
+            await _cleanup_resource("rate limiter", middleware.close)
+        middleware = getattr(middleware, "app", None)
+
+
 # --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- STARTUP ---
-    logger.info("--- Starting Route One Backend ---")
-    
-    # 1. System Info
+    database_started = services_started = False
+    firebase_app = None
     try:
-        mem = psutil.virtual_memory()
-        logger.info(f"System Memory: {mem.percent}% used ({mem.used / (1024**3):.2f}GB / {mem.total / (1024**3):.2f}GB)")
-        
-        # Feature flags and state
-        app.state.feature_flags = container.get_feature_flags()
-        
-    except Exception as e:
-        logger.critical(f"Lifespan Startup Failed: {e}")
-        raise RuntimeError(f"Lifespan Startup Failed: {e}")
+        # --- STARTUP ---
+        logger.info("--- Starting Route One Backend ---")
 
-    # 2. Database & Migrations
-    try:
-        await run_migrations()
-        await initialize_database(cfg_dict)
-    except Exception as e:
-        logger.critical(f"Database Init Failed: {e}")
-        raise
+        # 1. System Info
+        try:
+            mem = psutil.virtual_memory()
+            logger.info(f"System Memory: {mem.percent}% used ({mem.used / (1024**3):.2f}GB / {mem.total / (1024**3):.2f}GB)")
+        
+            # Feature flags and state
+            app.state.feature_flags = container.get_feature_flags()
+        
+        except Exception as e:
+            logger.critical(f"Lifespan Startup Failed: {e}")
+            raise RuntimeError(f"Lifespan Startup Failed: {e}")
 
-    # 3. Firebase (Critical if enabled)
-    fb_cfg = to_dict(getattr(loaded_config, "firebase_admin", {}))
-    try:
-        if fb_cfg.get("auth_enabled", False):
-            key_path = Path(fb_cfg.get("service_account_key_path", ""))
-            if not key_path.is_absolute():
-                # Handle paths relative to the backend directory (e.g., 'configs/...' or 'backend/configs/...')
-                if str(key_path).startswith("backend/"):
-                    key_path = BASE_DIR.parent / key_path
-                else:
-                    # Path is already relative to backend dir (e.g., 'configs/...')
-                    key_path = BASE_DIR / key_path
+        # 2. Database & Migrations
+        try:
+            await run_migrations()
+            database_started = True
+            await initialize_database(cfg_dict)
+        except Exception as e:
+            logger.critical(f"Database Init Failed: {e}")
+            raise
+
+        # 3. Firebase (Critical if enabled)
+        fb_cfg = to_dict(getattr(loaded_config, "firebase_admin", {}))
+        try:
+            if fb_cfg.get("auth_enabled", False):
+                key_path = Path(fb_cfg.get("service_account_key_path", ""))
+                if not key_path.is_absolute():
+                    # Handle paths relative to the backend directory (e.g., 'configs/...' or 'backend/configs/...')
+                    if str(key_path).startswith("backend/"):
+                        key_path = BASE_DIR.parent / key_path
+                    else:
+                        # Path is already relative to backend dir (e.g., 'configs/...')
+                        key_path = BASE_DIR / key_path
             
-            if key_path.exists():
-                cred = credentials.Certificate(str(key_path))
-                firebase_admin.initialize_app(cred, {"storageBucket": fb_cfg.get("storage_bucket")})
-                logger.info("Firebase initialized.")
-            elif fb_cfg.get("required", False):
-                raise FileNotFoundError(f"Required Firebase key missing: {key_path}")
-            else:
-                logger.warning(f"Firebase auth enabled but key file not found at {key_path}. Auth will fail.")
-    except Exception as e:
-        logger.error(f"Firebase Init Failed: {e}")
-        if fb_cfg.get("required", False): raise
+                if key_path.exists():
+                    cred = credentials.Certificate(str(key_path))
+                    firebase_app = firebase_admin.initialize_app(cred, {"storageBucket": fb_cfg.get("storage_bucket")})
+                    logger.info("Firebase initialized.")
+                elif fb_cfg.get("required", False):
+                    raise FileNotFoundError(f"Required Firebase key missing: {key_path}")
+                else:
+                    logger.warning(f"Firebase auth enabled but key file not found at {key_path}. Auth will fail.")
+        except Exception as e:
+            logger.error(f"Firebase Init Failed: {e}")
+            if fb_cfg.get("required", False): raise
 
-    # 4. Core Services
-    try:
-        connection_manager = await container.get_connection_manager()
+        # 4. Core Services
+        try:
+            connection_manager = await container.get_connection_manager()
+            app.state.connection_manager = connection_manager
         
-        # Initialize connection manager with config values
-        ws_cfg = cfg_dict.get("websocket", {})
-        await connection_manager.init(
-            max_connections=ws_cfg.get("max_connections", 1000),
-            token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
-            ping_interval=ws_cfg.get("ping_interval", 15),
-            pong_timeout=ws_cfg.get("pong_timeout", 60)
-        )
+            # Initialize connection manager with config values
+            ws_cfg = cfg_dict.get("websocket", {})
+            await connection_manager.init(
+                max_connections=ws_cfg.get("max_connections", 1000),
+                token_refresh_interval=ws_cfg.get("token_refresh_interval", 300),
+                ping_interval=ws_cfg.get("ping_interval", 15),
+                pong_timeout=ws_cfg.get("pong_timeout", 60)
+            )
         
-        app.state.connection_manager = connection_manager
+            services_started = True
+            await initialize_services(cfg_dict, logger, connection_manager)
         
-        await initialize_services(cfg_dict, logger, connection_manager)
+            fm = await container.get_feed_manager()
+            analytics_service = get_analytics_service()
         
-        fm = await container.get_feed_manager()
-        analytics_service = get_analytics_service()
-        
-        if fm:
-            scheduler = fm.get_prediction_scheduler()
-            if scheduler: app.state.prediction_scheduler = scheduler
+            if fm:
+                scheduler = fm.get_prediction_scheduler()
+                if scheduler: app.state.prediction_scheduler = scheduler
 
-            p_cfg = cfg_dict.get("prediction_scheduler", {})
-            p_enabled = p_cfg.get("enabled", True)
+                p_cfg = cfg_dict.get("prediction_scheduler", {})
+                p_enabled = p_cfg.get("enabled", True)
+
+                if p_enabled:
+                    # Prediction scheduler is started inside fm.start_processing()
+                    pass
+
+        except Exception as e:
+            logger.critical(f"Core Services Failed: {e}")
+            raise
+
+        # 5. Optional Services
+        try:
+            sample_feeds = []
+            # 5.0 Post-Startup Processing (sample feed registration)
+            psp_enabled = False
+            psp_cfg = cfg_dict.get("post_startup_processing", {})
+            if psp_cfg.get("enabled", False):
+                psp_enabled = True
+                sample_feeds = psp_cfg.get("sample_feeds", [])
+                if sample_feeds:
+                    logger.info(f"Post-startup processing: {len(sample_feeds)} sample feed(s) configured.")
+            # 5.1 Health Service
+            health_service = SystemHealthService(cfg_dict, fm, connection_manager)
+            app.state.health_service = health_service
+            health_service.start()
+        
+            # 5.2 File Watcher
+            fw_cfg = cfg_dict.get("file_watcher", {})
+            if fw_cfg.get("enabled", False):
+                watch_dir = Path(fw_cfg.get("watch_directory"))
+                if not watch_dir.is_absolute(): watch_dir = BASE_DIR.parent / watch_dir
+                watch_dir.mkdir(parents=True, exist_ok=True)
+
+                def on_new_video(p_str):
+                    asyncio.create_task(create_background_task(fm.add_and_start_feed(
+                        source=p_str, is_looped=True, name_hint=Path(p_str).name,
+                        latitude=34.05 + (random.random()-0.5)*0.01,
+                        longitude=-118.24 + (random.random()-0.5)*0.01
+                    )))
+
+                watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
+                app.state.file_watcher = watcher
+                watcher.start()
+            
+                # Scan existing
+                for vf in watch_dir.glob("*"):
+                    if vf.is_file() and watcher.event_handler._is_video_file(vf):
+                        on_new_video(str(vf))
+
+            # Start processing first to launch inference pool and WAIT for readiness.
+            # Default to True: backend/configs/config.yaml ships with
+            # auto_start_processing: true, but if the cfg_dict lookup fails for
+            # any reason the previous False fallback silently disabled feed
+            # initialization on boot, forcing operators to POST /api/v1/feeds/start
+            # by hand. Aligning the fallback with the YAML intent removes that
+            # footgun. start_processing() is still idempotent via the
+            # _is_processing_active guard inside FeedManager, so re-entry is safe.
+            auto_start = cfg_dict.get("auto_start_processing", True)
+            if auto_start:
+                await fm.start_processing()
+                logger.info("Feed Manager started processing and workers are ready.")
+
+            # Now register sample feeds ONLY after workers are ready
+            if sample_feeds:
+                logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
+                for feed in sample_feeds:
+                    f_path = feed.get("path")
+                    try:
+                        await fm.add_and_start_feed(
+                            source=f_path,
+                            is_looped=feed.get("is_looped", True),
+                            latitude=feed.get("latitude"),
+                            longitude=feed.get("longitude"),
+                            name_hint=feed.get("name", Path(f_path).name),
+                            is_sample_feed=True,
+                            start=psp_enabled
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to register sample feed {f_path}: {e}")
+                logger.info("Sample feeds registration complete.")
 
             if p_enabled:
                 # Prediction scheduler is started inside fm.start_processing()
                 pass
+        except Exception as e:
+            logger.error(f"Optional Services Failed: {e}")
 
-    except Exception as e:
-        logger.critical(f"Core Services Failed: {e}")
-        raise
+        logger.info("Lifespan startup complete - server ready.")
+        yield # --- App Running ---
 
-    # 5. Optional Services
-    try:
-        sample_feeds = []
-        # 5.0 Post-Startup Processing (sample feed registration)
-        psp_enabled = False
-        psp_cfg = cfg_dict.get("post_startup_processing", {})
-        if psp_cfg.get("enabled", False):
-            psp_enabled = True
-            sample_feeds = psp_cfg.get("sample_feeds", [])
-            if sample_feeds:
-                logger.info(f"Post-startup processing: {len(sample_feeds)} sample feed(s) configured.")
-        # 5.1 Health Service
-        health_service = SystemHealthService(cfg_dict, fm, connection_manager)
-        health_service.start()
-        app.state.health_service = health_service
-        
-        # 5.2 File Watcher
-        fw_cfg = cfg_dict.get("file_watcher", {})
-        if fw_cfg.get("enabled", False):
-            watch_dir = Path(fw_cfg.get("watch_directory"))
-            if not watch_dir.is_absolute(): watch_dir = BASE_DIR.parent / watch_dir
-            watch_dir.mkdir(parents=True, exist_ok=True)
-
-            def on_new_video(p_str):
-                asyncio.create_task(create_background_task(fm.add_and_start_feed(
-                    source=p_str, is_looped=True, name_hint=Path(p_str).name,
-                    latitude=34.05 + (random.random()-0.5)*0.01, 
-                    longitude=-118.24 + (random.random()-0.5)*0.01
-                )))
-
-            watcher = FileSystemWatcher(str(watch_dir.resolve()), on_new_video)
-            watcher.start()
-            app.state.file_watcher = watcher
-            
-            # Scan existing
-            for vf in watch_dir.glob("*"):
-                if vf.is_file() and watcher.event_handler._is_video_file(vf):
-                    on_new_video(str(vf))
-
-        # Start processing first to launch inference pool and WAIT for readiness.
-        # Default to True: backend/configs/config.yaml ships with
-        # auto_start_processing: true, but if the cfg_dict lookup fails for
-        # any reason the previous False fallback silently disabled feed
-        # initialization on boot, forcing operators to POST /api/v1/feeds/start
-        # by hand. Aligning the fallback with the YAML intent removes that
-        # footgun. start_processing() is still idempotent via the
-        # _is_processing_active guard inside FeedManager, so re-entry is safe.
-        auto_start = cfg_dict.get("auto_start_processing", True)
-        if auto_start:
-            await fm.start_processing()
-            logger.info("Feed Manager started processing and workers are ready.")
-
-        # Now register sample feeds ONLY after workers are ready
-        if sample_feeds:
-            logger.info(f"Registering {len(sample_feeds)} sample feeds from config...")
-            for feed in sample_feeds:
-                f_path = feed.get("path")
-                try:
-                    await fm.add_and_start_feed(
-                        source=f_path,
-                        is_looped=feed.get("is_looped", True),
-                        latitude=feed.get("latitude"),
-                        longitude=feed.get("longitude"),
-                        name_hint=feed.get("name", Path(f_path).name),
-                        is_sample_feed=True,
-                        start=psp_enabled
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to register sample feed {f_path}: {e}")
-            logger.info("Sample feeds registration complete.")
-
-        if p_enabled:
-            # Prediction scheduler is started inside fm.start_processing()
-            pass
-    except Exception as e:
-        logger.error(f"Optional Services Failed: {e}")
-
-    yield # --- App Running ---
-    logger.info("Lifespan yield reached - server ready.")
-
-    # --- SHUTDOWN ---
-    logger.info("--- Stopping Route One Backend ---")
+    finally:
+        async def cleanup():
+            nonlocal firebase_app, database_started
+            # --- SHUTDOWN (finally: also runs on partial startup) ---
+            logger.info("--- Stopping Route One Backend ---")
+            await _cleanup_resource("rate middleware stack", lambda: _close_rate_middleware(app))
     
-    if hasattr(app.state, "health_service"): await app.state.health_service.stop()
-    if hasattr(app.state, "file_watcher") and app.state.file_watcher: app.state.file_watcher.stop()
+            if getattr(app.state, "health_service", None) is not None:
+                await _cleanup_resource("health service", app.state.health_service.stop)
+                del app.state.health_service
+            if getattr(app.state, "file_watcher", None) is not None:
+                await _cleanup_resource("file watcher", app.state.file_watcher.stop)
+                del app.state.file_watcher
     
-    if background_tasks:
-        async with _tasks_lock:
-            tasks = list(background_tasks)
-        for t in tasks: t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+            if background_tasks:
+                async with _tasks_lock:
+                    tasks = list(background_tasks)
+                for t in tasks: t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-    await shutdown_services()
-    if hasattr(app.state, "connection_manager"): await app.state.connection_manager.shutdown()
-    await close_database()
+            await _drain_audit_tasks()
+
+            if services_started:
+                await _cleanup_resource("services", shutdown_services)
+            if getattr(app.state, "connection_manager", None) is not None:
+                await _cleanup_resource("connection manager", app.state.connection_manager.shutdown)
+                del app.state.connection_manager
+            if firebase_app is not None:
+                await _cleanup_resource("firebase", lambda: firebase_admin.delete_app(firebase_app))
+                firebase_app = None
+            if database_started:
+                await _cleanup_resource("database", close_database)
+                database_started = False
     
-    logger.info("Shutdown complete.")
+            logger.info("Shutdown complete.")
+        # Defer outer cancellation until all owned resources have been handled.
+        # In particular, cancelling an audit task does not stop its DB thread.
+        cleanup_task = asyncio.create_task(cleanup(), name="lifespan-cleanup")
+        cancelled = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
 
 # --- App Instance ---
 app = FastAPI(
@@ -441,6 +519,9 @@ rate_limits = {
     "/api/v1/feeds": RateLimitConfig(limit=30, window=60),
 }
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+# RateLimitMiddleware spawns a periodic-cleanup task at construction; its
+# async close() (coordinated with the rate agent) is awaited during shutdown
+# by _close_rate_middleware traversal.
 
 # Initialize CORS
 if cfg_dict:
@@ -457,20 +538,21 @@ async def audit_middleware(request: Request, call_next):
             db_manager = get_database_manager()
             audit_logger = AuditLogger(db_manager)
             
-            user_id = request.headers.get("X-User-ID", "anonymous")
+            # Identity contract: the auth dependency sets request.state.
+            # authenticated_user (User object) only after verification; the User's
+            # username attribute is the audit UID. Never trust a client header.
+            authenticated_user = getattr(request.state, "authenticated_user", None)
+            user_id = getattr(authenticated_user, "username", None) or "anonymous"
             
             # Extract simple resource info
             path_parts = request.url.path.strip("/").split("/")
             resource_type = path_parts[2] if len(path_parts) > 2 else "unknown" # api/v1/resource
             resource_id = request.path_params.get("id", "N/A")
             
-            # Fire-and-forget: the audit write (DB via to_thread) must NOT sit
-            # in the request hot path (crack #3). Schedule it on the loop so the
-            # response returns immediately; the task is tracked by
-            # create_background_task and drained on shutdown. log_action swallows
-            # its own exceptions, so a failed audit write can never break the
-            # request.
-            asyncio.create_task(
+            # Keep DB I/O off the response path, but own the task until completion.
+            # Audit writes are drained (not cancelled) before closing the DB;
+            # cancelling to_thread would leave its DB operation running.
+            _task = asyncio.create_task(
                 audit_logger.log_action(
                     user_id=user_id,
                     action=f"{request.method} {request.url.path}",
@@ -480,6 +562,8 @@ async def audit_middleware(request: Request, call_next):
                 ),
                 name=f"audit-{request.method}-{resource_type}-{resource_id}"
             )
+            audit_tasks.add(_task)
+            _task.add_done_callback(audit_tasks.discard)
         except Exception as e:
             logger.error(f"Error in audit middleware: {e}")
             

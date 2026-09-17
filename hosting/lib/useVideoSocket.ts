@@ -4,13 +4,7 @@ import { useWebSocket } from './websocket/WebSocketProvider';
 import { SurveillanceFeedMessage, VideoFrameMessage, VehicleFrontendData, VideoFrameSnapshot, LaneOverlayData } from './types';
 import { useVideoDecoder } from './hooks/useVideoDecoder';
 import videoStreamManager from './videoStreamManager';
-import {
- _subscribedFeeds,
- _feedHookCounts,
- _pendingUnsubscribes,
- _pendingCleanups,
- UNSUBSCRIBE_DEBOUNCE_MS,
-} from './websocket/feedSubscriptionState';
+import { retainFeedSubscription } from './websocket/feedSubscriptionState';
 
 const useVideoSocket = (streamId: string, minimal: boolean = false) => {
   // Stable per-hook log label. useId is the sanctioned render-safe source;
@@ -218,50 +212,6 @@ const useVideoSocket = (streamId: string, minimal: boolean = false) => {
     streamIdRef.current = streamId;
   }, [streamId]);
 
-  const subscribeToFeed = useCallback(() => {
-    const streamIdLocal = streamIdRef.current;
-    if (client?.isConnected() && streamIdLocal) {
-      const pending = _pendingUnsubscribes.get(streamIdLocal);
-      if (pending) {
-        clearTimeout(pending);
-        _pendingUnsubscribes.delete(streamIdLocal);
-      }
-      const pendingCleanup = _pendingCleanups.get(streamIdLocal);
-      if (pendingCleanup) {
-        clearTimeout(pendingCleanup);
-        _pendingCleanups.delete(streamIdLocal);
-      }
-      if (!_subscribedFeeds.has(streamIdLocal)) {
-        _subscribedFeeds.add(streamIdLocal);
-        client?.send({
-          type: WebSocketMessageType.SUBSCRIBE_TO_FEED,
-          data: { feed_id: streamIdLocal },
-        });
-      }
-    }
-  }, [client]);
-
-const unsubscribeFromFeed = useCallback(() => {
-    const streamIdLocal = streamIdRef.current;
-    const count = _feedHookCounts.get(streamIdLocal) ?? 0;
-    if (count === 0 && _subscribedFeeds.has(streamIdLocal)) {
-      const existing = _pendingUnsubscribes.get(streamIdLocal);
-      if (existing) clearTimeout(existing);
-
-      const timer = setTimeout(() => {
-        _pendingUnsubscribes.delete(streamIdLocal);
-        if (!_subscribedFeeds.has(streamIdLocal)) return;
-        _subscribedFeeds.delete(streamIdLocal);
-        client?.send({
-          type: WebSocketMessageType.UNSUBSCRIBE_FROM_FEED,
-          data: { feed_id: streamIdLocal },
-        });
-      }, UNSUBSCRIBE_DEBOUNCE_MS);
-
-      _pendingUnsubscribes.set(streamIdLocal, timer);
-    }
-  }, [client]);
-
   // Track recently processed frame_indexes per streamId to make handleFrame
   // idempotent. The same (feed_id, frame_index) tuple can reach this hook
   // multiple times during StrictMode double-mounts, HMR remounts, or when
@@ -384,12 +334,7 @@ const unsubscribeFromFeed = useCallback(() => {
     if (!streamId) return;
 
     lastProcessedIndexRef.current = -1;
-    const currentCount = _feedHookCounts.get(streamId) ?? 0;
-    _feedHookCounts.set(streamId, currentCount + 1);
-
-    if (client?.isConnected()) {
-      subscribeToFeed();
-    }
+    const releaseFeed = client ? retainFeedSubscription(client, streamId) : undefined;
 
     console.log(`[useVideoSocket ${hookId.current}] Mounting hook for streamId: ${streamId}. Subscribing to VIDEO_FRAME...`);
     const currentStreamId = streamId;
@@ -450,49 +395,16 @@ const unsubscribeFromFeed = useCallback(() => {
         // immediately. A received frame means the stream is alive, so the
         // "unavailable" overlay must not linger after a gap recovers.
         consecutiveStaleCountRef.current = 0;
-        if (error) setError(null);
+        setError(current => current === 'Video stream timed out.' ? null : current);
       }
     }, 5000); // Check every 5 seconds instead of every second
 
     const unsubscribeStatus = client?.onStatusChange((status: string) => {
       setIsConnected(status === 'connected' || status === 'authenticated');
-      if (status === 'authenticated') {
-        const pending = _pendingUnsubscribes.get(streamId);
-        if (pending) {
-          clearTimeout(pending);
-          _pendingUnsubscribes.delete(streamId);
-        }
-        _subscribedFeeds.delete(streamId);
-        subscribeToFeed();
-      } else if (status === 'disconnected') {
-        const pending = _pendingUnsubscribes.get(streamId);
-        if (pending) {
-          clearTimeout(pending);
-          _pendingUnsubscribes.delete(streamId);
-        }
-      }
     });
 
     return () => {
-      const count = _feedHookCounts.get(streamId) ?? 1;
-      if (count <= 1) {
-        _feedHookCounts.delete(streamId);
-      } else {
-        _feedHookCounts.set(streamId, count - 1);
-      }
-      
-      unsubscribeFromFeed();
-      if (count <= 1) {
-        const existingCleanup = _pendingCleanups.get(streamId);
-        if (existingCleanup) clearTimeout(existingCleanup);
-
-        const cleanupTimer = setTimeout(() => {
-          _pendingCleanups.delete(streamId);
-          client?.cleanupWorkerResources(streamId);
-        }, UNSUBSCRIBE_DEBOUNCE_MS);
-
-        _pendingCleanups.set(streamId, cleanupTimer);
-      }
+      releaseFeed?.();
       if (unsubscribeFrame) unsubscribeFrame();
       if (unsubscribeStatus) unsubscribeStatus();
       clearInterval(stalenessInterval);
@@ -504,7 +416,7 @@ const unsubscribeFromFeed = useCallback(() => {
         lastFrameRef.current.image.close();
       }
     };
-  }, [client, streamId, subscribeToFeed, unsubscribeFromFeed]);
+  }, [client, streamId]);
 
   // --- Public API ---
 

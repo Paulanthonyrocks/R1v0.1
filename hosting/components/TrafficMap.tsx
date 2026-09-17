@@ -7,7 +7,9 @@ import { useWebSocket } from '../lib/websocket/WebSocketProvider';
 import { WebSocketMessageType } from '../lib/websocket/WebSocketClient';
 import { useVehicleSelection } from '@/lib/context/VehicleSelectionContext';
 import { useVehicleTracking } from '../lib/hooks/useVehicleTracking';
-import { WebSocketVideoFrame } from '../lib/types/api';
+import type { VehicleData } from '../lib/types/api';
+import { retainFeedSubscription } from '../lib/websocket/feedSubscriptionState';
+import { useRealtimeState } from '../lib/context/RealtimeStateContext';
 import { Activity, Crosshair, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -20,6 +22,9 @@ const TrafficMap = forwardRef<any, {
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const client = useWebSocket();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const { feeds } = useRealtimeState();
+  const feedKey = [...new Set(feeds.map(feed => feed.feed_id))].sort().join('\n');
+  const feedIds = useMemo(() => feedKey ? feedKey.split('\n') : [], [feedKey]);
 
   // AUDIT FIX (2026-08-24): prune selections whose vehicles have TTL'd out of
   // tracking — otherwise the Set grows unboundedly over long sessions.
@@ -62,20 +67,22 @@ const TrafficMap = forwardRef<any, {
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(Date.now());
 
+  // The map owns feed demand independently of video widgets, but consumes only
+  // metadata. WebSocketClient retains responsibility for unowned bitmaps.
   useEffect(() => {
-    if (!client) return;
-
-    const unsubscribe = client.subscribe(WebSocketMessageType.VIDEO_FRAME, (data: unknown) => {
-      const frame = data as WebSocketVideoFrame;
-      if (frame && frame.v) {
-        mergeVehicleUpdates(frame.v);
-      }
+    if (!client?.subscribe || !feedIds.length) return;
+    const releases = feedIds.map(feedId => {
+      const unsubscribe = client.subscribe(
+        WebSocketMessageType.VIDEO_METADATA,
+        (data: { vehicles?: VehicleData[] }) => {
+          if (Array.isArray(data?.vehicles)) mergeVehicleUpdates(data.vehicles);
+        }, feedId,
+      );
+      const release = retainFeedSubscription(client, feedId);
+      return () => { unsubscribe(); release(); };
     });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [client, mergeVehicleUpdates]);
+    return () => releases.forEach(release => release());
+  }, [client, mergeVehicleUpdates, feedIds]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);

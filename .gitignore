@@ -44,6 +44,7 @@ gha-creds-*.json
 
 backend/configs/firrebase/service-account-key.json
 memory.md
+IMPROVEMENTS.md
 backend/scripts
 # Model weights (6.5MB binaries; re-downloadable from ultralytics)
 *.pt
@@ -52,3 +53,7 @@ backend/scripts
 # breaks the auto-commit deploy loop)
 *.engine
 *.onnx
+
+# Audit session test files (untracked working-tree artifacts)
+backend/tests/
+hosting/__tests__/

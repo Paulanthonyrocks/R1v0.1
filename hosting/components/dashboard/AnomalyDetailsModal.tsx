@@ -13,9 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { AnomalyDetailsModalProps, SeverityLevel } from '@/lib/types';
 import { incidentService } from '@/lib/services/incidentService';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
-
-const API_BASE_URL = getBackendBaseURL();
+import AuthenticatedImage from '@/components/AuthenticatedImage';
 import {
   AlertTriangle,
   Bomb,
@@ -96,7 +94,7 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
     handleUpdateStatus('RESOLVED');
   };
 
-  const snapshotPath = (anomaly.details as any)?.snapshot_path;
+  const snapshotPath = anomaly.details?.snapshot_path;
 
   return (
     <Dialog open={open} onOpenChange={(val) => {
@@ -108,11 +106,11 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
     }}>
       <DialogContent className="sm:max-w-[500px] bg-card border-border text-foreground p-6">
         <DialogHeader className="mb-4 text-left">
-          <DialogTitle className="flex items-center gap-2 text-lg font-semibold" id="anomaly-dialog-title">
+          <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
             <SeverityIcon className={cn("h-5 w-5", config.color.includes('yellow') || config.color.includes('amber') ? 'text-black' : 'text-white')} />
             Incident Details
           </DialogTitle>
-          <DialogDescription id="anomaly-dialog-desc" className="text-muted-foreground pt-1">
+          <DialogDescription className="text-muted-foreground pt-1">
             {anomaly.id ? `ID: ${anomaly.id}` : 'Anonymous Event'}
           </DialogDescription>
         </DialogHeader>
@@ -161,18 +159,15 @@ const AnomalyDetailsModal = ({ anomaly, open, onOpenChange, onAcknowledge }: Ano
             )}
           </div>
 
-          {snapshotPath && (
+          {open && typeof snapshotPath === 'string' && snapshotPath && (
             <div className="mt-4 border-2 border-lcd-text/20 bg-black overflow-hidden">
               <div className="bg-lcd-text text-lcd-bg px-2 py-0.5 text-[8px] font-bold uppercase">
                 Incident Snapshot // High-Res Capture
               </div>
-              <img
-                src={`${API_BASE_URL}/api/v1/snapshots/${snapshotPath}`}
+              <AuthenticatedImage
+                path={`/api/v1/snapshots/${snapshotPath.split('/').map(encodeURIComponent).join('/')}`}
                 alt="Incident Snapshot"
                 className="w-full h-auto object-contain max-h-[300px]"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
               />            </div>
           )}
 

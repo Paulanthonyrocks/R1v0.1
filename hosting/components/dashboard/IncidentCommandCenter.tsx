@@ -11,12 +11,10 @@ import {
   CheckCircle2, 
   XCircle,
   Eye,
-  Info,
   Clock,
   MapPin,
   Video,
   Hash,
-  ArrowRightLeft,
   ExternalLink
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,9 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/lib/auth/AuthProvider';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
-
-const API_BASE_URL = getBackendBaseURL();
+import AuthenticatedImage from '@/components/AuthenticatedImage';
 
 // Generated once at module load, not per render: these are static display
 // labels, and regenerating them every render made the IDs flicker.
@@ -290,9 +286,9 @@ const IncidentCommandCenter: React.FC<IncidentCommandCenterProps> = ({ alerts, o
                          <div className="h-full w-[1px] bg-lcd-text shadow-[0_0_10px_#000]" />
                       </div>
 
-                      {selectedIncident.details?.snapshot_path ? (
-                        <img
-                          src={`${API_BASE_URL}/api/v1/snapshots/${selectedIncident.details.snapshot_path}`}
+                      {typeof selectedIncident.details?.snapshot_path === 'string' && selectedIncident.details.snapshot_path ? (
+                        <AuthenticatedImage
+                          path={`/api/v1/snapshots/${selectedIncident.details.snapshot_path.split('/').map(encodeURIComponent).join('/')}`}
                           alt="Incident Snapshot"
                           className="w-full h-full object-contain filter grayscale contrast-125"
                         />

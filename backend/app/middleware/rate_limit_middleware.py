@@ -46,8 +46,20 @@ class RateLimitMiddleware:
             "premium": (limit * 5, window)
         }
         
-        # Start periodic cleanup task
-        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        # Middleware can be constructed before an event loop exists.
+        self._cleanup_task = None
+        self._closed = False
+        self._tier_cache = {}
+
+    async def close(self):
+        """Cancel and await owned cleanup work; safe to call repeatedly."""
+        self._closed = True
+        task, self._cleanup_task = self._cleanup_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.request_counts.clear()
+        self._tier_cache.clear()
 
     async def _periodic_cleanup(self):
         """Periodically remove stale entries from request_counts to prevent memory leaks."""
@@ -114,7 +126,7 @@ class RateLimitMiddleware:
 
         try:
             from app.utils.auth_utils import verify_firebase_token
-            decoded = await asyncio.to_thread(verify_firebase_token, token)
+            decoded = await verify_firebase_token(token)
             role = str(decoded.get("role", "")).lower()
             if role == "admin":
                 tier = "premium"
@@ -137,6 +149,8 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if self._cleanup_task is None and not self._closed:
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
         request = Request(scope, receive)
 
         # Skip rate limiting for OPTIONS requests (CORS preflight)

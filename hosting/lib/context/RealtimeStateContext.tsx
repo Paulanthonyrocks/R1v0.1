@@ -138,7 +138,6 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
                 if (data && Array.isArray(data.feeds)) {
                     const sortedFeeds = [...data.feeds].sort((a, b) => a.feed_id.localeCompare(b.feed_id));
                     setFeeds(sortedFeeds);
-                    sortedFeeds.forEach(feed => subscribeToFeed(feed.feed_id));
                 }
             }) 
             : null;

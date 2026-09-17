@@ -70,7 +70,7 @@ async def update_feed_config(
 )
 async def get_all_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[User] = Depends(get_current_active_user_optional),
+    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[List[FeedStatusData]]:
     """
     Endpoint to get the status of all registered feeds.
@@ -382,7 +382,7 @@ async def delete_feed(
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: Optional[User] = Depends(get_current_active_user_optional),
+    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatusData]:
     """Endpoint to get the current status of a specific feed."""
     if current_user:

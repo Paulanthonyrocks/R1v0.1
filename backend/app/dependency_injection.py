@@ -2,7 +2,7 @@ import logging
 import threading
 import copy
 from typing import Dict, Any, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from app.websocket.connection_manager import ConnectionManager
 from app.services.feed_manager import FeedManager
@@ -173,21 +173,27 @@ async def get_route_optimization_service():
     from app.services import get_route_optimization_service as get_ros_global
     return get_ros_global()
 
-async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_active_user(token: str = Depends(oauth2_scheme), request: Request = None) -> User:
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         decoded_token = await verify_firebase_token(token)
         username = decoded_token.get("uid") or decoded_token.get("sub")
-        return User(
+        user = User(
             username=username,
             email=decoded_token.get("email", ""),
             full_name=decoded_token.get("name", username),
             role=decoded_token.get("role", UserRole.USER),
+            signal_ids=decoded_token.get("signal_ids", []),
         )
-    except Exception as e:
-        logger.warning(f"Authentication failed for token: {token[:10]}... Error: {e}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        if request is not None:
+            request.state.authenticated_user = user
+        return user
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("Authentication claims rejected.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from None
 
 async def get_current_viewer(current_user: User = Depends(get_current_active_user)) -> User:
     if not current_user or current_user.role not in [UserRole.ADMIN, UserRole.VIEWER]:
@@ -201,6 +207,12 @@ async def get_current_active_user_optional(token: str = Depends(oauth2_scheme)) 
         return await get_current_active_user(token)
     except HTTPException:
         return None
+
+async def get_current_operator(current_user: User = Depends(get_current_active_user)) -> User:
+    if current_user.role not in (UserRole.ADMIN, UserRole.OPERATOR, UserRole.AGENCY):
+        raise HTTPException(status_code=403, detail="Operator, agency or admin role required")
+    return current_user
+
 
 async def get_current_admin(current_user: User = Depends(get_current_active_user)) -> User:
     if not current_user or current_user.role != UserRole.ADMIN:

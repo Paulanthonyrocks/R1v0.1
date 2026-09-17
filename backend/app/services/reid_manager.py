@@ -77,6 +77,8 @@ class GlobalReIDManager:
         # Initialize internal state
         self.metadata_store: Dict[str, Dict] = {}
         self.local_to_global: Dict[str, Dict[str, str]] = {}
+        self._active_local_ids: Dict[str, set] = {}
+        self._last_touch_sync: Dict[str, float] = {}
         self.last_cleanup_time = time.time()
         self.last_sync_time = time.time()
         # Throttle the FULL Redis re-sync (see _sync_from_redis). match_or_register
@@ -189,6 +191,49 @@ class GlobalReIDManager:
         with self._lock:
             return self.local_to_global.get(feed_id, {}).get(local_id)
 
+    def update_active_tracks(self, feed_id: str, local_ids):
+        """Declare simultaneous observations; old tracks may re-enter later."""
+        with self._lock:
+            ids = set(map(str, local_ids))
+            if ids:
+                self._active_local_ids[feed_id] = ids
+            else:
+                self._active_local_ids.pop(feed_id, None)
+                self._last_touch_sync.pop(feed_id, None)
+
+    def touch_identities(self, feed_id: str, local_ids):
+        """Refresh observed identities locally; batch remote leases at <=1 Hz."""
+        now = time.time()
+        with self._lock:
+            mapping = self.local_to_global.get(feed_id, {})
+            observed = {lid: mapping[lid] for lid in map(str, local_ids) if lid in mapping}
+            gids = set(observed.values())
+            interval = min(1.0, max(0.01, self.ttl_seconds / 3.0))
+            due = now - self._last_touch_sync.get(feed_id, float("-inf")) >= interval
+            rows = []
+            for gid in gids:
+                if gid not in self.metadata_store or gid not in self.gallery_ids:
+                    continue
+                self.metadata_store[gid]["last_seen"] = now
+                if due and self.redis and self.gallery_matrix is not None:
+                    idx = self.gallery_ids.index(gid)
+                    rows.append((gid, self.gallery_matrix[idx].astype(np.float32).tobytes(),
+                                 self.metadata_store[gid].get("metadata", {}).get("class_name", "unknown")))
+        if self.redis and rows and due:
+            try:
+                pipe = self.redis.pipeline()
+                for gid, embedding, class_name in rows:
+                    pipe.set(f"reid:emb:{gid}", embedding, ex=self.ttl_seconds)
+                    pipe.hset(f"reid:meta:{gid}", mapping={"last_seen": str(now), "class_name": class_name})
+                    pipe.expire(f"reid:meta:{gid}", self.ttl_seconds)
+                pipe.hset(f"reid:map:{feed_id}", mapping=observed)
+                pipe.expire(f"reid:map:{feed_id}", self.ttl_seconds)
+                pipe.execute()
+                with self._lock:
+                    self._last_touch_sync[feed_id] = now
+            except Exception as exc:
+                logger.warning(f"ReID lease refresh failed: {exc}")
+
     def distinct_vehicle_count(self) -> int:
         """Number of distinct global vehicle identities currently tracked.
 
@@ -242,6 +287,13 @@ class GlobalReIDManager:
                 mapping_key = f"reid:map:{feed_id}"
                 gid_bytes = self.redis.hget(mapping_key, local_id)
                 if gid_bytes:
+                    candidate = gid_bytes.decode('utf-8')
+                    with self._lock:
+                        active = self._active_local_ids.get(feed_id, set())
+                        if any(lid != local_id and lid in active and gid == candidate
+                               for lid, gid in self.local_to_global.get(feed_id, {}).items()):
+                            gid_bytes = None
+                if gid_bytes:
                     gid = gid_bytes.decode('utf-8')
                     self.redis.expire(mapping_key, self.ttl_seconds)
                     
@@ -254,6 +306,12 @@ class GlobalReIDManager:
                                 self.gallery_matrix[idx] = self._normalize(
                                     (1.0 - self.alpha) * self.gallery_matrix[idx] + self.alpha * embedding
                                 )
+                        if gid not in self.gallery_ids:
+                            row = embedding.reshape(1, -1)
+                            self.gallery_matrix = row if self.gallery_matrix is None else np.vstack([self.gallery_matrix, row])
+                            self.gallery_ids.append(gid)
+                        if gid not in self.metadata_store:
+                            self.metadata_store[gid] = {"last_seen": now, "metadata": metadata, "confidence": confidence}
                         # Mirror into in-memory map so subsequent frames skip Redis
                         if feed_id not in self.local_to_global:
                             self.local_to_global[feed_id] = {}
@@ -262,11 +320,21 @@ class GlobalReIDManager:
             except Exception as e:
                 logger.error(f"Redis ReID cache error: {e}")
 
+        # Refresh before allocating or binding a new identity. Never retry after
+        # installing the mapping: the cache fast path would skip publication.
+        sync_due = False
+        with self._lock:
+            if self.redis and (now - self.last_full_sync_time >= self.full_sync_interval):
+                self.last_full_sync_time = now
+                self.last_sync_time = now
+                sync_due = True
+        if sync_due:
+            self._sync_from_redis()
+
         # 2. Local Matching Logic
         global_id = None
         sync_emb = None
         new_reg = False
-        sync_needed = False
         
         with self._lock:
             # Check existing local mapping
@@ -278,6 +346,12 @@ class GlobalReIDManager:
             # Fallback to vector search
             if not global_id and self.gallery_matrix is not None and len(self.gallery_ids) > 0:
                 scores = np.dot(self.gallery_matrix, embedding)
+                active_ids = self._active_local_ids.get(feed_id, set())
+                occupied = {gid for lid, gid in self.local_to_global.get(feed_id, {}).items()
+                            if lid != local_id and lid in active_ids}
+                for idx, gid in enumerate(self.gallery_ids):
+                    if gid in occupied:
+                        scores[idx] = -np.inf
                 best_idx = np.argmax(scores)
                 if scores[best_idx] > self.similarity_threshold:
                     global_id = self.gallery_ids[best_idx]
@@ -287,8 +361,6 @@ class GlobalReIDManager:
                     updated_emb = self._normalize((1.0 - self.alpha) * self.gallery_matrix[best_idx] + self.alpha * embedding)
                     self.gallery_matrix[best_idx] = updated_emb
                     sync_emb = updated_emb
-                elif self.redis and (now - self.last_sync_time > 10.0):
-                    sync_needed = True
 
             # Registration
             if not global_id:
@@ -323,20 +395,7 @@ class GlobalReIDManager:
                 self.local_to_global[feed_id] = {}
             self.local_to_global[feed_id][local_id] = global_id
 
-        # 3. Network Sync (Outside Lock)
-        # A cache miss on a vector search requests a full re-sync, but we throttle
-        # the FULL pull to full_sync_interval_seconds: the pub/sub listener already
-        # keeps each instance's gallery warm incrementally, so re-pulling the
-        # entire remote gallery on every miss is what caused the sync storm. We
-        # still always honor a genuine miss via the incremental path -- only the
-        # expensive bulk re-pull is rate-limited. The recursion is preserved so a
-        # just-synced gallery gets a fresh match attempt.
-        if sync_needed:
-            self.last_sync_time = now
-            if now - self.last_full_sync_time >= self.full_sync_interval:
-                self.last_full_sync_time = now
-                self._sync_from_redis()
-            return self.match_or_register(feed_id, local_id, embedding, metadata, confidence=confidence)
+        # 3. Publish the resolved identity outside the lock.
 
         if sync_emb is not None:
             if self.redis:
@@ -580,7 +639,7 @@ class GlobalReIDManager:
                 # It was max_gallery_size*2, which guaranteed the remote list
                 # always exceeded what any instance can hold, so every full
                 # sync saw ~1000+ permanent "new" ids (sync-storm root cause).
-                self.redis.ltrim("reid:gallery", 0, self.max_gallery_size - 1)
+                self.redis.ltrim("reid:gallery", -self.max_gallery_size, -1)
             except Exception as e:
                 logger.error(f"Failed to trim Redis gallery: {e}")
 

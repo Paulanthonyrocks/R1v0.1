@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field  # Added for SuggestionFeedbackRequest
 import logging
 
 from app.models.traffic import LocationModel
+from app.models.user import User
 from app.models.routing import (
     PersonalizedRouteRequest,
     PersonalizedRouteResponse,
@@ -51,7 +52,7 @@ class SuggestionFeedbackRequest(BaseModel):
 )
 async def get_personalized_route(
     request: PersonalizedRouteRequest = Body(...),
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> PersonalizedRouteResponse:
     logger.info(
@@ -60,7 +61,7 @@ async def get_personalized_route(
     """Get a personalized route based on user preferences"""
     try:
         # Ensure the user_id matches the authenticated user
-        if request.user_id != current_user["uid"]:
+        if request.user_id != current_user.username:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User ID in request does not match authenticated user",
@@ -68,6 +69,8 @@ async def get_personalized_route(
 
         return await routing_service.get_personalized_route(request)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -83,14 +86,14 @@ async def get_personalized_route(
 )
 async def record_route_history(
     entry: RouteHistoryEntry = Body(...),
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> Dict[str, str]:
     logger.info(f"POST /history endpoint called by user: {current_user.username}")
     """Record a route in user's history"""
     try:
         # Ensure the user_id matches the authenticated user
-        if entry.user_id != current_user["uid"]:
+        if entry.user_id != current_user.username:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User ID in entry does not match authenticated user",
@@ -99,6 +102,8 @@ async def record_route_history(
         await routing_service.record_route_history(entry)
         return {"message": "Route history recorded successfully"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -113,13 +118,15 @@ async def record_route_history(
     description="Get user's routing preferences and learned patterns",
 )
 async def get_user_profile(
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> UserRoutingProfile:
     logger.info(f"GET /profile endpoint called by user: {current_user.username}")
     """Get user's routing profile"""
     try:
-        return await routing_service.get_user_profile(current_user["uid"])
+        return await routing_service.get_user_profile(current_user.username)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -135,15 +142,17 @@ async def get_user_profile(
 )
 async def get_route_history(
     limit: int = Query(default=50, ge=1, le=1000),
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ) -> List[RouteHistoryEntry]:
     logger.info(f"GET /history endpoint called by user: {current_user.username}")
     """Get user's route history"""
     try:
         return await routing_service.get_user_route_history(
-            user_id=current_user["uid"], limit=limit
+            user_id=current_user.username, limit=limit
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -157,7 +166,7 @@ async def get_route_history(
     description="Returns analytics on the user's route history, such as most common routes, time-of-day patterns, etc.",
 )
 async def get_route_history_analytics(
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
     limit: int = Query(20, ge=1, le=100),
 ) -> Dict[str, Any]:
@@ -166,9 +175,11 @@ async def get_route_history_analytics(
     )
     try:
         analytics = await routing_service.get_route_history_analytics(
-            user_id=current_user["uid"], limit=limit
+            user_id=current_user.username, limit=limit
         )
         return analytics
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -184,7 +195,7 @@ async def get_route_history_analytics(
 )
 async def record_suggestion_feedback_endpoint(
     feedback_data: SuggestionFeedbackRequest = Body(...),
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     routing_service: PersonalizedRoutingService = Depends(get_personalized_routing_service),
 ):
     """
@@ -193,7 +204,7 @@ async def record_suggestion_feedback_endpoint(
     try:
         success = await routing_service.record_suggestion_feedback(
             suggestion_id=feedback_data.suggestion_id,
-            user_id=current_user["uid"], 
+            user_id=current_user.username,
             interaction_status=feedback_data.interaction_status,
             feedback_text=feedback_data.feedback_text,
             rating=feedback_data.rating,
@@ -207,8 +218,8 @@ async def record_suggestion_feedback_endpoint(
                 detail="Suggestion ID not found, user mismatch, or invalid data. Feedback not recorded.",
             )
 
-    except HTTPException as http_exc:
-        raise http_exc
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -227,7 +238,7 @@ async def optimize_route(
     optimization_service: RouteOptimizationService = Depends(
         get_route_optimization_service
     ),
-    current_user: Dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     logger.info(f"POST /optimize endpoint called by user: {current_user.username}")
     """Get an optimized route with traffic predictions"""
@@ -247,7 +258,7 @@ async def optimize_route(
     description="Get areas where route optimization is available",
 )
 async def get_supported_areas(
-    _: Dict = Depends(get_current_active_user),
+    _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """Get areas where route optimization is available"""
     # Honest emptiness: the previous hardcoded "Downtown Area" bounds were not
@@ -265,7 +276,7 @@ async def get_supported_areas(
 )
 async def get_work_zones(
     feed_id: Optional[str] = None,
-    _: Dict = Depends(get_current_active_user),
+    _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     from app.services.workzone_service import WorkZoneService
     from app.config import get_current_config

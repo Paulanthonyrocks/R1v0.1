@@ -1,9 +1,11 @@
 import { User, IdTokenResult } from 'firebase/auth';
 
 export class TokenManager {
+    private sessionGeneration = 0;
+    private refreshInFlight: Promise<string | null> | null = null;
     private static instance: TokenManager;
     private currentToken: string | null = null;
-    private tokenRefreshCallbacks: ((token: string) => void)[] = [];
+    private tokenRefreshCallbacks: ((token: string | null) => void)[] = [];
     private currentUser: User | null = null;
     private refreshTimeoutId: NodeJS.Timeout | null = null;
 
@@ -17,6 +19,12 @@ export class TokenManager {
     }
 
     async updateToken(user: User | null): Promise<void> {
+        const generation = ++this.sessionGeneration;
+        this.refreshInFlight = null;
+        if (this.currentUser !== user && this.currentToken !== null) {
+            this.currentToken = null;
+            this.tokenRefreshCallbacks.forEach(callback => callback(null));
+        }
         this.currentUser = user;
 
         if (this.refreshTimeoutId) {
@@ -27,17 +35,20 @@ export class TokenManager {
         if (user) {
             try {
                 const newToken = await user.getIdToken();
+                if (this.sessionGeneration !== generation) return;
                 if (newToken !== this.currentToken) {
                     this.currentToken = newToken;
-                    this.tokenRefreshCallbacks.forEach(callback => callback(this.currentToken!));
+                    this.tokenRefreshCallbacks.forEach(callback => callback(this.currentToken));
                 }
-                this.scheduleTokenRefresh();
+                this.scheduleTokenRefresh(generation);
             } catch (error) {
+                if (this.sessionGeneration !== generation) return;
                 console.error('Error getting initial token:', error);
-                this.currentToken = null;
+                this.stopMonitoring();
             }
         } else {
             this.currentToken = null;
+            this.tokenRefreshCallbacks.forEach(callback => callback(null));
         }
     }
 
@@ -45,26 +56,40 @@ export class TokenManager {
         return this.currentToken;
     }
 
-    onTokenRefresh(callback: (token: string) => void): () => void {
+    onTokenRefresh(callback: (token: string | null) => void): () => void {
         this.tokenRefreshCallbacks.push(callback);
         return () => {
             this.tokenRefreshCallbacks = this.tokenRefreshCallbacks.filter(cb => cb !== callback);
         };
     }
 
-    async refreshToken(): Promise<string | null> {
+    refreshToken(): Promise<string | null> {
+        if (this.refreshInFlight) return this.refreshInFlight;
+        if (!this.currentUser) return Promise.resolve(null);
+        const generation = this.sessionGeneration;
+        const refresh = this.performRefresh(generation).finally(() => {
+            if (this.refreshInFlight === refresh) this.refreshInFlight = null;
+        });
+        this.refreshInFlight = refresh;
+        return refresh;
+    }
+
+    private async performRefresh(generation: number): Promise<string | null> {
         if (this.currentUser) {
             try {
                 console.log("Attempting to refresh token...");
                 const newToken = await this.currentUser.getIdToken(true);
+                if (this.sessionGeneration !== generation) return null;
                 this.currentToken = newToken;
                 console.log("Token refreshed successfully.");
                 this.tokenRefreshCallbacks.forEach(callback => callback(newToken));
-                this.scheduleTokenRefresh();
+                this.scheduleTokenRefresh(generation);
                 return newToken;
             } catch (error) {
                 console.error("Error refreshing token:", error);
-                this.stopMonitoring();
+                if (this.sessionGeneration === generation) {
+                    this.stopMonitoring();
+                }
                 return null;
             }
         }
@@ -74,7 +99,8 @@ export class TokenManager {
         return null;
     }
 
-    private scheduleTokenRefresh() {
+    private scheduleTokenRefresh(generation: number) {
+        if (this.sessionGeneration !== generation) return;
         if (this.refreshTimeoutId) {
             clearTimeout(this.refreshTimeoutId);
         }
@@ -82,9 +108,9 @@ export class TokenManager {
         if (!this.currentUser) {
             return;
         }
-
         this.currentUser.getIdTokenResult()
             .then((idTokenResult: IdTokenResult) => {
+                if (this.sessionGeneration !== generation) return;
                 const expirationTime = new Date(idTokenResult.expirationTime).getTime();
                 const now = Date.now();
                 const refreshBuffer = 5 * 60 * 1000; // 5 minutes
@@ -92,9 +118,9 @@ export class TokenManager {
 
                 if (refreshDelay > 0) {
                     console.log(`Token refresh scheduled in ${Math.round(refreshDelay / 1000 / 60)} minutes.`);
-                    this.refreshTimeoutId = setTimeout(async () => {
+                    this.refreshTimeoutId = setTimeout(() => {
                         console.log('Proactively refreshing token as scheduled...');
-                        await this.refreshToken();
+                        void this.refreshToken();
                     }, refreshDelay);
                 } else {
                     console.log('Token is close to expiry or expired, refreshing now...');
@@ -103,7 +129,9 @@ export class TokenManager {
             })
             .catch((error: any) => {
                 console.error('Error scheduling token refresh:', error);
-                this.stopMonitoring();
+                if (this.sessionGeneration === generation) {
+                    this.stopMonitoring();
+                }
             });
     }
 
@@ -114,6 +142,9 @@ export class TokenManager {
         }
         this.currentUser = null;
         this.currentToken = null;
+        ++this.sessionGeneration;
+        this.refreshInFlight = null;
+        this.tokenRefreshCallbacks.forEach(callback => callback(null));
         console.log('Token monitoring stopped.');
     }
 }

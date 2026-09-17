@@ -65,6 +65,7 @@ class ConnectionManager:
         self.low_priority_queues: Dict[str, deque] = {}           # For LOW priority (video, etc.)
         self.signal_queues: Dict[str, asyncio.Queue] = {}         # Signals sender task
         self.client_tasks: Dict[str, asyncio.Task] = {}
+        self._cleanup_tasks: Set[asyncio.Task] = set()
         # Per-client low-priority drop counter. Incremented in _enqueue_frame
         # when the bounded deque rotates (was previously silent -- the dominant
         # silent-drop site that masked the "video feed unavailable" freeze as
@@ -132,6 +133,10 @@ class ConnectionManager:
         self.ping_interval = ping_interval
         self.pong_timeout = pong_timeout # New: store pong timeout
         self._shutdown_event = asyncio.Event()
+        # Lifecycle serialization: init/shutdown must not interleave, and
+        # connect must not register clients after shutdown snapshots state.
+        self._lifecycle_lock = asyncio.Lock()
+        self._shutting_down = False
 
     async def init(
         self,
@@ -140,17 +145,21 @@ class ConnectionManager:
         ping_interval: int,
         pong_timeout: int, # New: include pong_timeout in init
     ):
-        # Update config even if already initialized
-        self.max_connections = max_connections
-        self.token_refresh_interval = token_refresh_interval
-        self.ping_interval = ping_interval
-        self.pong_timeout = pong_timeout # New: set pong_timeout
-        
-        # Cancel existing ping task if it's running to apply new configuration
-        if hasattr(self, "_ping_task") and self._ping_task and not self._ping_task.done():
-            self._ping_task.cancel()
-            
-        self._ping_task = asyncio.create_task(self._ping_clients())
+        async with self._lifecycle_lock:
+            # Reinitializers must not both await the same retired ping task and
+            # then each start a replacement.
+            self.max_connections = max_connections
+            self.token_refresh_interval = token_refresh_interval
+            self.ping_interval = ping_interval
+            self.pong_timeout = pong_timeout
+            ping_task = getattr(self, "_ping_task", None)
+            if ping_task is not None and not ping_task.done():
+                ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
+
+            self._shutdown_event.clear()
+            self._shutting_down = False
+            self._ping_task = asyncio.create_task(self._ping_clients())
             
         logger.info(
             f"ConnectionManager initialized with max_connections={max_connections}, "
@@ -173,6 +182,14 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user"):
         async with await self._get_client_lock(client_id):
+            # No await between admission and registration. Shutdown closes this
+            # gate before its first await; never acquire its lifecycle lock here
+            # (shutdown itself needs the client locks to disconnect).
+            if self._shutting_down:
+                await asyncio.wait_for(
+                    websocket.close(code=1001, reason="Server shutting down"), timeout=5.0
+                )
+                return
             if len(self.active_connections) >= self.max_connections:
                 logger.warning(
                     f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
@@ -217,7 +234,7 @@ class ConnectionManager:
 
             self.client_queues[client_id] = asyncio.PriorityQueue(maxsize=high_q_size + 50)
             self.low_priority_queues[client_id] = deque(maxlen=low_q_size)
-            self.signal_queues[client_id] = asyncio.Queue()
+            self.signal_queues[client_id] = asyncio.Queue(maxsize=1)
             self.client_tasks[client_id] = asyncio.create_task(self._client_sender(client_id, websocket))
             # Reset consecutive-send-failure counter for the new socket.
             self._csf[client_id] = 0
@@ -226,7 +243,9 @@ class ConnectionManager:
             if old_ws:
                 # We use a background task to avoid blocking the new connection's setup
                 # and to prevent deadlock if the old task is still hanging.
-                asyncio.create_task(self._disconnect_old_connection(client_id, old_ws, old_task))
+                cleanup = asyncio.create_task(self._disconnect_old_connection(client_id, old_ws, old_task))
+                self._cleanup_tasks.add(cleanup)
+                cleanup.add_done_callback(self._cleanup_tasks.discard)
 
             logger.info(
                 f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
@@ -241,24 +260,23 @@ class ConnectionManager:
         """Performs the actual resource cleanup for a client. 
         Assumes the client lock is already held by the caller.
         """
+        active_socket = self.active_connections.get(client_id)
+        if websocket is not None and active_socket is not None and active_socket is not websocket:
+            # A retired receiver must never remove its replacement's queues/state.
+            try:
+                if websocket.client_state != WebSocketState.DISCONNECTED:
+                    await asyncio.wait_for(websocket.close(code=1000), timeout=5.0)
+            except Exception:
+                pass
+            return
         logger.info(f"Disconnecting client {client_id}...")
         
-        # 1. Close WebSocket if provided or found in active_connections
-        ws = websocket or self.active_connections.get(client_id)
-        if ws:
-            try:
-                # Only close if not already closed
-                if ws.client_state != WebSocketState.DISCONNECTED:
-                    await ws.close(code=1000)
-            except Exception as e:
-                logger.debug(f"Error closing WebSocket for {client_id}: {e}")
-
-        # 2. Cancel and clean up the sender task
+        # Detach state before network I/O so a slow/cancelled close cannot
+        # leave registered queues or an unowned sender behind.
+        ws = websocket or active_socket
         task = self.client_tasks.pop(client_id, None)
         if task and not task.done():
             task.cancel()
-            # We don't await the task here to avoid blocking the disconnect flow
-            asyncio.create_task(self._await_task_safely(task))
 
         # 3. Remove from all mappings
         self.active_connections.pop(client_id, None)
@@ -307,30 +325,33 @@ class ConnectionManager:
                 if not self.feed_subscriptions[feed_id]:
                     del self.feed_subscriptions[feed_id]
 
+        try:
+            if ws and ws.client_state != WebSocketState.DISCONNECTED:
+                await asyncio.wait_for(ws.close(code=1000), timeout=5.0)
+        except Exception as e:
+            logger.debug(f"Error closing WebSocket for {client_id}: {e}")
+        finally:
+            if task is not None and task is not asyncio.current_task():
+                await asyncio.gather(task, return_exceptions=True)
+
         # Lock cleanup: remove the lock to prevent memory growth
         self._client_locks.pop(client_id, None)
-        
+
         logger.info(f"Client {client_id} successfully disconnected. Total active: {len(self.active_connections)}")
 
     async def _disconnect_old_connection(self, client_id: str, old_ws: WebSocket, old_task: Optional[asyncio.Task] = None):
         """Safely clean up a replaced connection without risking deadlocks.
         This is called in the background after a new connection has taken over.
         """
+        if old_task and not old_task.done():
+            old_task.cancel()
         try:
-            # 1. Attempt to close the old socket first (non-blocking)
-            try:
-                await old_ws.close(code=1000, reason="Reconnected")
-            except Exception as e:
-                logger.debug(f"Error closing old WebSocket for {client_id}: {e}")
-
-            # 2. Explicitly cancel the old sender task to avoid "WebSocketDisconnect" log spam.
-            if old_task and not old_task.done():
-                old_task.cancel()
-                asyncio.create_task(self._await_task_safely(old_task))
-            
-            logger.debug(f"Old connection resources for {client_id} processed.")
+            await asyncio.wait_for(old_ws.close(code=1000, reason="Reconnected"), timeout=5.0)
         except Exception as e:
-            logger.error(f"Error during deferred old connection cleanup for {client_id}: {e}")
+            logger.debug(f"Error closing old WebSocket for {client_id}: {e}")
+        finally:
+            if old_task is not None:
+                await asyncio.gather(old_task, return_exceptions=True)
 
     async def _await_task_safely(self, task: asyncio.Task):
         """Helper to await a cancelled task without blocking the main flow."""
@@ -688,7 +709,7 @@ class ConnectionManager:
                 await asyncio.wait_for(queue.put(wrapped_msg), timeout=timeout)
             
             # Signal the sender task
-            if client_id in self.signal_queues and self.signal_queues[client_id].qsize() < 100:
+            if client_id in self.signal_queues and not self.signal_queues[client_id].full():
                 self.signal_queues[client_id].put_nowait(True)
         except asyncio.TimeoutError:
             logger.info(f"Client {client_id} queue full. Dropping reliable message (priority {priority}) after {timeout}s timeout.")
@@ -714,9 +735,11 @@ class ConnectionManager:
 
     async def broadcast(self, message: str, priority: MessagePriority = MessagePriority.NORMAL):
         """Broadcast reliable message to all with specific priority."""
-        # Iterate over a copy to allow modification (disconnection) during iteration
-        for client_id in list(self.active_connections.keys()):
-            await self.send_personal_message(message, client_id, priority=priority)
+        # Enqueue independently so one saturated peer cannot delay healthy peers.
+        await asyncio.gather(*(
+            self.send_personal_message(message, client_id, priority=priority)
+            for client_id in list(self.active_connections)
+        ))
 
     async def broadcast_realtime(self, message: str, priority: MessagePriority = MessagePriority.LOW):
         """Broadcast fire-and-forget message to all with specific priority."""
@@ -758,7 +781,7 @@ class ConnectionManager:
                 try:
                     wrapped_msg = PrioritizedMessage(priority, data)
                     self.client_queues[client_id].put_nowait(wrapped_msg)
-                    if client_id in self.signal_queues:
+                    if client_id in self.signal_queues and not self.signal_queues[client_id].full():
                         self.signal_queues[client_id].put_nowait(True)
                 except asyncio.QueueFull:
                     logger.warning(f"[CONN_MGR] High-priority queue full for client {client_id}, dropping frame")
@@ -803,7 +826,7 @@ class ConnectionManager:
                                 f"deque_size={len(low_q)}/{q_max}, rtt={self.client_latencies.get(client_id)}ms). "
                                 f"Sender is draining slower than ingest; consider lowering video_output.fps."
                             )
-                    if client_id in self.signal_queues:
+                    if client_id in self.signal_queues and not self.signal_queues[client_id].full():
                         self.signal_queues[client_id].put_nowait(True)
                 except Exception as e:
                     logger.error(f"[CONN_MGR] Failed to enqueue low-priority frame for {client_id}: {e}")
@@ -1050,18 +1073,18 @@ class ConnectionManager:
     async def _ping_single_client(self, client_id: str, websocket: WebSocket, ping_message_json: str, current_time: float):
         """Helper to ping a single client and check for timeout."""
         if websocket.client_state == WebSocketState.DISCONNECTED:
-            return client_id
+            return client_id, websocket
         
         # Check if PONG was received within timeout
         last_pong_time = self.last_pong_received_time.get(client_id, 0)
-        if current_time - last_pong_time > self.pong_timeout + self.ping_interval: 
+        if current_time - last_pong_time > self.pong_timeout + self.ping_interval:
             logger.warning(f"Client {client_id} timed out (no PONG received). Disconnecting.")
-            return client_id
+            return client_id, websocket
         
         try:
             await self.send_personal_message(ping_message_json, client_id)
         except Exception:
-            return client_id
+            return client_id, websocket
         return None
 
     async def _ping_clients(self):
@@ -1091,10 +1114,11 @@ class ConnectionManager:
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Disconnect timed-out clients
+                # Carry snapshot identity through the gather: a reconnect may
+                # have replaced this client ID while other pings were pending.
                 for res in results:
-                    if isinstance(res, str):
-                        await self.disconnect(res)
+                    if isinstance(res, tuple):
+                        await self.disconnect(*res)
                 
                 await asyncio.sleep(self.ping_interval)
             except asyncio.CancelledError:
@@ -1105,9 +1129,19 @@ class ConnectionManager:
                 await asyncio.sleep(1) # Prevent tight error loop
 
     async def shutdown(self):
+        async with self._lifecycle_lock:
+            self._shutting_down = True
+            await self._shutdown_locked()
+
+    async def _shutdown_locked(self):
+        """Drain resources with lifecycle changes serialized and admission closed."""
         logger.info("Shutting down ConnectionManager...")
         self._shutdown_event.set()
-        
+        ping_task = getattr(self, "_ping_task", None)
+        if ping_task is not None:
+            ping_task.cancel()
+            await asyncio.gather(ping_task, return_exceptions=True)
+
         # Cancel all sender tasks
         tasks = list(self.client_tasks.values())
         for task in tasks:
@@ -1117,12 +1151,17 @@ class ConnectionManager:
             # Wait for all tasks to cancel to avoid "Task destroyed but pending"
             await asyncio.gather(*tasks, return_exceptions=True)
         
-        for ws in self.active_connections.values():
-            try:
-                await ws.close()
-            except Exception:
-                pass
-                
+        await asyncio.gather(*(
+            self.disconnect(client_id, ws)
+            for client_id, ws in list(self.active_connections.items())
+        ), return_exceptions=True)
+
+        # Replaced sockets are no longer in active_connections, but their
+        # bounded close and cancelled sender still belong to this manager.
+        if self._cleanup_tasks:
+            await asyncio.gather(*list(self._cleanup_tasks), return_exceptions=True)
+        self._cleanup_tasks.clear()
+
         self.active_connections.clear()
         self.client_queues.clear()
         self.client_tasks.clear()
@@ -1131,5 +1170,15 @@ class ConnectionManager:
         self.topic_subscriptions.clear()
         self.client_id_to_topics.clear()
         self.last_pong_received_time.clear() # New: Clear pong tracking on shutdown
-        self.client_latencies.clear()  # Clear latency tracking
+        self.client_latencies.clear()
+        # Also clear partial-startup or already-detached client state.
+        for mapping in (
+            self.low_priority_queues, self.signal_queues, self.feed_subscriptions,
+            self.client_id_to_feeds, self.client_id_to_user_role, self._client_locks,
+            self._low_drops, self._last_frame_ts, self._throttled_skips,
+            self._adaptive_payload_choice, self._csf,
+        ):
+            mapping.clear()
+        self._sampled_rtt_clients.clear()
+        self._sent_first_frames.clear()
         logger.info("All WebSocket connections closed.")

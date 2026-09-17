@@ -114,6 +114,7 @@ class PongData(BaseModel):
     timestamp: str = Field(default_factory=get_utc_now_str)
 
 class AuthSuccessData(BaseModel):
+    client_id: Optional[str] = None
     message: str = "Authentication successful."
     user_info: Optional[Dict[str, Any]] = None
 

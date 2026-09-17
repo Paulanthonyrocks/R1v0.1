@@ -48,25 +48,13 @@ export class IncidentService {
      */
     async markFalsePositive(incidentId: string, notes?: string): Promise<boolean> {
         try {
-            await this.apiClient.post(`/api/v1/incidents/${incidentId}/false-positive?notes=${encodeURIComponent(notes || '')}`);
-            return true;
-        } catch (error) {
-            console.error(`Failed to mark incident ${incidentId} as false positive:`, error);
-            return false;
-        }
-    }
-
-    /**
-     * Assigns an incident to a user.
-     */
-    async assignIncident(incidentId: string, userId: string): Promise<boolean> {
-        try {
-            await this.apiClient.post(`/api/v1/incidents/${incidentId}/assign`, {
-                user_id: userId
+            await this.apiClient.patch(`/api/v1/incidents/${incidentId}`, {
+                status: 'FALSE_POSITIVE',
+                resolution_notes: notes || '',
             });
             return true;
         } catch (error) {
-            console.error(`Failed to assign incident ${incidentId}:`, error);
+            console.error(`Failed to mark incident ${incidentId} as false positive:`, error);
             return false;
         }
     }
@@ -90,17 +78,6 @@ export class IncidentService {
         }
     }
 
-    /**
-     * Fetches incident statistics.
-     */
-    async getIncidentStats(): Promise<any> {
-        try {
-            return await this.apiClient.get('/api/v1/incidents/stats');
-        } catch (error) {
-            console.error('Failed to fetch incident stats:', error);
-            return null;
-        }
-    }
 }
 
 export const incidentService = IncidentService.getInstance();

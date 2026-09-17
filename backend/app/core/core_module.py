@@ -674,7 +674,8 @@ class CoreModule:
         # 4. Significant velocity change (> 15 km/h since last update)
         current_speed = track.get("speed", 0.0)
         last_speed = track.get("last_reid_speed", current_speed)
-        if abs(current_speed - last_speed) > 15.0:
+        # Unknown speed is not stationary; only compare measured values.
+        if current_speed is not None and last_speed is not None and abs(current_speed - last_speed) > 15.0:
             return True
 
         return False
@@ -754,6 +755,10 @@ class CoreModule:
             detections = external_detections
         else:
             thresh = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
+            # The detector keeps low-confidence recovery candidates; the
+            # tracker's two-stage association decides which become tracks.
+            thresh = min(thresh, float(self.config.get("vehicle_detection", {})
+                                       .get("low_confidence_threshold", thresh)))
             detections = self.detector.detect(frame, thresh)
 
         # 3. Compute detection embeddings BEFORE association so the tracker's

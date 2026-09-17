@@ -38,8 +38,53 @@ async def message_receiver(
     """
     Main loop for receiving and processing messages from a connected client.
     """
-    is_authenticated = False
     client_id = initial_id
+    control_tasks: set[asyncio.Task] = set()
+    identity_uid: str | None = None
+    auth_exp: float | None = None
+    socket_closed = asyncio.Event()
+    expiry_task: asyncio.Task | None = None
+
+    async def report_control(message, result, text):
+        await connection_manager.send_personal_message(
+            WebSocketMessage(
+                type=(WebSocketMessageTypeEnum.GENERAL_NOTIFICATION if result == "succeeded" else WebSocketMessageTypeEnum.ERROR_NOTIFICATION),
+                data={"status": result, "operation": message.type, "message": text},
+                correlation_id=message.correlation_id,
+            ).model_dump_json(), client_id, priority=MessagePriority.HIGH,
+        )
+
+    async def run_control(message):
+        try:
+            user_id = connection_manager.client_id_to_user_id.get(client_id)
+            role = await get_server_role(user_id)
+            allowed = ("admin",) if message.type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG else ("admin", "operator", "agency")
+            if role not in allowed:
+                await report_control(message, "failed", "Not authorized for this operation.")
+                return
+            if message.type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
+                payload = UpdateFeedConfigData(**(message.data or {}))
+                await feed_manager.update_feed_config(payload.feed_id, payload.updates)
+            else:
+                payload = FeedIdData(**(message.data or {}))
+                operation = {
+                    WebSocketMessageTypeEnum.START_FEED: "start_feed",
+                    WebSocketMessageTypeEnum.STOP_FEED: "stop_feed",
+                    WebSocketMessageTypeEnum.RESTART_FEED: "restart_feed",
+                }[message.type]
+                await getattr(feed_manager, operation)(payload.feed_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("WebSocket control failed.")
+            await report_control(message, "failed", "Operation failed or authorization unavailable.")
+        else:
+            await report_control(message, "succeeded", "Operation completed.")
+
+    def control_done(task):
+        control_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()  # Observe send failures without creating unowned tasks.
     
     try:
         # --- Initial Authentication Phase ---
@@ -70,6 +115,8 @@ async def message_receiver(
             username = decoded_token.get("uid") or decoded_token.get("sub")
             if not username:
                 raise Exception("Invalid token claims: missing uid/sub")
+            identity_uid = username
+            auth_exp = float(decoded_token.get("exp") or 0)
             
             user = User(
                 username=username,
@@ -104,6 +151,19 @@ async def message_receiver(
                 logger.debug(f"Could not send auth success to {initial_id} (client already disconnected): {re}")
             
             is_authenticated = True
+
+            async def _expiry_watcher():
+                deadline = (auth_exp or 0) - time.time()
+                if deadline > 0:
+                    await asyncio.sleep(min(deadline, 3600.0))
+                if not socket_closed.is_set():
+                    logger.info(f"Session token expired for {client_id}; closing socket.")
+                    try:
+                        await websocket.close(code=1008, reason="Token expired")
+                    except RuntimeError:
+                        pass
+
+            expiry_task = asyncio.create_task(_expiry_watcher())
             logger.info(f"Client assigned {client_id} authenticated as {user.username}")
 
         except asyncio.TimeoutError:
@@ -116,13 +176,13 @@ async def message_receiver(
         except WebSocketDisconnect:
             logger.warning(f"Client {initial_id} disconnected before authenticating.")
             return
-        except Exception as e:
-            logger.warning(f"Initial authentication failed for {initial_id}: {e}")
+        except Exception:
+            logger.warning(f"Initial authentication rejected for {initial_id}.")
             try:
                 await websocket.send_text(
                     WebSocketMessage(
                         type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                        data=AuthFailureData(message=str(e)).model_dump()
+                        data=AuthFailureData(message="Authentication failed.").model_dump()
                     ).model_dump_json()
                 )
             except RuntimeError as re:
@@ -155,12 +215,21 @@ async def message_receiver(
                 # 2. Validate basic structure using Pydantic
                 try:
                     message = WebSocketMessage.model_validate(message_dict)
-                except Exception as e:
-                    logger.info(f"Invalid message format from {client_id}: {e} | Data: {message_dict}")
+                except Exception:
+                    logger.info(f"Invalid message format from {client_id}; dropped ({len(message_text)} bytes).")
                     continue
 
                 msg_type = message.type
                 data = message.data or {}
+
+                # 3. Session-token expiry gate (runs before any message work)
+                if auth_exp is not None and auth_exp <= time.time():
+                    logger.info(f"Session token expired for {client_id}; closing socket.")
+                    try:
+                        await websocket.close(code=1008, reason="Token expired")
+                    except RuntimeError:
+                        pass
+                    return
 
                 # 3. Handle Message Types
                 if msg_type == WebSocketMessageTypeEnum.PING:
@@ -172,10 +241,10 @@ async def message_receiver(
                     ).model_dump_json()
                     try:
                         await websocket.send_text(pong_msg)
-                    except Exception as e:
+                    except Exception:
                         # Benign race: client disconnected between PING and
                         # PONG (common at shutdown). Not an error.
-                        logger.debug(f"Direct PONG send skipped (client gone): {e}")
+                        logger.debug("Direct PONG send skipped (client gone).")
                 elif msg_type == WebSocketMessageTypeEnum.PONG:
                     # Client responded to a server PING
                     logger.debug(f"Received PONG from {client_id}")
@@ -193,7 +262,7 @@ async def message_receiver(
                     connection_manager.record_pong(client_id, rtt_ms=rtt_ms)
                     pass
 
-                elif msg_type == WebSocketMessageTypeEnum.AUTHENTICATE:
+                if msg_type == WebSocketMessageTypeEnum.AUTHENTICATE:
                     # Auth Rate Limiting
                     if not await rate_limiter.is_allowed(f"auth_{client_id}"):
                         logger.warning(f"Auth rate limit exceeded for {client_id}")
@@ -210,25 +279,34 @@ async def message_receiver(
                     try:
                         auth_data = AuthenticateData(**data)
                         decoded_token = await verify_firebase_token(auth_data.token)
-                        
-                        # Re-verify and update the user role upon re-authentication
-                        new_role = decoded_token.get("role", "user")
-                        connection_manager.update_user_role(client_id, new_role)
-                        
+                        refreshed_uid = decoded_token.get("uid") or decoded_token.get("sub")
+                        if refreshed_uid != identity_uid:
+                            # One socket, one identity: a refresh must re-prove the
+                            # same account, never re-key the session to a new one.
+                            raise PermissionError("Identity change rejected.")
+                        auth_exp = float(decoded_token.get("exp") or 0)
+                        connection_manager.update_user_role(client_id, decoded_token.get("role", "user"))
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.AUTH_SUCCESS,
-                                data=AuthSuccessData().model_dump()
+                                data=AuthSuccessData(client_id=client_id).model_dump()
                             ).model_dump_json(),
                             client_id
                         )
-                        logger.info(f"Client {client_id} re-authenticated successfully. Role updated to {new_role}.")
-                    except Exception as e:
-                        logger.warning(f"Client {client_id} failed re-authentication: {e}")
+                        logger.info(f"Client {client_id} re-authenticated.")
+                    except PermissionError:
+                        logger.warning(f"Client {client_id} identity change rejected; closing.")
+                        try:
+                            await websocket.close(code=1008, reason="Identity change rejected.")
+                        except RuntimeError:
+                            pass
+                        return
+                    except Exception:
+                        logger.warning(f"Client {client_id} re-authentication failed.")
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
                                 type=WebSocketMessageTypeEnum.AUTH_FAILURE,
-                                data=AuthFailureData(message=str(e)).model_dump()
+                                data=AuthFailureData(message="Authentication failed.").model_dump()
                             ).model_dump_json(),
                             client_id
                         )
@@ -252,107 +330,12 @@ async def message_receiver(
                     WebSocketMessageTypeEnum.RESTART_FEED,
                     WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG
                 ]:
-                    # 3a. Rate Limiting for Control Messages
-                    if not await rate_limiter.is_allowed(client_id):
-                        logger.warning(f"Rate limit exceeded for control messages from {client_id}")
-                        await connection_manager.send_personal_message(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": "Rate limit exceeded. Please slow down your requests."}
-                            ).model_dump_json(),
-                            client_id,
-                            priority=MessagePriority.HIGH
-                        )
+                    if not await rate_limiter.is_allowed(client_id) or len(control_tasks) >= 4:
+                        await report_control(message, "failed", "Control capacity exceeded; please retry later.")
                         continue
-
-                    # Check Authorization (server-side, not the cached connect-time
-                    # role -- defeats role stickiness on long-lived sessions: a demoted
-                    # admin loses control immediately instead of at token expiry).
-                    cached_role = connection_manager.get_user_role(client_id)
-                    user_id = connection_manager.client_id_to_user_id.get(client_id)
-                    user_role = await get_server_role(user_id, fallback=cached_role)
-
-                    # UPDATE_FEED_CONFIG is admin-only because it rewrites per-feed
-                    # model + detection settings. The other three (start / stop /
-                    # restart) are agency-or-above so they match the surveillance
-                    # page guard and don't silently drop agency users' clicks.
-                    if msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
-                        required_role = "admin"
-                    else:
-                        required_role = "agency"
-                    role_rank = {"viewer": 0, "agency": 1, "admin": 2}
-                    if role_rank.get(user_role, -1) < role_rank.get(required_role, 99):
-                        logger.warning(
-                            f"Unauthorized {msg_type} attempt by {client_id} "
-                            f"(role: {user_role}, required: {required_role})"
-                        )
-                        await connection_manager.send_personal_message(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": f"Unauthorized: {required_role.capitalize()} privileges required for {msg_type}."}
-                            ).model_dump_json(),
-                            client_id,
-                            priority=MessagePriority.HIGH
-                        )
-                        continue
-
-                    # Process Admin Commands
-                    try:
-                        if msg_type == WebSocketMessageTypeEnum.START_FEED:
-                            feed_id_data = FeedIdData(**data)
-                            asyncio.create_task(feed_manager.start_feed(feed_id_data.feed_id))
-                        elif msg_type == WebSocketMessageTypeEnum.STOP_FEED:
-                            feed_id_data = FeedIdData(**data)
-                            asyncio.create_task(feed_manager.stop_feed(feed_id_data.feed_id))
-                        elif msg_type == WebSocketMessageTypeEnum.RESTART_FEED:
-                            feed_id_data = FeedIdData(**data)
-                            asyncio.create_task(feed_manager.restart_feed(feed_id_data.feed_id))
-                        elif msg_type == WebSocketMessageTypeEnum.UPDATE_FEED_CONFIG:
-                            update_data = UpdateFeedConfigData(**data)
-                            _task = asyncio.create_task(
-                                feed_manager.update_feed_config(
-                                    update_data.feed_id, update_data.updates
-                                )
-                            )
-
-                            def _surface_update_error(t: asyncio.Task) -> None:
-                                # Retrieve the exception so asyncio doesn't log
-                                # a bare "Task exception was never retrieved".
-                                # A malformed ROI (or any config error) must
-                                # reach the client, not vanish.
-                                ex = t.exception()
-                                if ex is None:
-                                    return
-                                logger.error(
-                                    f"[{client_id}] update_feed_config failed: {ex}"
-                                )
-                                try:
-                                    asyncio.create_task(
-                                        connection_manager.send_personal_message(
-                                            WebSocketMessage(
-                                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                                data={
-                                                    "message": f"Config update failed: {str(ex)}"
-                                                },
-                                            ).model_dump_json(),
-                                            client_id,
-                                            priority=MessagePriority.HIGH,
-                                        )
-                                    )
-                                except Exception:
-                                    pass
-
-                            _task.add_done_callback(_surface_update_error)
-                    except Exception as e:
-                        logger.error(f"Error scheduling {msg_type}: {e}")
-                        await connection_manager.send_personal_message(
-                            WebSocketMessage(
-                                type=WebSocketMessageTypeEnum.ERROR_NOTIFICATION,
-                                data={"message": f"Operation scheduling failed: {str(e)}"}
-                            ).model_dump_json(),
-                            client_id,
-                            priority=MessagePriority.HIGH
-                        )
+                    task = asyncio.create_task(run_control(message), name="ws-control")
+                    control_tasks.add(task)
+                    task.add_done_callback(control_done)
 
                 elif msg_type == WebSocketMessageTypeEnum.SUBSCRIBE:
                     try:
@@ -394,7 +377,7 @@ async def message_receiver(
                         logger.warning(f"Unsubscribe from feed error: {e}")
 
             except json.JSONDecodeError:
-                logger.warning(f"Received invalid JSON from {client_id}: {message_text}")
+                logger.warning(f"Received invalid JSON from {client_id} ({len(message_text)} bytes).")
             except Exception as e:
                 logger.error(f"Error processing message from {client_id}: {e}", exc_info=True)
                 try:
@@ -441,6 +424,17 @@ async def message_receiver(
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
 
+    finally:
+        socket_closed.set()
+        if expiry_task is not None:
+            expiry_task.cancel()
+            await asyncio.gather(expiry_task, return_exceptions=True)
+        pending = tuple(control_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
 @router.websocket("/ws/{client_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -453,6 +447,27 @@ async def websocket_endpoint(
     WebSocket endpoint. Authentication must be performed via an AUTHENTICATE message as the first frame.
     Server assigns the client_id after successful authentication.
     """
+    # Reuse the configured CORS trust set for the WebSocket handshake: an Origin
+    # header that no HTTP browser client would be allowed must not open a socket.
+    origin = websocket.headers.get("origin")
+    if origin:
+        from fastapi.middleware.cors import CORSMiddleware
+        allowed = False
+        for stack in getattr(websocket.app, "user_middleware", []):
+            options = getattr(stack, "kwargs", None) or {}
+            if stack.cls is not CORSMiddleware:
+                continue
+            if origin in options.get("allow_origins", []) or origin in [o.strip() for o in options.get("allow_origins", [])]:
+                allowed = True
+                break
+            regex = options.get("allow_origin_regex")
+            if regex and __import__("re").fullmatch(regex, origin):
+                allowed = True
+                break
+        if not allowed:
+            logger.warning(f"WebSocket origin rejected: {origin}")
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
     await websocket.accept()
 
     # Hold the *assigned* client_id (set by message_receiver after AUTH_SUCCESS)

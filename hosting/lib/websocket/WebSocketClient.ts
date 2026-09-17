@@ -37,6 +37,7 @@ export enum WebSocketMessageType {
     NEW_ALERT = 'new_alert',
     SIGNAL_UPDATE = 'signal_update',
     VIDEO_FRAME = 'video_frame',
+    VIDEO_METADATA = 'video_metadata', // Local decoded metadata; never sent to the backend.
     VIDEO_UPDATE = 'video_update',
     FEED_STATUS_UPDATE = 'feed_status_update',
     GENERAL_NOTIFICATION = 'general_notification',
@@ -260,7 +261,7 @@ export class WebSocketClient implements IWebSocketClient {
             this.networkChangeHandler = () => {
                 console.log(`[WebSocketClient ${this.instanceId}] Network back online, reconnecting...`);
 
-                if (!this.isConnected() && this.isInstanceActive()) {
+                if (this.shouldReconnect && this.currentToken && !this.isConnected() && this.isInstanceActive()) {
                     this.reconnectAttempts = 0; // Reset attempts on network change
                     this.connect(this.currentToken).catch(e => {
                         console.error(`[WebSocketClient ${this.instanceId}] Reconnect after network change failed:`, e);
@@ -364,7 +365,11 @@ export class WebSocketClient implements IWebSocketClient {
 
     private tokenRefreshTimeout: NodeJS.Timeout | null = null;
 
-    private async handleTokenRefresh(token: string): Promise<void> {
+    private async handleTokenRefresh(token: string | null): Promise<void> {
+        if (!token) {
+            this.disconnect();
+            return;
+        }
         if (this.tokenRefreshTimeout) {
             clearTimeout(this.tokenRefreshTimeout);
         }
@@ -401,38 +406,47 @@ export class WebSocketClient implements IWebSocketClient {
 
     public async reconnectWithNewToken(token: string): Promise<void> {
         if (!this.isInstanceActive()) return;
-
         this.cancelPendingOperations();
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-        }
+        this.retireSocket();
         this.setState(ConnectionState.DISCONNECTED);
         this.reconnectAttempts = 0;
-        this.reconnectDelay = 1000;
-        this.currentToken = token;
         return this.connect(token);
     }
 
-    private cancelPendingOperations() {
+    private settleConnection(error?: Error): void {
         if (this.connectTimeout) clearTimeout(this.connectTimeout);
-        if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-        this.stopPingInterval();
+        this.connectTimeout = null;
+        const resolve = this.resolveConnection;
+        const reject = this.rejectConnection;
+        this.resolveConnection = null;
+        this.rejectConnection = null;
+        this.connectionPromise = null;
+        if (error) reject?.(error);
+        else resolve?.();
     }
 
-    public async connect(token: string | null): Promise<void> {
-        if (!this.isInstanceActive()) {
-            console.warn(`[WebSocketClient ${this.instanceId}] Attempted to connect from dormant instance. Aborting.`);
-            return;
-        }
+    private retireSocket(): void {
+        const socket = this.ws;
+        this.ws = null;
+        this.authenticated = false;
+        this.stopPingInterval();
+        socket?.close();
+    }
+
+    private cancelPendingOperations(): void {
+        if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+        this.reconnectTimeout = null;
+        this.stopPingInterval();
+        this.settleConnection(new Error('Connection cancelled'));
+    }
+
+    public connect(token: string | null): Promise<void> {
+        if (!this.isInstanceActive()) return Promise.resolve();
         if (this.connectionPromise) return this.connectionPromise;
+        if (this.isConnected() && this.authenticated) return Promise.resolve();
         this.shouldReconnect = true;
         this.connectionPromise = this.performConnection(token);
-        try {
-            await this.connectionPromise;
-        } finally {
-            this.connectionPromise = null;
-        }
+        return this.connectionPromise;
     }
 
     /**
@@ -446,166 +460,71 @@ export class WebSocketClient implements IWebSocketClient {
         appendTunnelPassword(url);
     }
 
-    private async performConnection(token: string | null): Promise<void> {
-        if (this.connectionState === ConnectionState.CONNECTED || this.connectionState === ConnectionState.CONNECTING) {
-            return;
-        }
-
-        if (!this.isInstanceActive()) return;
-
-        this.setState(ConnectionState.CONNECTING, 'Attempting to connect...');
-
-        if (!token) token = this.currentToken || this.tokenManager.getCurrentToken();
-
+    private performConnection(token: string | null): Promise<void> {
+        token = token || this.currentToken || this.tokenManager.getCurrentToken();
         if (!token) {
-            console.warn(`[WebSocketClient ${this.instanceId}] No auth token for WebSocket, will wait for token update.`);
             this.setState(ConnectionState.DISCONNECTED, 'Waiting for authentication token');
-            this.notifyError('auth_error', 'No authentication token available.');
-            return;
+            return Promise.reject(new Error('No authentication token available'));
         }
-
         this.currentToken = token;
-
-        return new Promise<void>((resolve, reject) => {
-            try {
-                this.resolveConnection = resolve;
-                this.rejectConnection = reject;
-
-                if (!this.isInstanceActive()) {
-                    reject(new Error('Instance became dormant during connection setup'));
-                    return;
-                }
-
-                const clientId = this.clientId;
-                const url = new URL(this.url);
-
-                if (clientId) {
-                    // Ensure the path starts with /api/v1/ws and ends with the clientId
-                    const pathParts = ['api', 'v1', 'ws', clientId].filter(Boolean);
-                    url.pathname = '/' + pathParts.join('/');
-                }
-
-                // loca.lt (and similar tunnel providers) gate unauthenticated
-                // requests behind a password interstitial that, for WebSockets,
-                // manifests as an ECONNRESET on the upgrade (the proxy refuses
-                // the connection). The only way to clear it from a programmatic
-                // client is the `?password=` query param — exactly the same
-                // bypass APIClient applies to REST requests. Without this, every
-                // WS upgrade through the tunnel dies and the video feed silently
-                // restarts. Idempotent: skipped when no password is configured or
-                // the URL already carries one.
-                this.appendTunnelPassword(url);
-
-                console.log(`[WebSocketClient ${this.instanceId}] Attempting to connect to WebSocket:`, sanitizeTunnelUrl(url.toString()));
-
-                this.ws = new WebSocket(url.toString());
-                this.ws.binaryType = 'arraybuffer';
-
-                const connectionTimeout = setTimeout(() => {
-                    if (this.ws?.readyState === WebSocket.CONNECTING) {
-                        this.ws.close();
-                        reject(new Error('Connection timeout'));
-                    }
-                }, 30000);
-
-                this.ws.onopen = () => {
-                    clearTimeout(connectionTimeout);
-
-                    if (!this.shouldReconnect || !this.isInstanceActive()) {
-                        console.debug(`[WebSocketClient ${this.instanceId}] Connection opened but instance is dormant or destroying. Closing.`);
-                        this.ws?.close();
-                        return;
-                    }
-
-                    console.log(`[WebSocketClient ${this.instanceId}] WebSocket opened. ${clientId ? `Client ID: ${clientId}` : ''}`);
-                    
-                    // Authenticate upon connection with a small delay to ensure the socket is settled
-                    if (this.currentToken) {
-                        setTimeout(() => {
-                            this.send({
-                                type: WebSocketMessageType.AUTHENTICATE,
-                                data: { token: this.currentToken }
-                            });
-                            console.log(`[WebSocketClient ${this.instanceId}] Sent initial AUTHENTICATE message`);
-                        }, 50);
-                    } else {
-                        console.warn(`[WebSocketClient ${this.instanceId}] No token available for initial authentication`);
-                    }
-
-                    this.setState(ConnectionState.CONNECTED, 'Connection established');
-                    this.reconnectAttempts = 0;
-                    this.reconnectDelay = 1000;
-                    this.startPingInterval();
-                    // Do not flush queue here; wait for AUTH_SUCCESS
-                };
-
-                this.ws.onclose = (event: CloseEvent) => {
-                    clearTimeout(connectionTimeout);
-                    this.stopPingInterval();
-                    const { reason, wasClean, code } = event;
-                    console.log(`[WebSocketClient ${this.instanceId}] WebSocket closed:`, { code, reason, wasClean });
-
-                    if (this.connectionState === ConnectionState.CONNECTING) {
-                        reject(new Error(`Connection failed: ${reason}`));
-                        return;
-                    }
-
-                    this.setState(ConnectionState.DISCONNECTED, reason);
-                    // AUDIT (2026-08-23): clear module-level subscription tracking so a
-                    // reconnect re-subscribes everything cleanly. Hooks also re-subscribe
-                    // on 'authenticated', but feeds whose hooks unmounted mid-outage
-                    // would otherwise stay marked subscribed forever.
-                    resetFeedSubscriptionState();
-                    if (this.shouldReconnect && !wasClean && this.isInstanceActive()) {
-                        this.attemptReconnect(reason);
-                    }
-                };
-
-                this.ws.onerror = (event: Event) => {
-                    clearTimeout(connectionTimeout);
-                    console.error(`[WebSocketClient ${this.instanceId}] WebSocket error occurred. (Note: WebSocket onerror events typically do not contain detailed error information for security reasons)`, {
-                        readyState: this.ws?.readyState,
-                        url: this.ws?.url,
-                        event: event
-                    });
-                    const errorMessage = 'WebSocket error occurred';
-                    this.setState(ConnectionState.ERROR, errorMessage);
-                    this.notifyError('connection_error', errorMessage);
-                    if (this.connectionState === ConnectionState.CONNECTING) reject(new Error(errorMessage));
-                };
-
-                this.ws.onmessage = (event) => {
-                    // onmessage must NEVER throw — if it does, browsers stop
-                    // dispatching further messages on this socket (silent
-                    // pipeline death). Downstream parsers have historically
-                    // crashed on circular AUTH_FAILURE payloads.
-                    try {
-                        this.handleMessage(event);
-                    } catch (e) {
-                        console.error(
-                            `[WebSocketClient ${this.instanceId}] handleMessage crashed:`,
-                            e
-                        );
-                        // Drop the socket so the watchdog can reconnect
-                        // instead of us silently missing every subsequent frame.
-                        try {
-                            this.ws?.close();
-                        } catch (_) {
-                            // best-effort
-                        }
-                    }
-                };
-
-            } catch (error) {
-                console.error(`[WebSocketClient ${this.instanceId}] WebSocket connection error:`, error);
-                this.setState(ConnectionState.ERROR, 'Failed to initialize WebSocket connection');
-                reject(error);
-            }
+        this.authenticated = false;
+        this.setState(ConnectionState.CONNECTING, 'Attempting to connect...');
+        const promise = new Promise<void>((resolve, reject) => {
+            this.resolveConnection = resolve;
+            this.rejectConnection = reject;
         });
+        try {
+            const url = new URL(this.url);
+            if (this.clientId) url.pathname = `/api/v1/ws/${this.clientId}`;
+            this.appendTunnelPassword(url);
+            console.debug('[WebSocketClient] Connecting:', sanitizeTunnelUrl(url.toString()));
+            const socket = new WebSocket(url.toString());
+            this.ws = socket;
+            socket.binaryType = 'arraybuffer';
+            // Socket identity is the generation guard: retired events cannot touch
+            // a replacement's promise, authentication, timers, or listeners.
+            const current = () => this.ws === socket && this.isInstanceActive();
+            const failed = (reason: string, policy = false) => {
+                if (!current()) return;
+                this.settleConnection(new Error(reason));
+                this.retireSocket();
+                if (policy) {
+                    this.shouldReconnect = false;
+                    this.currentToken = null;
+                    this.messageQueue.length = 0;
+                }
+                this.setState(ConnectionState.DISCONNECTED, reason);
+                if (this.shouldReconnect && this.currentToken) this.attemptReconnect(reason);
+            };
+            // Covers both the upgrade and authentication; opening is not success.
+            this.connectTimeout = setTimeout(() => failed('Connection/authentication timeout'), 30000);
+            socket.onopen = () => {
+                if (!current()) return;
+                if (!this.shouldReconnect) { failed('Connection cancelled'); return; }
+                this.setState(ConnectionState.CONNECTED, 'Connection established');
+                socket.send(JSON.stringify({ type: WebSocketMessageType.AUTHENTICATE, data: { token: this.currentToken } }));
+                this.startPingInterval();
+            };
+            socket.onclose = (event: CloseEvent) => {
+                const policy = [1008, 4001, 4003, 4401, 4403].includes(event.code);
+                // wasClean describes the close handshake, not reconnect intent.
+                failed(event.reason || `Connection closed (${event.code})`, policy);
+            };
+            socket.onerror = () => failed('WebSocket error occurred');
+            socket.onmessage = (event) => {
+                if (!current()) return;
+                try { this.handleMessage(event); }
+                catch { failed('Invalid WebSocket message'); }
+            };
+        } catch (error) {
+            this.settleConnection(error instanceof Error ? error : new Error(String(error)));
+            this.setState(ConnectionState.ERROR, 'Failed to initialize WebSocket connection');
+        }
+        return promise;
     }
 
     private attemptReconnect(reason: string): void {
-        if (!this.isInstanceActive()) return;
+        if (!this.isInstanceActive() || !this.shouldReconnect || !this.currentToken || this.reconnectTimeout) return;
 
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.setState(ConnectionState.ERROR, 'Maximum reconnection attempts reached');
@@ -632,8 +551,9 @@ export class WebSocketClient implements IWebSocketClient {
         }
 
         this.reconnectTimeout = setTimeout(() => {
-            if (this.isInstanceActive()) {
-                this.performConnection(this.currentToken).catch(e => {
+            this.reconnectTimeout = null;
+            if (this.isInstanceActive() && this.shouldReconnect && this.currentToken) {
+                this.connect(this.currentToken).catch(e => {
                     console.error(`[WebSocketClient ${this.instanceId}] Reconnect performConnection failed:`, e);
                 });
             }
@@ -797,10 +717,7 @@ export class WebSocketClient implements IWebSocketClient {
                     this.reconnectDelay = 1000;
                     this.flushMessageQueue();
                     
-                    if (this.resolveConnection) {
-                        this.resolveConnection();
-                        this.resolveConnection = null;
-                    }
+                    this.settleConnection();
                     return;
                 }
 
@@ -840,17 +757,9 @@ export class WebSocketClient implements IWebSocketClient {
                         this.rejectConnection = null;
                     }
 
-                    // Attempt to refresh token and reconnect
-                    setTimeout(() => {
-                        if (this.isInstanceActive() && this.shouldReconnect) {
-                            console.log(`[WebSocketClient ${this.instanceId}] Attempting token refresh after AUTH_FAILURE...`);
-                            this.tokenManager.refreshToken()
-                                .then(token => {
-                                    if (token) this.reconnectWithNewToken(token);
-                                })
-                                .catch(e => console.error(`[WebSocketClient ${this.instanceId}] Token refresh failed:`, e));
-                        }
-                    }, 5000); // 5s delay before retry
+                    // Authentication policy rejection requires a new login/token,
+                    // never an autonomous retry with the rejected credential.
+                    this.disconnect();
                     return;
                 }
 
@@ -966,6 +875,15 @@ export class WebSocketClient implements IWebSocketClient {
                 return;
             }
 
+            const { frame, ...metadata } = data as { frame?: { close?: () => void } } & Record<string, unknown>;
+            const metadataListeners = this.scopedListeners.get(WebSocketMessageType.VIDEO_METADATA)?.get(scope);
+            if (metadataListeners?.size) {
+                this.notifyListeners(WebSocketMessageType.VIDEO_METADATA, metadata, scope);
+                if (!this.scopedListeners.get(type)?.get(scope)?.size) {
+                    frame?.close?.();
+                    return;
+                }
+            }
             const scopedMap = this.scopedListeners.get(type);
             if (!scopedMap) {
                 // Buffer the frame for late subscribers (handles race condition)
@@ -1153,8 +1071,13 @@ export class WebSocketClient implements IWebSocketClient {
     public disconnect(): void {
         console.log(`[WebSocketClient ${this.instanceId}] Disconnecting WebSocket...`);
         this.shouldReconnect = false;
+        this.currentToken = null;
+        this.authenticated = false;
+        this.messageQueue.length = 0;
+        if (this.tokenRefreshTimeout) clearTimeout(this.tokenRefreshTimeout);
+        this.tokenRefreshTimeout = null;
         this.cancelPendingOperations();
-        this.ws?.close();
+        this.retireSocket();
         this.setState(ConnectionState.DISCONNECTED, 'User disconnected');
     }
 
@@ -1164,6 +1087,7 @@ export class WebSocketClient implements IWebSocketClient {
             lastActiveInstanceId = null;
         }
         this.disconnect();
+        resetFeedSubscriptionState(this);
         this.listeners.clear();
         this.errorListeners.clear();
         this.statusListeners.clear();

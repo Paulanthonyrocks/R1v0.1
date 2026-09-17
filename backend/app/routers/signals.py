@@ -1,86 +1,53 @@
+from typing import Literal
+from pydantic import BaseModel, ConfigDict
 from fastapi import APIRouter, HTTPException, Depends
-
-from app.dependency_injection import get_current_active_user, get_traffic_signal_service
-from app.services.traffic_signal_service import (
-    TrafficSignalService,
-    TrafficSignalControlError,
-)
+from app.dependency_injection import get_current_active_user, get_current_operator, get_traffic_signal_service
+from app.services.traffic_signal_service import TrafficSignalService, TrafficSignalControlError
 from app.models.signals import SignalControlStatusEnum
-
-from fastapi import status
+from app.models.user import User, UserRole
 
 router = APIRouter()
 
 
+class SignalPhaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phase: Literal["red", "yellow", "green", "flashing_red", "flashing_yellow", "off"]
+
+
 @router.get("/")
 async def get_signals(
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     tss: TrafficSignalService = Depends(get_traffic_signal_service),
 ):
-    """Endpoint to retrieve the list of traffic signals. Requires authentication."""
-
     try:
-        signals = await tss.get_all_signal_states()
-        return signals
-    except TrafficSignalControlError as e:
-        # logger.error(f"Error retrieving signals for user {user_email}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
-        )
+        return await tss.get_all_signal_states()
+    except TrafficSignalControlError:
+        raise HTTPException(status_code=503, detail="Signal service unavailable.") from None
+    except HTTPException:
+        raise
     except Exception:
-        # logger.error(f"Unexpected error retrieving signals for user {user_email}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while retrieving signals.",
-        )
+        raise HTTPException(status_code=500, detail="Unable to retrieve signals.") from None
 
 
 @router.post("/{signal_id}/set_phase")
 async def set_signal_phase(
     signal_id: str,
-    phase: str,
-    current_user: dict = Depends(get_current_active_user),
+    request: SignalPhaseRequest,
+    current_user: User = Depends(get_current_operator),
     tss: TrafficSignalService = Depends(get_traffic_signal_service),
 ):
-    """Endpoint to update the phase of a traffic signal. Requires authentication."""
-    valid_phases = [
-        "red",
-        "yellow",
-        "green",
-        "flashing_red",
-        "flashing_yellow",
-        "off",
-    ]  # Example phases
-    if phase.lower() not in valid_phases:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid phase. Valid phases are: {', '.join(valid_phases)}",
-        )
-
-    user_email = current_user.email
-    # logger.info(f"User {user_email} attempting to set phase for signal {signal_id}.")
-
+    # No jurisdiction registry exists here. Use explicit server-managed resource
+    # grants for non-admin controllers; never infer scope from a client request.
+    if current_user.role != UserRole.ADMIN and signal_id not in current_user.signal_ids:
+        raise HTTPException(status_code=403, detail="Signal outside assigned control scope.")
     try:
-        resp = await tss.set_signal_phase(signal_id, phase.lower())
-        if resp.status == SignalControlStatusEnum.ACCEPTED:
-            return {
-                "message": f"Signal {signal_id} phase change to {phase.lower()} initiated successfully by user {user_email}"
-            }
-        else:
-            # This case might be hit if the service internally decides not to proceed (e.g. base_url not set and returns False)
-            # Or if the external API call was made but indicated failure in a way that didn't raise an exception in the service.
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to set phase for signal {signal_id}. The control service reported an issue.",
-            )
-    except TrafficSignalControlError as e:
-        # logger.error(f"Control error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
-        )
+        response = await tss.set_signal_phase(signal_id, request.phase)
+        if response.status != SignalControlStatusEnum.ACCEPTED:
+            raise HTTPException(status_code=502, detail="Signal service did not accept the command.")
+        return {"message": "Signal phase change accepted.", "signal_id": signal_id, "phase": request.phase}
+    except HTTPException:
+        raise
+    except TrafficSignalControlError:
+        raise HTTPException(status_code=503, detail="Signal service unavailable.") from None
     except Exception:
-        # logger.error(f"Unexpected error setting phase for signal {signal_id} by user {user_email}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred while setting signal phase for {signal_id}.",
-        )
+        raise HTTPException(status_code=500, detail="Unable to set signal phase.") from None

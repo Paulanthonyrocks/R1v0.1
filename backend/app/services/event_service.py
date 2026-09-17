@@ -10,8 +10,9 @@ class EventService:
     Service for fetching and caching public event data that may impact routes.
     """
 
-    def __init__(self, api_url: str, cache_ttl_minutes: int = 30):
+    def __init__(self, api_url: str, cache_ttl_minutes: int = 30, timeout: float = 10.0):
         self.api_url = api_url
+        self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_expiry: Optional[datetime] = None
@@ -24,7 +25,7 @@ class EventService:
             return self._cache
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.get(self.api_url) as response:
                     response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
                     events = await response.json()
@@ -37,6 +38,8 @@ class EventService:
             self._cache_expiry = now + self.cache_ttl
             return events
 
+        except TimeoutError as e:
+            raise HTTPException(status_code=504, detail="Event service timed out") from e
         except aiohttp.ClientError as e:
             self.logger.error(f"Event API request failed: {str(e)}")
             raise HTTPException(
