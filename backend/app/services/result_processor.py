@@ -163,12 +163,14 @@ class ResultProcessor:
                  executor: ThreadPoolExecutor = None, 
                  config: Dict[str, Any] = None,
                  registry: Any = None,
-                 broadcaster: Any = None):
+                 broadcaster: Any = None,
+                 analytics_input_queue: Any = None):
         self._central_output_queue = central_output_queue
         self._executor = executor
         self.config = config
         self.registry = registry
         self.broadcaster = broadcaster
+        self._analytics_input_queue = analytics_input_queue
         self._stop_flag = False
         # Optional hook for in-process subscribers; assigned via set_subscriber_pump.
         self._subscriber_pump: Optional[Any] = None
@@ -522,7 +524,26 @@ class ResultProcessor:
                     except Exception as e:
                         logger.debug(f"[RESULT_PROC] status re-broadcast failed for {feed_id}: {e}")
 
-            # 2. Serialize as Msgpack to match frontend expectations
+            # 2. Forward to analytics worker for DB persistence of feed_metrics
+            if self._analytics_input_queue and metrics:
+                try:
+                    # Format expected by analytics_worker: (feed_id, frame_idx, timestamp, vehicles, lanes, lines, feed_metrics, extra)
+                    lanes = extra.get("ln", {}).get("lines", []) if extra else []
+                    bounds = extra.get("ln", {}).get("bounds", []) if extra else []
+                    self._analytics_input_queue.put_nowait((
+                        feed_id,
+                        frame_idx,
+                        time.time(),
+                        vehicles,
+                        lanes,
+                        bounds,
+                        metrics,
+                        extra or {}
+                    ))
+                except Exception as e:
+                    logger.debug(f"Analytics input queue full, dropping frame for {feed_id}: {e}")
+
+            # 3. Serialize as Msgpack to match frontend expectations
             # Compact keys: t=type, f=feed_id, i=frame_index, ts=timestamp, v=vehicles, m=metrics, bg=background
             # When adaptive streaming is on, ``extra`` carries a downscaled ``bg``
             # JPEG. We pack TWO payloads -- full-res (crisp, for low-RTT links)

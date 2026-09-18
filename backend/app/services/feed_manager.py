@@ -188,6 +188,13 @@ class FeedManager:
 
         self._inference_stop_event = RedisEvent('inference_stop')
         self._startup_ready = asyncio.Event()
+
+        # Analytics worker queues (for DB persistence of feed_metrics)
+        self._analytics_input_queue = RedisQueue('analytics_input', maxsize=FeedManagerConstants.QUEUE_MAX_SIZE)
+        self._analytics_output_queue = RedisQueue('analytics_output', maxsize=FeedManagerConstants.QUEUE_MAX_SIZE)
+        self._analytics_stop_event = RedisEvent('analytics_stop')
+        self._analytics_process = None
+        self._analytics_reader_task = None
         
         # Initialize Worker Pool Manager now that queues and slot_count are available
         self.pool_manager = InferencePoolManager(
@@ -205,7 +212,8 @@ class FeedManager:
             executor=self._executor,
             config=self.config,
             registry=self.registry,
-            broadcaster=self.broadcaster
+            broadcaster=self.broadcaster,
+            analytics_input_queue=self._analytics_input_queue
         )
 
         # Initialize Watchdog
@@ -885,6 +893,9 @@ class FeedManager:
         await self._check_and_manage_sample_feed()
         self._startup_ready.set() # Allow scaling monitor to resume
 
+        # Start analytics worker process for feed_metrics persistence
+        await self._start_analytics_worker()
+
         if self._prediction_scheduler:
             # Single authority is prediction_scheduler.enabled (default False,
             # matching services.py and analytics_service.py). A missing key
@@ -915,6 +926,18 @@ class FeedManager:
 
         self.logger.info("Stopping overall video processing.")
         self._is_processing_active = False
+
+        # Stop analytics worker
+        self._analytics_stop_event.set()
+        if self._analytics_reader_task is not None and not self._analytics_reader_task.done():
+            self._analytics_reader_task.cancel()
+            self.logger.info("Cancelled analytics output reader task.")
+        if self._analytics_process is not None and self._analytics_process.is_alive():
+            self._analytics_process.terminate()
+            await asyncio.sleep(0.2)
+            if self._analytics_process.is_alive():
+                self._analytics_process.kill()
+            self.logger.info("Stopped AnalyticsWorker.")
 
         # Cancel background tasks (monitor/watchdog/reader). These are the
         # SAME tasks shutdown() cancels -- we just do it without tearing down
@@ -1728,6 +1751,71 @@ class FeedManager:
                 writer_queue.cancel_join_thread()
             except Exception:
                 pass
+
+    async def _start_analytics_worker(self):
+        """Start the analytics worker process for feed_metrics DB persistence."""
+        if self._analytics_process is not None and self._analytics_process.is_alive():
+            self.logger.debug("Analytics worker already running.")
+            return
+        
+        self._analytics_stop_event.clear()
+        
+        # Import here to avoid circular imports
+        from app.core.analytics_worker import analytics_worker_process
+        
+        self._analytics_process = Process(
+            target=analytics_worker_process,
+            args=(
+                self.config,
+                self._analytics_input_queue,
+                self._analytics_output_queue,
+                self._analytics_stop_event,
+                None,  # heartbeat - optional
+            ),
+            daemon=True,
+            name="AnalyticsWorker",
+        )
+        self._analytics_process.start()
+        self.logger.info(f"Started AnalyticsWorker (PID {self._analytics_process.pid})")
+        
+        # Start the output reader task
+        self._analytics_reader_task = asyncio.create_task(self._read_analytics_output())
+        self.logger.info("Started analytics output reader task.")
+
+    async def _read_analytics_output(self):
+        """Read analytics worker output and forward feed_metrics to db_queue."""
+        self.logger.info("Analytics output reader task started.")
+        while not self._stop_reader_flag:
+            try:
+                items = []
+                try:
+                    for _ in range(100):
+                        items.append(self._analytics_output_queue.get_nowait())
+                except Exception:
+                    pass
+                
+                if not items:
+                    await asyncio.sleep(0.05)
+                    continue
+                
+                # Forward feed_metrics to db_queue for persistence
+                for item in items:
+                    try:
+                        # Expected format: (feed_id, feed_metrics, vehicles, lanes, lines)
+                        feed_id, feed_metrics, vehicles, lanes, lines = item
+                        self._db_queue.put_nowait({
+                            "type": "feed_metrics",
+                            "data": feed_metrics
+                        })
+                    except Exception as e:
+                        self.logger.warning(f"Failed to parse analytics output item: {e}")
+                
+                # Brief yield
+                await asyncio.sleep(0.001 if len(items) >= 100 else 0.005)
+                
+            except Exception as e:
+                self.logger.error(f"Error in analytics output reader: {e}", exc_info=True)
+                await asyncio.sleep(1.0)
 
     # --- Background Reader ---
     # Result processing is now handled by the ResultProcessor service.
