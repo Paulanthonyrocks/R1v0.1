@@ -2,6 +2,7 @@
 import logging
 import queue
 import signal
+import sys
 import time
 from typing import Any, Optional
 from multiprocessing import Queue, Event
@@ -36,6 +37,18 @@ def analytics_worker_process(
     Expected Output Queue Format:
         Tuple: (feed_id, feed_metrics, vehicles, lanes, lines)
     """
+    # CRITICAL: Initialize config first so RedisEvent.is_set() works
+    # (it calls get_redis_client() which needs get_current_config())
+    from app.config import initialize_config
+    initialize_config()
+    
+    import logging.config as logging_config
+    try:
+        logging_config.dictConfig(config["logging"])
+    except Exception as e:
+        print(f"Logging configuration failed: {e}", file=sys.stderr)
+        logging.basicConfig(level=logging.INFO)
+    
     logger.info("Analytics worker process started.")
 
     def signal_handler(signum, frame):

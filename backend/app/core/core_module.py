@@ -821,7 +821,9 @@ class CoreModule:
                             if dt > 2.0:
                                 track["speed"] = raw_speed
                             else:
-                                prev_speed = track.get("speed", raw_speed)
+                                prev_speed = track.get("speed")
+                                if prev_speed is None:
+                                    prev_speed = raw_speed
                                 track["speed"] = (
                                     self.ewma_alpha * raw_speed
                                     + (1 - self.ewma_alpha) * prev_speed
