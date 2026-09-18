@@ -183,6 +183,27 @@ def database_writer_process(
                         logger.error(f"Failed to upsert {len(identified_batch)} identified vehicles: {e}")
                         failed_items.extend(identified_batch)
 
+                feed_metrics_batch = [it for it in valid_items if it["type"] == "feed_metrics"]
+                if feed_metrics_batch:
+                    metrics_data = []
+                    malformed_metrics = 0
+                    for it in feed_metrics_batch:
+                        if "data" in it:
+                            metrics_data.append(it["data"])
+                        else:
+                            malformed_metrics += 1
+                            logger.warning(f"Malformed feed_metrics missing 'data' key: {it!r}")
+                            failed_items.append(it)
+                    if metrics_data:
+                        try:
+                            rows = db_manager.save_feed_metrics_batch(metrics_data)
+                            logger.debug(f"Wrote {rows} feed metrics to DB.")
+                        except (DatabaseError, Exception) as e:
+                            logger.error(f"Failed to write {len(metrics_data)} feed metrics: {e}")
+                            failed_items.extend(it for it in feed_metrics_batch if "data" in it)
+                    if malformed_metrics:
+                        logger.warning(f"Discarded {malformed_metrics} malformed feed_metrics in this batch.")
+
                 if failed_items:
                     dropped_count = len(failed_items) - _MAX_REENQUEUE
                     if dropped_count > 0:

@@ -256,40 +256,37 @@ class TrackingManager:
                         self.on_track_expired(track)
 
 
-        # 6. Initialize New Tracks (with duplicate-box prevention)
-        # A leftover unmatched HIGH-CONF detection is frequently a RE-detection of
-        # a car whose track missed a frame (-> predicting) but whose association
-        # cost stayed above dynamic_matching_threshold. Naively spawning a new
-        # track here draws a SECOND box on the same car ("new box on an
-        # already-detected vehicle") -- and with a longer track_timeout the stale
-        # predicting box lingers beside it. Before creating a new track, try a
-        # pure centroid re-association: if the detection CENTER falls inside an
-        # existing UNMATCHED track's predicted bbox, update that track (keeps its
-        # vehicle_id AND its global_vehicle_id / ReID identity) instead of
-        # creating a duplicate. This is a strong same-car signal: a genuinely new
-        # car rarely centers exactly inside another track's predicted box.
-        matched_dedup: set = set()
-        unmatched_tracks = [
-            t for tid, t in self.vehicle_data.items() if tid not in final_matched
-        ]
+        # Association gates are authoritative. A center inside a predicted box
+        # must not override an appearance, geometry, or class rejection.
+        # Suppress duplicate track creation when a high-conf detection's centroid
+        # falls inside an existing track's predicted_bbox (even if the main
+        # association rejected it). This prevents identity transfer in overlapping
+        # traffic where the detector fires twice for the same vehicle.
         for det in unmatched_dets_1:
-            db = det[0]
-            dcx, dcy = (db[0] + db[2]) / 2.0, (db[1] + db[3]) / 2.0
-            reassigned = False
-            for t in unmatched_tracks:
-                if t["vehicle_id"] in matched_dedup:
-                    continue
-                tb = t.get("predicted_bbox") or t.get("bbox")
-                if tb and len(tb) == 4 and tb[0] <= tb[2] and tb[1] <= tb[3]:
-                    if tb[0] <= dcx <= tb[2] and tb[1] <= dcy <= tb[3]:
-                        self._update_track(t, det, current_time)
-                        matched_dedup.add(t["vehicle_id"])
-                        new_or_updated_tracks[t["vehicle_id"]] = t
-                        reassigned = True
+            bbox, cls, conf, emb = det
+            det_cx = (bbox[0] + bbox[2]) / 2
+            det_cy = (bbox[1] + bbox[3]) / 2
+            
+            # Check if detection center falls inside any existing track's predicted box
+            inside_existing = False
+            for tid, track in self.vehicle_data.items():
+                pred_bbox = track.get("predicted_bbox")
+                if pred_bbox:
+                    x1, y1, x2, y2 = pred_bbox
+                    if x1 <= det_cx <= x2 and y1 <= det_cy <= y2:
+                        inside_existing = True
+                        logger.debug(
+                            f"[{self.feed_id}] Suppressing duplicate track creation: "
+                            f"detection centroid ({det_cx:.1f}, {det_cy:.1f}) inside "
+                            f"track {tid} predicted_bbox {pred_bbox}"
+                        )
                         break
-            if not reassigned:
-                new_track = self._create_new_track(det, current_time)
-                new_or_updated_tracks[new_track["vehicle_id"]] = new_track
+            
+            if inside_existing:
+                continue
+            
+            new_track = self._create_new_track(det, current_time)
+            new_or_updated_tracks[new_track["vehicle_id"]] = new_track
 
         self.vehicle_data.clear()
         self.vehicle_data.update(new_or_updated_tracks)
@@ -386,7 +383,10 @@ class TrackingManager:
             
         effective_gate_dist = np.minimum(gate_dist * boosts, max_dist)
         
-        dist_mask = dist < effective_gate_dist
+        det_classes = np.array([d[1] for d in detections])
+        track_classes = np.array([t.get("class_id", -1) for t in tracks])
+        class_mask = det_classes[:, None] == track_classes[None, :]
+        dist_mask = (dist < effective_gate_dist) & class_mask
         if not np.any(dist_mask):
             return costs
 

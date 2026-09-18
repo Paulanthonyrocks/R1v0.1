@@ -492,6 +492,23 @@ class DatabaseManager:
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp DESC);")
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS feed_metrics (
+                feed_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                vehicles_count INTEGER,
+                lanes_count INTEGER,
+                avg_speed REAL,
+                congestion_level REAL,
+                latitude REAL,
+                longitude REAL,
+                anomalies TEXT,
+                extra TEXT,
+                PRIMARY KEY (feed_id, timestamp)
+        )""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fm_timestamp ON feed_metrics(timestamp DESC);"
+        )
+
         # ... and other table creation statements ...
         logger.debug("SQLite DB table creation check finished.")
 
@@ -1225,6 +1242,116 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to batch insert alerts: {e}", exc_info=True)
             raise DatabaseError(f"Batch alert insert failed: {e}") from e
+
+    def save_feed_metrics_batch(self, metrics_list: List[Dict]) -> int:
+        """Saves a batch of feed metrics to the database.
+        
+        Each dict should have: feed_id, timestamp, and optional metrics fields.
+        """
+        if not metrics_list:
+            return 0
+        
+        sql = """INSERT OR REPLACE INTO feed_metrics (
+            feed_id, timestamp, vehicles_count, lanes_count, avg_speed,
+            congestion_level, latitude, longitude, anomalies, extra
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        
+        batch_params = []
+        import json
+        for m in metrics_list:
+            if not isinstance(m, dict):
+                logger.warning(f"Skipping non-dict feed_metrics data: {type(m).__name__}")
+                continue
+            anomalies = m.get("anomalies")
+            if isinstance(anomalies, (list, dict)):
+                anomalies = json.dumps(anomalies)
+            extra = m.get("extra")
+            if isinstance(extra, (list, dict)):
+                extra = json.dumps(extra)
+            
+            params = (
+                m.get("feed_id", "unknown"),
+                m.get("timestamp", time.time()),
+                m.get("vehicles_count"),
+                m.get("lanes_count"),
+                m.get("avg_speed"),
+                m.get("congestion_level"),
+                m.get("latitude"),
+                m.get("longitude"),
+                anomalies,
+                extra,
+            )
+            batch_params.append(params)
+        
+        if not batch_params:
+            return 0
+        
+        try:
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    conn.executemany(sql, batch_params)
+                    conn.commit()
+            
+            if self.timescale_engine:
+                asyncio.create_task(self._save_feed_metrics_to_timescale_batch(metrics_list))
+            
+            logger.debug(f"Batch inserted {len(batch_params)} feed metrics.")
+            return len(batch_params)
+        except Exception as e:
+            logger.error(f"Failed to batch insert feed_metrics: {e}", exc_info=True)
+            raise DatabaseError(f"Batch feed_metrics insert failed: {e}") from e
+
+    async def _save_feed_metrics_to_timescale_batch(self, metrics_list: List[Dict]):
+        """Asynchronously saves a batch of feed metrics to TimescaleDB."""
+        if not self.timescale_engine:
+            return
+        
+        try:
+            from sqlalchemy import text
+            import json
+            
+            async with self.timescale_session_factory() as session:
+                for m in metrics_list:
+                    anomalies = m.get("anomalies")
+                    if isinstance(anomalies, (list, dict)):
+                        anomalies = json.dumps(anomalies)
+                    extra = m.get("extra")
+                    if isinstance(extra, (list, dict)):
+                        extra = json.dumps(extra)
+                    
+                    sql = text("""
+                        INSERT INTO feed_metrics (
+                            feed_id, timestamp, vehicles_count, lanes_count, avg_speed,
+                            congestion_level, latitude, longitude, anomalies, extra
+                        ) VALUES (
+                            :feed_id, :timestamp, :vehicles_count, :lanes_count, :avg_speed,
+                            :congestion_level, :latitude, :longitude, :anomalies, :extra
+                        )
+                        ON CONFLICT (feed_id, timestamp) DO UPDATE SET
+                            vehicles_count = EXCLUDED.vehicles_count,
+                            lanes_count = EXCLUDED.lanes_count,
+                            avg_speed = EXCLUDED.avg_speed,
+                            congestion_level = EXCLUDED.congestion_level,
+                            latitude = EXCLUDED.latitude,
+                            longitude = EXCLUDED.longitude,
+                            anomalies = EXCLUDED.anomalies,
+                            extra = EXCLUDED.extra
+                    """)
+                    await session.execute(sql, {
+                        "feed_id": m.get("feed_id", "unknown"),
+                        "timestamp": m.get("timestamp", time.time()),
+                        "vehicles_count": m.get("vehicles_count"),
+                        "lanes_count": m.get("lanes_count"),
+                        "avg_speed": m.get("avg_speed"),
+                        "congestion_level": m.get("congestion_level"),
+                        "latitude": m.get("latitude"),
+                        "longitude": m.get("longitude"),
+                        "anomalies": anomalies,
+                        "extra": extra,
+                    })
+                await session.commit()
+        except Exception as e:
+            logger.error(f"TimescaleDB feed_metrics batch save failed: {e}")
 
     # ... (all your other synchronous and asynchronous database methods like get_alerts_filtered,
     #      save_alert, acknowledge_alert, get_raw_traffic_data_mongo, etc., remain here unchanged)

@@ -54,6 +54,7 @@ backend/scripts
 *.engine
 *.onnx
 
-# Audit session test files (untracked working-tree artifacts)
-backend/tests/
+# Keep scratch audit artifacts local, but include maintained regressions.
+backend/tests/*
+!backend/tests/test_pipeline_followup.py
 hosting/__tests__/

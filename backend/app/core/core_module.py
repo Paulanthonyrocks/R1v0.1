@@ -250,7 +250,6 @@ class CoreModule:
         # is unaffected by the key names here.
         self.pixels_per_meter = config.get("pixels_per_meter", 30)  # top-level key, default 30 (config.yaml)
         self.ewma_alpha = b_cfg.get("ewma_alpha", 0.3)              # was 'speed_smoothing_factor' (nonexistent)
-        self.speed_limit = b_cfg.get("speed_limit", 60)             # was 'speed_limit_kmh' (nonexistent)
         self.accel_threshold_mps2 = b_cfg.get("accel_threshold_mps2", 2.0)  # was 'acceleration_threshold_mps2'
         self.stopped_speed_threshold_kmh = b_cfg.get("stopped_speed_threshold_kmh", 5.0)
         # False-hard-braking guards (traffic_monitor consumes acceleration for the
@@ -265,8 +264,6 @@ class CoreModule:
         # 300 frames is NOT 5 minutes: the deque holds the most recent 300
         # *processed* frames. At a typical inference rate of 15+ FPS that is
         # ~20s of history; at 30 FPS it is ~10s. (Prior comment assumed 1 FPS.)
-        self.speed_history: deque = deque(maxlen=300)
-        self.congestion_history: deque = deque(maxlen=300)
         self._homography_fallback_warned = False
 
         self.preprocessor = None
@@ -508,7 +505,7 @@ class CoreModule:
         
         return initialized
 
-    def _pixel_based_speed(self, track: TrackData) -> Optional[float]:
+    def _pixel_based_speed(self, track: TrackData) -> Dict[str, Any]:
         """
         Calculates vehicle speed in km/h based on pixel-space velocity.
         Used as a fallback when ground-plane coordinates are unavailable.
@@ -517,128 +514,39 @@ class CoreModule:
             track: The track data containing 'vx' and 'vy'.
 
         Returns:
-            The calculated speed in km/h, or None if the fallback cannot
-            produce a meaningful value (uncalibrated camera with no populated
-            pixel velocity). Returning None (not 0.0) is deliberate: a 0.0 km/h
-            speed reads as "stopped in gridlock" and corrupts the congestion
-            KPI, whereas None is explicitly "unknown / uncalibrated".
+            Dict with keys: 'speed_kmh' (float or None) and 'calibrated' (bool).
+            'calibrated' is True only when homography is available. When False,
+            'speed_kmh' is a pixel-space approximation using pixels_per_meter
+            (not ground-truth km/h), or None if no pixel velocity available.
         """
-        # The ground-plane path was unavailable (no homography) and the
-        # pixel-fallback needs vx/vy, which are never populated by the tracker
-        # in this codebase. In that uncalibrated state there is no honest
-        # speed to report -- return None rather than a fake 0.0.
-        if not self.transformer.is_calibrated and "vx" not in track and "vy" not in track:
-            return None
+        if self.transformer.is_calibrated:
+            # Ground-plane speed: honest km/h from homography
+            if "ground_coordinates" in track:
+                curr_gx, curr_gy = track["ground_coordinates"]
+                prev_ground_pos = track.get("prev_ground_pos")
+                prev_t = track.get("prev_t")
+                
+                if prev_ground_pos and prev_t:
+                    prev_gx, prev_gy = prev_ground_pos
+                    dt = track.get("_current_time", 0.0) - prev_t
+                    if dt > 0:
+                        dist = math.sqrt((curr_gx - prev_gx) ** 2 + (curr_gy - prev_gy) ** 2)
+                        raw_speed = (dist / dt) * 3.6
+                        raw_speed = min(raw_speed, 180.0)
+                        return {"speed_kmh": raw_speed, "calibrated": True}
+            return {"speed_kmh": None, "calibrated": True}
+        
+        # Uncalibrated fallback: pixel-space approximation
+        if "vx" not in track and "vy" not in track:
+            return {"speed_kmh": None, "calibrated": False}
         vx = track.get("vx", 0.0)
         vy = track.get("vy", 0.0)
         pixel_speed = math.sqrt(vx ** 2 + vy ** 2)
-        return (pixel_speed / self.pixels_per_meter) * 3.6 if self.pixels_per_meter > 0 else 0.0
-
-    def _compute_congestion_score(self, vehicles: List[Dict], avg_speed: Optional[float]) -> float:
-        """
-        Computes congestion score on a 0-100 scale.
-        0 = free flow, 100 = jammed.
-
-        NOTE: This must stay in sync with TrafficMonitor.get_metrics()
-        (app/utils/monitoring.py) — same weights and scale — so the DB
-        feed_metrics record and the live WebSocket/predictor feature agree
-        (audit C4). Canonical: 0.7 * speed_factor + 0.3 * density_factor, x100.
-
-        When ``avg_speed`` is None (uncalibrated camera — speed unknowable),
-        the speed_factor term is dropped so congestion reflects DENSITY ONLY.
-        Crucially this does NOT default to a gridlock reading: without a speed
-        signal we cannot claim congestion either, so the score is explicitly
-        flagged uncalibrated by the caller rather than pinned near 75/100.
-        """
-        density_factor = len(vehicles) / 100.0
-        density_factor = max(0.0, min(1.0, density_factor))
-
-        if avg_speed is None:
-            # No speed signal available: report density-only congestion with
-            # no speed contribution (rather than pretending gridlock).
-            congestion = density_factor * 0.3 * 100.0
+        if self.pixels_per_meter > 0:
+            speed_kmh = (pixel_speed / self.pixels_per_meter) * 3.6
         else:
-            free_flow_speed = self.speed_limit
-            speed_factor = 1.0 - (avg_speed / free_flow_speed) if free_flow_speed > 0 else 0.0
-            speed_factor = max(0.0, min(1.0, speed_factor))
-            congestion = (speed_factor * 0.7 + density_factor * 0.3) * 100.0
-        return round(congestion, 1)
-
-    def _compute_feed_metrics(self, vis_tracks: Dict[str, TrackData]) -> Dict[str, Any]:
-        """
-        Aggregate per-vehicle data into feed-level metrics.
-
-        The vehicle population is EVERY currently-visible track (active OR
-        predicting) -- including stopped vehicles. Filtering on
-        ``speed > 0`` here (the old behaviour) caused three bugs:
-          1. During total gridlock (every vehicle at speed 0.0) it hit the
-             early-return branch and reported ``congestion_score: 0.0`` --
-             free flow -- which is the exact condition this metric exists to
-             flag (audit finding #4).
-          2. Density (``len(vehicles)/100``) was computed over only the
-             moving subset, so congestion *fell* as more vehicles stopped --
-             backwards from what density means.
-          3. ``vehicle_count`` switched meaning frame-to-frame (all tracks on
-             the empty path vs moving-only on the normal path).
-
-        This must stay in sync with TrafficMonitor.get_metrics()
-        (app/utils/monitoring.py): same weights and scale, and the same
-        vehicle population (all tracked vehicles), so the DB feed_metrics
-        record and the live WebSocket/predictor feature agree (audit C4).
-        """
-        # All currently-visible tracks, active or predicting -- including
-        # stopped vehicles, which is the whole point of congestion scoring.
-        vehicles = list(vis_tracks.values())
-        if not vehicles:
-            return {
-                "average_speed_kmh": 0.0,
-                "congestion_score": 0.0,
-                "vehicle_count": 0,
-            }
-
-        valid_speeds = [t.get("speed") for t in vehicles]
-        speeds = [float(s) for s in valid_speeds if s is not None]
-        # If no vehicle has a calibrated speed (e.g. uncalibrated camera),
-        # report the average speed as None ("uncalibrated") rather than 0.0.
-        # A 0.0 avg speed would be interpreted as gridlock and pin the
-        # congestion KPI near 75/100 -- a fake-but-plausible number. None is
-        # the honest signal that speed simply isn't measurable here.
-        if speeds:
-            avg_speed = float(np.median(speeds))  # Robust to outliers
-            speed_uncalibrated = False
-        else:
-            avg_speed = 0.0
-            speed_uncalibrated = True
-
-        # Congestion from a null speed must not silently read as free-flow OR
-        # as gridlock. When speed is uncalibrated we still have vehicle density,
-        # so compute the density component but flag the score as uncalibrated.
-        if speed_uncalibrated:
-            congestion = self._compute_congestion_score(vehicles, None)
-        else:
-            congestion = self._compute_congestion_score(vehicles, avg_speed)
-
-        # Update session histories (only record numeric avg speeds so the
-        # EMA session average isn't polluted by uncalibrated frames)
-        if not speed_uncalibrated:
-            self.speed_history.append(avg_speed)
-        self.congestion_history.append(congestion)
-
-        session_avg_speed = float(np.mean(self.speed_history)) if self.speed_history else 0.0
-        session_avg_congestion = float(np.mean(self.congestion_history)) if self.congestion_history else 0.0
-
-        return {
-            "average_speed_kmh": round(avg_speed, 1) if not speed_uncalibrated else None,
-            "speed_uncalibrated": speed_uncalibrated,
-            "session_average_speed_kmh": round(session_avg_speed, 1) if self.speed_history else None,
-            "congestion_score": congestion,
-            "congestion_uncalibrated": speed_uncalibrated,
-            "session_average_congestion_score": round(session_avg_congestion, 3),
-            "vehicle_count": len(vehicles),
-            # total_vehicles_cumulative is tracked by TrafficMonitor.seen_vehicle_ids;
-            # _compute_feed_metrics only writes to DB. Use monitor.get_metrics() for
-            # the authoritative cumulative count (broadcast via VIDEO_FRAME).
-        }
+            speed_kmh = None
+        return {"speed_kmh": speed_kmh, "calibrated": False}
 
     def _should_update_reid(self, tid: str, track: TrackData, frame_index: int) -> bool:
         """
@@ -889,6 +797,7 @@ class CoreModule:
 
                 if ground_positions is not None and idx < len(ground_positions):
                     track["ground_coordinates"] = ground_positions[idx]
+                    track["_current_time"] = current_time
 
                 # --- Speed (km/h) ---
                 if "ground_coordinates" in track:
@@ -921,7 +830,9 @@ class CoreModule:
                             track["speed"] = track.get("speed", 0.0)
                     else:
                         # First frame for this track — fall back to pixel velocity
-                        track["speed"] = self._pixel_based_speed(track)
+                        speed_result = self._pixel_based_speed(track)
+                        track["speed"] = speed_result["speed_kmh"]
+                        track["speed_calibrated"] = speed_result["calibrated"]
 
                     track["prev_ground_pos"] = (curr_gx, curr_gy)
                     track["prev_t"] = current_time
@@ -934,7 +845,9 @@ class CoreModule:
                     if not self._homography_fallback_warned:
                         logger.info(f"[{self.feed_id}] Homography unavailable, using pixel-based speed (calibration recommended)")
                         self._homography_fallback_warned = True
-                    track["speed"] = self._pixel_based_speed(track)
+                    speed_result = self._pixel_based_speed(track)
+                    track["speed"] = speed_result["speed_kmh"]
+                    track["speed_calibrated"] = speed_result["calibrated"]
 
                 # Physical speed cap to prevent anomalies (e.g., 180 km/h).
                 # Only clamp when we actually have a numeric speed; an
@@ -998,16 +911,15 @@ class CoreModule:
             self._lane_votes = {k: v for k, v in self._lane_votes.items() if k in vehicle_data}
         _sub["finalize"] += time.perf_counter() - _t_finalize
 
-        # Compute feed-level metrics (average speed, congestion)
+        # Drain OCR and persist individual vehicle observations
         _t_tail = time.perf_counter()
-        feed_metrics = self._compute_feed_metrics(vis_tracks)
 
         # Drain OCR results FIRST so any plate recognised this frame is reflected
         # in the DB write (and in vis_tracks) instead of being deferred a frame
         # (audit 3.1). Previously _save_vehicle_data ran before OCR processing.
         self._process_ocr_results(vehicle_data)
 
-        self._save_vehicle_data(vis_tracks, feed_metrics)
+        self._save_vehicle_data(vis_tracks)
         _sub["metrics_ocr_db"] += time.perf_counter() - _t_tail
 
         # Reuse the STAGE-TIMINGS 30s cadence: log the sub-stage split here so
@@ -1223,35 +1135,21 @@ class CoreModule:
             with self._ocr_lock:
                 self._ocr_in_flight.discard(tid)
 
-    def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData], feed_metrics: Optional[Dict[str, Any]] = None):
+    def _save_vehicle_data(self, tracked_vehicles: Dict[str, TrackData]):
         """
         Throttled write of vehicle state to the DB queue (max 1 Hz per vehicle).
         Filters for valid bbox and centroid before sending.
 
         Args:
             tracked_vehicles: Dictionary of currently tracked vehicles and their metadata.
-            feed_metrics: Feed-level aggregated metrics (speed, congestion).
         """
         if not self.db_queue:
             return
 
         now = time.time()
         
-        # 1. Save Feed-Level Metrics (once per frame/cycle)
-        if feed_metrics:
-            try:
-                self.db_queue.put_nowait({
-                    "type": "feed_metrics",
-                    "feed_id": self.feed_id,
-                    "timestamp": float(now),
-                    **feed_metrics
-                })
-            except queue.Full:
-                if now - self._last_queue_warn_time > 1.0:
-                    logger.warning(f"[{self.feed_id}] DB queue full. Dropping feed metrics.")
-                    self._last_queue_warn_time = now
-
-        # 2. Save Individual Vehicle Data (throttled)
+        # Feed aggregates travel through TrafficMonitor -> AnalyticsService;
+        # the database writer queue accepts individual vehicle records only.
         for vehicle_id, data in tracked_vehicles.items():
             # Use persistent storage for last save time to ensure throttling works across frames
             if now - self._last_db_save_times.get(vehicle_id, 0) < 1.0:
