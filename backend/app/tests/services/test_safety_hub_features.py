@@ -135,6 +135,33 @@ class TestF7V2XInbound(unittest.TestCase):
         self.assertEqual(svc.inbound_stats()["rx_count"], 1)
         self.assertEqual(svc.inbound_stats()["stations_seen"], 1)
 
+    def test_broadcast_loopback_no_vehicle_needed(self):
+        """Server-side proof: TX to 127.0.0.1 lands intact on a UDP listener."""
+        import asyncio
+        import json
+        import socket
+        rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        rx.bind(("127.0.0.1", 0))
+        rx.settimeout(2.0)
+        port = rx.getsockname()[1]
+        svc = v2x.V2XService(config={"v2x": {"enabled": True,
+                                             "broadcast_ip": "127.0.0.1",
+                                             "broadcast_port": port}})
+        try:
+            self.assertTrue(svc.enabled)
+            asyncio.run(svc.broadcast_directive("feed1", "ALL", "HAZARD_ALERT", "inc123"))
+            data, _ = rx.recvfrom(65535)
+            msg = json.loads(data.decode("utf-8"))
+            self.assertEqual(msg["v2x_msg"], "DIRECTIVE")
+            self.assertEqual(msg["f"], "feed1")
+            self.assertEqual(msg["z"], "ALL")
+            self.assertEqual(msg["type"], "HAZARD_ALERT")
+            self.assertEqual(msg["val"], "inc123")
+            self.assertEqual(svc.inbound_stats()["tx_count"], 1)
+        finally:
+            rx.close()
+            asyncio.run(svc.stop())
+
 
 class TestF8ANPR(unittest.TestCase):
     def test_lists(self):

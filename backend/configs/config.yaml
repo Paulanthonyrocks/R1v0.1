@@ -258,8 +258,24 @@ logging:
       level: INFO
       maxBytes: 10485760
   loggers:
-    Process:
+    Inference:
       handlers:
+      - consoleHandler
+      - mainFileHandler
+      - workerFileHandler
+      level: INFO
+      propagate: false
+    Ingestion:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
+      - workerFileHandler
+      level: INFO
+      propagate: false
+    app.core.analytics_worker:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
       - workerFileHandler
       level: INFO
       propagate: false
@@ -371,7 +387,13 @@ logging:
       - mlFileHandler
       level: INFO
       propagate: false
-    app.routers.video_ws:
+    app.routers.ws:
+      handlers:
+      - consoleHandler
+      - videoWsFileHandler
+      level: INFO
+      propagate: false
+    app.websocket.connection_manager:
       handlers:
       - consoleHandler
       - videoWsFileHandler

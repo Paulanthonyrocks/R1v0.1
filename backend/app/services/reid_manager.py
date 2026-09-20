@@ -26,6 +26,9 @@ class GlobalReIDManager:
         self.max_gallery_size = self.reid_cfg.get("max_gallery_size", 1000)
         self.ttl_seconds = self.reid_cfg.get("ttl_seconds", 3600)
         self.persistence_path = self.reid_cfg.get("persistence_path", "backend/data/reid_gallery.pkl")
+        # Single-owner persistence: only coordinator/owner process saves pickle on cleanup.
+        # Subprocess inference workers query Redis/DB and skip periodic disk churn.
+        self.is_owner = self.reid_cfg.get("is_owner", False)
 
         # Embedding smoothing factor (centroid update)
         self.alpha = self.reid_cfg.get("embedding_smoothing", 0.1)
@@ -643,5 +646,7 @@ class GlobalReIDManager:
             except Exception as e:
                 logger.error(f"Failed to trim Redis gallery: {e}")
 
-        if not self.db_manager:
+        # Only designated owner process saves pickle during cleanup;
+        # workers query Redis/DB and avoid periodic disk churn.
+        if not self.db_manager and self.is_owner:
             self.save_state()

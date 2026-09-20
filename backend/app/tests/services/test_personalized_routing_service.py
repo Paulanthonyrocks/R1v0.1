@@ -204,11 +204,13 @@ class TestPersonalizedRoutingServiceWithDb(unittest.IsolatedAsyncioTestCase):
     async def _add_suggestion_log_entry(
         self, session, **kwargs
     ):  # session is SQLAlchemy Session
+        now_dt = datetime.now(timezone.utc)
         entry_data = {
             "id": str(uuid.uuid4()),
             "suggestion_id": str(uuid.uuid4()),  # Default, can be overridden by kwargs
             "user_id": USER_ID_DB_TEST_1,
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": now_dt,
+            "created_at": now_dt,
             "suggestion_details": {
                 "type": "test_suggestion",
                 "destination_name": "Test Dest",

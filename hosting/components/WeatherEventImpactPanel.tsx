@@ -36,9 +36,12 @@ const WeatherEventImpactPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const getSeverityFromWeather = (weather: WeatherData): string => {
-    if (weather.precipitation_chance > 70 || weather.wind_speed > 50) return 'High';
-    if (weather.precipitation_chance > 30 || weather.wind_speed > 30) return 'Medium';
+  const getSeverityFromWeather = (weather?: WeatherData | null): string => {
+    if (!weather) return 'Low';
+    const precip = weather.precipitation_chance ?? 0;
+    const wind = weather.wind_speed ?? 0;
+    if (precip > 70 || wind > 50) return 'High';
+    if (precip > 30 || wind > 30) return 'Medium';
     return 'Low';
   };
 
@@ -49,31 +52,39 @@ const WeatherEventImpactPanel: React.FC = () => {
         const defaultLon = -118.2437;
 
         const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
-        const [weatherData, eventsData] = await Promise.all([
+        const [weatherRes, eventsRes] = await Promise.allSettled([
           apiClient.get<WeatherData>(`/api/v1/weather/current?lat=${defaultLat}&lon=${defaultLon}`),
           apiClient.get<EventData[]>('/api/v1/events/current')
         ]);
 
-        const weatherImpact: WeatherEventImpact = {
-          type: 'weather',
-          description: `${weatherData.conditions} - ${weatherData.temperature}°C`,
-          severity: getSeverityFromWeather(weatherData),
-          location: 'Regional Hub',
-          startTime: new Date().toISOString(),
-          details: weatherData
-        };
+        const nextImpacts: WeatherEventImpact[] = [];
 
-        const eventImpacts: WeatherEventImpact[] = eventsData.map((event: EventData) => ({
-          type: 'event',
-          description: event.description,
-          severity: event.severity,
-          location: event.location,
-          startTime: event.start_time,
-          endTime: event.end_time,
-          details: event
-        }));
+        if (weatherRes.status === 'fulfilled' && weatherRes.value) {
+          const weatherData = weatherRes.value;
+          nextImpacts.push({
+            type: 'weather',
+            description: `${weatherData.conditions || 'Standard Conditions'} - ${weatherData.temperature ?? 0}°C`,
+            severity: getSeverityFromWeather(weatherData),
+            location: 'Regional Hub',
+            startTime: new Date().toISOString(),
+            details: weatherData
+          });
+        }
 
-        setImpacts([weatherImpact, ...eventImpacts]);
+        if (eventsRes.status === 'fulfilled' && Array.isArray(eventsRes.value)) {
+          const eventImpacts: WeatherEventImpact[] = eventsRes.value.map((event: EventData) => ({
+            type: 'event',
+            description: event?.description || 'Regional Event',
+            severity: event?.severity || 'Low',
+            location: event?.location || 'Regional Hub',
+            startTime: event?.start_time || new Date().toISOString(),
+            endTime: event?.end_time,
+            details: event
+          }));
+          nextImpacts.push(...eventImpacts);
+        }
+
+        setImpacts(nextImpacts);
       } catch (err) {
         setError('Failed to retrieve atmospheric and event telemetry');
         console.error('Error fetching impacts:', err);
@@ -130,18 +141,22 @@ const WeatherEventImpactPanel: React.FC = () => {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                         <div className="flex items-center gap-2 opacity-70 uppercase font-bold">
-                            <MapPin size={14} className="text-primary" /> {impact.location}
+                            <MapPin size={14} className="text-primary" /> {impact.location || 'Unknown'}
                         </div>
                         <div className="flex items-center gap-2 opacity-70 uppercase font-bold">
-                            <Calendar size={14} className="text-primary" /> {new Date(impact.startTime).toLocaleString()}
+                            <Calendar size={14} className="text-primary" /> {(() => {
+                                if (!impact.startTime) return 'N/A';
+                                const d = new Date(impact.startTime);
+                                return isNaN(d.getTime()) ? 'N/A' : d.toLocaleString();
+                            })()}
                         </div>
                     </div>
 
                     {impact.type === 'weather' && impact.details && (
                         <div className="pt-4 border-t border-lcd-text/10 flex flex-wrap gap-6">
-                            <WeatherSubStat icon={<Wind size={14} />} label="Wind" value={`${(impact.details as WeatherData).wind_speed.toFixed(1)} km/h`} />
-                            <WeatherSubStat icon={<Droplets size={14} />} label="Precip" value={`${(impact.details as WeatherData).precipitation_chance}%`} />
-                            <WeatherSubStat icon={<Thermometer size={14} />} label="Temp" value={`${(impact.details as WeatherData).temperature}°C`} />
+                            <WeatherSubStat icon={<Wind size={14} />} label="Wind" value={`${Number((impact.details as WeatherData).wind_speed ?? 0).toFixed(1)} km/h`} />
+                            <WeatherSubStat icon={<Droplets size={14} />} label="Precip" value={`${(impact.details as WeatherData).precipitation_chance ?? 0}%`} />
+                            <WeatherSubStat icon={<Thermometer size={14} />} label="Temp" value={`${(impact.details as WeatherData).temperature ?? 0}°C`} />
                         </div>
                     )}
                 </div>

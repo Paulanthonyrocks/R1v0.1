@@ -98,6 +98,7 @@ class FeedManager:
         self._active_incidents_cache: int = 0
         self._active_incidents_cached_at: float = 0.0
         self._reid_manager = GlobalReIDManager(config)
+        self._reid_manager.is_owner = True
         shm_pool_size = self.config.get('performance', {}).get('shm_pool_size', 100)
         self.logger.info(f"Initializing SharedFrameBuffer with pool_size={shm_pool_size}")
         self.frame_buffer = SharedFrameBuffer(pool_size=shm_pool_size, owner=True)

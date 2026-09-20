@@ -31,10 +31,21 @@ interface GlobalVehicle {
 interface TrackPoint {
     feed_id: string;
     timestamp: number;
-    speed: number;
-    lane: number;
-    direction: string;
-    license_plate: string;
+    speed?: number | null;
+    lane?: number | null;
+    direction?: string | null;
+    license_plate?: string | null;
+}
+
+function formatTimestamp(ts: number | string | undefined | null): string {
+    if (ts === undefined || ts === null || ts === '') return 'N/A';
+    if (typeof ts === 'number') {
+        const ms = ts > 1e11 ? ts : ts * 1000;
+        const d = new Date(ms);
+        return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString();
+    }
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString();
 }
 
 export default function TrackingPage() {
@@ -161,7 +172,7 @@ export default function TrackingPage() {
                                             </div>
                                             <div className="text-right">
                                                 <div className={cn("text-[9px] font-black opacity-40 uppercase tabular-nums", selectedId === v.global_vehicle_id && "opacity-60")}>
-                                                    {new Date(v.last_seen * 1000).toLocaleTimeString()}
+                                                    {formatTimestamp(v.last_seen)}
                                                 </div>
                                                 <ArrowRight size={18} className={cn("ml-auto opacity-0 group-hover:opacity-100 transition-all mt-1", selectedId === v.global_vehicle_id && "opacity-100")} />
                                             </div>
@@ -224,24 +235,31 @@ export default function TrackingPage() {
                                                             {group.feed_id.toUpperCase().replace('_', ' ')}
                                                         </span>
                                                         <div className="text-[9px] font-bold opacity-40 group-hover:opacity-60 group-hover:text-lcd-bg">
-                                                            ENTRY: {new Date(group.startTime * 1000).toLocaleTimeString()} {'// EXIT:'} {new Date(group.endTime * 1000).toLocaleTimeString()}
+                                                            ENTRY: {formatTimestamp(group.startTime)} {'// EXIT:'} {formatTimestamp(group.endTime)}
                                                         </div>
                                                     </div>
                                                     <div className="text-right">
                                                         <span className="text-[9px] font-black opacity-40 uppercase block group-hover:text-lcd-bg">Avg. Velocity</span>
                                                         <span className="text-2xl font-black font-lcd tabular-nums group-hover:text-lcd-bg">
-                                                            {(group.points.reduce((s: any, p: any) => s + p.speed, 0) / group.points.length).toFixed(1)} <span className="text-xs">km/h</span>
+                                                            {(() => {
+                                                                const validSpeeds = (group.points || [])
+                                                                    .map((p: any) => p?.speed)
+                                                                    .filter((s: any) => typeof s === 'number' && !isNaN(s));
+                                                                return validSpeeds.length > 0
+                                                                    ? (validSpeeds.reduce((acc: number, curr: number) => acc + curr, 0) / validSpeeds.length).toFixed(1)
+                                                                    : '0.0';
+                                                            })()} <span className="text-xs">km/h</span>
                                                         </span>
                                                     </div>
                                                 </div>
                                                 <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-6 text-xs font-bold uppercase tracking-tight group-hover:text-lcd-bg">
                                                     <div className="flex items-center gap-2 opacity-70">
-                                                        <Navigation size={14} /> HEADING: {group.points[0].direction}
+                                                        <Navigation size={14} /> HEADING: {group.points[0]?.direction || 'N/A'}
                                                     </div>
                                                     <div className="flex items-center gap-2 opacity-70">
-                                                        <MapPin size={14} /> LANE_SEG: {group.points[0].lane}
+                                                        <MapPin size={14} /> LANE_SEG: {group.points[0]?.lane ?? 'N/A'}
                                                     </div>
-                                                    {group.points[0].license_plate !== "Unknown" && (
+                                                    {group.points[0]?.license_plate && group.points[0].license_plate !== "Unknown" && (
                                                         <div className="flex items-center gap-2 text-primary group-hover:text-lcd-bg">
                                                             <User size={14} /> OCR_DATA: {group.points[0].license_plate}
                                                         </div>
