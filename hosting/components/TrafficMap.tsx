@@ -174,7 +174,7 @@ const TrafficMap = forwardRef<any, {
           const nx = v.bbox[0] + ((v.vx || 0) * dt) / 640;
           const ny = v.bbox[1] + ((v.vy || 0) * dt) / 480;
           const x = Math.max(0, Math.min(1, nx)) * canvasW;
-          const y = Math.max(0, Math.min(1, ny)) * canvasH;
+            const y = Math.max(0, Math.min(1, ny)) * canvasH;
           const w = (v.bbox[2] - v.bbox[0]) * canvasW;
           const h = (v.bbox[3] - v.bbox[1]) * canvasH;
 
@@ -208,17 +208,17 @@ const TrafficMap = forwardRef<any, {
       requestAnimationFrame(() => {
         if (!containerRef.current) return;
         const rect = containerRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
 
-      const clickedVehicle = Object.values(vehicles.current || {}).find(v => {
+        const clickedVehicle = Object.values(vehicles.current || {}).find(v => {
         if (!v.bbox || !Array.isArray(v.bbox)) return false;
         const [vx1, vy1, vx2, vy2] = v.bbox;
         return x >= vx1 && x <= vx2 && y >= vy1 && y <= vy2;
       });
 
-      if (clickedVehicle) {
-        const gid = clickedVehicle.global_vehicle_id;
+        if (clickedVehicle) {
+          const gid = clickedVehicle.global_vehicle_id;
         const vid = clickedVehicle.vehicle_id;
         const id = gid || vid;
         
