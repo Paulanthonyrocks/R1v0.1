@@ -35,7 +35,7 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
                 );
                 drawHeatmap(points);
             } catch (e) {
-                console.error("Heatmap fetch failed:", e);
+                if (!String(e).includes("Failed to fetch")) console.error("Heatmap fetch failed:", e);
             } finally {
                 setLoading(false);
             }

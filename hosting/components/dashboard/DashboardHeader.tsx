@@ -36,13 +36,13 @@ const DashboardHeader: React.FC = () => {
         { href: '/dashboard', label: 'DASHBOARD', icon: Home },
         { href: '/dashboard/map', label: 'MAP', icon: MapIcon },
         { href: '/dashboard/analytics', label: 'ANALYTICS', icon: BarChart3 },
-        { href: '/surveillance', label: 'FEEDS', icon: LayoutGrid },
-        { href: '/anomalies', label: 'ALERTS', icon: Zap },
+        { href: '/surveillance', label: 'SURVEILLANCE', icon: LayoutGrid },
+        { href: '/anomalies', label: 'ANOMALIES', icon: Zap },
         { href: '/incidents', label: 'INCIDENTS', icon: AlertTriangle },
         { href: '/signals', label: 'SIGNALS', icon: Signal },
         { href: '/impacts', label: 'IMPACTS', icon: CloudSun },
         { href: '/dashboard/tracking', label: 'TRACKING', icon: Navigation },
-        { href: '/dashboard/predictive', label: 'FORECASTS', icon: TrendingUp },
+        { href: '/dashboard/predictive', label: 'PREDICTIVE', icon: TrendingUp },
         { href: '/logs', label: 'LOGS', icon: Terminal },
     ];
 

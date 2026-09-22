@@ -33,7 +33,7 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
             });
             setData(response);
         } catch (e) {
-            console.error("OD Matrix fetch failed:", e);
+            if (!String(e).includes("Failed to fetch")) console.error("OD Matrix fetch failed:", e);
         } finally {
             setLoading(false);
         }
