@@ -204,8 +204,10 @@ const TrafficMap = forwardRef<any, {
     if (!containerRef.current || !rendererRef.current) return;
     
     const handleClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
+      // Defer blocking bbox/calculation to next frame (performance fix for violation)
+      requestAnimationFrame(() => {
+        if (!containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
 
@@ -231,6 +233,7 @@ const TrafficMap = forwardRef<any, {
           setSelectedGlobalId(id);
         }
       }
+      });
     };
 
     const el = rendererRef.current.domElement;

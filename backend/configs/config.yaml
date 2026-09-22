@@ -36,6 +36,13 @@ behavior_analysis:
   stopped_speed_threshold_kmh: 5
 calibration:
   drift_threshold_px: 3.0
+traffic_signal_controller:
+  api_base_url: http://localhost:8082/mock/signals
+  default_signals:
+    - signal_id: sig_101
+      location_description: Main St & First Ave
+    - signal_id: sig_102
+      location_description: Oak Rd & Second Blvd
 database:
   cache_size: 128
   chunk_size: 100
@@ -1039,19 +1046,6 @@ vehicle_detection:
   static_object_timeout: 20
   traffic_predictor:
     model_path: models/traffic_predictor_model.h5
-  use_openvino: true
-  vehicle_class_ids:
-  - 2
-  - 3
-  - 5
-  - 7
-  # 640 -> 960 (workload increase): 2.25x per-detect GPU compute AND a real
-  # accuracy gain on the 640x480 sources (1.5x supersample helps small/distant
-  # vehicles). NOTE: a deployed TensorRT engine is shape-locked to its export
-  # imgsz (320) and caps here at 320 (inference_worker.py trt_imgsz_cap) --
-  # re-export the engine at 960 for this to bite. 1280 is available if you
-  # want brute force (4x).
-  yolo_imgsz: 960
 video_input:
   max_queue_size: 500
   queue_put_timeout_ms: 1000
