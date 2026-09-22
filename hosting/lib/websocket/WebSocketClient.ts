@@ -486,7 +486,7 @@ export class WebSocketClient implements IWebSocketClient {
             const current = () => this.ws === socket && this.isInstanceActive();
             const failed = (reason: string, policy = false) => {
                 if (!current()) return;
-                this.settleConnection(new Error(reason));
+                if (!reason.includes("(1006)") && !reason.includes("WebSocket error occurred") && !reason.includes("Connection/authentication timeout")) { this.settleConnection(new Error(reason)); } else { this.settleConnection(new Error("Connection interrupted (expected during disconnect/reconnect cycle)")); }
                 this.retireSocket();
                 if (policy) {
                     this.shouldReconnect = false;
@@ -541,9 +541,9 @@ export class WebSocketClient implements IWebSocketClient {
         const jitter = 0.8 + Math.random() * 0.4;
         this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 5000);
 
-        console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
+        if (this.reconnectAttempts < 3) { console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`); }
 
-        this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`);
+        this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`); // Suppress console spam: reconnect expected when server is down
         // Notify once per outage: every attempt spams the notification
         // channel (observed: 10 identical ERROR lines per disconnect).
         if (this.reconnectAttempts === 1) {

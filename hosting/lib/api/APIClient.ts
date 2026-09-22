@@ -91,6 +91,10 @@ export class APIClient {
             return response;
         } catch (error) {
             clearTimeout(timeoutId);
+            const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes("Failed to fetch")) {
+                return new Response(JSON.stringify({ status: "unavailable", message: "Server unreachable" }), { status: 503, headers: { "Content-Type": "application/json" } });
+            }
             throw error;
         }
     }
