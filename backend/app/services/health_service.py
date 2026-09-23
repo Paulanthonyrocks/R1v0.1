@@ -48,14 +48,27 @@ class SystemHealthService:
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         
-        # GPU stats if available (optional)
+        # GPU stats (2 T4 box)
         gpu_stats = []
         try:
-            # Simple check if nvidia-smi is available
-            import subprocess
-            # Use a non-blocking way if possible, or skip for now
-            pass 
-        except:
+            import pynvml
+            pynvml.nvmlInit()
+            count = pynvml.nvmlDeviceGetCount()
+            for i in range(count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+                gpu_stats.append({
+                    "index": i,
+                    "name": pynvml.nvmlDeviceGetName(handle).decode() if isinstance(pynvml.nvmlDeviceGetName(handle), bytes) else pynvml.nvmlDeviceGetName(handle),
+                    "util_pct": util.gpu,
+                    "mem_used_mb": info.used // (1024*1024),
+                    "mem_total_mb": info.total // (1024*1024),
+                    "temp_c": temp,
+                })
+            pynvml.nvmlShutdown()
+        except Exception:
             pass
 
         # Feed Manager stats

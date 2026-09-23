@@ -584,6 +584,7 @@ app.include_router(signals.router, prefix="/api/v1/signals", tags=["Signals"])
 app.include_router(logs.router, prefix="/api/v1/logs", tags=["Logs"])
 app.include_router(ws.router, prefix="/api/v1", tags=["WebSocket"])
 app.include_router(ws_monitoring.router, prefix="/api/v1/websocket", tags=["WebSocket Monitoring"])
+app.include_router(webrtc.router, prefix="/api/v1/webrtc", tags=["WebRTC"])
 
 # --- Secure File Serving ---
 # Auth required: these are camera snapshots; serving them unauthenticated exposed

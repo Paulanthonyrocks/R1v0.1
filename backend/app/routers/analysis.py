@@ -515,3 +515,24 @@ async def get_feed_history_endpoint(
         # dashboard history widget. Degrade to an empty series instead of 500/503.
         logger.warning(f"History fetch failed for {feed_id}, returning empty: {e}")
         return []
+
+@router.get("/emissions", summary="CO2 emissions estimate", tags=["Analytics"])
+async def get_emissions(
+    hours: int = Query(1, ge=1, le=168),
+    as_svc: AnalyticsService = Depends(get_analytics_service),
+):
+    try:
+        metrics_summary = await as_svc.get_metrics_summary()
+        active_vehicles = metrics_summary.get("total_vehicles", 0) or 0
+        avg_speed = metrics_summary.get("average_speed_kmh", 30)
+        co2_rate = active_vehicles * float(avg_speed) * 0.12 / 3600
+        return {
+            "hourly_co2_kg": round(co2_rate, 3),
+            "active_vehicles": int(active_vehicles),
+            "avg_speed_kmh": float(avg_speed),
+            "method": "backend_real_metrics_heuristic",
+            "window_hours": hours,
+        }
+    except Exception as e:
+        logger.warning(f"Emissions endpoint degraded: {e}")
+        return {"hourly_co2_kg": 0.0, "method": "degraded", "error": str(e)}

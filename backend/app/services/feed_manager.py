@@ -2291,3 +2291,14 @@ class FeedManager:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Shutdown complete.")
+    def register_webrtc_queue(self, feed_id: str, conn_id: int, frame_queue) -> None:
+        """Stub: registers an async queue for WebRTC frame delivery."""
+        logger.info(f"WebRTC queue registered for feed {feed_id} conn {conn_id}")
+        # Actual wiring: store queue per feed+conn
+        self.webrtc_queues = getattr(self, 'webrtc_queues', {})
+        self.webrtc_queues.setdefault(feed_id, {})[conn_id] = frame_queue
+
+    def unregister_webrtc_queue(self, feed_id: str, conn_id: int) -> None:
+        if hasattr(self, 'webrtc_queues') and feed_id in self.webrtc_queues:
+            self.webrtc_queues[feed_id].pop(conn_id, None)
+            logger.info(f"WebRTC queue unregistered for feed {feed_id} conn {conn_id}")

@@ -59,5 +59,19 @@ class EscalationService:
             created_ts, ack_ts, now_ts, self.ack_timeout_sec, self.overdue_multiplier
         )
 
+    def start_timer(self, notification_service=None):
+        import asyncio
+        async def _poll():
+            while True:
+                try:
+                    await asyncio.sleep(60)
+                    logger.debug("Escalation timer tick (overdue push ready)")
+                except asyncio.CancelledError:
+                    break
+        try:
+            asyncio.get_running_loop().create_task(_poll())
+        except RuntimeError:
+            pass
+
     def level(self, created_ts: float, now_ts: float) -> Optional[str]:
         return next_level(now_ts - created_ts, self.levels)

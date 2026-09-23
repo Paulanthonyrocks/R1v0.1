@@ -60,6 +60,9 @@ redis>=5.0.0
 # Async HTTP
 aiohttp>=3.8.0
 
+# GPU telemetry (2 T4 setup)
+pynvml>=11.5
+
 # WebRTC
 aiortc>=1.8.0
 av>=11.0.0

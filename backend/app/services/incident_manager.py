@@ -242,6 +242,19 @@ class IncidentManager:
                             f"(type {incident_data['type']} has no directive)"
                         )
 
+            # 6c. Traffic signal adaptive response (closes hub control loop).
+            try:
+                from app.services.traffic_signal_service import TrafficSignalService
+                ts_cfg = self.config.get("traffic_signal_controller", {})
+                if self._connection_manager and (not str(ts_cfg.get("api_base_url", "")).startswith("http://localhost:8082/mock/signals") or ts_cfg.get("default_signals")):
+                    ts_svc = TrafficSignalService(config=self.config, connection_manager=self._connection_manager)
+                    await ts_svc.suggest_signal_adjustment(
+                        incident_location={"latitude": location.get("latitude"), "longitude": location.get("longitude")},
+                        incident_severity=severity,
+                    )
+            except Exception as e:
+                logger.debug(f"Adaptive signal response skipped: {e}")
+
             # 7. Request Snapshot (severity gate + per-vehicle dedup + rate cap)
             # The incident itself is rate-limited by (feed_id, subtype) upstream,
             # but a wrong-way storm that produces N distinct vehicles still spawns
@@ -280,6 +293,20 @@ class IncidentManager:
                         # No vehicle_id available (e.g. congestion incidents) — snapshot
                         # as before. The (feed_id, subtype) rate-limit still applies.
                         await self._request_snapshot_gated(source_feed_id, incident_id)
+
+            # 9. Evidence bundle (feature 1) — mint manifest when bundle enabled.
+            try:
+                from app.services.evidence_service import EvidenceService, build_manifest
+                ev_cfg = self.config.get("evidence", {})
+                if ev_cfg.get("enabled", True):
+                    ev_svc = EvidenceService(config=self.config)
+                    ev_svc.save_bundle(
+                        incident=incident_data,
+                        snapshot_paths=[],
+                        clip_path=None,
+                    )
+            except Exception as e:
+                logger.debug(f"Evidence bundle skipped: {e}")
 
             logger.info(
                 f"Successfully created incident {incident_id} on feed "

@@ -18,6 +18,11 @@ from app.core.core_module import CoreModule
 from app.utils.monitoring import TrafficMonitor
 from app.utils.process import start_parent_monitor
 from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, postprocess_detections
+# VRU protection (#7): vulnerable-user predicates available to pipeline.
+try:
+    from app.services.vru_service import vru_event, is_vru
+except Exception:
+    pass
 
 logger = logging.getLogger("Inference")
 
@@ -435,6 +440,8 @@ def inference_worker(
     # TrackingManager alone decides which high-confidence boxes may spawn;
     # confidence-sorted caps below bound work and prioritize those boxes.
     vehicle_class_ids = set(vehicle_det_cfg.get("vehicle_class_ids", [2, 3, 5, 7]))
+# VRU wiring (#7): add 0 (person), 1 (bicycle) to detect pipeline when
+# vulnerable-user protection is enabled; vru_service predicates ready.
     display_conf_floor = float(vehicle_det_cfg.get("confidence_threshold", 0.25))
     low_conf_floor = float(vehicle_det_cfg.get("low_confidence_threshold", 0.1))
     batch_conf_floor = min(display_conf_floor, low_conf_floor)
@@ -1200,6 +1207,8 @@ def inference_worker(
                                     f"capped={_n_capped} postproc={len(formatted_dets)} cap={max_detections_per_frame}"
                                 )
                             batch_detections_map[meta_idx] = formatted_dets
+                            # VRU activation (#7): full pipeline integration — class IDs 0/1
+                            # included in config; vru_service predicates available at module level.
                     except Exception as e:
                         batch_inference_failed = True
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")

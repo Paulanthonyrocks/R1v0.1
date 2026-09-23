@@ -126,24 +126,7 @@ inference:
   # (forced in-code). Raise only with timeout + depth evidence.
   batch_size: 2
   detection_model: models/yolov8n.pt
-  device: cuda:0
-  # 2 T4 GPUs: start with `num_workers` (=2) — one Worker per GPU at
-  # 1:1. The pool grows under load up to inference_pool_size (8); see
-  # inference_pool_manager.scale_pool. With SLOT_COUNT=6 (see constants.py) and 2 workers,
-  # each worker owns 2 slots and the existing route formula
-  # `(wid + sub*pool_size) % SLOT_COUNT` co-locates 2+ feeds onto the
-  # same worker, so the configured batch_size (8) actually fills (was
-  # collapsing to batch=1 when num_workers==SLOT_COUNT, e.g. 4 workers
-  # for 3 feeds left each worker with 1 slot = 1 queue = empty batch).
-  #
-  # GATE: build the TensorRT engine once on the T4 box with
-  #   python scripts/export_tensorrt.py
-  # -> models/yolov8n.engine. The inference worker auto-loads .engine
-  # over .pt when it exists (inference_worker.py:205), dropping per-call
-  # latency ~4-8× vs float32 PyTorch forward.
   num_workers: 2
-  worker_ready_timeout: 60
-  use_tensorrt: true
   inference_timeout: 0.05
   # skip_frames=0: detect EVERY ingested frame (was 3). The GPUs sit at
   # ~0% util on the 3 sample feeds (~8fps each); the old skip=3 ran only
@@ -940,6 +923,8 @@ vehicle_detection:
   car_classifier_model_path: models/Car_Make_Model.tflite
   confidence_threshold: 0.3
   enabled: true
+  yolo_imgsz: 640
+  vehicle_class_ids: [0, 1, 2, 3, 5, 7]  # VRU activated: 0=person, 1=bicycle, 2/3/5/7=vehicles
   # Calibration: maps image pixels -> real-world ground plane (meters) via a
   # homography. Required for physically-meaningful speed (km/h). Without it the
   # pipeline falls back to pixel-based velocity (avg_speed broadcasts as 0.0).

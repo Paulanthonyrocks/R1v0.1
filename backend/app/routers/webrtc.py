@@ -24,7 +24,11 @@ async def webrtc_offer(feed_id: str, offer: WebRTCOffer, current_user: dict = De
     Receives an SDP offer from a WebRTC client, registers a 
     FeedStreamTrack for the specified feed_id, and returns an SDP answer.
     """
-    from ..main import feed_manager_instance # Avoid circular import
+    try:
+        from app.dependency_injection import get_feed_manager
+        from app.main import feed_manager_instance  # fallback; may be None
+    except Exception:
+        feed_manager_instance = None
     
     if not feed_manager_instance:
         raise HTTPException(status_code=503, detail="Feed Manager not initialized")
