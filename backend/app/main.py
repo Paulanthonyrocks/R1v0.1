@@ -46,7 +46,7 @@ from app.services.audit_logger import AuditLogger
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
     incidents, routing, weather,
-    events, ws, vehicles, signals, ws_monitoring, logs
+    events, ws, vehicles, signals, ws_monitoring, logs, webrtc
 )
 
 # --- Constants & Setup ---
