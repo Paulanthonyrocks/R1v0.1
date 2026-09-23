@@ -159,11 +159,7 @@ class ReIDEmbedder:
                 input_tensor = self._normalize_batch(input_tensor)
 
             # Forward pass
-            if self.device.startswith("cuda"):
-                with torch.autocast(self.device, dtype=torch.float16):
-                    embedding = self.backbone(input_tensor)
-            else:
-                embedding = self.backbone(input_tensor)
+            embedding = self.backbone(input_tensor)
 
             # L2 Normalize
             embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
@@ -213,12 +209,8 @@ class ReIDEmbedder:
                     [self.transform(img) for img in valid_images]
                 ).to(self.device)
 
-            # Forward pass (fp16 when CUDA)
-            if self.device.startswith("cuda"):
-                with torch.autocast(self.device, dtype=torch.float16):
-                    embeddings = self.backbone(input_tensor)
-            else:
-                embeddings = self.backbone(input_tensor)
+            # Forward pass
+            embeddings = self.backbone(input_tensor)
 
             # L2 Normalize
             embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)

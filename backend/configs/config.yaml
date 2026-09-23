@@ -875,7 +875,6 @@ tracking:
   velocity_gate_boost: 3.0
   base_gate_multiplier: 1.0
   appearance_weight: 0.5
-  embedding_dim: 128
 traffic_predictor_model_path: models/traffic_predictor_model.h5
 v2x:
   broadcast_ip: 255.255.255.255
