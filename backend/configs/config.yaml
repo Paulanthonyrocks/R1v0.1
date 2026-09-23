@@ -974,7 +974,6 @@ vehicle_detection:
   - 480
   low_confidence_threshold: 0.1
   max_active_tracks: 100
-  max_reid_per_frame: 2
   min_bbox_area: 100
   min_bbox_dimension: 5
   model_path: models/yolov8n.pt
@@ -1025,11 +1024,6 @@ vehicle_detection:
     ttl_seconds: 14400
   reid_enabled: true
   reid_interval_frames: 30
-  # DEAD KEY (verified Sep-10): zero readers in app/ (only test_core_module
-  # references it as a config value). The gallery TTL is vehicle_detection.reid.ttl_seconds
-  # (reid_manager.py:27) -- see the reid: block above. Left at its historical
-  # value to avoid pointless diff noise.
-  reid_timeout: 10
   # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
   # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis
   # calls, and unbounded matching on dense scenes (130+ vehicles) pinned
