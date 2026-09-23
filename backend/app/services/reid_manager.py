@@ -155,6 +155,9 @@ class GlobalReIDManager:
                         if not emb_bytes: continue
                         
                         embedding = self._normalize(np.frombuffer(emb_bytes, dtype=np.float32))
+                        # Skip embeddings with mismatched dimension (old 64-dim vs new 128-dim)
+                        if embedding.shape[0] != 128:
+                            continue
                         loaded_ids.append(gid)
                         loaded_embs.append(embedding)
                         
@@ -346,8 +349,8 @@ class GlobalReIDManager:
                 if global_id in self.metadata_store:
                     self.metadata_store[global_id]["last_seen"] = now
 
-            # Fallback to vector search
-            if not global_id and self.gallery_matrix is not None and len(self.gallery_ids) > 0:
+            # Fallback to vector search (dimension guard)
+            if not global_id and self.gallery_matrix is not None and len(self.gallery_ids) > 0 and self.gallery_matrix.shape[1] == embedding.shape[0]:
                 scores = np.dot(self.gallery_matrix, embedding)
                 active_ids = self._active_local_ids.get(feed_id, set())
                 occupied = {gid for lid, gid in self.local_to_global.get(feed_id, {}).items()
@@ -566,6 +569,9 @@ class GlobalReIDManager:
                     continue
                 try:
                     embedding = self._normalize(np.frombuffer(emb_bytes, dtype=np.float32))
+                    # Filter mismatched dimensions (old 64-dim vs new 128-dim embedder)
+                    if embedding.shape[0] != 128:
+                        continue
                 except Exception:
                     continue
                 fetched.append((gid, embedding, meta))
