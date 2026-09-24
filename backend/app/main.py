@@ -663,6 +663,19 @@ async def detailed_health_check():
 if __name__ == "__main__":
     import uvicorn
     # Use standard uvicorn runner for development
+    #
+    # ws_ping_interval=20/ws_ping_timeout=20 (uvicorn defaults) KILLED every
+    # tunnelled WebSocket session in 40-80s bursts (2026-09-24 run: 10/10
+    # sessions dead at ~40s multiples of connect time; lifespans 39.6-169.2s).
+    # uvicorn's PROTOCOL-level ping is invisible to app logs — the browser
+    # auto-pongs, but through the loca.lt tunnel (50-67s RTT, documented in
+    # ws_keepalive_tunnel_rtt_stutter.md) the pong can never return within the
+    # 20s deadline, so uvicorn closes the socket at 20+20=40s no matter what
+    # the app-level keepalive (ping_interval 25 / pong_timeout 100 in
+    # config.yaml) says. The app-level PING/PONG (WebSocketClient.ts 25s /
+    # connection_manager 100s) is the keepalive that actually works through
+    # the tunnel — disable the protocol-level one entirely. Without this,
+    # every connection is doomed at its first protocol ping cycle.
     uvicorn.run(
         "app.main:app", 
         host="0.0.0.0", 
@@ -670,5 +683,7 @@ if __name__ == "__main__":
         reload=True, 
         log_level="info",
         proxy_headers=True,
-        forwarded_allow_ips="*"
+        forwarded_allow_ips="*",
+        ws_ping_interval=None,   # protocol keepalive OFF — app-level governs
+        ws_ping_timeout=None,
     )

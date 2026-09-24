@@ -384,6 +384,12 @@ logging:
       level: INFO
       propagate: false
     app.websocket.connection_manager:
+      # (2026-09-24) Exactly ONE entry for this logger. A Sep-20 edit added a
+      # videoWsFileHandler copy ABOVE the pre-existing mainFileHandler one;
+      # YAML duplicate keys silently last-wins, which routed connection_manager
+      # lines to backend_main.log and left backend_video_ws.log with zero
+      # disconnect/close lines — every WS teardown went invisible in the log
+      # that exists to show it.
       handlers:
       - consoleHandler
       - videoWsFileHandler
@@ -441,12 +447,6 @@ logging:
       handlers:
       - consoleHandler
       - servicesFileHandler
-      level: INFO
-      propagate: false
-    app.websocket.connection_manager:
-      handlers:
-      - consoleHandler
-      - mainFileHandler
       level: INFO
       propagate: false
     fastapi:

@@ -1078,7 +1078,17 @@ class ConnectionManager:
         # Check if PONG was received within timeout
         last_pong_time = self.last_pong_received_time.get(client_id, 0)
         if current_time - last_pong_time > self.pong_timeout + self.ping_interval:
-            logger.warning(f"Client {client_id} timed out (no PONG received). Disconnecting.")
+            # Reap attribution: this disconnects the client WITHOUT a
+            # WebSocketDisconnect in the receiver loop (the receiver task is
+            # cancelled here), so the close-code attribution in
+            # routers/ws.py never fires. Without this line the reap is
+            # invisible — sessions vanished with no cause logged (2026-09-24:
+            # every teardown showed only "Disconnecting client", never why).
+            logger.warning(
+                f"Client {client_id} timed out (no PONG received in "
+                f"{self.pong_timeout + self.ping_interval}s; last pong "
+                f"{current_time - last_pong_time:.0f}s ago). Reaping connection."
+            )
             return client_id, websocket
         
         try:
