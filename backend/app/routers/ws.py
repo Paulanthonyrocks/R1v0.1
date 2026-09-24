@@ -153,9 +153,24 @@ async def message_receiver(
             is_authenticated = True
 
             async def _expiry_watcher():
-                deadline = (auth_exp or 0) - time.time()
-                if deadline > 0:
-                    await asyncio.sleep(min(deadline, 3600.0))
+                # Read auth_exp through the holder, NOT a closure capture:
+                # re-auth (main loop) replaces holder["exp"] with the fresh
+                # token's exp, but this watcher was already sleeping toward
+                # the ORIGINAL deadline. The 2026-09-24 run proved it: session
+                # authed 16:26:13 (Firebase ID token exp = 17:26:13), client
+                # re-authed with a fresh 1h token at 17:21:29, and the watcher
+                # still killed the socket at 17:26:11 -- the stale closure
+                # value, 2s from the original exp. Loop until the CURRENT
+                # deadline passes; re-auth pushes the deadline out, so the
+                # loop sleeps again toward the new exp.
+                while not socket_closed.is_set():
+                    deadline = (auth_exp_holder["exp"] or 0) - time.time()
+                    if deadline > 0:
+                        await asyncio.sleep(min(deadline, 3600.0))
+                        # deadline may have been extended by re-auth while we
+                        # slept -- re-check instead of falling through.
+                        continue
+                    break
                 if not socket_closed.is_set():
                     logger.info(f"Session token expired for {client_id}; closing socket.")
                     try:
@@ -163,6 +178,7 @@ async def message_receiver(
                     except RuntimeError:
                         pass
 
+            auth_exp_holder: dict = {"exp": auth_exp}
             expiry_task = asyncio.create_task(_expiry_watcher())
             logger.info(f"Client assigned {client_id} authenticated as {user.username}")
 
@@ -285,6 +301,12 @@ async def message_receiver(
                             # same account, never re-key the session to a new one.
                             raise PermissionError("Identity change rejected.")
                         auth_exp = float(decoded_token.get("exp") or 0)
+                        # Push the fresh deadline into the RUNNING watcher
+                        # (it reads auth_exp_holder, not this local). Without
+                        # this the watcher keeps the original token's exp and
+                        # closes the socket at the old expiry despite the
+                        # successful re-auth (2026-09-24 17:26 kill).
+                        auth_exp_holder["exp"] = auth_exp
                         connection_manager.update_user_role(client_id, decoded_token.get("role", "user"))
                         await connection_manager.send_personal_message(
                             WebSocketMessage(
