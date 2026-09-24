@@ -584,8 +584,25 @@ class FeedManager:
                     for item in items:
                         msg_type = item.get("type", "vehicle_data")
                         if msg_type == "vehicle_data":
-                            if item.get("embedding"):
-                                items_needing_reid.append(item)
+                            # The inference worker already ran match_or_register
+                            # for these tracks; re-running it here duplicates
+                            # the Redis round-trips and EMA-updates the same
+                            # centroid in a SECOND manager instance (divergence
+                            # risk, last-writer-wins in Redis). Skip items the
+                            # worker already resolved; only items that somehow
+                            # arrive with an embedding but no resolvable mapping
+                            # fall through to the bulk path.
+                            if item.get("global_vehicle_id"):
+                                pass
+                            elif item.get("embedding"):
+                                existing = self._reid_manager.get_global_id(
+                                    item.get("feed_id", "unknown"),
+                                    item.get("vehicle_id", "unknown"),
+                                )
+                                if existing:
+                                    item["global_vehicle_id"] = existing
+                                else:
+                                    items_needing_reid.append(item)
                             else:
                                 global_id = self._reid_manager.get_global_id(
                                     item.get("feed_id", "unknown"),

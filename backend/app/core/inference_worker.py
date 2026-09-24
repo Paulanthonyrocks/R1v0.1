@@ -409,6 +409,18 @@ def inference_worker(
 
     from app.services.reid_manager import GlobalReIDManager
     local_reid_manager = GlobalReIDManager(config)
+    # DB warm start (F-live fix): without this, worker instances cold-start
+    # with an EMPTY gallery after a restart and only converge via the throttled
+    # 30s Redis full sync -- on the Kaggle box Redis restarts WITH the backend,
+    # so that path is also cold, and re-entering vehicles re-register as NEW
+    # global ids during the window. Warm-starting from the persistent
+    # reid_identities table closes the restart recognition gap immediately.
+    try:
+        from app.utils.database import DatabaseManager
+        local_reid_manager.set_db_manager(DatabaseManager(config))
+        logger.info(f"[Worker {worker_id}] ReID manager DB warm start connected.")
+    except Exception as e:
+        logger.warning(f"[Worker {worker_id}] ReID DB warm start unavailable: {e}")
 
     from app.utils.shared_frame_buffer import SharedFrameBuffer
 
@@ -1525,14 +1537,11 @@ def inference_worker(
 
     finally:
         if local_reid_manager:
-            logger.debug(f"[Worker {worker_id}] Cleaning up local ReID manager...")
+            logger.debug(f"[Worker {worker_id}] Shutting down local ReID manager...")
             try:
-                if hasattr(local_reid_manager, "cleanup"):
-                    local_reid_manager.cleanup()
-                elif hasattr(local_reid_manager, "close"):
-                    local_reid_manager.close()
+                local_reid_manager.shutdown()
             except Exception as e:
-                logger.error(f"[Worker {worker_id}] Error cleaning up ReID manager: {e}")
+                logger.error(f"[Worker {worker_id}] Error shutting down ReID manager: {e}")
 
         for feed_id, cm in core_modules.items():
             try:

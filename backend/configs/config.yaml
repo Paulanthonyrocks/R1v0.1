@@ -975,7 +975,6 @@ vehicle_detection:
     input_size:
     - 256
     - 256
-    min_track_age_for_appearance: 5
     model_path: ''
     # ReID match threshold. 0.80 was too strict for mobilenet_v3_small embeddings
     # on small 640x480-detected crops: re-entering vehicles (embedding drifts with
@@ -1007,7 +1006,6 @@ vehicle_detection:
     # this TTL governs the Redis in-memory gallery view.
     ttl_seconds: 14400
   reid_enabled: true
-  reid_interval_frames: 30
   # Per-frame ReID MATCH budget (read by inference_worker.py). Caps how many
   # NEW tracks run match_or_register per detect frame; each costs ~5 sync Redis
   # calls, and unbounded matching on dense scenes (130+ vehicles) pinned

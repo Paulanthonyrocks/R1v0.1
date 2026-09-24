@@ -115,7 +115,12 @@ class GlobalReIDManager:
         thread = getattr(self, "_sub_thread", None)
         if thread and thread.is_alive():
             thread.join(timeout=6.0)
-        self.save_state()
+        # Single-owner persistence (same rule as _cleanup): inference workers
+        # share this persistence path with the feed_manager owner -- an
+        # unconditional save here lets a worker clobber the owner's pickle
+        # with a partial gallery.
+        if not self.db_manager and self.is_owner:
+            self.save_state()
         logger.info("GlobalReIDManager shutdown complete.")
 
     def save_state(self):
@@ -313,6 +318,24 @@ class GlobalReIDManager:
                                     (1.0 - self.alpha) * self.gallery_matrix[idx] + self.alpha * embedding
                                 )
                         if gid not in self.gallery_ids:
+                            # Dim guard (same intent as the DB-load/full-sync
+                            # 128 checks): a stale Redis entry from an old
+                            # embedder (64-dim) would corrupt the gallery
+                            # matrix shape and break every subsequent dot
+                            # product. An empty gallery accepts any dim -- the
+                            # first embedding establishes it (same convention
+                            # as tracking.py's assoc path).
+                            if (self.gallery_matrix is not None
+                                    and embedding.shape[0] != self.gallery_matrix.shape[1]):
+                                logger.warning(
+                                    f"Skipping Redis cache hit for {gid}: "
+                                    f"embedding dim {embedding.shape[0]} != gallery dim "
+                                    f"{self.gallery_matrix.shape[1]}"
+                                )
+                                if feed_id not in self.local_to_global:
+                                    self.local_to_global[feed_id] = {}
+                                self.local_to_global[feed_id][local_id] = gid
+                                return gid
                             row = embedding.reshape(1, -1)
                             self.gallery_matrix = row if self.gallery_matrix is None else np.vstack([self.gallery_matrix, row])
                             self.gallery_ids.append(gid)
