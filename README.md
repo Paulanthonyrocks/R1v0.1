@@ -69,7 +69,7 @@ The Traffic Management Hub is an advanced AI-powered surveillance and traffic an
         # uvicorn app.main:app --reload --port 8000
         # NOTE: if you start the backend with the CLI instead of `python -m app.main`,
         # pass the protocol-keepalive flags or tunnelled WebSockets die at ~40s:
-        #   uvicorn app.main:app --port 8000 --ws-ping-interval null --ws-ping-timeout null
+        #   uvicorn app.main:app --port 8000 --ws-ping-interval null --ws-ping-timeout null --timeout-graceful-shutdown 25
         # (see app/main.py __main__ comment for the full root-cause)
         ```
 

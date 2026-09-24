@@ -664,6 +664,15 @@ if __name__ == "__main__":
     import uvicorn
     # Use standard uvicorn runner for development
     #
+    # timeout_graceful_shutdown=25 (2026-09-24): the 17:33:14 SIGINT run
+    # hung inside lifespan cleanup (feed-manager teardown awaiting a DB
+    # read behind a wedged writer) and uvicorn waited INDEFINITELY -- the
+    # notebook had to SIGKILL the box, so the final "Shutdown complete."
+    # and the ReID pickle save never ran. A bounded graceful window turns
+    # "hang until killed" into "log, exit, and let the next boot's DB warm
+    # start (reid_identities) restore state". Stages inside cleanup are
+    # also individually bounded now (see feed_manager.shutdown).
+    #
     # ws_ping_interval=20/ws_ping_timeout=20 (uvicorn defaults) KILLED every
     # tunnelled WebSocket session in 40-80s bursts (2026-09-24 run: 10/10
     # sessions dead at ~40s multiples of connect time; lifespans 39.6-169.2s).
@@ -686,4 +695,5 @@ if __name__ == "__main__":
         forwarded_allow_ips="*",
         ws_ping_interval=None,   # protocol keepalive OFF — app-level governs
         ws_ping_timeout=None,
+        timeout_graceful_shutdown=25,
     )

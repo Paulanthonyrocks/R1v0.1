@@ -1273,7 +1273,7 @@ class FeedManager:
         async with self._get_feed_lock(feed_id):
             await self._start_feed_internal(feed_id)
 
-    async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False):
+    async def _stop_feed_internal(self, feed_id: str, skip_sample_mgmt: bool = False, broadcast: bool = True):
         resources_to_cleanup = None
         async with self._lock:
             entry = self.registry.process_registry.get(feed_id)
@@ -1286,8 +1286,9 @@ class FeedManager:
         if resources_to_cleanup:
             await self._terminate_resources(resources_to_cleanup)
 
-        await self._broadcast_feed_update(feed_id)
-        await self._broadcast_kpi_update()
+        if broadcast:
+            await self._broadcast_feed_update(feed_id)
+            await self._broadcast_kpi_update()
         if not skip_sample_mgmt:
             await self._check_and_manage_sample_feed()
 
@@ -1471,8 +1472,15 @@ class FeedManager:
                 await self._broadcast_feed_update(feed_id)
                 raise FeedOperationError(f"Restart failed: {e}")
 
-    async def stop_all_feeds(self):
-        """Stop all active feeds without triggering auto-restart of sample feeds."""
+    async def stop_all_feeds(self, broadcast: bool = True):
+        """Stop all active feeds without triggering auto-restart of sample feeds.
+
+        `broadcast=False` during shutdown: the trailing KPI rebroadcast awaits
+        db.get_incidents (threading-lock serialized behind any in-flight DB
+        write) and pushes to WebSocket clients that the shutdown is about to
+        disconnect anyway. During the 2026-09-24 17:33 teardown this was the
+        exact await that starved the whole cleanup until the box was killed.
+        """
         logger.info("Stopping all active feeds.")
         async with self._lock:
             feeds_to_stop = [
@@ -1488,13 +1496,15 @@ class FeedManager:
                 # Stop all feeds without triggering _check_and_manage_sample_feed after each one
                 for fid in feeds_to_stop:
                     try:
-                        await self._stop_feed_internal(fid, skip_sample_mgmt=True)
+                        await self._stop_feed_internal(fid, skip_sample_mgmt=True, broadcast=broadcast)
                         # Broadcast update for each feed so frontend sees the state change
-                        await self._broadcast_feed_update(fid)
+                        if broadcast:
+                            await self._broadcast_feed_update(fid)
                     except Exception as e:
                         logger.error(f"Error stopping feed {fid}: {e}")
 
-        await self._broadcast_kpi_update()
+        if broadcast:
+            await self._broadcast_kpi_update()
 
     async def start_all_feeds(self):
         """Start all feeds currently in stopped or error state. Mirrors stop_all_feeds."""
@@ -2009,6 +2019,11 @@ class FeedManager:
     async def _broadcast_feed_update(self, feed_id: str):
         if not self.broadcaster:
             return
+        # Shutdown guard: these broadcasts await DB reads + WS sends; during
+        # teardown they can starve the cleanup (the 17:33 hang) and their
+        # audience is being disconnected anyway.
+        if getattr(self, "_is_shutting_down", False):
+            return
         async with self._lock:
             entry = self.process_registry.get(feed_id)
             if not entry:
@@ -2052,6 +2067,10 @@ class FeedManager:
 
     async def _broadcast_kpi_update(self):
         if not self.broadcaster:
+            return
+        # Shutdown guard: same rationale as _broadcast_feed_update -- the
+        # incidents-count DB read inside can starve teardown.
+        if getattr(self, "_is_shutting_down", False):
             return
 
         total_vehicles_active = 0
@@ -2287,13 +2306,42 @@ class FeedManager:
         if self._watchdog_task:
             self._watchdog_task.cancel()
 
-        await self.stop_processing()
-        await self.stop_all_feeds()
-        await self._stop_inference_pool()
+        # CLEAN SHUTDOWN (2026-09-24): every stage is bounded. The 17:33:14
+        # SIGINT run hung after "Stopping all active feeds." -- the KPI
+        # rebroadcast inside stop_all_feeds awaited db.get_incidents, which
+        # queued behind a cancelled-but-still-running _db_reader_task thread
+        # stuck in a sqlite retry while the freshly-killed child processes'
+        # connections held the file -- and the whole cleanup starved until
+        # the notebook SIGKILLed the box. No stage of shutdown may wait on
+        # the outside world indefinitely; on timeout we log, cancel, and
+        # move on. Better a logged partial shutdown than a silent hang.
+        async def _bounded(stage_name: str, coro, timeout: float = 15.0):
+            try:
+                await asyncio.wait_for(coro, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Shutdown stage '{stage_name}' timed out after {timeout}s; "
+                    f"continuing (state may be partially torn down)."
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Shutdown stage '{stage_name}' failed: {e}", exc_info=True)
 
+        await _bounded("stop_processing", self.stop_processing(), timeout=20.0)
+        # broadcast=False: no KPI/feed WS rebroadcast during teardown -- it was
+        # the starving await in the 17:33 hang, and the clients it targets are
+        # being disconnected by the same shutdown.
+        await _bounded("stop_all_feeds", self.stop_all_feeds(broadcast=False), timeout=20.0)
+        await _bounded("stop_inference_pool", self._stop_inference_pool(), timeout=30.0)
+
+        # Pickle persistence is best-effort (the DB already holds the gallery
+        # continuously via save_reid_identity); never let it block exit.
         if self._reid_manager:
-            await asyncio.to_thread(self._reid_manager.save_state)
-            logger.info("ReID state saved during shutdown.")
+            await _bounded("reid_save_state",
+                           asyncio.to_thread(self._reid_manager.save_state),
+                           timeout=10.0)
+            logger.info("ReID state save handled during shutdown.")
 
         tasks = [
             t for t in (
