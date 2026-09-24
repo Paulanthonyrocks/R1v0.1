@@ -200,10 +200,10 @@ class DetectionEngine:
             return False
             
         # Calculate intersection area
-        # We use a slice of the binary mask to find how many pixels are 'on' (255)
+        # Slice of the binary mask; count_nonzero is allocation-free vs
+        # np.sum(mask == 255) which materializes a bool temp array per box.
         roi_crop = self.roi_mask[y1:y2, x1:x2]
-        # Fix: Use explicit check for 255 values
-        intersection_pixels = np.sum(roi_crop == 255)
+        intersection_pixels = np.count_nonzero(roi_crop)
         box_area = (x2 - x1) * (y2 - y1)
         
         # Keep detection if a configurable threshold of the box is within the ROI

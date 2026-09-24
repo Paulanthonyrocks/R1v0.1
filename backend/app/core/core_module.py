@@ -36,9 +36,12 @@ except ImportError:
 
 logger = logging.getLogger("app.ml")
 
+# Sentinel for _roi_px cache misses (None is a valid cached value: no ROI).
+_UNSET = object()
+
+
 class OCRQueueFull(Exception):
     """Raised when the bounded OCR executor's pending queue is at capacity."""
-
 
 class _BoundedThreadPoolExecutor(ThreadPoolExecutor):
     """ThreadPoolExecutor with a hard cap on the *pending* (queued, not yet
@@ -164,6 +167,14 @@ class CoreModule:
 
         res = v_cfg.get("frame_resolution", [640, 480])
         self.roi_polygon_points = self.config.get("roi_processing", {}).get("polygon_points", None)
+        # Memoized pixel polygon for per-frame / per-track hot paths
+        # (_preprocess_frame, _assign_lane_band). Keyed on (w, h) so a
+        # resolution change re-coerces; assigning roi_polygon_points
+        # (init or update_config) resets the cache. Both hot paths run per
+        # detect frame / per track, so skipping re-coercion of the same wire
+        # polygon every call is a pure win (see ROI-load audit).
+        self._roi_px_cache: Dict[Tuple[int, int], Optional[np.ndarray]] = {}
+        self._roi_px(res[0], res[1])
         # Lane bands (position-derived lane ids). Nothing in the pipeline
         # assigns track["lane"] -- CV lane detection is disabled and its
         # boundaries are unconsumed -- so every vehicle rode lane=-1 and
@@ -305,6 +316,23 @@ class CoreModule:
             
         return "cpu"
 
+    def _roi_px(self, w: int, h: int) -> Optional[np.ndarray]:
+        """Memoized pixel_polygon() for hot paths.
+
+        _preprocess_frame and _assign_lane_band both coerce the SAME wire
+        polygon every frame (and the latter per track). normalize_polygon
+        walks the point list in Python each call; this caches the int32
+        result keyed on (w, h). Cache is dropped whenever the polygon or
+        resolution changes (update_config resets it via _roi_px_cache.clear()).
+        """
+        key = (w, h)
+        cached = self._roi_px_cache.get(key, _UNSET)
+        if cached is not _UNSET:
+            return cached
+        result = pixel_polygon(self.roi_polygon_points, w, h)
+        self._roi_px_cache[key] = result
+        return result
+
     def _initialize_roi_mask(self, resolution: List[int]):
         """
         Initializes ROI and exclusion masks once per resolution change.
@@ -365,7 +393,7 @@ class CoreModule:
         x_min, x_max = 0.0, float(frame_width)
         if self.roi_polygon_points:
             try:
-                pts = pixel_polygon(self.roi_polygon_points, frame_width, frame_height)
+                pts = self._roi_px(frame_width, frame_height)
                 if pts is not None and len(pts) >= 3:
                     row_xs = []
                     n = len(pts)
@@ -419,7 +447,7 @@ class CoreModule:
         """
         if self.roi_polygon_points:
             h, w = frame.shape[:2]
-            pts = pixel_polygon(self.roi_polygon_points, w, h)
+            pts = self._roi_px(w, h)
             if pts is not None:
                 x_min = int(np.min(pts[:, 0]))
                 y_min = int(np.min(pts[:, 1]))
@@ -1282,6 +1310,7 @@ class CoreModule:
                 roi_points = updates["roi"]
                 if isinstance(roi_points, list):
                     self.roi_polygon_points = roi_points
+                    self._roi_px_cache.clear()  # hot-path memo is stale
                     # Keep config in sync so other modules reading the dict see the
                     # new polygon (audit 1.2). Previously only internal state changed.
                     roi_cfg = self.config.get("roi_processing", {})
