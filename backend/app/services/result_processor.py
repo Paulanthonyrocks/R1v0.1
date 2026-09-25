@@ -582,7 +582,10 @@ class ResultProcessor:
             # 3. Broadcast via broadcaster (latency-aware when adaptive)
             if self.broadcaster:
                 if adaptive and small_data is not full_data:
-                    threshold = float(self.config.get("video_processing", {}).get("adaptive_latency_threshold_ms", 120))
+                    # Fallback was 120 — stale (config.yaml sets 250). With
+                    # config present this never fires; aligning the fallback
+                    # keeps code and config from disagreeing on the tunnel tier.
+                    threshold = float(self.config.get("video_processing", {}).get("adaptive_latency_threshold_ms", 250))
                     await self.broadcaster.broadcast_to_feed_realtime_bytes_adaptive(
                         feed_id=feed_id,
                         full_data=full_data,

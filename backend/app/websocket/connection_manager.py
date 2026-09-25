@@ -481,54 +481,65 @@ class ConnectionManager:
                                 except ValueError:
                                     pass
 
-                    # 2. Low-priority send logic
-                    # We send a frame if:
-                    # - We've hit the streak limit (high_msg_streak >= 5)
-                    # - OR there are no high-priority messages left
+                    # 2. Low-priority send logic (2026-09-24: batched drain).
+                    # Before: one frame per wake-loop iteration, and on a
+                    # 50-67s-RTT tunnel each send_bytes round-trip yields the
+                    # event loop long enough that the next iteration re-checks
+                    # high-priority state — sender got ~71% of the 500ms cap.
+                    # Now: drain up to LOW_PRIO_BATCH frames per pass, then let
+                    # the loop fall through. Fairness to KPI/control traffic is
+                    # preserved by the high-priority check at the TOP of the
+                    # next iteration; the batch only runs when the high queue
+                    # is empty or the streak limit was hit, exactly as before.
+                    LOW_PRIO_BATCH = 4
                     if low_priority_queue and (high_msg_streak >= 5 or high_priority_queue.empty()):
-                        try:
-                            message = low_priority_queue.popleft()
-                            msg_count += 1
-                            sent_something = True
-                            high_msg_streak = 0 # Reset streak after interleaving
+                        for _ in range(LOW_PRIO_BATCH):
+                            if not low_priority_queue:
+                                break
+                            if websocket.client_state != WebSocketState.CONNECTED:
+                                return
+                            try:
+                                message = low_priority_queue.popleft()
+                                msg_count += 1
+                                sent_something = True
 
-                            if isinstance(message, bytes):
-                                await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
-                            else:
-                                await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
-                            # Successful send — reset the consecutive-failure counter.
-                            self._csf[client_id] = 0
-                        except IndexError:
-                            pass
-                        except WebSocketDisconnect:
-                            logger.info(f"[Sender {client_id}] WebSocketDisconnect during low-priority send. Exiting task.")
-                            return
-                        except (asyncio.TimeoutError, RuntimeError, Exception) as e:
-                            err_str = str(e)
-                            if "close message has been sent" in err_str or "not connected" in err_str:
-                                logger.info(f"[Sender {client_id}] Connection closed (detected during low-priority send: {err_str}). Exiting task.")
+                                if isinstance(message, bytes):
+                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                                else:
+                                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                                self._csf[client_id] = 0
+                            except IndexError:
+                                break
+                            except WebSocketDisconnect:
+                                logger.info(f"[Sender {client_id}] WebSocketDisconnect during low-priority send. Exiting task.")
                                 return
-                            # Same consecutive-failure policy as the high-priority
-                            # branch: 3 in a row -> force close + exit. Without
-                            # this, a single dead client on a slow tunnel can hold
-                            # up the LOW queue (bounded deque) and lose every frame
-                            # for ~50s before the runtime error stack finally fires.
-                            self._csf[client_id] = self._csf.get(client_id, 0) + 1
-                            if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                            except (asyncio.TimeoutError, RuntimeError, Exception) as e:
+                                err_str = str(e)
+                                if "close message has been sent" in err_str or "not connected" in err_str:
+                                    logger.info(f"[Sender {client_id}] Connection closed (detected during low-priority send: {err_str}). Exiting task.")
+                                    return
+                                # Same consecutive-failure policy as before: 3 in
+                                # a row -> force close + exit.
+                                self._csf[client_id] = self._csf.get(client_id, 0) + 1
+                                if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                                    logger.warning(
+                                        f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
+                                        f"(state={websocket.client_state}); forcing close."
+                                    )
+                                    try:
+                                        await websocket.close(code=1011, reason="Send timeout")
+                                    except Exception:
+                                        pass
+                                    return
                                 logger.warning(
-                                    f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
-                                    f"(state={websocket.client_state}); forcing close."
+                                    f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. "
+                                    f"Dropping message. ({self._csf[client_id]} consecutive)"
                                 )
-                                try:
-                                    await websocket.close(code=1011, reason="Send timeout")
-                                except Exception:
-                                    pass
-                                return
-                            logger.warning(
-                                f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. "
-                                f"Dropping message. ({self._csf[client_id]} consecutive)"
-                            )
-                    
+                        # One low-priority batch counts as one interleave slot:
+                        # reset the streak so the NEXT iteration's high-priority
+                        # check runs first (same post-frame semantics as before).
+                        high_msg_streak = 0
+
                     # If we hit the streak limit but the low-priority queue was empty,
                     # we must reset the streak to allow high-priority messages to continue flowing.
                     if high_msg_streak >= 5 and not low_priority_queue:
@@ -572,7 +583,15 @@ class ConnectionManager:
         """
         latency_ms = self.client_latencies.get(client_id, 50)
         if latency_ms > 200:
-            return 90    # was 30
+            # was 90; doubled 2026-09-24 alongside the tunnel rate-cap raise
+            # (0.5 -> 0.25s per feed = 4fps/feed, 12fps aggregate for 3 feeds).
+            # At 12fps the sender needs ~7.5s of buffer headroom before the
+            # popleft-oldest drop path engages; 90 frames covered 7.5s at 12fps
+            # but zero burst. 180 frames ≈ 15s of runway — still bounded, still
+            # forces stale-frame eviction under sustained overload, but no
+            # longer sheds frames purely because a 50s-RTT wake overlaps a
+            # frame burst at the new cap.
+            return 180   # was 90 (pre-2026-09-24), originally 30
         elif latency_ms > 100:
             return 180   # was 60
         return 360       # was 120; ~2.5s of 3-feed video at 15fps per client
@@ -619,7 +638,14 @@ class ConnectionManager:
             return 0.0  # LAN: pass through every frame
         if latency_ms < 250:
             return 0.5  # Mixed: 2 fps per feed (3 feeds = 6 fps aggregate)
-        return 0.5      # Tunnel: 2 fps per feed (3 feeds = 6 fps aggregate)
+        # Tunnel (>250ms): raised 0.5 -> 0.25 (2026-09-24). The tunnel tier was
+        # sized for ~250ms links; the live loca.lt link is 50-67s RTT and
+        # delivered only 1.42fps/feed (5100 frames / 3598s) — 71% of the 2fps
+        # cap — while 0 frames were dropped at source. The deque bound +
+        # popleft-oldest drop path remain the safety valve if the wire can't
+        # take 4fps/feed (12fps aggregate); live A/B = next run's heartbeat
+        # counts (expect ~3x frames/feed vs the 16:26-17:26 baseline).
+        return 0.25     # Tunnel: 4 fps per feed (3 feeds = 12 fps aggregate)
 
     def _maybe_resize_low_priority_queue(self, client_id: str) -> None:
         """Re-create the per-client low_priority deque when RTT crosses a size

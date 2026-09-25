@@ -46,6 +46,17 @@ def database_writer_process(
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    # Stale-state guard: a previous instance may have been SIGKILLed before
+    # clearing its stop key (the notebook kill path leaves RedisEvent SET --
+    # a fresh writer would immediately "gracefully" exit and DB writes would
+    # silently stop). Clear it at boot: only THIS process's own teardown (or
+    # the parent's explicit stop) may set it.
+    try:
+        stop_event.clear()
+        logger.info("Database writer stop event cleared for fresh start.")
+    except Exception as e:
+        logger.warning(f"Could not clear stop event at boot: {e}")
+
     db_manager = None
     consecutive_failures = 0
     circuit_trip_count = 0
@@ -265,6 +276,9 @@ def database_writer_process(
                                 logger.warning(f"Malformed alert during drain: {item!r}")
                         elif msg_type == "identified_vehicle":
                             db_manager.upsert_identified_vehicles_batch([item])
+                        elif msg_type == "feed_metrics":
+                            if "data" in item:
+                                db_manager.save_feed_metrics_batch([item["data"]])
                         drained += 1
                     except Exception as e:
                         logger.critical(f"Critical data loss during drain for {msg_type}: {e}. Item: {item!r}")
@@ -286,6 +300,14 @@ def database_writer_process(
                     logger.info(f"Final prune: removed {pruned} old records.")
             except Exception as e:
                 logger.error(f"Final prune failed: {e}")
-            db_manager.close()
+            # close() is a COROUTINE (disposes the async SQLAlchemy engines).
+            # Calling it bare created the coroutine and dropped it — engines
+            # were never disposed and every restart leaked the pool. The prune
+            # worker above already runs it via asyncio.run; mirror that.
+            try:
+                import asyncio as _aio
+                _aio.run(db_manager.close())
+            except Exception as e:
+                logger.error(f"Error closing database manager: {e}")
 
         logger.info("Database writer process terminated.")

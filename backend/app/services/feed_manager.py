@@ -134,6 +134,13 @@ class FeedManager:
 
         # Database processing
         self._db_queue: Optional[RedisQueue] = RedisQueue('db_writes', maxsize=FeedManagerConstants.DB_QUEUE_MAXSIZE)
+        # Dedicated DB writer process (2026-09-24 wiring, previously unwired):
+        # consumes the same 'db_writes' RedisQueue OFF the event loop, with the
+        # circuit-breaker / bounded re-enqueue / graceful-drain semantics the
+        # inline _read_db_queue task lacked. The inline reader caused the
+        # 17:33 shutdown hang (cancelled task's to_thread thread holding the
+        # DB threading.Lock). A process can be termainated cleanly with its
+        # own 5s drain; an asyncio task cannot.
         self._db_reader_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_scale_time = 0.0
@@ -408,7 +415,47 @@ class FeedManager:
             self._reid_manager.set_db_manager(service._db_manager)
             self.logger.info("ReIDManager connected to DatabaseManager.")
 
-        if self._db_reader_task is None:
+        # DB writes (2026-09-24): the dedicated database_writer_process now
+        # owns the 'db_writes' queue (circuit-breaker, re-enqueue, 5s drain).
+        # The old inline _read_db_queue asyncio task is RETIRED — its
+        # cancelled-but-running to_thread thread was the root cause of the
+        # 17:33 shutdown hang (DB threading.Lock starvation), and it ran
+        # DB writes on the event loop's thread pool. _read_db_queue is kept
+        # as a fallback if the writer process cannot be spawned.
+        self._db_writer_stop_event = RedisEvent('db_writer_stop')
+        if getattr(self, "_db_writer_process", None) is None:
+            self._db_writer_process = None
+        writer_started = False
+        # Idempotence guard (same rule as _start_analytics_worker): a live
+        # writer must NOT be joined by a second spawn -- two consumers on the
+        # same 'db_writes' queue would steal items from each other.
+        if self._db_writer_process is not None and self._db_writer_process.is_alive():
+            self.logger.debug("DatabaseWriter already running.")
+            writer_started = True
+        if not writer_started:
+            try:
+                from app.core.database_writer import database_writer_process
+                self._db_writer_process = Process(
+                    target=database_writer_process,
+                    args=(
+                        self.config,
+                        self._db_queue,
+                        self._db_writer_stop_event,
+                        None,  # heartbeat - optional
+                    ),
+                    daemon=True,
+                    name="DatabaseWriter",
+                )
+                self._db_writer_process.start()
+                writer_started = self._db_writer_process.is_alive()
+                if writer_started:
+                    self.logger.info(f"Started DatabaseWriter process (PID {self._db_writer_process.pid}).")
+            except Exception as e:
+                self.logger.error(f"Failed to start DatabaseWriter process: {e}", exc_info=True)
+                self._db_writer_process = None
+
+        if not writer_started and self._db_reader_task is None:
+            # Fallback: legacy inline reader (same semantics as pre-2026-09-24).
             self._db_reader_task = asyncio.create_task(self._read_db_queue())
 
     def set_connection_manager(self, manager: ConnectionManager):
@@ -2334,6 +2381,35 @@ class FeedManager:
         # being disconnected by the same shutdown.
         await _bounded("stop_all_feeds", self.stop_all_feeds(broadcast=False), timeout=20.0)
         await _bounded("stop_inference_pool", self._stop_inference_pool(), timeout=30.0)
+
+        # Dedicated DB writer (2026-09-24): set the Redis stop key, then give
+        # the process its own bounded graceful window -- its finally-block
+        # drains up to 5s of queued writes, runs the final prune, and closes
+        # the engines. Only escalate to terminate/kill if it wedges.
+        db_writer = getattr(self, "_db_writer_process", None)
+        if db_writer is not None:
+            try:
+                self._db_writer_stop_event.set()
+            except Exception as e:
+                logger.warning(f"Could not set db writer stop event: {e}")
+            try:
+                db_writer.join(timeout=12.0)
+            except Exception:
+                pass
+            if db_writer.is_alive():
+                logger.warning("DatabaseWriter did not exit in 12s; terminating.")
+                try:
+                    db_writer.terminate()
+                    db_writer.join(timeout=5.0)
+                except Exception:
+                    pass
+                if db_writer.is_alive():
+                    logger.warning("DatabaseWriter still alive; killing.")
+                    try:
+                        db_writer.kill()
+                    except Exception:
+                        pass
+            self._db_writer_process = None
 
         # Pickle persistence is best-effort (the DB already holds the gallery
         # continuously via save_reid_identity); never let it block exit.
