@@ -273,13 +273,23 @@ class TrafficMonitor:
                     self._last_braking_fire = {
                         k: t for k, t in self._last_braking_fire.items() if t >= cutoff
                     }
+                # Sanitize centroid to plain floats: tracking.py builds it from
+                # np.float32 bbox coords, and json.dumps in
+                # save_feed_metrics_batch raises on np.float32 — which nuked
+                # the whole feed_metrics batch (circuit-breaker, data loss).
+                centroid = data.get("centroid")
+                if centroid is not None:
+                    try:
+                        centroid = (float(centroid[0]), float(centroid[1]))
+                    except (TypeError, IndexError, ValueError):
+                        centroid = None
                 self.anomalies.append({
                     "type": "hard_braking",
                     "vehicle_id": v_id,
                     "timestamp": now,
                     "severity": "Warning",
                     "details": f"Sudden deceleration detected: {accel:.1f} m/s²",
-                    "location": data.get("centroid")
+                    "location": centroid
                 })
             # Wrong-way detection is handled authoritatively by SafetyMonitor
             # (velocity vs. learned/static lane flow vector). The previous

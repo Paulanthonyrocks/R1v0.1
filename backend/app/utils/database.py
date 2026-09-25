@@ -1264,10 +1264,12 @@ class DatabaseManager:
                 continue
             anomalies = m.get("anomalies")
             if isinstance(anomalies, (list, dict)):
-                anomalies = json.dumps(anomalies)
+                # default=float: anomaly payloads may carry numpy scalars
+                # (np.float32 centroids etc.) that plain dumps() rejects.
+                anomalies = json.dumps(anomalies, default=float)
             extra = m.get("extra")
             if isinstance(extra, (list, dict)):
-                extra = json.dumps(extra)
+                extra = json.dumps(extra, default=float)
             
             params = (
                 m.get("feed_id", "unknown"),
@@ -1314,10 +1316,10 @@ class DatabaseManager:
                 for m in metrics_list:
                     anomalies = m.get("anomalies")
                     if isinstance(anomalies, (list, dict)):
-                        anomalies = json.dumps(anomalies)
+                        anomalies = json.dumps(anomalies, default=float)
                     extra = m.get("extra")
                     if isinstance(extra, (list, dict)):
-                        extra = json.dumps(extra)
+                        extra = json.dumps(extra, default=float)
                     
                     sql = text("""
                         INSERT INTO feed_metrics (
