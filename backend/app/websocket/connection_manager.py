@@ -128,6 +128,23 @@ class ConnectionManager:
         # every successful send, cleaned up in _disconnect_unsafe.
         self._csf: Dict[str, int] = {}
 
+        # Send-timeout policy (2026-09-28). See _send_timeout_for.
+        #   FLOOR   : pre-existing flat budget, used until a real RTT sample
+        #              lands and for fast/LAN clients.
+        #   MULTIPLE: budget as a multiple of measured RTT -- a slow-but-alive
+        #              link must not be judged dead by a flat deadline.
+        #   CEILING : hard cap so a pathological sample can't park the loop.
+        #   MAX_CSF : consecutive failures tolerated before force-closing 1011.
+        #              Raised 3 -> 10 because a brief congestion spike on a
+        #              high-RTT tunnel produced 3 expiries inside ~15s and the
+        #              server killed a client that was still draining. 10 x the
+        #              adaptive timeout keeps the "abandon a genuinely wedged
+        #              socket" property while tolerating transient slowness.
+        self.SEND_TIMEOUT_FLOOR_S = 5.0
+        self.SEND_TIMEOUT_RTT_MULTIPLE = 2.0
+        self.SEND_TIMEOUT_CEILING_S = 180.0
+        self.MAX_CONSECUTIVE_SEND_FAILURES = 10
+
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
         self.ping_interval = ping_interval
@@ -425,6 +442,9 @@ class ConnectionManager:
                     if websocket.client_state != WebSocketState.CONNECTED:
                         logger.info(f"[Sender {client_id}] WebSocket state is {websocket.client_state}. Stopping sender loop.")
                         return
+                    # Re-resolve the send budget each pass: a PONG can land
+                    # between iterations and change the client's RTT tier.
+                    send_timeout = self._send_timeout_for(client_id)
                     sent_something = False
                     
                     # 1. High-priority send logic
@@ -442,9 +462,9 @@ class ConnectionManager:
                                 sent_something = True
 
                                 if isinstance(message, bytes):
-                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=send_timeout)
                                 else:
-                                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                                    await asyncio.wait_for(websocket.send_text(message), timeout=send_timeout)
                                 high_priority_queue.task_done()
                                 # Successful send — reset the consecutive-failure counter.
                                 self._csf[client_id] = 0
@@ -463,13 +483,16 @@ class ConnectionManager:
                                     return
                                 # Live socket but the send just timed out (or raised
                                 # some other transient). Track consecutive failures
-                                # and force-close + exit after 3 in a row (~15s of
-                                # grace). Previously we logged and continued forever,
+                                # and force-close + exit after MAX_CONSECUTIVE_SEND_FAILURES
+                                # in a row. Previously we logged and continued forever,
                                 # which let a single dead client hold up the queue
                                 # for 50s+ and trigger cascading "queue full" drops
-                                # on reliable callers.
+                                # on reliable callers. The threshold is no longer 3:
+                                # on a high-RTT tunnel three expiries arrived inside
+                                # ~15s during ordinary congestion and the server
+                                # force-closed a client that was still draining.
                                 self._csf[client_id] = self._csf.get(client_id, 0) + 1
-                                if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                                if self._csf[client_id] >= self.MAX_CONSECUTIVE_SEND_FAILURES or websocket.client_state != WebSocketState.CONNECTED:
                                     logger.warning(
                                         f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
                                         f"(state={websocket.client_state}); forcing close."
@@ -511,9 +534,9 @@ class ConnectionManager:
                                 sent_something = True
 
                                 if isinstance(message, bytes):
-                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=5.0)
+                                    await asyncio.wait_for(websocket.send_bytes(message), timeout=send_timeout)
                                 else:
-                                    await asyncio.wait_for(websocket.send_text(message), timeout=5.0)
+                                    await asyncio.wait_for(websocket.send_text(message), timeout=send_timeout)
                                 self._csf[client_id] = 0
                             except IndexError:
                                 break
@@ -525,10 +548,11 @@ class ConnectionManager:
                                 if "close message has been sent" in err_str or "not connected" in err_str:
                                     logger.info(f"[Sender {client_id}] Connection closed (detected during low-priority send: {err_str}). Exiting task.")
                                     return
-                                # Same consecutive-failure policy as before: 3 in
-                                # a row -> force close + exit.
+                                # Same consecutive-failure policy as before, now
+                                # driven by MAX_CONSECUTIVE_SEND_FAILURES instead
+                                # of a hard 3.
                                 self._csf[client_id] = self._csf.get(client_id, 0) + 1
-                                if self._csf[client_id] >= 3 or websocket.client_state != WebSocketState.CONNECTED:
+                                if self._csf[client_id] >= self.MAX_CONSECUTIVE_SEND_FAILURES or websocket.client_state != WebSocketState.CONNECTED:
                                     logger.warning(
                                         f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
                                         f"(state={websocket.client_state}); forcing close."
@@ -688,6 +712,33 @@ class ConnectionManager:
             f"[CONN_MGR] Resized low_priority_queue for {client_id}: "
             f"{current.maxlen} -> {target} (rtt={self.client_latencies.get(client_id)}ms)"
         )
+
+    def _send_timeout_for(self, client_id: str) -> float:
+        """Per-send budget, scaled to the client's measured RTT (2026-09-28).
+
+        The sender used a flat `wait_for(send, timeout=5.0)`. Through the
+        loca.lt tunnel the RTT has been measured at 80,305ms (low_priority_queue
+        saturation warning, 17:25) and 37,335ms client-side, so a 5s budget is
+        guaranteed to expire on a link that is slow-but-alive. Each expiry
+        counted toward the consecutive-failure counter, and 3 of them forced a
+        1011 close -- i.e. the server killed healthy-but-slow clients. That is
+        what ended both Sep-28 sessions (226.5s and 281.3s), NOT a peer drop.
+
+        Budget = 2x measured RTT (headroom for a frame encode + the return
+        trip), floored at the old 5.0s so a fast/LAN client is unaffected, and
+        capped so a pathological RTT sample cannot park the event loop for
+        minutes. No real PONG sample yet -> the floor (5.0s), which is the
+        pre-existing behavior.
+
+        80.3s RTT -> 160.6s budget, so a slow-but-draining client no longer
+        trips the counter; the deque bound and its popleft-oldest drop path
+        remain the real backpressure valve.
+        """
+        latency_ms = self.client_latencies.get(client_id)
+        if latency_ms is None or latency_ms <= 0:
+            return self.SEND_TIMEOUT_FLOOR_S
+        adaptive = (latency_ms / 1000.0) * self.SEND_TIMEOUT_RTT_MULTIPLE
+        return min(max(adaptive, self.SEND_TIMEOUT_FLOOR_S), self.SEND_TIMEOUT_CEILING_S)
 
     def update_client_latency(self, client_id: str, rtt_ms: float):
         """Update tracked latency for adaptive behavior."""
