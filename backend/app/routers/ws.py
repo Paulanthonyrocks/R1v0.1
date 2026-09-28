@@ -33,10 +33,15 @@ async def message_receiver(
     assigned_id_holder: dict,
     connection_manager: ConnectionManager,
     feed_manager: FeedManager,
-    rate_limiter: RateLimiterManager
+    rate_limiter: RateLimiterManager,
+    exit_reason_holder: dict | None = None
 ):
     """
     Main loop for receiving and processing messages from a connected client.
+
+    `exit_reason_holder` (2026-09-28) is an optional out-param the endpoint's
+    `finally` reads to name WHY this loop ended. Optional so existing callers
+    and tests keep working; when omitted, stamping is a no-op.
     """
     client_id = initial_id
     control_tasks: set[asyncio.Task] = set()
@@ -44,6 +49,10 @@ async def message_receiver(
     auth_exp: float | None = None
     socket_closed = asyncio.Event()
     expiry_task: asyncio.Task | None = None
+
+    def _set_exit_reason(reason: str) -> None:
+        if exit_reason_holder is not None:
+            exit_reason_holder["reason"] = reason
 
     async def report_control(message, result, text):
         await connection_manager.send_personal_message(
@@ -188,9 +197,11 @@ async def message_receiver(
                 await websocket.close(code=1008, reason="Auth timeout")
             except RuntimeError as re:
                 logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
+            _set_exit_reason("auth-timeout")
             return
         except WebSocketDisconnect:
             logger.warning(f"Client {initial_id} disconnected before authenticating.")
+            _set_exit_reason("disconnected-before-auth")
             return
         except Exception:
             logger.warning(f"Initial authentication rejected for {initial_id}.")
@@ -207,6 +218,7 @@ async def message_receiver(
                 await websocket.close(code=1008)
             except RuntimeError as re:
                 logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
+            _set_exit_reason("initial-auth-rejected")
             return
 
         # --- Main Message Loop ---
@@ -245,6 +257,7 @@ async def message_receiver(
                         await websocket.close(code=1008, reason="Token expired")
                     except RuntimeError:
                         pass
+                    _set_exit_reason("session-token-expired")
                     return
 
                 # 3. Handle Message Types
@@ -322,6 +335,7 @@ async def message_receiver(
                             await websocket.close(code=1008, reason="Identity change rejected.")
                         except RuntimeError:
                             pass
+                        _set_exit_reason("reauth-identity-change-rejected")
                         return
                     except Exception:
                         logger.warning(f"Client {client_id} re-authentication failed.")
@@ -425,6 +439,7 @@ async def message_receiver(
         msg = str(e)
         if "WebSocket is not connected" in msg or "Need to call" in msg or "accept" in msg:
             logger.info(f"Client {client_id} disconnected (socket closed before accept).")
+            _set_exit_reason("socket-closed-before-accept")
         else:
             # Close-code attribution (Sep-10): the frontend runs behind the
             # loca.lt tunnel, whose proxy recycles live WebSockets abnormally
@@ -432,6 +447,11 @@ async def message_receiver(
             # code 1000/1001. Logging the code turns each disconnect in
             # backend_main.log into definitive attribution — 18 disconnects in
             # the Sep-10 138-min run were indistinguishable between the two.
+            # The reason is ALSO stamped into the teardown line: this is the
+            # ONLY branch that can distinguish a 1006 proxy drop from a clean
+            # client close, and on Sep-28 it produced zero "disconnected [...]"
+            # lines, meaning not one session death came through here (the
+            # socket was already gone and the receiver task cancelled).
             close_code = getattr(e, "code", None)
             if isinstance(e, WebSocketDisconnect):
                 how = {
@@ -441,10 +461,13 @@ async def message_receiver(
                     1011: "server error",
                 }.get(close_code, f"code {close_code}")
                 logger.info(f"Client {client_id} disconnected [{how}].")
+                _set_exit_reason(f"websocket-disconnect-code-{close_code}")
             else:
                 logger.info(f"Client {client_id} disconnected: {e}")
+                _set_exit_reason(f"receiver-runtime-error")
     except Exception as e:
         logger.error(f"Unexpected error in message_receiver for {client_id}: {e}", exc_info=True)
+        _set_exit_reason(f"receiver-unexpected-error: {type(e).__name__}")
 
     finally:
         socket_closed.set()
@@ -498,15 +521,25 @@ async def websocket_endpoint(
     # parameter, not a mutation — message_receiver's local `client_id =
     # assigned_id` only rebinds its own scope.
     assigned_id_holder: dict = {"id": None}
+    # Teardown reason (2026-09-28). `message_receiver` returns through several
+    # paths that log nothing of their own: a clean WebSocketDisconnect IS logged
+    # with its close code, but a return from the auth-expiry gate, a control-
+    # message failure, or an internally-closed socket returns silently. The
+    # teardown line below was then the only trace, and it read just
+    # "Disconnecting client <id>..." with no cause -- so the Sep-28 run's 8
+    # connect+40s deaths were unattributable. Every receiver exit stamps a
+    # reason here; the default names the paths that don't set one.
+    exit_reason_holder: dict = {"reason": "receiver-loop-exited-without-reason"}
 
     try:
         try:
             # Run the receiver loop. Pass the URL-path id as initial; once
             # AUTHENTICATE succeeds the holder will be updated.
-            await message_receiver(websocket, client_id, assigned_id_holder, connection_manager, feed_manager, rate_limiter)
+            await message_receiver(websocket, client_id, assigned_id_holder, connection_manager, feed_manager, rate_limiter, exit_reason_holder)
 
         except Exception as e:
             logger.error(f"Critical WebSocket error for {client_id}: {e}", exc_info=True)
+            exit_reason_holder["reason"] = f"receiver-critical-error: {type(e).__name__}"
         finally:
             # Disconnect using the assigned id if auth completed, otherwise
             # the URL-path id. The ConnectionManager's internal dicts are
@@ -515,7 +548,9 @@ async def websocket_endpoint(
             # per-client dict cleanup, leaking _client_locks and leaving
             # active_connections populated after teardown.
             final_id = assigned_id_holder["id"] or client_id
-            await connection_manager.disconnect(final_id, websocket)
+            await connection_manager.disconnect(
+                final_id, websocket, reason=exit_reason_holder["reason"]
+            )
 
     except Exception as e:
         logger.error(f"Error in websocket_endpoint for {client_id}: {e}", exc_info=True)

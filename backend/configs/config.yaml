@@ -30,6 +30,13 @@ behavior_analysis:
   # (monitoring.py reads it); without it the anomaly list floods on dense
   # scenes where speed wobble is tracking noise, not braking.
   hard_braking_cooldown_seconds: 10
+  # PER-FEED cap on emitted hard-braking anomalies (2026-09-28). The
+  # per-vehicle cooldown above cannot suppress a replayed SCENE: the
+  # sample_traffic_2 loop replays its brake every ~60s under a new vehicle id,
+  # so every instance passed its own 10s window. Sep-28: 27 incidents on
+  # Feed_2 alone, 0 on Feeds 1/3. This bounds it to one per window per feed.
+  # A real road -- distinct vehicles braking at distinct times -- is unaffected.
+  hard_braking_feed_cooldown_seconds: 60
   ewma_alpha: 0.2
   lane_change_buffer: 20
   speed_limit: 60
@@ -395,6 +402,20 @@ logging:
       - videoWsFileHandler
       level: INFO
       propagate: false
+    # (2026-09-28) uvicorn's OWN logger was absent. That is why the Sep-28 run
+    # contains not one "Started server process" / "Uvicorn running on ..." line:
+    # `uvicorn.error` had no handler, propagate:false (uvicorn's default config
+    # sets it), and root cannot see it -- so every protocol-level message
+    # (including the "WebSocket ping ... timed out" close reason) was
+    # DISCARDED. It is exactly the log that would have attributed the 40s
+    # session deaths. Route it to mainFileHandler and let it propagate so both
+    # get a copy.
+    uvicorn.error:
+      handlers:
+      - consoleHandler
+      - mainFileHandler
+      level: INFO
+      propagate: false
     app.services:
       handlers:
       - consoleHandler
@@ -729,20 +750,18 @@ post_startup_processing:
       latitude: 34.051
       longitude: 118.243
       path: backend/data/sample_traffic_3.mp4
-    # Workload test (GPU utilization): 2 extra feeds decoding existing live
-    # files, taking the pool to max_concurrent_feeds (5). Each adds ~8-15fps
-    # of ingestion + detection work. Same source files are safe: feed ids are
-    # manager-assigned, sources may repeat. Remove these two entries to revert.
-    - is_looped: true
-      latitude: 34.0522
-      longitude: 118.2437
-      path: backend/data/sample_traffic.mp4
-      name: sample_traffic.mp4 (load-6)
-    - is_looped: true
-      latitude: 34.053
-      longitude: 118.244
-      path: backend/data/sample_traffic_2.mp4
-      name: sample_traffic_2.mp4 (load-7)
+  # (2026-09-28) Two extra "workload test" entries (load-6, load-7) were
+  # removed here. They re-pointed at sample_traffic.mp4 and
+  # sample_traffic_2.mp4 -- the SAME source strings as the two entries above --
+  # and add_and_start_feed dedupes on an EXACT `entry["source"] == source`
+  # match (feed_manager.py:1183), so both were silently absorbed into the
+  # existing feeds: the Sep-28 run logged "Reusing existing feed ..." and "is
+  # already starting. Skipping restart." and never reached 5 feeds. The old
+  # comment claimed "Same source files are safe: feed ids are manager-assigned,
+  # sources may repeat" -- that is backwards; the dedupe runs on SOURCE, before
+  # any id is generated, so repeating a source can never create a second feed.
+  # To run a genuine 5-feed GPU load test again, give the extra entries
+  # DISTINCT paths (copy the files to new names on the box first).
 
 prediction_scheduler:
   accuracy_cache_ttl_minutes: 60
@@ -1092,13 +1111,18 @@ weather_service:
   enabled: false
 websocket:
   max_connections: 1000
-  # Aligned with frontend (WebSocketClient.ts: 10s ping, 60s pong timeout)
-  # and main.py default (ping_interval=15, pong_timeout=60).
-  # With 50-67s RTT over tunnel, a PONG legitimately returns at ~67s, just past
-  # the 60s deadline -> both sides kill the connection (frontend code 1006) ->
-  # reconnect ~16-30s -> stutter. Relaxed to 25s ping / 100s pong timeout so a
-  # slow tunnel PONG clears the deadline; keepalive pings every 25s also keep
-  # the tunnel (Cloud Workstations proxy) from idling out.
+  # Aligned with the frontend's REAL keepalive: WebSocketClient.ts sends its
+  # PING on a 25_000ms interval and treats >100_000ms without a PONG as a
+  # timeout (lines 609 and 605), and connection_manager.py below is what
+  # actually drives the server side. An earlier version of this comment
+  # claimed "frontend 10s ping, 60s pong timeout / main.py default
+  # (ping_interval=15, pong_timeout=60)" -- none of those numbers exist in
+  # the code; they were stale from a prior tuning pass and had been read as
+  # authoritative.
+  # With 50-67s RTT over tunnel, a PONG legitimately returns at ~67s, so a
+  # 60s deadline kills healthy connections. 25s ping / 100s pong timeout lets
+  # a slow tunnel PONG clear the deadline; the 25s cadence also keeps the
+  # tunnel (Cloud Workstations proxy) from idling out.
   ping_interval: 25
   pong_timeout: 100
   token_refresh_interval: 300

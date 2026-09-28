@@ -1454,22 +1454,6 @@ class FeedManager:
                 entry = self.process_registry.get(feed_id)
                 is_sample = entry.get("is_sample_feed", False) if entry else False
             await self._stop_feed_internal(feed_id, skip_sample_mgmt=is_sample)
-        resources_to_cleanup = None
-        async with self._lock:
-            entry = self.process_registry.get(feed_id)
-            if not entry:
-                raise FeedNotFoundError(feed_id)
-
-            logger.info(f"Stopping feed: '{feed_id}'")
-            resources_to_cleanup = self._detach_resources(feed_id)
-
-        if resources_to_cleanup:
-            await self._terminate_resources(resources_to_cleanup)
-
-        await self._broadcast_feed_update(feed_id)
-        await self._broadcast_kpi_update()
-        if not is_sample:
-            await self._check_and_manage_sample_feed()
 
     async def halt_feeds_for_worker(self, slots) -> None:
         """Stops every running feed whose ingestion routes to one of the given
@@ -1527,6 +1511,20 @@ class FeedManager:
         write) and pushes to WebSocket clients that the shutdown is about to
         disconnect anyway. During the 2026-09-24 17:33 teardown this was the
         exact await that starved the whole cleanup until the box was killed.
+
+        SELF-DEADLOCK FIX (2026-09-28). This method used to hold `self._lock`
+        across the whole loop that calls `_stop_feed_internal`, and
+        `_stop_feed_internal` immediately does `async with self._lock` itself.
+        `self._lock` is a plain asyncio.Lock (NOT reentrant), so the inner
+        acquire blocked forever and the stage burned its entire 20s budget on
+        every single shutdown. Proof from the Sep-28 run: the outer
+        "Stopping all active feeds." line logged, then ZERO "Stopping feed:
+        '<id>'" lines for any of the 3 feeds — the inner acquire blocks before
+        that first log line, so no feed was ever touched and the 20s was pure
+        deadlock wait. The `async with self._lock` is now only around the
+        registry snapshot (a plain list comprehension, no awaits inside), and
+        each feed is stopped outside the lock via the per-feed lock, exactly as
+        `stop_feed`/`restart_feed` already do.
         """
         logger.info("Stopping all active feeds.")
         async with self._lock:
@@ -1539,16 +1537,21 @@ class FeedManager:
                 ]
             ]
 
-            if feeds_to_stop:
-                # Stop all feeds without triggering _check_and_manage_sample_feed after each one
-                for fid in feeds_to_stop:
-                    try:
-                        await self._stop_feed_internal(fid, skip_sample_mgmt=True, broadcast=broadcast)
-                        # Broadcast update for each feed so frontend sees the state change
-                        if broadcast:
-                            await self._broadcast_feed_update(fid)
-                    except Exception as e:
-                        logger.error(f"Error stopping feed {fid}: {e}")
+        if not feeds_to_stop:
+            return
+
+        # Stop all feeds without triggering _check_and_manage_sample_feed after each one.
+        # Per-feed lock, NOT self._lock: _stop_feed_internal acquires self._lock
+        # internally, so holding it here would re-introduce the deadlock.
+        for fid in feeds_to_stop:
+            try:
+                async with self._get_feed_lock(fid):
+                    await self._stop_feed_internal(fid, skip_sample_mgmt=True, broadcast=broadcast)
+                # Broadcast update for each feed so frontend sees the state change
+                if broadcast:
+                    await self._broadcast_feed_update(fid)
+            except Exception as e:
+                logger.error(f"Error stopping feed {fid}: {e}")
 
         if broadcast:
             await self._broadcast_kpi_update()

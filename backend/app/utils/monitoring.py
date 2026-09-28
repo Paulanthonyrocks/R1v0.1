@@ -167,6 +167,22 @@ class TrafficMonitor:
         )
         self._last_braking_fire: Dict[str, float] = {}
 
+        # Per-FEED hard-braking gate (2026-09-28). The per-vehicle cooldown
+        # above cannot suppress a RECURRING SCENE: sample_traffic_2 loops its
+        # braking scene every ~60s, so different vehicle ids keep arriving and
+        # each one passes its own 10s cooldown. Result on Sep-28: 27
+        # "Sudden deceleration" incidents on Feed_2 alone (11:34 -> 12:39, one
+        # every 1-2 min, accel -10.0..-12.0) and ZERO on Feed_1/Feed_3, whose
+        # footage has no such scene -- 31 of the run's 35 incidents came from
+        # one looping video.
+        # One TrafficMonitor is constructed per feed (inference_worker.py:968
+        # keeps a traffic_monitors[feed_id] dict), so a plain instance attribute
+        # IS the per-feed gate -- no feed_id plumbing needed.
+        self.hard_braking_feed_cooldown_seconds: float = float(
+            behavior_cfg.get("hard_braking_feed_cooldown_seconds", 60.0)
+        )
+        self._last_braking_fire_feed: float = 0.0
+
         # Passage counting (Sep-10): "Total Flow" needs TRANSITS -- each
         # vehicle that passes through the scene -- not the ReID gallery size.
         # On looping sample footage the gallery saturates at cast size
@@ -257,6 +273,15 @@ class TrafficMonitor:
             if accel < self.hard_braking_min_physical_accel_mps2:
                 continue
             if accel < self.hard_braking_accel_threshold_mps2:
+                # Per-FEED gate (2026-09-28): a looping sample scene replays the
+                # same brake every ~60s under a NEW vehicle id, so the
+                # per-vehicle cooldown below never suppresses it. Cap the feed
+                # to one emitted anomaly per window. Checked BEFORE any
+                # bookkeeping is recorded, so a suppressed event does not
+                # consume the window it just failed to use (the shed-before-
+                # bookkeeping rule).
+                if now - self._last_braking_fire_feed < self.hard_braking_feed_cooldown_seconds:
+                    continue
                 # Cooldown: same vehicle must not re-fire until the window
                 # elapses -- the anomaly list is consumed per-frame and creates
                 # an incident per anomaly, so an unbounded stream of the same
@@ -265,6 +290,7 @@ class TrafficMonitor:
                 if now - last < self.hard_braking_cooldown_seconds:
                     continue
                 self._last_braking_fire[v_id] = now
+                self._last_braking_fire_feed = now
                 # Evict stale cooldown entries alongside the seen-ids cap so
                 # this map tracks the same bounded cardinality (audit: the
                 # sibling map got a cap, this one didn't).

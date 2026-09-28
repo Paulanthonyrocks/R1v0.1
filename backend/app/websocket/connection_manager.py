@@ -252,13 +252,20 @@ class ConnectionManager:
                 f"Total connections: {len(self.active_connections)}"
             )
 
-    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None):
+    async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None, reason: str = "unspecified"):
         async with await self._get_client_lock(client_id):
-            await self._disconnect_unsafe(client_id, websocket)
+            await self._disconnect_unsafe(client_id, websocket, reason=reason)
 
-    async def _disconnect_unsafe(self, client_id: str, websocket: Optional[WebSocket] = None):
+    async def _disconnect_unsafe(self, client_id: str, websocket: Optional[WebSocket] = None, reason: str = "unspecified"):
         """Performs the actual resource cleanup for a client. 
         Assumes the client lock is already held by the caller.
+
+        `reason` is free-text attribution logged on the teardown line. Without
+        it every disconnect reads "Disconnecting client <id>..." with no cause.
+        Sep-28: 14 sessions, 8 of them dead at connect+40s, and ZERO of them
+        attributable -- the reap path (_ping_single_client) only logs when the
+        pong deadline is already blown, and the receiver-task-cancel path
+        (shutdown) logs nothing at all. Every caller now names its reason.
         """
         active_socket = self.active_connections.get(client_id)
         if websocket is not None and active_socket is not None and active_socket is not websocket:
@@ -269,7 +276,7 @@ class ConnectionManager:
             except Exception:
                 pass
             return
-        logger.info(f"Disconnecting client {client_id}...")
+        logger.info(f"Disconnecting client {client_id} (reason: {reason})...")
         
         # Detach state before network I/O so a slow/cancelled close cannot
         # leave registered queues or an unowned sender behind.
@@ -1097,9 +1104,13 @@ class ConnectionManager:
                 await asyncio.gather(*tasks)
 
     async def _ping_single_client(self, client_id: str, websocket: WebSocket, ping_message_json: str, current_time: float):
-        """Helper to ping a single client and check for timeout."""
+        """Helper to ping a single client and check for timeout.
+
+        Returns None when the client is healthy, else a
+        (client_id, websocket, reason) tuple for the caller to reap.
+        """
         if websocket.client_state == WebSocketState.DISCONNECTED:
-            return client_id, websocket
+            return client_id, websocket, "already-disconnected"
         
         # Check if PONG was received within timeout
         last_pong_time = self.last_pong_received_time.get(client_id, 0)
@@ -1110,17 +1121,23 @@ class ConnectionManager:
             # routers/ws.py never fires. Without this line the reap is
             # invisible — sessions vanished with no cause logged (2026-09-24:
             # every teardown showed only "Disconnecting client", never why).
+            # The deadline is ping_interval+pong_timeout (125s) and is checked
+            # BEFORE the ping is sent, so a client that never pongs at all is
+            # only reaped here -- but note this cannot explain the Sep-28
+            # connect+40s deaths, which are far below this window. The reason
+            # string keeps the two classes distinguishable in the log.
+            last_pong_age = current_time - last_pong_time
             logger.warning(
                 f"Client {client_id} timed out (no PONG received in "
                 f"{self.pong_timeout + self.ping_interval}s; last pong "
-                f"{current_time - last_pong_time:.0f}s ago). Reaping connection."
+                f"{last_pong_age:.0f}s ago). Reaping connection."
             )
-            return client_id, websocket
+            return client_id, websocket, "no-pong-timeout"
         
         try:
             await self.send_personal_message(ping_message_json, client_id)
         except Exception:
-            return client_id, websocket
+            return client_id, websocket, "ping-send-failed"
         return None
 
     async def _ping_clients(self):
@@ -1152,6 +1169,10 @@ class ConnectionManager:
 
                 # Carry snapshot identity through the gather: a reconnect may
                 # have replaced this client ID while other pings were pending.
+                # The tuple is (client_id, websocket, reason) -- the reason is
+                # positional, so it lands in disconnect(reason=...) and shows up
+                # on the teardown line. Before this, a reap at connect+40s was
+                # indistinguishable from any other teardown in the log.
                 for res in results:
                     if isinstance(res, tuple):
                         await self.disconnect(*res)
@@ -1188,7 +1209,7 @@ class ConnectionManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         
         await asyncio.gather(*(
-            self.disconnect(client_id, ws)
+            self.disconnect(client_id, ws, reason="connection-manager-shutdown")
             for client_id, ws in list(self.active_connections.items())
         ), return_exceptions=True)
 

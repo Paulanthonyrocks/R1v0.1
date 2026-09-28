@@ -180,6 +180,25 @@ class TunnelSecretMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
 
+    @staticmethod
+    def _redact_query(query_string: bytes) -> bytes:
+        """Replace the tunnel secret in a raw query string with REDACTED.
+
+        uvicorn's access logger formats the request line from the ASGI scope's
+        `query_string`, so redacting the scope redacts the log. The middleware
+        still sees the real value (it runs before uvicorn logs), so the tunnel
+        gate keeps working -- only the persisted log line is scrubbed.
+        """
+        if not query_string or b"password=" not in query_string:
+            return query_string
+        out = []
+        for part in query_string.split(b"&"):
+            if part.startswith(b"password="):
+                out.append(b"password=REDACTED")
+            else:
+                out.append(part)
+        return b"&".join(out)
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] == "http":
             headers = scope.get("headers", [])
@@ -196,7 +215,17 @@ class TunnelSecretMiddleware:
                 if "password=" not in qs:
                     qs = (qs + "&" if qs else "") + "password=" + header_pw.decode("latin-1")
                     scope["query_string"] = qs.encode("latin-1")
+            # Redact for the access log (2026-09-28). The Sep-28 run persisted
+            # `password=34.48.3.206` in two backend_main.log lines from
+            # uvicorn.access. The frontend already redacts its own console output
+            # via sanitizeTunnelUrl, but Chrome's native "WebSocket connection to
+            # ... failed" line cannot be intercepted from JS, and the SERVER-side
+            # copy was never covered at all. Redacting the scope here is the one
+            # place that catches the server side. The secret is still functional
+            # for this request: only the logged rendering is scrubbed.
+            scope["query_string"] = self._redact_query(scope.get("query_string", b""))
         await self.app(scope, receive, send)
+
 # --- Middleware Implementation ---
 class WebSocketOriginMiddleware:
     """
@@ -267,6 +296,22 @@ async def lifespan(app: FastAPI):
     try:
         # --- STARTUP ---
         logger.info("--- Starting Route One Backend ---")
+
+        # 0. WebSocket protocol-keepalive. MUST run first: the lifespan runs
+        # before any WebSocket is accepted, so disabling uvicorn's protocol
+        # keepalive here covers every connection this process serves -- including
+        # the CLI start path (`uvicorn app.main:app ...`) that skips the
+        # __main__ block's ws_ping_interval=None. On Sep-28 that gap killed 8 of
+        # 14 tunnelled sessions at connect+40s. See
+        # _audit_websocket_protocol_keepalive for the full signature.
+        try:
+            _keepalive_status = _audit_websocket_protocol_keepalive()
+            if "WARNING" in _keepalive_status:
+                logger.warning(_keepalive_status)
+            else:
+                logger.info(_keepalive_status)
+        except Exception as e:
+            logger.warning(f"Could not audit WebSocket protocol keepalive: {e}")
 
         # 1. System Info
         try:
@@ -696,4 +741,65 @@ if __name__ == "__main__":
         ws_ping_interval=None,   # protocol keepalive OFF — app-level governs
         ws_ping_timeout=None,
         timeout_graceful_shutdown=25,
+    )
+
+
+# --- Protocol-keepalive enforcement (2026-09-28) ---------------------------
+# Sep-28 run: 8 of 14 WebSocket sessions died at 39.0-39.6s, every one right
+# after its FIRST app-level PING at +24.8s. That is uvicorn's PROTOCOL-level
+# keepalive (defaults ws_ping_interval=20 + ws_ping_timeout=20 -> first ping at
+# connect+20s, kill at +40s), not our app-level keepalive (25s/100s).
+#
+# The `ws_ping_interval=None` in the __main__ block above only applies when the
+# server is started via `python -m app.main`. Started via the CLI
+# (`uvicorn app.main:app ...`) the whole __main__ block is skipped and uvicorn's
+# 20/20 defaults apply. README.md documented exactly that CLI command, and the
+# Sep-28 run carried the full 20+20 signature.
+#
+# This is a DETECTION guard, not a monkeypatch. Two reasons it does not reach
+# into uvicorn: (1) the live Config instance is not reachable from app code
+# under the CLI -- `uvicorn.server` is the MODULE, so `uvicorn.server.config`
+# is the `uvicorn.config` module, and mutating it would silently no-op while
+# reporting success; (2) patching Config/protocol internals blind, with no
+# uvicorn installed to verify the attribute names against, risks breaking boot
+# for every path to fix one. Instead we read our OWN command line (psutil is
+# already imported here) and, when the CLI path is in use without the flags,
+# fail loudly at boot with the exact remedy instead of at 40s per session.
+
+_PROTOCOL_KEEPALIVE_REMEDY = (
+    "restart with: python -m app.main   (or: uvicorn app.main:app --port 8000 "
+    "--ws-ping-interval null --ws-ping-timeout null --timeout-graceful-shutdown 25)"
+)
+
+def _audit_websocket_protocol_keepalive() -> str:
+    """Report whether this process can be running uvicorn's default WS keepalive.
+
+    Returns a human-readable status; the caller logs it. Never raises.
+    """
+    try:
+        cmdline = " ".join(psutil.Process().cmdline())
+    except Exception as e:
+        return f"protocol keepalive: could not inspect own command line ({e})"
+
+    normalized = cmdline.replace("\\", "/")
+    lowered = normalized.lower()
+
+    # `python -m app.main` -> the __main__ block owns the settings.
+    if "app.main" in lowered and "-m app.main" in lowered.replace("  ", " "):
+        return "protocol keepalive: DISABLED (started via `python -m app.main`)"
+
+    is_uvicorn_cli = ("uvicorn" in lowered) and ("-m app.main" not in lowered)
+    if not is_uvicorn_cli:
+        return ("protocol keepalive: DISABLED (not a uvicorn CLI start; "
+                "app-level keepalive governs)")
+
+    if "--ws-ping-interval" in lowered or "--ws_ping_interval" in lowered:
+        return "protocol keepalive: DISABLED (CLI started with explicit ws-ping flags)"
+
+    return (
+        "protocol keepalive: WARNING -- started via the uvicorn CLI WITHOUT "
+        "--ws-ping-interval/--ws-ping-timeout, so uvicorn's 20s/20s protocol "
+        "keepalive is ACTIVE and will kill every tunnelled WebSocket at "
+        "connect+40s (browser auto-PONG cannot return within 20s through a "
+        "50-67s RTT tunnel). " + _PROTOCOL_KEEPALIVE_REMEDY
     )
