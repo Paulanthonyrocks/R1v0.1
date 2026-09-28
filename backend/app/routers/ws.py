@@ -117,6 +117,7 @@ async def message_receiver(
                     await websocket.close(code=1008)
                 except RuntimeError as re:
                     logger.debug(f"Could not close websocket for {initial_id} (already closed): {re}")
+                _set_exit_reason("first-frame-not-authenticate")
                 return
 
             auth_data = AuthenticateData(**(message.data or {}))
@@ -223,6 +224,17 @@ async def message_receiver(
 
         # --- Main Message Loop ---
         async for message_text in websocket.iter_text():
+            # `iter_text()` can terminate the loop WITHOUT raising (Starlette
+            # stops iteration on a clean peer close in some paths). If the
+            # reason is still the default when the loop ends normally, the peer
+            # closed the socket -- that IS the answer, so record it here rather
+            # than letting it fall through to the un-stamped default. (The
+            # first run with this instrumentation showed 4/4 teardowns reading
+            # "receiver-loop-exited-without-reason" precisely because this
+            # normal-exit path was unstamped.)
+            if exit_reason_holder is not None and \
+                    exit_reason_holder["reason"] == "receiver-loop-exited-without-reason":
+                _set_exit_reason("peer-closed-or-loop-ended")
             # DO NOT log the raw payload: the AUTHENTICATE frame carries the
             # client's Firebase ID token (a JWT) in cleartext, and the initial
             # and re-auth frames both flow through this loop -- logging the raw

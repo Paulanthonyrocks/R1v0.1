@@ -200,14 +200,19 @@ class TunnelSecretMiddleware:
         return b"&".join(out)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        if scope["type"] == "http":
+        # BOTH http AND websocket. The WebSocket upgrade handshake carries the
+        # same `?password=` (browsers cannot set headers on a WS handshake), and
+        # uvicorn logs the accepted-upgrade line from the scope just like an
+        # HTTP request line. Sep-28: 4 of the 6 surviving leaks were
+        # `uvicorn.error ... "WebSocket /api/v1/ws/... ?password=..." [accepted]`.
+        if scope["type"] in ("http", "websocket"):
             headers = scope.get("headers", [])
             header_pw = None
             for k, v in headers:
                 if k == b"x-tunnel-password":
                     header_pw = v
                     break
-            if header_pw is not None:
+            if header_pw is not None and scope["type"] == "http":
                 # Promote header secret to the query so downstream handlers that
                 # read `?password=` (tunnel compat) still work without the
                 # secret being in the URL the client constructed.
@@ -215,14 +220,15 @@ class TunnelSecretMiddleware:
                 if "password=" not in qs:
                     qs = (qs + "&" if qs else "") + "password=" + header_pw.decode("latin-1")
                     scope["query_string"] = qs.encode("latin-1")
-            # Redact for the access log (2026-09-28). The Sep-28 run persisted
-            # `password=34.48.3.206` in two backend_main.log lines from
-            # uvicorn.access. The frontend already redacts its own console output
-            # via sanitizeTunnelUrl, but Chrome's native "WebSocket connection to
-            # ... failed" line cannot be intercepted from JS, and the SERVER-side
-            # copy was never covered at all. Redacting the scope here is the one
-            # place that catches the server side. The secret is still functional
-            # for this request: only the logged rendering is scrubbed.
+            # Redact for the access log (2026-09-28). The frontend already
+            # redacts its own console output via sanitizeTunnelUrl, but Chrome's
+            # native "WebSocket connection to ... failed" line cannot be
+            # intercepted from JS, and the SERVER-side copy was never covered.
+            # Redacting the scope here is the one place that catches the server
+            # side. The secret is still functional for this request: only the
+            # logged rendering is scrubbed. (Nothing downstream reads
+            # `?password=` -- the tunnel validates it at the proxy edge, before
+            # the backend -- so redaction cannot break auth.)
             scope["query_string"] = self._redact_query(scope.get("query_string", b""))
         await self.app(scope, receive, send)
 
@@ -556,7 +562,6 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(TunnelSecretMiddleware)
 
 # Per-route rate limits; everything else falls back to the default 60/60.
 rate_limits = {
@@ -564,6 +569,15 @@ rate_limits = {
     "/api/v1/feeds": RateLimitConfig(limit=30, window=60),
 }
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, rate_limits=rate_limits)
+
+# (2026-09-28) TunnelSecretMiddleware must be OUTSIDE RateLimitMiddleware, so it
+# is registered AFTER it (Starlette runs the last-added middleware outermost).
+# It was previously added BEFORE, making it INNER -- and the first run with the
+# redaction proved that ordering matters: only 2 of 8 secret-bearing log lines
+# were scrubbed. The RateLimitMiddleware answers CORS OPTIONS preflights itself
+# and never calls the inner app, so the tunnel secret in those preflight request
+# lines reached uvicorn.access verbatim.
+app.add_middleware(TunnelSecretMiddleware)
 # RateLimitMiddleware spawns a periodic-cleanup task at construction; its
 # async close() (coordinated with the rate agent) is awaited during shutdown
 # by _close_rate_middleware traversal.
