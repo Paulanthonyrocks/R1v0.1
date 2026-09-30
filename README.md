@@ -73,13 +73,14 @@ The Traffic Management Hub is an advanced AI-powered surveillance and traffic an
         #
         # There is no .env loader in this repo, so the value must be in the
         # environment of the process that serves requests. Write it once:
-        #   mkdir -p backend/keys
         #   python -c "import secrets; print(secrets.token_urlsafe(32))" \
-        #       > backend/keys/tunnel_auth.token
-        #   chmod 600 backend/keys/tunnel_auth.token
-        #   export TUNNEL_AUTH_TOKEN_FILE=$PWD/backend/keys/tunnel_auth.token
+        #       > /kaggle/working/R1v0.1/backend/keys/tunnel_auth.token
+        #   chmod 600 /kaggle/working/R1v0.1/backend/keys/tunnel_auth.token
+        #   export TUNNEL_AUTH_TOKEN_FILE=/kaggle/working/R1v0.1/backend/keys/tunnel_auth.token
         # Only the PATH goes in the env var, so the secret survives a restart,
-        # a cell re-run, or a fresh kernel without being re-pasted.
+        # a cell re-run, or a fresh kernel without being re-pasted. The path
+        # MUST be absolute: this command is valid from the repo root and from
+        # backend/, and a $PWD-relative path silently breaks in one of them.
         #
         # The SAME value must reach the frontend as NEXT_PUBLIC_TUNNEL_AUTH_TOKEN
         # (hosting/.env.local). It is appended as `?tunnel_token=` on both REST

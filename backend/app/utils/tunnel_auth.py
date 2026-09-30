@@ -35,7 +35,7 @@ import hmac
 import logging
 import os
 import re
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -89,9 +89,25 @@ def _fallback_cors_headers_for_origin(origin: Optional[str]) -> dict:
 
 
 def _env_token() -> Optional[str]:
+    tok, _src, _detail = _resolve_token()
+    return tok
+
+
+def _resolve_token() -> Tuple[Optional[str], str, str]:
+    """Resolve the secret AND report where it came from.
+
+    Returns (token, source, detail). `detail` is the file path (or the env var
+    name) so the start-up log can name the exact file that was read. That was
+    not cosmetic: the first two production failures of this gate were both
+    "the value is not reaching the process", and the only way to tell a wrong
+    path from an unset var from an unreadable file is to print which one it was.
+    Logging a bare "ACTIVE" or a bare "not set" sends you back to the same
+    guessing loop both times.
+    """
     tok = os.getenv("TUNNEL_AUTH_TOKEN", "").strip()
     if tok:
-        return tok
+        return tok, "TUNNEL_AUTH_TOKEN", "inline env var"
+
     # TUNNEL_AUTH_TOKEN_FILE -- the durable form.
     #
     # Why this exists (2026-09-30): the inline-only form failed twice in
@@ -106,23 +122,35 @@ def _env_token() -> Optional[str]:
     # re-run, new kernel -- without re-pasting the secret. Same pattern and the
     # same reasoning as ROUTE_ONE_EVIDENCE_KEY_FILE in evidence_integrity.py.
     #
+    # Use an ABSOLUTE path here. The backend is started from either the repo
+    # root or backend/, so a `$PWD`-relative path is correct in one and broken
+    # in the other -- and a broken relative path shows up as a shell redirect
+    # error at write time or an unreadable file here, never as a clear message.
+    #
     # Precedence: inline value wins, then the file. Stripped, because a trailing
     # newline from `echo >` or `openssl rand >` is the single most likely cause
     # of a "the two sides should match but don't" 403 storm, and the token is
     # compared with hmac.compare_digest so a stray byte fails silently.
     path = os.getenv("TUNNEL_AUTH_TOKEN_FILE", "").strip()
     if not path:
-        return None
+        return None, "none", "TUNNEL_AUTH_TOKEN and TUNNEL_AUTH_TOKEN_FILE both unset"
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = fh.read().strip()
     except OSError as e:
-        logger.error(f"TUNNEL_AUTH_TOKEN_FILE set but unreadable: {path} ({e})")
-        return None
+        logger.error(
+            "TUNNEL_AUTH_TOKEN_FILE is set but UNREADABLE: %s (%s). "
+            "Check the path -- it must be absolute and must exist in THIS "
+            "container.", path, e
+        )
+        return None, "unreadable", path
     if not data:
-        logger.error(f"TUNNEL_AUTH_TOKEN_FILE is empty: {path}")
-        return None
-    return data
+        logger.error(
+            "TUNNEL_AUTH_TOKEN_FILE is EMPTY: %s. Refusing to fall back to "
+            "open; regenerate with token_urlsafe(32).", path
+        )
+        return None, "empty", path
+    return data, "TUNNEL_AUTH_TOKEN_FILE", path
 
 
 def _paths_match(path: str) -> bool:
@@ -266,22 +294,21 @@ def install_tunnel_auth(app, token: Optional[str] = None) -> None:
     innermost and an unauthenticated caller would already have reached the
     rate limiter and every other middleware before being turned away.
     """
-    resolved = token if token is not None else _env_token()
-    src = "argument" if token is not None else (
-        "TUNNEL_AUTH_TOKEN_FILE" if os.getenv("TUNNEL_AUTH_TOKEN", "").strip() == ""
-        and os.getenv("TUNNEL_AUTH_TOKEN_FILE", "").strip() else "TUNNEL_AUTH_TOKEN"
-    )
+    resolved, src, detail = (token, "argument", "passed to install_tunnel_auth") if token is not None else _resolve_token()
     if resolved:
         logger.info(
-            "Tunnel auth gate ACTIVE (secret resolved via %s, %d chars). "
-            "Open paths: %s", src, len(resolved), ", ".join(sorted(OPEN_PATHS))
+            "Tunnel auth gate ACTIVE -- secret resolved via %s (%s), %d chars. "
+            "Open paths: %s", src, detail, len(resolved), ", ".join(sorted(OPEN_PATHS))
         )
     else:
         logger.error(
-            "Tunnel auth gate ACTIVE but no secret could be resolved -- every "
-            "tunneled request will be rejected (fail-closed). Generate one with: "
-            "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and "
-            "either export TUNNEL_AUTH_TOKEN_FILE=<path to a file holding it> "
-            "(preferred) or TUNNEL_AUTH_TOKEN inline."
+            "Tunnel auth gate ACTIVE but NO secret could be resolved [%s: %s] -- "
+            "every tunneled request will be rejected (fail-closed). Fix: write one "
+            "with python -c \"import secrets; print(secrets.token_urlsafe(32))\" > "
+            "/kaggle/working/R1v0.1/backend/keys/tunnel_auth.token, then export "
+            "TUNNEL_AUTH_TOKEN_FILE=/kaggle/working/R1v0.1/backend/keys/tunnel_auth.token "
+            "(ABSOLUTE path -- the backend starts from two different cwds). See "
+            "backend/tunnel_token.env.example.",
+            src, detail,
         )
     app.add_middleware(TunnelAuthMiddleware, token=token)

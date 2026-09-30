@@ -213,6 +213,47 @@ def test_unreadable_token_file_fails_closed():
         os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
 
 
+def test_resolution_reports_which_file_it_read():
+    """The start-up log must name the path, not just say "ACTIVE".
+
+    Two production failures of this gate were both "the value is not reaching
+    the process", and the second one was a `$PWD`-relative path that was valid
+    from the repo root and broken from backend/ -- the cwd the backend is
+    actually started from. A log line saying only "ACTIVE" cannot distinguish
+    wrong-path from unset-var from unreadable-file, which is what sent the
+    debugging in circles. The detail string is the fix; this pins it.
+    """
+    tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+    try:
+        tok_file.parent.mkdir(parents=True, exist_ok=True)
+        tok_file.write_text(SECRET)
+
+        os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+        os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+        tok, src, detail = ta._resolve_token()
+        assert tok is None and src == 'none'
+        assert 'unset' in detail, f'unset state must say so, got {detail!r}'
+
+        os.environ['TUNNEL_AUTH_TOKEN_FILE'] = '/nonexistent/path/tunnel_auth.token'
+        tok, src, detail = ta._resolve_token()
+        assert tok is None and src == 'unreadable'
+        assert detail == '/nonexistent/path/tunnel_auth.token', (
+            'the configured path must be echoed verbatim -- that path IS the '
+            'diagnostic'
+        )
+
+        os.environ['TUNNEL_AUTH_TOKEN_FILE'] = str(tok_file)
+        tok, src, detail = ta._resolve_token()
+        assert tok == SECRET
+        assert src == 'TUNNEL_AUTH_TOKEN_FILE'
+        assert detail == str(tok_file), 'must report the file it actually read'
+    finally:
+        os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+        os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+        if tok_file.exists():
+            tok_file.unlink()
+
+
 def test_empty_token_file_fails_closed():
     """An empty file is a silent misconfiguration, not an open door."""
     tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
