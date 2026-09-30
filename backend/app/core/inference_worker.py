@@ -153,6 +153,92 @@ def _exit_worker_fatal(worker_id: int, feed_id: str, err: str) -> None:
 # normalize bbox coordinates consistently.
 _FRAME_DIMS_BY_FEED: Dict[str, tuple] = {}
 
+
+def _plate_boxes_for_sidecar(core, frame_dims) -> list:
+    """Derive plate-region boxes from a core module's live tracks.
+
+    Returns [x1, y1, x2, y2] in SNAPSHOT pixel coords. Only vehicle classes
+    are considered, and the box is the lower-centre band of the vehicle where a
+    plate physically sits -- mirroring core_module._locate_plate_region's
+    fallback band. This deliberately does NOT claim to be a localized plate
+    rect: it is the region to blur, which is what privacy masking needs.
+    """
+    if core is None:
+        return []
+    try:
+        data = getattr(getattr(core, "tracker", None), "vehicle_data", None) or {}
+    except Exception:
+        return []
+    if not data:
+        return []
+
+    # Only motor vehicles carry readable plates; pedestrians must not be
+    # blurred as "plate" regions, and person boxes are handled separately.
+    vehicle_classes = {2, 3, 5, 7}  # COCO: car, motorcycle, bus, truck
+    out = []
+    for _tid, trk in data.items():
+        try:
+            bbox = trk.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            if int(trk.get("class_id", 2)) not in vehicle_classes:
+                continue
+            x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+            if x2 <= x1 or y2 <= y1:
+                continue
+            vw = x2 - x1
+            # Bottom-centre band, as a fraction of the vehicle box.
+            bx1 = x1 + 0.15 * vw
+            bx2 = x2 - 0.15 * vw
+            by1 = y1 + 0.60 * (y2 - y1)
+            by2 = y1 + 0.92 * (y2 - y1)
+            if bx2 - bx1 < 2 or by2 - by1 < 2:
+                continue
+            out.append([int(bx1), int(by1), int(bx2), int(by2)])
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def _write_mask_sidecar(snapshot_path: str, core, config) -> bool:
+    """Write `<snapshot>.boxes.json` for PrivacyService to consume.
+
+    Returns True when a sidecar was written. When there are no boxes it
+    returns False and writes NOTHING: an empty sidecar is worse than none,
+    because it reads as "the detector ran and found no plates" when in fact
+    there was nothing to report. PrivacyService treats a missing sidecar as
+    "unmasked, no boxes" and says so.
+    """
+    if not (config.get("privacy", {}) or {}).get("enabled", False):
+        return False
+
+    path = Path(snapshot_path)
+    frame_dims = _FRAME_DIMS_BY_FEED.get(getattr(core, "feed_id", None))
+    boxes = _plate_boxes_for_sidecar(core, frame_dims)
+    if not boxes:
+        return False
+
+    sidecar = path.with_suffix(path.suffix + ".boxes.json")
+    try:
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({
+            "boxes": boxes,
+            "source": "inference_worker.vehicle_data",
+            "frame_dims": list(frame_dims) if frame_dims else None,
+            # Honest provenance. The snapshot is written by the INGESTION
+            # worker from the frame it last decoded, while these boxes come
+            # from the inference worker's most recent detection -- usually the
+            # same frame, but not guaranteed. A box that lands slightly off
+            # still errs toward masking a wider region, never a narrower one.
+            "frame_alignment": "approximate",
+            "written_at": time.time(),
+        }))
+        logger.debug(f"Mask sidecar written: {sidecar} ({len(boxes)} plate region(s))")
+        return True
+    except OSError as e:
+        logger.warning(f"Mask sidecar write failed {sidecar}: {e}")
+        return False
+
 # Per-feed last-track-id set (churn telemetry). The aggregate vehicles_count is
 # BLIND to churn: a churned track gets re-detected next frame, so the count stays
 # flat while individual boxes flicker. Counting NEW track ids per detect frame
@@ -848,6 +934,35 @@ def inference_worker(
                             else None
                         )
                         if _ctrl_type == "snapshot_saved":
+                            # Write the privacy-mask sidecar. This is the ONLY
+                            # point where the saved snapshot's path and the live
+                            # detection boxes exist in the same process: the
+                            # ingestion worker writes the jpg but has no boxes,
+                            # and it emits this control message precisely so the
+                            # worker that ran detection can act on it. Without
+                            # the sidecar, PrivacyService.mask_evidence_snapshot
+                            # finds no boxes and releases the image UNMASKED
+                            # (reported honestly, but unmasked) -- so this write
+                            # is what actually makes blur-on-export work.
+                            try:
+                                _snap_path = (
+                                    extra_payload.get("snapshot_path")
+                                    if isinstance(extra_payload, dict) else None
+                                )
+                                if _snap_path:
+                                    _write_mask_sidecar(
+                                        _snap_path,
+                                        core_modules.get(feed_id),
+                                        config,
+                                    )
+                            except Exception as e:
+                                # Best-effort: a missing sidecar degrades to an
+                                # honestly-unmasked release, never a crash and
+                                # never a false claim of masking.
+                                logger.debug(
+                                    f"[Worker {worker_id}] mask sidecar write failed "
+                                    f"for feed {feed_id}: {e}"
+                                )
                             if msg_id and hasattr(slot_q_ref, "ack"):
                                 slot_q_ref.ack(msg_id)
                                 acked_msgs.add(msg_id)

@@ -5,8 +5,10 @@ bundled: callers pass boxes from their own detector, or the whole frame is
 left untouched and the response flags masked=false. Disabled by default
 means export paths keep serving the original until an operator opts in.
 """
+import json
 import logging
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("app.services.privacy")
 
@@ -34,6 +36,80 @@ class PrivacyService:
         cfg = config.get("privacy", {})
         self.enabled = cfg.get("enabled", False)
         self.blur_kernel = int(cfg.get("blur_kernel", 31))
+
+    def mask_evidence_snapshot(
+        self,
+        src: Path,
+        dest: Path,
+        boxes: Optional[List[Box]] = None,
+    ) -> Dict[str, Any]:
+        """Write a masked copy of a snapshot to `dest`.
+
+        Returns a report describing what actually happened, so the caller can
+        record it in the manifest. The critical property: when no boxes are
+        available the report says `masked: false` with a reason. It never
+        returns a masked=True for an unmasked file.
+        """
+        report: Dict[str, Any] = {"masked": False, "boxes": 0, "reason": None}
+
+        # Decide box availability FIRST. "No boxes" is decisive on its own and
+        # must not be masked by an unrelated dependency failure -- a caller
+        # reading this report needs the real reason the release is unmasked.
+        derived = boxes if boxes is not None else self._boxes_from_sidecar(src)
+        if not derived:
+            report["reason"] = "no face/plate boxes available to mask"
+            return report
+        if not self.enabled:
+            report["reason"] = "masking disabled or not applicable"
+            return report
+
+        try:
+            import cv2
+            img = cv2.imread(str(src))
+            if img is None:
+                report["reason"] = f"unreadable image: {src.name}"
+                return report
+        except Exception as e:
+            report["reason"] = f"cv2 unavailable: {e}"
+            return report
+
+        out, masked = self.mask_image(img, derived)
+        if not masked:
+            report["reason"] = "masking disabled or not applicable"
+            return report
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(dest), out)
+        report["masked"] = True
+        report["boxes"] = len(derived)
+        report["dest"] = str(dest)
+        return report
+
+    @staticmethod
+    def _boxes_from_sidecar(src: Path) -> List[Box]:
+        """Read boxes from `<snapshot>.boxes.json` if the detector wrote one.
+
+        This is the honest seam: masking is driven by real detector output when
+        it exists, and reports honestly when it does not, rather than
+        inventing boxes that would mask the wrong pixels.
+        """
+        sidecar = src.with_suffix(src.suffix + ".boxes.json")
+        if not sidecar.is_file():
+            return []
+        try:
+            data = json.loads(sidecar.read_text())
+        except Exception:
+            return []
+        raw = data.get("boxes") if isinstance(data, dict) else data
+        if not isinstance(raw, list):
+            return []
+        out: List[Box] = []
+        for item in raw:
+            try:
+                if len(item) == 4:
+                    out.append(tuple(int(v) for v in item))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def mask_image(self, img, boxes: List[Box]):
         """Returns (img, masked_bool). No-op passthrough when disabled or no boxes."""

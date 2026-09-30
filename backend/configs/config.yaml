@@ -32,11 +32,15 @@ behavior_analysis:
   hard_braking_cooldown_seconds: 10
   # PER-FEED cap on emitted hard-braking anomalies (2026-09-28). The
   # per-vehicle cooldown above cannot suppress a replayed SCENE: the
-  # sample_traffic_2 loop replays its brake every ~60s under a new vehicle id,
-  # so every instance passed its own 10s window. Sep-28: 27 incidents on
-  # Feed_2 alone, 0 on Feeds 1/3. This bounds it to one per window per feed.
-  # A real road -- distinct vehicles braking at distinct times -- is unaffected.
-  hard_braking_feed_cooldown_seconds: 60
+  # sample_traffic_2 loop replays its brake under a new vehicle id, so every
+  # instance passes its own 10s window. All 15 incidents in the 18:11 run were
+  # Feed_2 alone, with a MEDIAN GAP OF 240s -- which is why a 60s window
+  # suppressed nothing at all (15 -> 15 when replaying the observed timings).
+  # Replay of those exact timestamps: 120s -> 13, 300s -> 9, 600s -> 5.
+  # 300 is the knee: it halves the count without pushing a genuine multi-car
+  # incident burst past 5 minutes. A real road -- distinct vehicles braking at
+  # distinct times -- is unaffected.
+  hard_braking_feed_cooldown_seconds: 300
   ewma_alpha: 0.2
   lane_change_buffer: 20
   speed_limit: 60
@@ -907,6 +911,15 @@ v2x:
 evidence:
   enabled: true
   dir: backend/data/evidence
+  # Phase 1 chain-of-custody sealing. `seal: true` is fail-CLOSED: if no key
+  # material is reachable (ROUTE_ONE_EVIDENCE_KEY / _KEY_FILE) the bundle is
+  # still written so no incident is lost, but it is marked `sealed: false` and
+  # verify_bundle() fails loudly on it. An unsealed bundle is never presented
+  # as verified.
+  seal: true
+  # Identifies the key in every manifest. `dev-local` is the code default and
+  # must NOT appear on a bundle handed to an assessor -- set this per deploy.
+  key_id: kaggle-dev
 escalation:
   enabled: true
   ack_timeout_sec: 300
@@ -916,7 +929,15 @@ escalation:
   - {name: supervisor, after_sec: 300}
   - {name: command, after_sec: 900}
 privacy:
-  enabled: false
+  # Phase 1: default ON. The NDPA annex commits to blur-on-export for
+  # plate-bearing imagery, so shipping this false contradicted the annex.
+  # NOTE the honest limit: masking is driven by real detector output (a
+  # `<snapshot>.boxes.json` sidecar). With no boxes available,
+  # mask_evidence_snapshot reports masked=false with a reason rather than
+  # pretending the image was masked -- the ingestion worker does not yet
+  # emit that sidecar, so live snapshots currently release UNMASKED and say
+  # so. Writing the sidecar is the next wiring step.
+  enabled: true
   blur_kernel: 31
 camera_health:
   enabled: true

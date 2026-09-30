@@ -123,6 +123,55 @@ class IncidentManager:
             logger.warning(f"Failed to request snapshot for incident {incident_id}: {e}")
             return False
 
+    def _schedule_evidence_completion(self, incident: Dict[str, Any], incident_id: str) -> None:
+        """Mint the evidence bundle now, then complete it when the snapshot lands.
+
+        The ingestion worker writes the snapshot on its own thread after this
+        returns, so there is nothing to copy at mint time. A short bounded poll
+        runs in the background: on each pass any snapshot that has appeared is
+        copied in and the manifest is re-sealed. The poll gives up after
+        `evidence.snapshot_wait_sec` and leaves the bundle honestly recording
+        `snapshots: []` rather than inventing imagery that never arrived.
+        """
+        try:
+            from app.services.evidence_service import EvidenceService
+            from app.config import get_current_config
+            from pathlib import Path as _Path
+
+            ev_cfg = self.config.get("evidence", {})
+            svc = EvidenceService(config=self.config)
+
+            # Mint immediately so an incident is never without a manifest.
+            svc.save_bundle(incident=incident, snapshot_paths=[], clip_path=None)
+
+            wait_sec = float(ev_cfg.get("snapshot_wait_sec", 20.0))
+            interval = float(ev_cfg.get("snapshot_poll_sec", 1.0))
+            try:
+                snap_dir = _Path(get_current_config().snapshots_dir)
+            except Exception:
+                snap_dir = _Path("backend/data/snapshots")
+
+            async def _complete() -> None:
+                deadline = time.time() + wait_sec
+                while time.time() < deadline:
+                    await asyncio.sleep(interval)
+                    try:
+                        found = svc.find_snapshots_on_disk(incident, snap_dir)
+                        if found:
+                            svc.attach_snapshots(incident, [str(p) for p in found], None)
+                            return
+                    except Exception as e:
+                        logger.debug(f"Evidence completion poll error: {e}")
+                        return
+                logger.debug(
+                    f"Evidence bundle {incident_id} left without snapshot after "
+                    f"{wait_sec:.0f}s; manifest records snapshots=[]"
+                )
+
+            asyncio.create_task(_complete())
+        except Exception as e:
+            logger.debug(f"Evidence bundle scheduling skipped: {e}")
+
     async def create_incident(
         self,
         location: Dict[str, Any],
@@ -294,17 +343,19 @@ class IncidentManager:
                         # as before. The (feed_id, subtype) rate-limit still applies.
                         await self._request_snapshot_gated(source_feed_id, incident_id)
 
-            # 9. Evidence bundle (feature 1) — mint manifest when bundle enabled.
+            # 9. Evidence bundle (feature 1).
+            #    The snapshot is written ASYNCHRONOUSLY by the ingestion
+            #    worker (save_snapshot cmd -> thread -> file on disk), and its
+            #    `snapshot_saved` control message is acked-and-dropped in
+            #    inference_worker, so the path never reaches us here. Minting
+            #    the bundle with snapshot_paths=[] therefore produced an empty
+            #    bundle for every live incident. Instead: mint the sealed
+            #    manifest now, and complete it on the deferred pass once the
+            #    worker has written the file.
             try:
-                from app.services.evidence_service import EvidenceService, build_manifest
                 ev_cfg = self.config.get("evidence", {})
                 if ev_cfg.get("enabled", True):
-                    ev_svc = EvidenceService(config=self.config)
-                    ev_svc.save_bundle(
-                        incident=incident_data,
-                        snapshot_paths=[],
-                        clip_path=None,
-                    )
+                    self._schedule_evidence_completion(incident_data, incident_id)
             except Exception as e:
                 logger.debug(f"Evidence bundle skipped: {e}")
 

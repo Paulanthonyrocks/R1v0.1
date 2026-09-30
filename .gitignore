@@ -54,9 +54,20 @@ backend/scripts
 *.engine
 *.onnx
 
+# Evidence signing keys (Phase 1 chain-of-custody). NEVER commit these --
+# a leaked key lets anyone mint bundles that verify against it, which defeats
+# the entire purpose of the seal.
+backend/keys/
+*.key
+evidence_key
+!*.key.example
+
 # Keep scratch audit artifacts local, but include maintained regressions.
 backend/tests/*
 !backend/tests/test_pipeline_followup.py
+# Phase 1 evidence-integrity regressions: sealing must fail closed on a
+# tampered artefact, an edited manifest, a forged signature, and a missing key.
+!backend/tests/test_evidence_integrity.py
 backend/app/tests/
 hosting/__tests__/
 # One-off manual probe scripts (verified: empty / hello-world debug scratch)
