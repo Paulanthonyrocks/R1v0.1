@@ -65,6 +65,30 @@ The Traffic Management Hub is an advanced AI-powered surveillance and traffic an
 
     *   **Start Backend:**
         ```bash
+        # REQUIRED when the backend is reachable through a tunnel (loca.lt,
+        # cloudworkstations.dev, ...). The gate is FAIL-CLOSED: with no secret
+        # every request except /health is rejected 401 and the WebSocket upgrade
+        # is rejected 403 -- which the browser surfaces as a reconnect storm,
+        # not as an auth error, so it looks like a tunnel problem.
+        #
+        # There is no .env loader in this repo, so the value must be in the
+        # environment of the process that serves requests. Write it once:
+        #   mkdir -p backend/keys
+        #   python -c "import secrets; print(secrets.token_urlsafe(32))" \
+        #       > backend/keys/tunnel_auth.token
+        #   chmod 600 backend/keys/tunnel_auth.token
+        #   export TUNNEL_AUTH_TOKEN_FILE=$PWD/backend/keys/tunnel_auth.token
+        # Only the PATH goes in the env var, so the secret survives a restart,
+        # a cell re-run, or a fresh kernel without being re-pasted.
+        #
+        # The SAME value must reach the frontend as NEXT_PUBLIC_TUNNEL_AUTH_TOKEN
+        # (hosting/.env.local). It is appended as `?tunnel_token=` on both REST
+        # and WS -- the browser WS API cannot set headers on a handshake. See
+        # backend/tunnel_token.env.example for the full checklist.
+        #
+        # To disable the gate explicitly (local dev, never a public box):
+        #   export TUNNEL_AUTH_REQUIRED=0
+
         # From the backend directory
         # uvicorn app.main:app --reload --port 8000
         # NOTE: if you start the backend with the CLI instead of `python -m app.main`,

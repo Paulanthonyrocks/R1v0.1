@@ -147,9 +147,89 @@ def test_fails_closed_when_no_token_configured():
     inner = App()
     mw = ta.TunnelAuthMiddleware(inner, token=None)
     os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+    # The file form resolves on every request, so it has to be cleared too --
+    # otherwise a developer who has correctly configured it locally sees this
+    # "fail-closed" test pass for the wrong reason (200) and the regression it
+    # guards goes unnoticed on exactly the machine that would catch it.
+    os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
     status, _ = run(mw, make_scope(headers=[(ta.HEADER, b'anything')]))
     assert status == 401, 'unset token must reject, never wave requests through'
     assert inner.reached == 0
+
+
+def test_token_read_from_file():
+    """TUNNEL_AUTH_TOKEN_FILE is the durable form (2026-09-30)."""
+    tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+    try:
+        tok_file.parent.mkdir(parents=True, exist_ok=True)
+        tok_file.write_text(SECRET + '\n')  # trailing newline on purpose
+        os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+        os.environ['TUNNEL_AUTH_TOKEN_FILE'] = str(tok_file)
+        try:
+            assert ta._env_token() == SECRET, (
+                'file value must be read AND stripped -- a trailing newline from '
+                '`> file` is the likeliest cause of a two-sides-dont-match 403'
+            )
+            inner = App()
+            mw = ta.TunnelAuthMiddleware(inner, token=None)
+            status, _ = run(mw, make_scope(qs=f'tunnel_token={SECRET}'.encode()))
+            assert status == 200, 'secret from file must authenticate'
+            assert inner.reached == 1
+        finally:
+            os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+    finally:
+        if tok_file.exists():
+            tok_file.unlink()
+
+
+def test_inline_token_wins_over_file():
+    """Precedence is inline first, so a pinned prod value is never shadowed."""
+    tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+    try:
+        tok_file.parent.mkdir(parents=True, exist_ok=True)
+        tok_file.write_text('value-from-file')
+        os.environ['TUNNEL_AUTH_TOKEN'] = 'value-inline'
+        os.environ['TUNNEL_AUTH_TOKEN_FILE'] = str(tok_file)
+        assert ta._env_token() == 'value-inline'
+    finally:
+        os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+        os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+        if tok_file.exists():
+            tok_file.unlink()
+
+
+def test_unreadable_token_file_fails_closed():
+    """A configured-but-broken file must reject, not fall back to open."""
+    os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+    os.environ['TUNNEL_AUTH_TOKEN_FILE'] = '/nonexistent/path/tunnel_auth.token'
+    try:
+        assert ta._env_token() is None
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=None)
+        status, _ = run(mw, make_scope(headers=[(ta.HEADER, b'anything')]))
+        assert status == 401, 'unreadable secret file must reject, not open'
+        assert inner.reached == 0
+    finally:
+        os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+
+
+def test_empty_token_file_fails_closed():
+    """An empty file is a silent misconfiguration, not an open door."""
+    tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+    try:
+        tok_file.parent.mkdir(parents=True, exist_ok=True)
+        tok_file.write_text('   \n')
+        os.environ.pop('TUNNEL_AUTH_TOKEN', None)
+        os.environ['TUNNEL_AUTH_TOKEN_FILE'] = str(tok_file)
+        assert ta._env_token() is None, 'whitespace-only file must resolve to None'
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=None)
+        status, _ = run(mw, make_scope(headers=[(ta.HEADER, b'anything')]))
+        assert status == 401
+    finally:
+        os.environ.pop('TUNNEL_AUTH_TOKEN_FILE', None)
+        if tok_file.exists():
+            tok_file.unlink()
 
 
 def test_health_is_open_for_probes():

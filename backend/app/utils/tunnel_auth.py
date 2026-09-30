@@ -90,7 +90,39 @@ def _fallback_cors_headers_for_origin(origin: Optional[str]) -> dict:
 
 def _env_token() -> Optional[str]:
     tok = os.getenv("TUNNEL_AUTH_TOKEN", "").strip()
-    return tok or None
+    if tok:
+        return tok
+    # TUNNEL_AUTH_TOKEN_FILE -- the durable form.
+    #
+    # Why this exists (2026-09-30): the inline-only form failed twice in
+    # production. The backend runs from a notebook kernel, and the value was set
+    # in a cell that did not survive into the process that served the request,
+    # so the gate correctly fail-closed and every WS handshake 403'd. The
+    # symptom was indistinguishable from a tunnel fault (see _reject_ws), which
+    # cost a debugging cycle.
+    #
+    # A file removes the ordering dependency entirely: write it once, point the
+    # env var at it, and it is correct for every future start -- restart, cell
+    # re-run, new kernel -- without re-pasting the secret. Same pattern and the
+    # same reasoning as ROUTE_ONE_EVIDENCE_KEY_FILE in evidence_integrity.py.
+    #
+    # Precedence: inline value wins, then the file. Stripped, because a trailing
+    # newline from `echo >` or `openssl rand >` is the single most likely cause
+    # of a "the two sides should match but don't" 403 storm, and the token is
+    # compared with hmac.compare_digest so a stray byte fails silently.
+    path = os.getenv("TUNNEL_AUTH_TOKEN_FILE", "").strip()
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = fh.read().strip()
+    except OSError as e:
+        logger.error(f"TUNNEL_AUTH_TOKEN_FILE set but unreadable: {path} ({e})")
+        return None
+    if not data:
+        logger.error(f"TUNNEL_AUTH_TOKEN_FILE is empty: {path}")
+        return None
+    return data
 
 
 def _paths_match(path: str) -> bool:
@@ -135,9 +167,11 @@ class TunnelAuthMiddleware:
         if not token:
             # Fail closed. An unset token must never mean "no auth required".
             logger.error(
-                "TUNNEL_AUTH_TOKEN is not set -- rejecting tunneled request. "
-                "Set a 32+ char random secret, or unset TUNNEL_AUTH_REQUIRED to "
-                "disable this gate explicitly."
+                "TUNNEL_AUTH_TOKEN is not set and TUNNEL_AUTH_TOKEN_FILE is unset "
+                "or unreadable -- rejecting tunneled request. Write a 32+ char "
+                "random secret and export TUNNEL_AUTH_TOKEN_FILE=<path> (see "
+                "backend/tunnel_token.env.example), or set TUNNEL_AUTH_REQUIRED=0 "
+                "to disable this gate explicitly."
             )
             return False
         presented = self._presented(scope)
@@ -208,10 +242,20 @@ class TunnelAuthMiddleware:
 
     @staticmethod
     async def _reject_ws(send: Send) -> None:
-        # Minimal RFC6455 close frame: FIN|opcode 0x8, payload = 1008 + reason.
-        reason = b"tunnel auth required"
-        payload = b"\x03\xe8" + reason  # 1008
-        frame = bytes([0x88, len(payload)]) + payload
+        # Reject during the handshake. ASGI's `websocket.close` is the correct
+        # way to do this; hand-rolling the RFC6455 frame (a `frame` local built
+        # from FIN|opcode 0x8 and payload 1008) was dead code -- it was
+        # constructed and never sent, because the ASGI event is what uvicorn
+        # actually serialises.
+        #
+        # Note for whoever debugs the next occurrence: the browser does NOT
+        # surface this as a 1008 close. The handshake never completes, so the
+        # client sees a generic connection failure (Chrome:
+        # "WebSocket connection to ... failed", WebSocketClient's
+        # onerror -> "WebSocket error occurred") and burns its reconnect
+        # attempts against a rejection that will never change. Correlate with
+        # the WARNING line above and the uvicorn `"..." 403` line, not with
+        # anything the client says.
         await send({"type": "websocket.close", "code": 1008, "reason": "tunnel auth required"})
 
 
@@ -223,15 +267,21 @@ def install_tunnel_auth(app, token: Optional[str] = None) -> None:
     rate limiter and every other middleware before being turned away.
     """
     resolved = token if token is not None else _env_token()
+    src = "argument" if token is not None else (
+        "TUNNEL_AUTH_TOKEN_FILE" if os.getenv("TUNNEL_AUTH_TOKEN", "").strip() == ""
+        and os.getenv("TUNNEL_AUTH_TOKEN_FILE", "").strip() else "TUNNEL_AUTH_TOKEN"
+    )
     if resolved:
         logger.info(
-            "Tunnel auth gate ACTIVE (TUNNEL_AUTH_TOKEN set). "
-            "Open paths: %s", ", ".join(sorted(OPEN_PATHS))
+            "Tunnel auth gate ACTIVE (secret resolved via %s, %d chars). "
+            "Open paths: %s", src, len(resolved), ", ".join(sorted(OPEN_PATHS))
         )
     else:
         logger.error(
-            "Tunnel auth gate ACTIVE but TUNNEL_AUTH_TOKEN is UNSET -- every "
+            "Tunnel auth gate ACTIVE but no secret could be resolved -- every "
             "tunneled request will be rejected (fail-closed). Generate one with: "
-            "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and "
+            "either export TUNNEL_AUTH_TOKEN_FILE=<path to a file holding it> "
+            "(preferred) or TUNNEL_AUTH_TOKEN inline."
         )
     app.add_middleware(TunnelAuthMiddleware, token=token)

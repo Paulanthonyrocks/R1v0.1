@@ -62,6 +62,13 @@ backend/keys/
 evidence_key
 !*.key.example
 
+# Tunnel-auth secret. Same reasoning: a leaked token makes the backend's own
+# gate meaningless, and the backend/keys/ dir above already covers this path,
+# but *.token is also ignored wherever else it lands. The .example files are
+# kept so the setup stays documented in-repo.
+*.token
+!*.token.example
+
 # Keep scratch audit artifacts local, but include maintained regressions.
 backend/tests/*
 !backend/tests/test_pipeline_followup.py
