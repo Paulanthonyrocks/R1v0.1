@@ -68,6 +68,9 @@ backend/tests/*
 # Phase 1 evidence-integrity regressions: sealing must fail closed on a
 # tampered artefact, an edited manifest, a forged signature, and a missing key.
 !backend/tests/test_evidence_integrity.py
+# Tunnel-auth gate: a leaked loca.lt password (the runner's public IP) must
+# NOT be sufficient, and an unset token must reject rather than open.
+!backend/tests/test_tunnel_auth.py
 backend/app/tests/
 hosting/__tests__/
 # One-off manual probe scripts (verified: empty / hello-world debug scratch)

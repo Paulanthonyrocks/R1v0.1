@@ -90,28 +90,10 @@ export function appendTunnelPassword(url: URL): void {
 }
 
 /**
- * Redact the tunnel password for logging. The `?password=` query param is
- * mandatory for tunnel deployments (browsers can't set headers on the WS
- * handshake, and loca.lt only honours the query form at its edge), so the
- * secret WILL be in request URLs by design -- but it must never reach logs:
- * console output is persisted to backend/logs and forwarded. Chrome's native
- * "WebSocket connection to '...' failed" line can't be redacted; everything
- * the app itself logs can and must go through here.
+ * NOTE: `sanitizeTunnelUrl` (redacting both `password=` and `tunnel_token=`)
+ * is defined further down in this file, next to the other tunnel-secret
+ * helpers it must stay in sync with. Do not re-add a second copy here.
  */
-export function sanitizeTunnelUrl(url: string): string {
-  if (!url || url.indexOf('password=') === -1) return url;
-  try {
-    const isAbsolute = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
-    const urlObj = new URL(url, 'http://redact.local');
-    if (urlObj.searchParams.has('password')) {
-      urlObj.searchParams.set('password', 'REDACTED');
-    }
-    const out = urlObj.toString();
-    return isAbsolute ? out : out.replace('http://redact.local', '');
-  } catch {
-    return url.replace(/([?&]password=)[^&#]*/g, '$1REDACTED');
-  }
-}
 
 /**
  * Returns true when the URL host is a loca.lt tunnel — the only provider
@@ -137,6 +119,70 @@ export function isLocaLtHost(url: URL | string): boolean {
     return u.host.endsWith('.loca.lt') || u.host === 'loca.lt';
   } catch {
     return false;
+  }
+}
+
+// --- Backend tunnel auth token (defence in depth) ---
+//
+// The loca.lt password above is set to the runner's PUBLIC IP, which means it
+// is readable straight out of any tunnel URL. The backend therefore enforces
+// its own independent secret (TUNNEL_AUTH_TOKEN / `tunnel_token`), so a leaked
+// or guessed IP password still gets a 401 at the application.
+//
+// Unlike the loca.lt password this is NOT host-gated: the backend gate applies
+// to every host it protects, including cloudworkstations.dev. Idempotent.
+
+let _cachedAuthToken: string | null | undefined;
+
+export function getTunnelAuthToken(): string | null {
+  if (_cachedAuthToken !== undefined) return _cachedAuthToken;
+  const tok = process.env.NEXT_PUBLIC_TUNNEL_AUTH_TOKEN;
+  _cachedAuthToken = tok && tok.trim().length > 0 ? tok.trim() : null;
+  return _cachedAuthToken;
+}
+
+/** REST helper: append `?tunnel_token=`. Idempotent. */
+export function withTunnelAuth(url: string): string {
+  const tok = getTunnelAuthToken();
+  if (!tok) return url;
+  try {
+    const urlObj = new URL(url);
+    if (!urlObj.searchParams.has('tunnel_token')) {
+      urlObj.searchParams.set('tunnel_token', tok);
+    }
+    return urlObj.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** WebSocket helper: append `?tunnel_token=`. Idempotent.
+ *
+ * The query form is the ONLY option for WebSockets -- the browser WS API
+ * accepts no custom headers on the handshake. */
+export function appendTunnelAuth(url: URL): void {
+  const tok = getTunnelAuthToken();
+  if (!tok) return;
+  if (!url.searchParams.has('tunnel_token')) {
+    url.searchParams.set('tunnel_token', tok);
+  }
+}
+
+/** Redact BOTH tunnel secrets for logging. */
+export function sanitizeTunnelUrl(url: string): string {
+  if (!url) return url;
+  if (url.indexOf('password=') === -1 && url.indexOf('tunnel_token=') === -1) return url;
+  try {
+    const isAbsolute = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
+    const urlObj = new URL(url, 'http://redact.local');
+    if (urlObj.searchParams.has('password')) urlObj.searchParams.set('password', 'REDACTED');
+    if (urlObj.searchParams.has('tunnel_token')) urlObj.searchParams.set('tunnel_token', 'REDACTED');
+    const out = urlObj.toString();
+    return isAbsolute ? out : out.replace('http://redact.local', '');
+  } catch {
+    return url
+      .replace(/([?&]password=)[^&#]*/g, '$1REDACTED')
+      .replace(/([?&]tunnel_token=)[^&#]*/g, '$1REDACTED');
   }
 }
 

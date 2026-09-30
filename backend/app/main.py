@@ -41,6 +41,7 @@ from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitConfig
 from app.middleware.security_middleware import SecurityHeadersMiddleware
 from app.services.audit_logger import AuditLogger
+from app.utils.tunnel_auth import install_tunnel_auth
 
 # --- Routers ---
 from app.routers import (
@@ -177,6 +178,14 @@ def setup_cors(app: FastAPI, config: dict):
 # direct deployment can drop the query param entirely. It does not strip the
 # query param for tunnel deployments (that would break the tunnel gate).
 class TunnelSecretMiddleware:
+    # Also installed as a logging.Filter on the uvicorn loggers (see
+    # _install_tunnel_secret_log_filter). Belt-and-braces: the middleware
+    # mutates the ASGI scope, but a CORS preflight can be answered by
+    # CORSMiddleware without the request ever reaching a handler, and the
+    # scope mutation is not a guarantee the emitted log line is scrubbed.
+    # The filter sits on the logger itself, so it catches every record
+    # regardless of which middleware layer produced it.
+
     def __init__(self, app: ASGIApp):
         self.app = app
 
@@ -231,6 +240,88 @@ class TunnelSecretMiddleware:
             # the backend -- so redaction cannot break auth.)
             scope["query_string"] = self._redact_query(scope.get("query_string", b""))
         await self.app(scope, receive, send)
+
+
+class TunnelSecretLogFilter(logging.Filter):
+    """Scrub the tunnel password from uvicorn's request lines (2026-09-28).
+
+    The middleware above redacts `scope["query_string"]`, and that DOES work for
+    ordinary requests -- on Sep-28 both WebSocket handshakes and the GET were
+    logged as `password=REDACTED`. It did not work for the CORS preflight:
+
+        uvicorn.access - "OPTIONS /api/v1/analytics/history/...?hours=24&password=35.226.22.63" 200
+        uvicorn.access - "GET      /api/v1/analytics/history/...?hours=24&password=REDACTED" 200
+
+    Two earlier explanations were wrong and are recorded so they are not
+    retried: (a) "RateLimitMiddleware answers preflights" -- false, it passes
+    OPTIONS through (rate_limit_middleware.py:157-159); (b) "TunnelSecret is
+    inner to CORSMiddleware" -- also false, it is registered last and therefore
+    runs FIRST, outermost. The scope dict is the same object uvicorn logs from
+    (h11_impl.py:481 and websockets_impl.py:283 both call
+    get_path_with_query_string(self.scope)), so a redaction that is skipped for
+    one method and not another points at the preflight not traversing the same
+    middleware stack -- most plausibly the OPTIONS response is produced during
+    routing/handshake handling, before the user middleware chain is entered.
+
+    Rather than keep guessing at which layer owns preflights, this filter runs at
+    EMIT time on the logger itself. No matter which code path produced the
+    record -- middleware, router, or a preflight handled during handshake -- the
+    message is scrubbed on its way to every handler. It is idempotent with the
+    middleware and cannot break routing: the tunnel already validated the secret
+    at the proxy edge, and nothing downstream reads `?password=`.
+
+    Redaction is targeted at the known query-param form so unrelated text that
+    merely contains the word "password" is left alone.
+    """
+
+    # Both tunnel secrets are redacted by two independent passes in filter().
+    # A single combined alternation was tried first and is wrong: with two
+    # capture groups the replacement \1REDACTED silently drops the second
+    # branch's prefix, so `tunnel_token=` could survive unscrubbed.
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if "password=" not in message and "tunnel_token=" not in message:
+            return True
+        # Two passes, one per secret: a combined alternation would let the
+        # replacement text of one branch consume the other's prefix.
+        scrubbed = re.sub(r"((?:[?&]|%3[fF]|%26)password=)[^&\"'\s]*", r"\1REDACTED", message)
+        scrubbed = re.sub(r"((?:[?&]|%3[fF]|%26)tunnel_token=)[^&\"'\s]*", r"\1REDACTED", scrubbed)
+        if scrubbed != message:
+            # Mutate in place and invalidate the cached formatting so every
+            # handler renders the scrubbed text.
+            record.msg = scrubbed
+            record.args = ()
+            record.message = scrubbed
+        return True
+
+
+def _install_tunnel_secret_log_filter() -> int:
+    """Attach TunnelSecretLogFilter to every logger that can emit a request line.
+
+    Returns the number of loggers patched. Idempotent.
+    """
+    patched = 0
+    targets = (
+        "uvicorn.access", "uvicorn.error", "uvicorn",
+        "app.routers.ws", "app.websocket.connection_manager",
+    )
+    for name in targets:
+        lg = logging.getLogger(name)
+        if not any(isinstance(f, TunnelSecretLogFilter) for f in lg.filters):
+            lg.addFilter(TunnelSecretLogFilter())
+            patched += 1
+    # A filter on a parent logger does NOT apply to records propagated from a
+    # child with propagate=False (every logger in config.yaml sets it), so the
+    # root logger gets it too as a catch-all.
+    root = logging.getLogger()
+    if not any(isinstance(f, TunnelSecretLogFilter) for f in root.filters):
+        root.addFilter(TunnelSecretLogFilter())
+        patched += 1
+    return patched
 
 # --- Middleware Implementation ---
 class WebSocketOriginMiddleware:
@@ -318,6 +409,19 @@ async def lifespan(app: FastAPI):
                 logger.info(_keepalive_status)
         except Exception as e:
             logger.warning(f"Could not audit WebSocket protocol keepalive: {e}")
+
+        # 0b. Tunnel-secret log filter. Installed before anything can emit a
+        # request line, and on the LOGGERS themselves rather than only on the
+        # middleware, so a CORS preflight (which is answered without traversing
+        # the user middleware chain) is scrubbed too. The middleware redacts the
+        # ASGI scope; this catches whatever the scope path misses. On Sep-28 the
+        # middleware alone left one raw `?password=35.226.22.63` on an OPTIONS
+        # preflight line while the same GET on the same path was redacted.
+        try:
+            _patched = _install_tunnel_secret_log_filter()
+            logger.info(f"Tunnel-secret log filter installed on {_patched} logger(s).")
+        except Exception as e:
+            logger.warning(f"Could not install tunnel-secret log filter: {e}")
 
         # 1. System Info
         try:
@@ -585,6 +689,14 @@ app.add_middleware(TunnelSecretMiddleware)
 # Initialize CORS
 if cfg_dict:
     setup_cors(app, cfg_dict)
+
+# Tunnel auth gate. Registered AFTER setup_cors on purpose: Starlette runs the
+# last-added middleware outermost, and this must be the FIRST thing an inbound
+# request meets -- ahead of CORS preflight handling and the rate limiter, so an
+# unauthenticated caller is turned away before it can consume a rate-limit
+# budget or reach any handler. Added before setup_cors it would sit inside and
+# an unauthenticated request would already have been preflighted and counted.
+install_tunnel_auth(app)
 
 # Audit Logger Middleware
 @app.middleware("http")

@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
-import { appendTunnelPassword, sanitizeTunnelUrl } from '../api/backendBaseUrl';
+import { appendTunnelPassword, appendTunnelAuth, sanitizeTunnelUrl } from '../api/backendBaseUrl';
 import { resetFeedSubscriptionState } from './feedSubscriptionState';
 
 interface WebSocketErrorEvent extends Event {
@@ -460,6 +460,19 @@ export class WebSocketClient implements IWebSocketClient {
         appendTunnelPassword(url);
     }
 
+    /**
+     * Append the backend's own auth token so the WebSocket upgrade passes the
+     * application's TunnelAuthMiddleware. Query param rather than header
+     * because the browser WS API cannot set headers on a handshake.
+     *
+     * Independent of the loca.lt password above: that one is the runner's
+     * public IP and is readable from any tunnel URL, so the backend enforces a
+     * second secret that is not. Both are applied; neither replaces the other.
+     */
+    private appendTunnelAuthToken(url: URL): void {
+        appendTunnelAuth(url);
+    }
+
     private performConnection(token: string | null): Promise<void> {
         token = token || this.currentToken || this.tokenManager.getCurrentToken();
         if (!token) {
@@ -477,6 +490,7 @@ export class WebSocketClient implements IWebSocketClient {
             const url = new URL(this.url);
             if (this.clientId) url.pathname = `/api/v1/ws/${this.clientId}`;
             this.appendTunnelPassword(url);
+            this.appendTunnelAuthToken(url);
             console.debug('[WebSocketClient] Connecting:', sanitizeTunnelUrl(url.toString()));
             const socket = new WebSocket(url.toString());
             this.ws = socket;

@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
-import { getBackendBaseURL, withTunnelPassword, getTunnelPassword } from './backendBaseUrl';
+import { getBackendBaseURL, withTunnelPassword, getTunnelPassword, withTunnelAuth } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -143,7 +143,7 @@ export class APIClient {
     }
 
     async request<T>(path: string, options: RequestInit & { timeout?: number } = {}, retryAttempt: number = 0, authReplayed = false): Promise<T> {
-        const url = withTunnelPassword(new URL(path, this.baseURL).toString());
+        const url = withTunnelAuth(withTunnelPassword(new URL(path, this.baseURL).toString()));
         // AUDIT (session/transport fix): Authorization is computed per request from
         // TokenManager instead of being cached on this.headers — a cached header went
         // stale after refresh/logout and replayed dead credentials.
@@ -246,7 +246,7 @@ export class APIClient {
      * tunnel-password handling with request(); errors are APIError like JSON paths.
      */
     async getBlob(path: string, options: RequestInit & { timeout?: number } = {}): Promise<Blob> {
-        const url = withTunnelPassword(new URL(path, this.baseURL).toString());
+        const url = withTunnelAuth(withTunnelPassword(new URL(path, this.baseURL).toString()));
         const token = this.tokenManager.getCurrentToken();
         const fetchOptions: RequestInit & { timeout?: number } = {
             ...options,
