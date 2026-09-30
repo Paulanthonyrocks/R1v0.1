@@ -139,6 +139,12 @@ def setup_cors(app: FastAPI, config: dict):
     # normally rejects and which otherwise lets ANY tunnel subdomain with a
     # token reach the API (crack #2).
     allow_origin_regex = r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
+
+    # The module-level _CORS_ALLOW_ORIGIN_REGEX above is the single source of
+    # truth: the error handlers (_cors_headers_for) must apply the identical
+    # allowlist to responses CORSMiddleware never decorates. Re-compiling it
+    # here would let the two drift, which is exactly how a 503 gets reflected
+    # to an origin that should never have been allowed.
     
     if env == "development":
         # No wildcard origins — rely solely on the regex matcher. Note: Starlette
@@ -641,20 +647,80 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# --- Exception Handlers ---
+# --- Error responses must carry CORS headers ---
+#
+# CORSMiddleware decorates responses that flow back up through it. An
+# exception_handler returning its OWN JSONResponse does NOT get decorated:
+# Starlette's ExceptionMiddleware sits INSIDE CORSMiddleware, so the handler's
+# response short-circuits the stack and reaches the browser with no
+# Access-Control-Allow-Origin.
+#
+# That is why a 503 from get_current_active_user surfaces in the browser as
+# "blocked by CORS policy: No 'Access-Control-Allow-Origin' header" rather than
+# the 503 it actually is -- the real status is hidden behind a CORS error, and
+# the caller cannot tell auth failure from a genuine network fault.
+#
+# Fix: echo the request Origin (when it matches the configured allowlist) and
+# Vary: Origin onto error responses. The allowlist is re-evaluated here rather
+# than echoing blindly -- reflecting any Origin with credentials would hand any
+# site credentialed cross-origin access.
+# Defaults so the error handlers are safe even if setup_cors() never runs
+# (it is conditional on cfg_dict). Without these, an exception raised before
+# setup_cors would raise NameError inside the exception handler itself.
+_CORS_ALLOW_ORIGIN_REGEX = re.compile(
+    r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt"
+    r"|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
+)
+_ALLOWED_ORIGIN_LITERALS: set = set()
+
+
+def _cors_headers_for_origin(origin: Optional[str]) -> dict:
+    """CORS headers for an error response CORSMiddleware never decorates.
+
+    Takes the Origin string directly (not a Request) so the outermost
+    TunnelAuthMiddleware can reuse it without wrapping an ASGI scope in a full
+    starlette Request. Returns {} for a disallowed origin, so this can never
+    widen the allowlist.
+    """
+    if not origin:
+        return {}
+    try:
+        allowed = bool(_CORS_ALLOW_ORIGIN_REGEX.fullmatch(origin))
+    except (TypeError, ValueError):
+        allowed = False
+    if not allowed and origin not in _ALLOWED_ORIGIN_LITERALS:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
+
+
+def _cors_headers_for(request: Request) -> dict:
+    """Attach CORS headers to error responses CORSMiddleware never sees."""
+    return _cors_headers_for_origin(request.headers.get("origin"))
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     trace_id = request_id_var.get() or str(uuid.uuid4())
     logger.exception(f"Unhandled exception (Trace ID: {trace_id}):")
     detail = str(exc) if os.getenv("ENVIRONMENT") == "development" else "Internal Server Error"
-    return JSONResponse(status_code=500, content={"detail": detail, "trace_id": trace_id})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": detail, "trace_id": trace_id},
+        headers=_cors_headers_for(request),
+    )
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    headers = dict(exc.headers or {})
+    headers.update(_cors_headers_for(request))
     return JSONResponse(
-        status_code=exc.status_code, 
-        content={"detail": exc.detail}, 
-        headers=exc.headers
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers
     )
 
 # --- Middleware Registration ---

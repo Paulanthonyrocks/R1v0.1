@@ -34,6 +34,7 @@ middleware matches on path prefix rather than per-route.
 import hmac
 import logging
 import os
+import re
 from typing import List, Optional, Set
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -53,6 +54,38 @@ OPEN_PREFIXES: List[str] = ["/static"]
 
 class TunnelAuthError(Exception):
     """Raised internally to produce a 401. Never escapes to the client as 500."""
+
+
+def _origin_of(scope) -> Optional[str]:
+    """Read the Origin request header straight off the ASGI scope."""
+    want = b"origin"
+    for k, v in scope.get("headers", []):
+        if k.lower() == want:
+            return v.decode("latin-1")
+    return None
+
+
+# Same allowlist as app.main.setup_cors. Only used if that module cannot be
+# imported; it deliberately cannot widen the allowlist.
+_FALLBACK_CORS_REGEX = re.compile(
+    r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt"
+    r"|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
+)
+
+
+def _fallback_cors_headers_for_origin(origin: Optional[str]) -> dict:
+    if not origin:
+        return {}
+    try:
+        if not _FALLBACK_CORS_REGEX.fullmatch(origin):
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
 
 
 def _env_token() -> Optional[str]:
@@ -133,27 +166,44 @@ class TunnelAuthMiddleware:
                 f"Tunnel auth rejected {scope['type']} {path} from {who} "
                 f"(no valid secret presented)"
             )
+            # This middleware is OUTERMOST -- it answers before CORSMiddleware
+            # ever runs, so its rejection would reach the browser with no
+            # Access-Control-Allow-Origin and surface as an opaque CORS error
+            # rather than the 401 it is.
+            #
+            # The matcher is imported from app.main so there is exactly ONE
+            # allowlist (a second copy is how it drifts). The import is lazy
+            # because app.main imports this module at import time.
+            #
+            # If it fails we fall back to the SAME compiled pattern below
+            # rather than silently emitting no CORS headers: a swallowed
+            # ImportError here would restore the exact bug this fixes, and the
+            # fallback cannot widen the allowlist (same regex, same fullmatch).
+            try:
+                from app.main import _cors_headers_for_origin
+            except Exception:
+                _cors_headers_for_origin = _fallback_cors_headers_for_origin
+            extra = _cors_headers_for_origin(_origin_of(scope))
             if scope["type"] == "websocket":
                 # Close during handshake. 1008 = policy violation.
                 await self._reject_ws(send)
                 return
-            await self._reject_http(send)
+            await self._reject_http(send, extra)
             return
 
         await self.app(scope, receive, send)
 
     @staticmethod
-    async def _reject_http(send: Send) -> None:
+    async def _reject_http(send: Send, extra_headers: Optional[dict] = None) -> None:
         body = b'{"detail":"Tunnel authentication required."}'
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("ascii")),
-                (b"www-authenticate", b"TunnelAuth"),
-            ],
-        })
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+            (b"www-authenticate", b"TunnelAuth"),
+        ]
+        for k, v in (extra_headers or {}).items():
+            headers.append((k.encode("latin-1"), str(v).encode("latin-1")))
+        await send({"type": "http.response.start", "status": 401, "headers": headers})
         await send({"type": "http.response.body", "body": body})
 
     @staticmethod

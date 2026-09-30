@@ -218,6 +218,46 @@ def test_evidence_paths_are_gated():
         assert not any(p.startswith(o) for o in ta.OPEN_PREFIXES), f'{p} bypassed'
 
 
+def _hdrs(sent):
+    """Collect response headers case-insensitively (ASGI header names are
+    bytes and this middleware emits some in mixed case)."""
+    out = {}
+    for m in sent:
+        if m.get('type') == 'http.response.start':
+            for k, v in m['headers']:
+                out[k.decode().lower()] = v.decode()
+    return out
+
+
+def test_rejection_carries_cors_headers():
+    """A 401 from the OUTERMOST middleware would otherwise reach the browser
+    with no Access-Control-Allow-Origin and surface as an opaque CORS error
+    rather than the 401 it is. Same defect that hid the 503 behind CORS."""
+    inner = App()
+    mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+    origin = 'https://3000-firebase-x.cluster-abc.cloudworkstations.dev'
+    scope = make_scope(headers=[(b'origin', origin.encode())])
+    _, sent = run(mw, scope)
+    hdrs = _hdrs(sent)
+    assert hdrs.get('access-control-allow-origin') == origin, \
+        f"401 must echo the allowed Origin, got {hdrs}"
+    assert hdrs.get('vary') == 'Origin'
+    assert hdrs.get('access-control-allow-credentials') == 'true'
+
+
+def test_rejection_omits_cors_for_disallowed_origin():
+    """An origin outside the allowlist must NOT be reflected."""
+    inner = App()
+    mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+    scope = make_scope(headers=[(b'origin', b'https://evil.example.com')])
+    _, sent = run(mw, scope)
+    hdrs = _hdrs(sent)
+    assert 'access-control-allow-origin' not in hdrs, \
+        'must not reflect a disallowed origin'
+    assert 'access-control-allow-credentials' not in hdrs, \
+        'must not offer credentialed access to a disallowed origin'
+
+
 if __name__ == '__main__':
     failures = []
     for name, fn in sorted(list(globals().items())):
