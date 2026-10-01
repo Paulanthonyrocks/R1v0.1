@@ -197,19 +197,20 @@ class TunnelSecretMiddleware:
 
     @staticmethod
     def _redact_query(query_string: bytes) -> bytes:
-        """Replace the tunnel secret in a raw query string with REDACTED.
+        """Redact BOTH tunnel secrets from a raw query string.
 
-        uvicorn's access logger formats the request line from the ASGI scope's
-        `query_string`, so redacting the scope redacts the log. The middleware
-        still sees the real value (it runs before uvicorn logs), so the tunnel
-        gate keeps working -- only the persisted log line is scrubbed.
+        Retained for defence in depth and for tests, but NOT applied to the live
+        scope -- see __call__ for why that is actively harmful. Both secrets are
+        handled, not just `password`: an earlier version redacted only
+        `password`, which would have left the auth token exposed in any
+        rendering built from the scope.
         """
-        if not query_string or b"password=" not in query_string:
+        if not query_string:
             return query_string
         out = []
         for part in query_string.split(b"&"):
-            if part.startswith(b"password="):
-                out.append(b"password=REDACTED")
+            if part.startswith(b"password=") or part.startswith(b"tunnel_token="):
+                out.append(part.split(b"=", 1)[0] + b"=REDACTED")
             else:
                 out.append(part)
         return b"&".join(out)
@@ -235,16 +236,39 @@ class TunnelSecretMiddleware:
                 if "password=" not in qs:
                     qs = (qs + "&" if qs else "") + "password=" + header_pw.decode("latin-1")
                     scope["query_string"] = qs.encode("latin-1")
-            # Redact for the access log (2026-09-28). The frontend already
-            # redacts its own console output via sanitizeTunnelUrl, but Chrome's
-            # native "WebSocket connection to ... failed" line cannot be
-            # intercepted from JS, and the SERVER-side copy was never covered.
-            # Redacting the scope here is the one place that catches the server
-            # side. The secret is still functional for this request: only the
-            # logged rendering is scrubbed. (Nothing downstream reads
-            # `?password=` -- the tunnel validates it at the proxy edge, before
-            # the backend -- so redaction cannot break auth.)
-            scope["query_string"] = self._redact_query(scope.get("query_string", b""))
+
+            # DO NOT redact `scope["query_string"]` here (2026-10-01). This
+            # middleware used to rewrite the LIVE scope to
+            # `password=REDACTED`, on the belief that the change was "log-only"
+            # because nothing downstream reads `?password=`. That belief was
+            # wrong in a way that broke live traffic:
+            #
+            # The scope is not a private copy -- it is the same dict uvicorn
+            # routes, redirects and logs from. Starlette's redirect_slashes
+            # builds the redirect Location from scope["path"] +
+            # scope["query_string"], so any 307 handed the BROWSER a URL
+            # containing `password=REDACTED`. The browser then re-requested it,
+            # the tunnel saw a wrong password, and rejected it:
+            #
+            #   GET /api/v1/incidents?password=<real>  ->  307
+            #   GET /api/v1/incidents/?password=REDACTED -> 401 from the tunnel
+            #
+            # which the browser surfaced as a CORS error, because the tunnel's
+            # 401 carries no Access-Control-Allow-Origin. This hit every
+            # endpoint whose canonical path has a trailing slash -- the whole
+            # incidents list.
+            #
+            # Log redaction belongs at EMIT time, which is what
+            # TunnelSecretLogFilter does: it is attached to uvicorn.access AND
+            # uvicorn.error (so the WS accepted-upgrade line is covered), it
+            # handles lazy %-style args, and no request path can bypass it
+            # because it runs after the record exists. That layer is now the
+            # single source of redaction, and the scope is left untouched.
+            #
+            # Note the header-promotion branch above still writes to the scope.
+            # That is a FUNCTIONAL change (making a header-supplied secret
+            # usable by `?password=` readers) and its value is the real secret,
+            # so a redirect carrying it forward is correct.
         await self.app(scope, receive, send)
 
 
