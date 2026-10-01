@@ -27,16 +27,44 @@ class DependencyContainer:
         self._lock = threading.Lock()
 
     def set_config(self, config: Any):
-        """Set the configuration for the container. This can only be called once."""
+        """Set the configuration for the container. This can only be called once.
+
+        A second call is not automatically a bug: app/main.py configures the
+        container at MODULE level, so `python -m app.main` plus uvicorn's
+        re-import of `app.main` executes that body twice in one process and the
+        singleton sees two calls with the SAME config. Logging that at WARNING
+        on every boot meant a genuine conflicting second configuration -- which
+        IS a bug, and a silent one, since the new value is discarded -- would
+        have been indistinguishable from routine start-up noise.
+
+        So the two cases are now separated: an identical re-set drops to DEBUG,
+        and a DIFFERENT config stays at WARNING and names the keys that
+        disagree, because that is the case where the container is now holding
+        something the caller did not ask for.
+        """
         with self._lock:
+            incoming = config.dict() if hasattr(config, "dict") else config
+
             if self._config:
-                logger.warning("DependencyContainer.set_config called again. Ignoring subsequent configuration.")
+                if self._config == incoming:
+                    logger.debug(
+                        "DependencyContainer.set_config called again with an "
+                        "identical config (module re-import); keeping the first."
+                    )
+                    return
+                differing = sorted(
+                    k for k in set(self._config) | set(incoming)
+                    if self._config.get(k) != incoming.get(k)
+                )
+                logger.warning(
+                    "DependencyContainer.set_config called again with a DIFFERENT "
+                    f"config; ignoring it. Disagreeing top-level keys: {differing}. "
+                    "The container is holding the FIRST config, so a caller "
+                    "expecting the new values will not get them."
+                )
                 return
 
-            if hasattr(config, "dict"):
-                self._config = config.dict()
-            else:
-                self._config = config
+            self._config = incoming
 
             ws_cfg = self._config.get("websocket", {})
             rl_cfg = ws_cfg.get("rate_limit", {})

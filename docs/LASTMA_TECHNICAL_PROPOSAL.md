@@ -38,23 +38,40 @@ We ingest the video and metadata streams the state already produces, and we oper
 | **Speed and lane events** | Per-lane vehicle counts, speed estimation, lane-discipline events | **Production** |
 | **ROI configuration** | Frontend-configurable regions of interest for targeted corridor and lane monitoring | **Production** |
 | **Incident detection** | Accident, breakdown, obstruction and incident records with severity classification | **Production** |
-| **Evidence bundle assembly** | Collects incident record + snapshot stills into a single bundle with a JSON manifest | **Partial.** See §2.2 |
+| **Evidence bundle assembly** | Collects incident record + snapshot stills into a single bundle with a JSON manifest | **Production.** SHA-256 sealed, verified 2026-09-30 |
 | **Forensic search** | Attribute filtering over incident records (type, severity, feed, lane, time window, text) | **Partial.** See §2.2 |
-| **Privacy masking** | Gaussian blur of caller-supplied face/plate boxes on export | **Partial.** See §2.2 |
+| **Privacy masking** | Gaussian blur of caller-supplied face/plate boxes on export | **Production.** See §2.2 |
+| **Release integrity** | The masked copy actually handed to a third party is sealed and separately verifiable | **Production.** Added 2026-10-01 |
 | **Retention enforcement** | Age- and size-based cleanup of video, snapshots, pavement imagery, with 7-day default age cap | **Production** |
 | **Audit trail** | SQLite audit_log table, indexed on timestamp, queried via `/logs` endpoint, 90-day retention | **Production** |
 
 ### 2.2 What is not yet production-ready — stated plainly
 
-We would rather flag these now than have your technical team find them during due diligence. Three modules are partially implemented and each maps to a requirement in the Nigerian Data Protection Act conversation (§5):
-
-**Evidence integrity.** The evidence bundle manifest currently records incident metadata, snapshot filenames and a bundle timestamp. **It contains no cryptographic hash of the bundle contents.** A manifest without a SHA-256 digest is an index, not a chain of custody. Under the Evidence Act and the ICT Act, a bundle that cannot be shown unaltered since capture is a bundle an offender's counsel will challenge. Remediation is specified in §7, Phase 1 — SHA-256 digest per artefact, manifest signed with a KMS-held key, verification endpoint for receiving counsel. This is the highest-priority engineering item in this proposal.
+We would rather flag these now than have your technical team find them during due diligence. Two modules are partially implemented and each maps to a requirement in the Nigerian Data Protection Act conversation (§5):
 
 **Forensic search scale.** The current search is a linear scan over incidents already resident in the database, bounded at 1,000 rows. It is adequate for a pilot corridor and will not hold at state volume across 36 states. Remediation: indexed query layer over incident attributes plus a plate-index table, specified in §7, Phase 2.
 
-**Privacy masking default.** Blur-on-export ships **disabled by default** and requires the caller to supply box coordinates from its own detector. No detector is bundled. For plate-bearing imagery this must be on-by-default with automated box derivation, specified in §7, Phase 1.
+**Plate recognition (ANPR).** Detection of vehicles and of the region a plate occupies is in production and drives privacy masking. Reading the plate *characters* is not: there is no recogniser bundled, and the allow/block list feature is a string lookup that reports `unconfigured` until a recogniser is wired behind the same interface. Nothing in the evidence chain depends on it — a bundle is sealed and verifiable whether or not its plate was ever read — but any commitment to plate-level enforcement must wait for it.
+
+**Two Phase 1 items closed since the first draft of this proposal**, recorded here so the change is visible rather than silent:
+
+- *Evidence integrity* (previously flagged as our highest-priority gap) is closed. Every bundle carries a SHA-256 digest per artefact and a signed manifest; the 2026-09-30 live run sealed 10 of 10 bundles. See §2.3 for the exact scheme and its one honest limitation.
+- *Privacy masking* is closed and was verified end-to-end, not merely enabled. Mask regions are derived automatically from live detector output and carried to the export step in a sidecar the detection worker writes; the caller no longer has to supply coordinates. With no vehicle in frame there are no regions to blur, and the release says `masked: false` with a reason instead of claiming a control that did not run.
 
 We raise these because the credibility of this proposal depends on you being able to rely on our numbers. A vendor who hides these in a demo loses the account in month three.
+
+### 2.3 Integrity scheme — precisely what we can and cannot prove
+
+The seal is **HMAC-SHA256** over a canonicalised manifest, with a key held in a file on the appliance (`ROUTE_ONE_EVIDENCE_KEY_FILE`, created 0600). We state the scheme because a symmetric MAC is not a digital signature, and the distinction is material:
+
+- **Proven:** the artefacts have not changed since sealing, and the manifest has not been altered since it was signed. Editing either — including editing the manifest *and* recomputing its digest — fails verification and names the specific artefact.
+- **Not proven: non-repudiation.** Anyone holding the key can both seal and verify. Our verification responses return `non_repudiation: false` explicitly, so this can never be misread later as an asymmetry we do not have.
+- Verification returns a report, never a bare boolean: manifest digest, signature, and each artefact separately, with expected versus actual digest.
+- Sealing is fail-closed. If key material is unreachable, the bundle and the release are still written — an incident is never lost — but marked `sealed: false`, and verification of an unsealed document fails loudly rather than passing quietly.
+
+**Both** the original bundle and the masked release copy are sealed. The release is the artefact a recipient actually holds, so it carries its own manifest, its own digests, and a pointer back to the digest of the bundle it derives from. Verification of the two is a separate endpoint, because a recipient holding the release needs the release verified.
+
+The signer is an interface, not a function. An Ed25519 or KMS-held asymmetric key can replace the MAC without changing the manifest shape, the service, or the verification endpoint.
 
 ---
 
@@ -160,11 +177,16 @@ Retention is enforced in code, not policy: age- and size-based cleanup with a 7-
 
 ## 7. Delivery plan
 
-**Phase 1 — weeks 1–6. Integrity foundations.**
-Evidence bundle SHA-256 digest per artefact; signed manifest with KMS-held key; verification endpoint for receiving counsel. Privacy masking switched to on-by-default with automatic box derivation from the plate and person detectors. Audit events extended to cover every evidence read, export and verification, not only incident lifecycle. Retention defaults reviewed and confirmed against the state retention schedule.
+**Phase 1 — weeks 1–6. Integrity foundations. COMPLETE.**
+Evidence bundle SHA-256 digest per artefact; signed manifest; verification endpoint for receiving counsel. Privacy masking on-by-default with automatic region derivation from the live detector output, carried to export by a sidecar written by the detection worker. Audit events extended to cover every evidence read, export, verification and release-verification, not only incident lifecycle. Retention defaults reviewed and confirmed against the state retention schedule (7-day media, 90-day audit).
+
+Two additions made on review of the completed phase, both recorded in §2.3 rather than left implicit:
+
+- **The masked release copy is sealed too.** The bundle's seal covers the unmasked originals, but the images a third party actually receives are different bytes produced by the masking pass. Releasing an unsealed copy would mean the artefact that leaves the building cannot be shown unaltered. The release now carries its own manifest and digests, a pointer back to the source bundle's digest, and its own verification endpoint.
+- **The scheme is HMAC-SHA256, not a KMS-held asymmetric key.** An earlier draft of this plan specified KMS. What is deployed is a symmetric MAC over a canonicalised manifest, with the key in a 0600 file on the appliance. It proves integrity and authenticity; it does **not** provide non-repudiation, and every verification response says so. Moving to Ed25519 or KMS is a drop-in behind the existing signer interface and is scoped as a hardening item, not a Phase 1 remainder.
 
 **Phase 2 — weeks 7–12. Forensic scale and multi-site.**
-Indexed forensic query layer replacing the linear scan. Plate index table for cross-corridor search. Re-identification accuracy measurement and reporting, published to LASTMA monthly. On-premises appliance packaging and hardening for site deployment.
+Indexed forensic query layer replacing the linear scan. Plate index table for cross-corridor search. Re-identification accuracy measurement and reporting, published to LASTMA monthly. On-premises appliance packaging and hardening for site deployment. Plate-character recognition (ANPR) behind the existing interface, so plate-level enforcement becomes possible; this does not gate the evidence chain.
 
 **Phase 3 — weeks 13–20. Recovery and reporting.**
 Reconciliation reporting: detected, issued, paid, collected, outstanding, by site and day. Dashboard for the command centre. Handover and operator training. Transition to a support agreement.

@@ -166,15 +166,27 @@ Route One recognises that a cloud-hosted deployment would create transfer obliga
 
 - In transit: TLS on the operator console and on all administrative endpoints.
 - At rest: platform encryption for the database, to be enabled at deployment with keys held by the State.
-- Evidence bundles: signing key held in a State-controlled key management service. **Route One does not hold the signing key.** This is deliberate — it means Route One cannot unilaterally produce or alter an evidence artefact, and the State can prove that in an audit.
+- Evidence bundles: signing key held in a file on the appliance, created 0600 and owned by the State. **In the current pilot configuration that file sits on Route One-supplied hardware and Route One administers it.** The target state is a State-controlled key management service holding the key, with Route One holding no signing capability at all; that is a deployment-control item, not a code change, and it is scheduled for the Phase 2 appliance-hardening work. Until it is done, the control that Route One cannot unilaterally alter an artefact is **not** satisfied by the current key custody, and we state that rather than let the target state be read as the present one.
 
 ### 7.4 Gaps in current security posture, stated plainly
 
-**Evidence bundles currently carry no cryptographic hash.** The manifest records incident metadata and snapshot filenames but no integrity digest, and the chain-of-custody implementation is a stub. Consequently, an evidence bundle produced today **cannot be demonstrated unaltered since capture**, which is exactly what it would need to survive challenge under the Evidence Act and the ICT Act. This is the highest-priority remediation in the delivery plan (Phase 1, week 1): SHA-256 digest per artefact, manifest signed with a State-held KMS key, and a verification endpoint so receiving counsel can independently confirm integrity. The operator console is not demoed to the State as court-admissible evidence until this is complete.
+**Key custody does not yet meet the target state.** As above, the integrity signing key currently resides in a 0600 file on the appliance rather than in a State-controlled KMS. The cryptographic mechanism is sound — see 7.5 — but a symmetric MAC means anyone holding the key can both seal and verify, so there is **no non-repudiation** until the key moves to State custody and, if required, the scheme moves to an asymmetric key behind the existing signer interface. Verification responses return `non_repudiation: false` explicitly so this is never misread as an asymmetry we hold.
 
 **No TLS is currently configured in the development deployment.** Production deployment is conditional on TLS termination at the State's edge, with certificate management owned by the State.
 
 We state both plainly because a DPIA that omits the security gaps of the system it assesses is not a DPIA.
+
+### 7.5 Evidence integrity — what is implemented and what it proves
+
+*(Added 2026-10-01; supersedes the earlier statement in this annex that bundles carried no cryptographic hash. That gap is closed.)*
+
+Every evidence bundle carries a SHA-256 digest per artefact and a signed manifest over a canonicalised serialisation. The masked release copy — the images actually handed to a third party — is sealed separately, with its own manifest and its own verification endpoint, and carries a pointer back to the digest of the bundle it derives from. Both were confirmed on live operation: the 2026-09-30 run sealed 10 of 10 bundles.
+
+What this proves: the artefacts have not changed since sealing, and the manifest has not been altered since signing. Editing either fails verification and names the specific artefact, including the case where an editor recomputes the manifest digest and cannot re-sign it.
+
+What this does not prove: non-repudiation (7.4). Sealing is fail-closed — where key material is unreachable the artefact is still written so no incident is lost, but is marked `sealed: false` and verification fails loudly rather than passing quietly.
+
+Privacy masking on export is on by default with regions derived from live detector output rather than supplied by the caller. Where no vehicle is present there is nothing to blur, and the release records `masked: false` with a reason; it does not report a control as satisfied when it did not run.
 
 ---
 

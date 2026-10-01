@@ -2,10 +2,42 @@ import os
 import time
 import logging
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List
 
 logger = logging.getLogger("app.services.retention")
+
+# Fallback for the size cap when config does not set one. The previous flat
+# 10 GB default was larger than the entire pilot volume (9.8 GB), and
+# _enforce_size_limit() returns early while a directory is under the cap -- so
+# on any small appliance the size valve could never fire and the disk filled
+# before cleanup did. Deriving the fallback from actual free space keeps the
+# valve reachable wherever this runs, instead of trusting a number that may
+# exceed the disk it is meant to protect.
+_FREE_SPACE_FRACTION = 0.5
+_FREE_SPACE_FLOOR_GB = 0.5
+_FREE_SPACE_CEILING_GB = 20.0
+
+
+def default_max_size_gb(path: str = ".") -> float:
+    """Half the free space on the volume holding `path`, clamped.
+
+    Used ONLY when config omits retention.max_size_gb. An explicit config
+    value always wins, because commissioning may deliberately size the cap
+    against a different volume than the one the process runs from.
+    """
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError:
+        free = 0
+    if free <= 0:
+        # Cannot measure: fall back to the floor rather than to a value that
+        # might exceed the disk. Cleanup then trims conservatively.
+        return _FREE_SPACE_FLOOR_GB
+    gb = (free / (1024 ** 3)) * _FREE_SPACE_FRACTION
+    return round(min(max(gb, _FREE_SPACE_FLOOR_GB), _FREE_SPACE_CEILING_GB), 2)
+
 
 class RetentionService:
     def __init__(self, config: Dict[str, Any]):
@@ -14,7 +46,14 @@ class RetentionService:
         self.enabled = self.retention_config.get("enabled", True)
         self.check_interval = self.retention_config.get("check_interval_seconds", 3600) # Default 1 hour
         self.max_age_days = self.retention_config.get("max_age_days", 7)
-        self.max_size_gb = self.retention_config.get("max_size_gb", 10)
+        if self.retention_config.get("max_size_gb") is not None:
+            self.max_size_gb = self.retention_config.get("max_size_gb")
+        else:
+            self.max_size_gb = default_max_size_gb()
+            logger.info(
+                f"retention.max_size_gb not configured; deriving "
+                f"{self.max_size_gb} GB from free space"
+            )
         
         # Ensure we have absolute paths or relative to project root
         self.monitored_directories = self.retention_config.get("directories", [

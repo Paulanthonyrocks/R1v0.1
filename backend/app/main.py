@@ -416,6 +416,20 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not audit WebSocket protocol keepalive: {e}")
 
+        # 0a. Auto-reload. Same entrypoint trap as above: `reload=False` lives
+        # in the __main__ block, so `uvicorn app.main:app --reload` re-arms it.
+        # Reported at boot because a mid-session reload RECOVERS cleanly (GPU
+        # workers respawn, feeds restart) and so leaves no other trace -- this
+        # line is the only evidence it happened.
+        try:
+            _reload_status = _audit_uvicorn_reload()
+            if "WARNING" in _reload_status:
+                logger.warning(_reload_status)
+            else:
+                logger.info(_reload_status)
+        except Exception as e:
+            logger.warning(f"Could not audit uvicorn autoreload: {e}")
+
         # 0b. Tunnel-secret log filter. Installed before anything can emit a
         # request line, and on the LOGGERS themselves rather than only on the
         # middleware, so a CORS preflight (which is answered without traversing
@@ -923,10 +937,34 @@ if __name__ == "__main__":
     # the tunnel — disable the protocol-level one entirely. Without this,
     # every connection is doomed at its first protocol ping cycle.
     uvicorn.run(
-        "app.main:app", 
-        host="0.0.0.0", 
-        port=8000, 
-        reload=True, 
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        # reload=False (2026-10-01). It was True here, which was wrong for this
+        # deployment on two counts:
+        #
+        # (1) NOISE. uvicorn's reloader watches the whole cwd (backend/), which
+        #     contains logs/ -- the directory THIS PROCESS IS WRITING TO. Every
+        #     log line the backend emits became a filesystem event. The live
+        #     Sep-30 run logged 7,195 "N changes detected" lines in 43 minutes
+        #     (~170/min), which is 76% of backend_main.log.
+        #
+        # (2) RESTART HAZARD. A reload tears down the process and respawns,
+        #     which kills 3 GPU inference workers, every ingestion process and
+        #     every live feed mid-run. On a Kaggle box nobody edits .py files,
+        #     so the only realistic trigger was our own log writes -- and one
+        #     would have silently restarted the pipeline.
+        #
+        # The reloader did filter out non-.py changes, so it never actually
+        # fired (11 config loads, all at startup, none mid-run) -- the cost was
+        # CPU and log volume, not restart thrash. But "it hasn't fired yet" is
+        # not a reason to leave a restart primitive armed.
+        #
+        # NOTE: as with ws_ping_interval below, this block is SKIPPED when the
+        # server is started via the CLI (`uvicorn app.main:app --reload`), which
+        # re-arms the hazard through the other door. _audit_uvicorn_reload()
+        # runs at boot and reports which entrypoint is in use.
+        reload=False,
         log_level="info",
         proxy_headers=True,
         forwarded_allow_ips="*",
@@ -995,3 +1033,58 @@ def _audit_websocket_protocol_keepalive() -> str:
         "connect+40s (browser auto-PONG cannot return within 20s through a "
         "50-67s RTT tunnel). " + _PROTOCOL_KEEPALIVE_REMEDY
     )
+
+
+# --- Auto-reload enforcement (2026-10-01) -----------------------------------
+# `reload=False` in the __main__ block above is skipped on a CLI start, exactly
+# like ws_ping_interval=None. `uvicorn app.main:app --reload` therefore re-arms
+# the same hazard through the other door, and -- unlike the keepalive case --
+# nothing about the resulting run looks wrong: the pipeline comes back up, so a
+# restart in the middle of a session reads as "it recovered" rather than
+# "something restarted it". A reload here also kills 3 GPU workers and every
+# live feed, and (because the reloader watches backend/, which includes logs/)
+# the process's own log writes are what would trigger it.
+#
+# Same DETECTION approach as the keepalive audit: read our own command line and
+# report the real state at boot, rather than trying to reach into uvicorn's
+# Config (which is not reachable from app code under the CLI).
+
+_RELOAD_REMEDY = "restart without --reload (or: python -m app.main)"
+
+
+def _audit_uvicorn_reload() -> str:
+    """Report whether the autoreloader is armed in THIS process.
+
+    Returns a human-readable status; the caller logs it. Never raises.
+    """
+    try:
+        cmdline = " ".join(psutil.Process().cmdline())
+    except Exception as e:
+        return f"autoreload: could not inspect own command line ({e})"
+
+    normalized = cmdline.replace("\\", "/")
+    lowered = normalized.lower()
+
+    # `python -m app.main` -> the __main__ block owns the setting.
+    if "app.main" in lowered and "-m app.main" in lowered.replace("  ", " "):
+        return "autoreload: DISABLED (started via `python -m app.main`)"
+
+    is_uvicorn_cli = ("uvicorn" in lowered) and ("-m app.main" not in lowered)
+    if not is_uvicorn_cli:
+        return (
+            "autoreload: DISABLED (not a uvicorn CLI start; nothing is "
+            "watching the filesystem)"
+        )
+
+    if "--reload" in lowered or "--reload-dir" in lowered:
+        return (
+            "autoreload: WARNING -- started via the uvicorn CLI WITH --reload, "
+            "so the autoreloader IS watching backend/ (which includes logs/, the "
+            "directory this process writes to). A reload kills 3 GPU inference "
+            "workers, every ingestion process and every live feed, then brings "
+            "them back -- so the run recovers and nothing looks wrong. It also "
+            "regenerated ~170 'N changes detected' events/min in the Sep-30 log "
+            "(76% of backend_main.log). " + _RELOAD_REMEDY
+        )
+
+    return "autoreload: DISABLED (uvicorn CLI started without --reload)"

@@ -61,6 +61,12 @@ from app.services.constants import FeedManagerConstants
 class FeedManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        # Grace period before a feed's ingestion process is escalated from
+        # stop_event to SIGTERM. Read from config because the right value is
+        # pool-size dependent (see _stop_feed_process).
+        self._feed_stop_grace_s = self.config.get('feed_manager', {}).get(
+            'stop_grace_seconds', FeedManagerConstants.FEED_STOP_GRACE_S_DEFAULT
+        )
         self.logger = logger
 
         # Emergency SHM cleanup before initializing anything to prevent restart failures
@@ -1786,31 +1792,29 @@ class FeedManager:
         if process and process.is_alive():
             try:
                 loop = asyncio.get_running_loop()
-                # Dropped join timeout from 1.0s -> 0.2s. Once the per-feed
-                # stop_event.set() above propagates to Redis (RedisEvent.set()
-                # is a synchronous SET), the ingestion worker's should_stop()
-                # exits its frame loop within ~150ms (observed in production
-                # logs: child sent end-of-stream 136ms after SIGTERM, with
-                # the Redis-key path being even faster). A 1.0s wait was
-                # 5-7x longer than necessary per feed, accumulating to ~24s
-                # of pure sleep across the 24-feed inference pool at every
-                # shutdown. If the worker is genuinely stuck (deadlocked in
-                # cv2 / frame_buffer), 200ms is still plenty for the SIGTERM
-                # escalation path below to do its job.
-                await loop.run_in_executor(None, process.join, 0.2)
+                # Grace period is configurable (feed_manager.stop_grace_seconds)
+                # because the right value scales with the pool: worst case is
+                # grace x feed count. The previous hardcoded 200ms was tuned
+                # for a 24-feed pool and fired on NORMAL teardown in the live
+                # 3-feed run -- every child had already logged "terminated"
+                # and was still releasing SHM/Redis when the parent escalated,
+                # which added noise and risked SIGTERM mid-teardown.
+                grace = float(self._feed_stop_grace_s)
+                await loop.run_in_executor(None, process.join, grace)
 
                 if process.is_alive():
                     # The per-feed stop_event was set but the worker didn't
-                    # break its loop within 200ms. Most likely causes:
+                    # break its loop within the grace period. Most likely causes:
                     # blocked in cv2.VideoCapture.read() / SHM read / frame
                     # encode. Escalate to SIGTERM -- the signal handler is
                     # installed and will set the local flag immediately.
                     logger.warning(
                         f"Process {process.pid} for {feed_id} did not exit within "
-                        f"200ms after stop_event.set(); escalating to SIGTERM."
+                        f"{grace * 1000:.0f}ms after stop_event.set(); "
+                        f"escalating to SIGTERM."
                     )
                     process.terminate()
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(grace)
 
                     if process.is_alive():
                         # SIGTERM didn't work either. Force-kill.

@@ -3,6 +3,23 @@ from typing import Dict, Any, Optional, List
 class FeedManagerConstants:
     # Process & Queue Defaults
     PROCESS_JOIN_TIMEOUT = 3.0
+    # Grace period between stop_event.set() and the SIGTERM escalation for a
+    # feed's ingestion process (2026-10-01).
+    #
+    # This was a hardcoded 200ms, chosen to save ~24s of shutdown time across
+    # a then-24-feed pool. The live 3-feed run showed the cost of that: every
+    # feed logged "Ingestion process N terminated" at 14:52:27.120 and was
+    # STILL alive when the parent checked at 14:52:27.597. The child logs
+    # "terminated" when it finishes processing, then still has SHM release,
+    # Redis teardown and interpreter exit to do -- routinely more than 200ms.
+    # So the escalation fired on normal teardown rather than on a stall, which
+    # both adds noise and risks SIGTERM-ing a worker mid-teardown.
+    #
+    # Now configurable because the correct value scales with the pool: the
+    # worst case is this many seconds x number of feeds, which is negligible at
+    # 3-8 feeds and material at 24. Raise it if genuine stalls are being
+    # masked; the escalation and force-kill paths below still bound the wait.
+    FEED_STOP_GRACE_S_DEFAULT = 1.0
     QUEUE_MAX_SIZE = 500
     QUEUE_DRAIN_LIMIT = 100
     MAX_METRICS_HISTORY_LENGTH = 1000

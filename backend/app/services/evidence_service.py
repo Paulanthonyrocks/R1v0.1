@@ -63,6 +63,16 @@ class EvidenceService:
         safe = "".join(c for c in incident_id if c.isalnum() or c in "-_")
         return self.evidence_dir / safe
 
+    def release_path(self, incident_id: str) -> Path:
+        """Directory holding the masked, third-party release copy.
+
+        Kept beside the evidence bundle (not inside it) so that releasing a
+        masked copy can never mutate -- and thereby invalidate the seal on --
+        the original bundle. Single source of truth: the export router derives
+        this rather than building the name itself.
+        """
+        return self.bundle_path(incident_id).parent / f"{self.bundle_path(incident_id).name}_release"
+
     def _signer(self):
         """Return a signer, or None when key material is unavailable."""
         try:
@@ -242,6 +252,144 @@ class EvidenceService:
         except Exception as e:
             logger.error(f"Evidence manifest unreadable {incident_id}: {e}")
             return None
+
+    def seal_release(
+        self,
+        incident_id: str,
+        masked_dir: Path,
+        results: List[Dict[str, Any]],
+        source_manifest: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Seal the masked release copy so the RELEASED artefact has custody.
+
+        The evidence bundle's seal covers the unmasked originals. The images
+        actually handed to a third party are different bytes produced by a
+        different process, so an unsealed release means the artefact that
+        leaves the building cannot be shown unaltered -- which is the one the
+        recipient will actually be holding. This seals that copy too.
+
+        The release manifest is a DISTINCT document from the evidence
+        manifest. It records what masking did (`fully_masked`, per-artefact
+        outcomes) rather than pretending to be the original bundle, and it
+        carries the source bundle's digest so the chain from released copy
+        back to sealed original is explicit and checkable.
+
+        Fail-closed, exactly like save_bundle: when no key is available the
+        release is still written (the caller already produced the files) but
+        marked `sealed: false`, and verify_release refuses to call it valid.
+        """
+        if not self.enabled:
+            return {"sealed": False, "reason": "evidence bundles disabled"}
+
+        masked_count = sum(1 for r in results if r.get("masked"))
+        total = len(results)
+        release = {
+            "incident_id": incident_id,
+            "document": "masked_release",
+            "released_at": time.time(),
+            # Honest statement of what the privacy control actually did. A
+            # release with fully_masked=false is still a valid, sealed
+            # document -- it is a sealed record that the masking was partial.
+            "privacy": {
+                "enabled": True,
+                "snapshots_total": total,
+                "snapshots_masked": masked_count,
+                "fully_masked": bool(total) and masked_count == total,
+                "results": results,
+            },
+            # Names only, never absolute source paths: the release is meant to
+            # be verifiable on another host, where our staging paths mean
+            # nothing.
+            "artefact_names": sorted(
+                r["name"] for r in results if r.get("masked") and r.get("name")
+            ),
+        }
+
+        # Chain back to the sealed original. Absent source manifest is
+        # recorded as such rather than omitted, so the reader can tell an
+        # unlinked release from one whose parent was never sealed.
+        src_digest = (source_manifest or {}).get("integrity", {}).get("manifest_digest")
+        release["derived_from_bundle_digest"] = src_digest
+        release["source_bundle_sealed"] = bool(
+            (source_manifest or {}).get("sealed")
+        )
+
+        try:
+            masked_dir.mkdir(parents=True, exist_ok=True)
+            inventory = integrity.hash_artefacts(masked_dir, release["artefact_names"])
+            signer = self._signer()
+            if signer is not None:
+                # Set BEFORE sealing -- see save_bundle: the digest covers the
+                # whole manifest, so a field added afterwards breaks verify.
+                release["sealed"] = True
+                release["key_id"] = self.key_id
+                release["manifest_self_hash_excluded"] = True
+                release = integrity.seal_manifest(release, signer, inventory)
+            else:
+                release["artefacts"] = inventory
+                release["sealed"] = False
+
+            (masked_dir / "manifest.json").write_text(json.dumps(release, default=str))
+            release["release_dir"] = str(masked_dir)
+            logger.info(
+                f"Release bundle {incident_id} sealed={release['sealed']} "
+                f"masked={masked_count}/{total}"
+            )
+            return release
+        except Exception as e:
+            # Never lose the release: the files exist and the caller must be
+            # able to hand them over with an honest "not sealed" marker.
+            logger.error(f"Release bundle seal failed {incident_id}: {e}")
+            release["sealed"] = False
+            release["seal_error"] = str(e)
+            release["release_dir"] = str(masked_dir)
+            try:
+                (masked_dir / "manifest.json").write_text(
+                    json.dumps(release, default=str)
+                )
+            except Exception:
+                pass
+            return release
+
+    def verify_release(self, incident_id: str) -> Dict[str, Any]:
+        """Verify a sealed masked release. Mirrors verify_bundle's contract.
+
+        Never raises: a verification failure is a result, not an exception.
+        """
+        release_dir = self.release_path(incident_id)
+        manifest_path = release_dir / "manifest.json"
+        if not manifest_path.exists():
+            return {"valid": False, "sealed": False,
+                    "reason": f"no release produced for incident {incident_id}",
+                    "incident_id": incident_id, "document": "masked_release",
+                    "artefacts": []}
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except Exception as e:
+            return {"valid": False, "sealed": False,
+                    "reason": f"release manifest unreadable: {e}",
+                    "incident_id": incident_id, "document": "masked_release",
+                    "artefacts": []}
+        if not manifest.get("sealed"):
+            return {"valid": False, "sealed": False,
+                    "reason": "release was never sealed; it cannot be shown unaltered",
+                    "incident_id": incident_id, "document": "masked_release",
+                    "artefacts": []}
+        try:
+            signer = integrity.get_signer()
+        except integrity.SignerUnavailable as e:
+            return {"valid": False, "sealed": True,
+                    "reason": f"cannot verify: {e}",
+                    "incident_id": incident_id, "document": "masked_release",
+                    "artefacts": []}
+        report = integrity.verify_manifest(manifest, release_dir, signer)
+        report["incident_id"] = incident_id
+        report["sealed"] = True
+        report["key_id"] = manifest.get("key_id")
+        report["document"] = "masked_release"
+        report["privacy"] = manifest.get("privacy")
+        report["derived_from_bundle_digest"] = manifest.get("derived_from_bundle_digest")
+        return report
 
     def verify_bundle(self, incident_id: str) -> Dict[str, Any]:
         """Verify a sealed bundle end to end.

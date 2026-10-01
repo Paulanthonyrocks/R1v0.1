@@ -483,5 +483,151 @@ class SidecarDerivationTests(TestCase):
         self.assertEqual(len(boxes), 1, "PrivacyService must read what the worker wrote")
 
 
+class ReleaseSealTests(TestCase):
+    """The masked RELEASE is the artefact a third party actually holds.
+
+    The bundle's seal covers the unmasked originals; these assert the released
+    copy carries its own chain of custody, and -- more importantly -- that it
+    cannot be altered, or claimed as verified, after the fact.
+    """
+
+    def setUp(self):
+        os.environ['ROUTE_ONE_EVIDENCE_KEY'] = KEY.decode()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        os.environ.pop('ROUTE_ONE_EVIDENCE_KEY', None)
+        self.tmp.cleanup()
+
+    def _release(self, masked=2, total=None):
+        """Build a bundle, then seal a release over N masked copies."""
+        svc = make_service(self.dir)
+        src = Path(self.dir) / 'snap.jpg'
+        src.write_bytes(b'\xff\xd8\xff\xe0 fake jpeg bytes')
+        bundle = svc.save_bundle(INCIDENT, [str(src)], None)
+
+        release_dir = svc.release_path('INC-0001')
+        release_dir.mkdir(parents=True, exist_ok=True)
+        # `masked` images actually exist on disk; the remainder of `total`
+        # were attempted and failed, so they are reported but never written.
+        names = [f'rel_{i}.jpg' for i in range(masked)]
+        for n in names:
+            (release_dir / n).write_bytes(b'\xff\xd8 masked bytes')
+        results = [{'name': n, 'masked': True, 'boxes': 1} for n in names]
+        if total is not None and total > masked:
+            results += [{'name': f'miss_{i}.jpg', 'masked': False,
+                         'reason': 'no face/plate boxes available to mask'}
+                        for i in range(total - masked)]
+        release = svc.seal_release('INC-0001', release_dir, results,
+                                   source_manifest=bundle)
+        return svc, release_dir, release, bundle
+
+    def test_release_is_sealed_and_verifies_clean(self):
+        svc, release_dir, release, _ = self._release()
+        self.assertTrue(release['sealed'])
+        self.assertIn('integrity', release)
+        report = svc.verify_release('INC-0001')
+        self.assertTrue(report['valid'], report.get('reason'))
+        self.assertTrue(report['signature_valid'])
+        self.assertTrue(report['artefacts_valid'])
+        self.assertEqual(report['document'], 'masked_release')
+
+    def test_release_path_is_outside_the_bundle(self):
+        svc, release_dir, _, _ = self._release()
+        # Masking must never mutate the sealed originals.
+        self.assertNotEqual(release_dir, svc.bundle_path('INC-0001'))
+        self.assertFalse(release_dir.is_relative_to(svc.bundle_path('INC-0001')))
+
+    def test_release_chains_to_sealed_source_bundle(self):
+        svc, _, release, bundle = self._release()
+        self.assertTrue(release['source_bundle_sealed'])
+        self.assertEqual(
+            release['derived_from_bundle_digest'],
+            bundle['integrity']['manifest_digest'],
+            "the released copy must name the digest of the original it derives from",
+        )
+
+    def test_tampered_release_image_fails_verification(self):
+        svc, release_dir, _, _ = self._release()
+        (release_dir / 'rel_0.jpg').write_bytes(b'swapped after sealing')
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['artefacts_valid'])
+        failed = [a for a in report['artefacts'] if a.get('ok') is False]
+        self.assertTrue(any(a['name'] == 'rel_0.jpg' for a in failed),
+                        "the altered release image must be named in the report")
+
+    def test_edited_release_manifest_fails_signature(self):
+        svc, release_dir, _, _ = self._release()
+        mpath = release_dir / 'manifest.json'
+        m = json.loads(mpath.read_text())
+        # Claim a fuller masking than actually happened.
+        m['privacy']['fully_masked'] = True
+        m['privacy']['snapshots_masked'] = 99
+        m['integrity']['manifest_digest'] = integrity.compute_manifest_digest(m)
+        mpath.write_text(json.dumps(m))
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['signature_valid'],
+                         "an edited release manifest must not pass the signature check")
+
+    def test_deleted_release_image_fails_verification(self):
+        svc, release_dir, _, _ = self._release()
+        (release_dir / 'rel_1.jpg').unlink()
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['artefacts_valid'])
+
+    def test_wrong_key_fails_release_verification(self):
+        svc, release_dir, _, _ = self._release()
+        os.environ['ROUTE_ONE_EVIDENCE_KEY'] = 'a-different-key'
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['signature_valid'])
+
+    def test_partial_masking_still_seals_and_says_so(self):
+        """A partial release is a valid SEALED record of a partial masking.
+
+        It must never be reported as fully_masked, and it must still verify --
+        the seal attests what happened, not that masking was complete.
+        """
+        svc, _, release, _ = self._release(masked=1, total=2)
+        self.assertTrue(release['sealed'])
+        self.assertFalse(release['privacy']['fully_masked'])
+        self.assertEqual(release['privacy']['snapshots_masked'], 1)
+        self.assertEqual(release['privacy']['snapshots_total'], 2)
+        report = svc.verify_release('INC-0001')
+        self.assertTrue(report['valid'])
+        self.assertFalse(report['privacy']['fully_masked'])
+
+    def test_unsealed_release_never_verifies(self):
+        os.environ.pop('ROUTE_ONE_EVIDENCE_KEY', None)
+        os.environ.pop('ROUTE_ONE_EVIDENCE_KEY_FILE', None)
+        svc = make_service(self.dir)
+        src = Path(self.dir) / 'snap.jpg'
+        src.write_bytes(b'bytes')
+        bundle = svc.save_bundle(INCIDENT, [str(src)], None)
+        release_dir = svc.release_path('INC-0001')
+        release_dir.mkdir(parents=True, exist_ok=True)
+        (release_dir / 'rel_0.jpg').write_bytes(b'masked')
+        release = svc.seal_release('INC-0001', release_dir,
+                                   [{'name': 'rel_0.jpg', 'masked': True}],
+                                   source_manifest=bundle)
+        self.assertFalse(release['sealed'], "no key must fail closed")
+        self.assertTrue((release_dir / 'rel_0.jpg').exists(),
+                        "the artefact must still be produced, never lost")
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['sealed'])
+
+    def test_verify_release_without_a_release_says_so(self):
+        svc = make_service(self.dir)
+        report = svc.verify_release('INC-0001')
+        self.assertFalse(report['valid'])
+        self.assertFalse(report['sealed'])
+        self.assertIn('no release', report['reason'])
+
+
 if __name__ == '__main__':
     main()

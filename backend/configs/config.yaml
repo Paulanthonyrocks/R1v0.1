@@ -81,6 +81,13 @@ database:
 feed_manager:
   db_write_interval: 0.5
   error_check_interval: 5.0
+  # Grace period between stop_event.set() and the SIGTERM escalation for a
+  # feed's ingestion process. Was hardcoded 200ms, which fired on NORMAL
+  # teardown in the live 3-feed run (children had already logged
+  # "terminated" and were still releasing SHM/Redis). Worst case is this x
+  # feed count, so it is negligible at 3-8 feeds and material at 24 -- re-tune
+  # if the pool grows. See FeedManagerConstants.FEED_STOP_GRACE_S_DEFAULT.
+  stop_grace_seconds: 1.0
   # Workload headroom: raised from 5 (was 3 feeds; now 5 configured). Kept at
   # 8 -- NOT filled to the brim: 5 feeds x 15fps at imgsz 960 (fp32) is
   # already ~1 card of compute; adding feeds past ~7 just piles onto the
@@ -907,6 +914,35 @@ v2x:
   # Feature 7 inbound: UDP listener for BSM/CAM/ACK. Off by default.
   listen_enabled: false
   listen_port: 5005
+# Retention enforcement. Previously there was NO `retention:` section here, so
+# every value came from a code default and an operator could not tune retention
+# without editing Python -- which also made "retention defaults reviewed and
+# confirmed against the state retention schedule" (Phase 1) unreviewable: there
+# was nothing in config to confirm against.
+#
+# max_size_gb MUST be smaller than the free space on the appliance, or the
+# size-based valve can never fire: perform_cleanup() returns early when the
+# monitored total is under the cap, so a cap above the filesystem means the disk
+# fills first. The pilot box is a 9.8 GB volume, so the old flat 10 GB default
+# was unreachable by construction. Re-tune per site at commissioning.
+retention:
+  enabled: true
+  check_interval_seconds: 3600
+  # NDPA annex: 7-day default age cap on video/snapshots/imagery.
+  max_age_days: 7
+  # ~1.5 GB on a 9.8 GB volume with ~2 GB free: leaves headroom for the venv,
+  # model weights and logs, which are NOT covered by this cap.
+  max_size_gb: 1.5
+  # Audit records are the evidentiary trail; NDPA annex commits to 90 days.
+  audit_days: 90
+  analytics_days: 30
+  directories:
+    - backend/data/processed_videos
+    - backend/data/pavement_images
+    - backend/data/pavement_reports
+    # Incident snapshots: every incident mints a JPEG with no other janitor
+    # (was unbounded on a 9.8GB disk). Age cap bounds them.
+    - backend/data/snapshots
 # Features 1-9 (all honest-gated; hardware paths default off).
 evidence:
   enabled: true
@@ -931,12 +967,24 @@ escalation:
 privacy:
   # Phase 1: default ON. The NDPA annex commits to blur-on-export for
   # plate-bearing imagery, so shipping this false contradicted the annex.
-  # NOTE the honest limit: masking is driven by real detector output (a
-  # `<snapshot>.boxes.json` sidecar). With no boxes available,
-  # mask_evidence_snapshot reports masked=false with a reason rather than
-  # pretending the image was masked -- the ingestion worker does not yet
-  # emit that sidecar, so live snapshots currently release UNMASKED and say
-  # so. Writing the sidecar is the next wiring step.
+  #
+  # WIRING (corrected 2026-10-01): masking is driven by real detector output.
+  # The inference worker writes a `<snapshot>.boxes.json` sidecar when it
+  # handles the `snapshot_saved` control message (inference_worker.py, the
+  # only point where the saved snapshot's path and the live detection boxes
+  # coexist in one process); PrivacyService reads it back on the export path.
+  # So live snapshots DO release masked, and the earlier note here claiming
+  # the sidecar was unwired is obsolete.
+  #
+  # The boxes are the lower-centre band of each YOLO vehicle box, NOT a
+  # localised plate rect -- that is the region to blur, which is what this
+  # control needs. They come from the tracker's vehicle_data, so masking does
+  # NOT depend on `anpr.enabled` (that flag only gates an allow/block plate
+  # string lookup; no plate recognizer is bundled).
+  #
+  # If no vehicle is in frame there are no boxes, so nothing is written and
+  # the release honestly reports masked=false with a reason rather than
+  # claiming a control that did not run.
   enabled: true
   blur_kernel: 31
 camera_health:

@@ -210,7 +210,7 @@ async def export_incident_evidence(
 
     priv = PrivacyService(config=cfg)
     bundle_dir = svc.bundle_path(incident_id)
-    masked_dir = bundle_dir.parent / f"{bundle_dir.name}_release"
+    masked_dir = svc.release_path(incident_id)
     results: List[Dict[str, Any]] = []
     masked_count = 0
 
@@ -224,10 +224,19 @@ async def export_incident_evidence(
             masked_count += 1
         results.append({"name": name, **report})
 
+    # Seal the release copy. The bundle's seal covers the unmasked originals;
+    # the bytes actually handed over are different images produced by the
+    # masking pass, so without this the released artefact has no chain of
+    # custody. Fail-closed: an unsealable release is still written and still
+    # returned, marked sealed=false.
+    release = svc.seal_release(
+        incident_id, masked_dir, results, source_manifest=bundle
+    )
+
     await _audit_evidence_access(
         incident_id, "EVIDENCE_EXPORT",
         f"snapshots={len(results)} masked={masked_count} "
-        f"privacy_enabled={priv.enabled}",
+        f"privacy_enabled={priv.enabled} release_sealed={release.get('sealed')}",
         current_user,
     )
 
@@ -240,6 +249,11 @@ async def export_incident_evidence(
         # True only when every release image was actually masked.
         "fully_masked": bool(results) and masked_count == len(results),
         "results": results,
+        # Chain of custody for the RELEASED copy, not just the original.
+        "release_sealed": bool(release.get("sealed")),
+        "release_integrity": release.get("integrity"),
+        "release_key_id": release.get("key_id"),
+        "derived_from_bundle_digest": release.get("derived_from_bundle_digest"),
     }
 
 
@@ -285,6 +299,39 @@ async def verify_incident_evidence(
     except Exception as e:  # audit must not mask the verification result
         logger.warning(f"Evidence verify audit write failed: {e}")
 
+    return report
+
+
+@router.get("/{incident_id}/evidence/release/verify",
+            summary="Verify masked release bundle integrity")
+async def verify_incident_release(
+    incident_id: str,
+    current_user: User = Depends(get_current_admin),
+):
+    """Verify the sealed MASKED RELEASE -- the copy actually handed over.
+
+    Distinct from /evidence/verify, which covers the unmasked original. A
+    recipient holding the release needs the release verified, and a release
+    that was never produced must say so rather than return a vacuous pass.
+
+    Admin-only and audit-logged, including on failure: a failed release
+    verification is exactly the event a reviewer needs to see.
+    """
+    from app.services.evidence_service import EvidenceService
+    from app.config import get_current_config
+
+    svc = EvidenceService(config=get_current_config().model_dump())
+    if not svc.enabled:
+        raise HTTPException(status_code=501, detail="Evidence bundles disabled")
+
+    report = svc.verify_release(incident_id)
+
+    await _audit_evidence_access(
+        incident_id, "EVIDENCE_RELEASE_VERIFY",
+        f"valid={report.get('valid')} sealed={report.get('sealed')} "
+        f"reason={report.get('reason')}",
+        current_user,
+    )
     return report
 
 

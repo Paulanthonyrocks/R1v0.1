@@ -91,11 +91,22 @@ The Traffic Management Hub is an advanced AI-powered surveillance and traffic an
         #   export TUNNEL_AUTH_REQUIRED=0
 
         # From the backend directory
-        # uvicorn app.main:app --reload --port 8000
+        # uvicorn app.main:app --port 8000
         # NOTE: if you start the backend with the CLI instead of `python -m app.main`,
         # pass the protocol-keepalive flags or tunnelled WebSockets die at ~40s:
         #   uvicorn app.main:app --port 8000 --ws-ping-interval null --ws-ping-timeout null --timeout-graceful-shutdown 25
         # (see app/main.py __main__ comment for the full root-cause)
+        #
+        # Do NOT pass --reload. The reloader watches the whole backend/ cwd,
+        # which contains logs/ -- the directory the backend itself writes to --
+        # so its own log output becomes filesystem events (~170/min, 76% of
+        # backend_main.log in the Sep-30 run). A reload also kills 3 GPU
+        # inference workers, every ingestion process and every live feed, then
+        # brings them back cleanly, so a mid-session restart leaves no other
+        # trace. app/main.py logs the real state at boot:
+        #   autoreload: DISABLED (...)
+        # and warns if --reload is in use. `python -m app.main` is unaffected
+        # (reload=False there since 2026-10-01).
         ```
 
     *   **Start Frontend:**
