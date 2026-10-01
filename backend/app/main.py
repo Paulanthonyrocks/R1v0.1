@@ -285,6 +285,15 @@ class TunnelSecretLogFilter(logging.Filter):
     # capture groups the replacement \1REDACTED silently drops the second
     # branch's prefix, so `tunnel_token=` could survive unscrubbed.
 
+    @staticmethod
+    def _scrub(text: str) -> str:
+        """Redact both secrets. Two passes, one per secret: a combined
+        alternation would let one branch's replacement text consume the
+        other's prefix."""
+        out = re.sub(r"((?:[?&]|%3[fF]|%26)password=)[^&\"'\s]*", r"\1REDACTED", text)
+        out = re.sub(r"((?:[?&]|%3[fF]|%26)tunnel_token=)[^&\"'\s]*", r"\1REDACTED", out)
+        return out
+
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             message = record.getMessage()
@@ -292,15 +301,44 @@ class TunnelSecretLogFilter(logging.Filter):
             return True
         if "password=" not in message and "tunnel_token=" not in message:
             return True
-        # Two passes, one per secret: a combined alternation would let the
-        # replacement text of one branch consume the other's prefix.
-        scrubbed = re.sub(r"((?:[?&]|%3[fF]|%26)password=)[^&\"'\s]*", r"\1REDACTED", message)
-        scrubbed = re.sub(r"((?:[?&]|%3[fF]|%26)tunnel_token=)[^&\"'\s]*", r"\1REDACTED", scrubbed)
+
+        if record.args:
+            # Lazy %-style args -- and uvicorn.access is exactly this shape:
+            #   access_logger.info('%s - "%s %s HTTP/%s" %d', addr, method, path,
+            #                       version, status)
+            #
+            # Its AccessFormatter IGNORES record.msg entirely and unpacks
+            # exactly five values out of record.args. So the previous
+            # `record.args = ()` here made every access line raise
+            #     ValueError: not enough values to unpack (expected 5, got 0)
+            # inside uvicorn/logging.py:99 -- the secret was redacted and the
+            # access log line was LOST, silently, on every request. The error
+            # surfaced only on stderr as "--- Logging error ---".
+            #
+            # Redact INSIDE the args and keep their shape and length. Then
+            # uvicorn's formatter renders the scrubbed path, and getMessage()
+            # does too, so no handler can emit the raw secret.
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    self._scrub(a) if isinstance(a, str) else a for a in record.args
+                )
+            elif isinstance(record.args, dict):
+                record.args = {
+                    k: (self._scrub(v) if isinstance(v, str) else v)
+                    for k, v in record.args.items()
+                }
+            try:
+                record.message = record.getMessage()
+            except Exception:
+                pass
+            return True
+
+        # No args: msg is the whole message, so it can be replaced outright.
+        scrubbed = self._scrub(message)
         if scrubbed != message:
-            # Mutate in place and invalidate the cached formatting so every
-            # handler renders the scrubbed text.
+            # Invalidate the cached formatting so every handler renders the
+            # scrubbed text.
             record.msg = scrubbed
-            record.args = ()
             record.message = scrubbed
         return True
 
