@@ -20,6 +20,16 @@ _FIREBASE_SLOTS = BoundedSemaphore(_FIREBASE_WORKERS)
 async def _firebase_call(function, *args, **kwargs):
     # Hold capacity until the actual thread ends, not merely until its await times out.
     if not _FIREBASE_SLOTS.acquire(blocking=False):
+        # Say so in the log. This 503 is a CAPACITY refusal, not a Firebase
+        # outage -- the two look identical in the browser and pull an operator
+        # in completely opposite directions (wait vs. fix the credential). The
+        # function name is enough to tell which call is hot: verify_id_token is
+        # per-request, get_user only on the claims refresh.
+        logger.warning(
+            "Firebase concurrency pool saturated (%d slots); refusing %s. "
+            "This is a capacity refusal, not an outage.",
+            _FIREBASE_WORKERS, getattr(function, "__name__", str(function)),
+        )
         raise HTTPException(status_code=503, detail="Authentication service busy.")
     try:
         future = _FIREBASE_EXECUTOR.submit(partial(function, *args, **kwargs))
@@ -44,8 +54,14 @@ async def _get_account(user_id: str):
         raise
     except auth.UserDisabledError:
         raise HTTPException(status_code=403, detail="User account is disabled.") from None
-    except Exception:
-        logger.warning("Current account lookup unavailable.")
+    except Exception as e:
+        # Name the failure. "Authentication service unavailable" is three
+        # different problems (credential rejected, network unreachable, project
+        # id wrong) and the exception is the only thing that distinguishes
+        # them -- but it was being discarded, so the 503 storm in the browser
+        # gave an operator nothing to act on.
+        logger.warning("Current account lookup unavailable: %s: %s",
+                       type(e).__name__, e)
         raise HTTPException(status_code=503, detail="Authentication service unavailable.") from None
     if getattr(record, "disabled", False):
         raise HTTPException(status_code=403, detail="User account is disabled.")
@@ -71,8 +87,13 @@ async def verify_firebase_token(token: str) -> Dict[str, Any]:
     except (auth.RevokedIdTokenError, auth.InvalidIdTokenError):
         logger.info("Firebase credential rejected.")
         raise HTTPException(status_code=401, detail="Invalid or expired token.", headers={"WWW-Authenticate": "Bearer"}) from None
-    except Exception:
-        logger.warning("Firebase authentication unavailable.")
+    except Exception as e:
+        # Same reasoning as _get_account: the exception is the only evidence
+        # that separates an unreachable Firebase from a bad credential from a
+        # wrong project id. A generic warning line made the browser's 503
+        # undiagnosable.
+        logger.warning("Firebase authentication unavailable: %s: %s",
+                       type(e).__name__, e)
         raise HTTPException(status_code=503, detail="Authentication service unavailable.") from None
 
 

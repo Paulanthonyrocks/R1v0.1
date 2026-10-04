@@ -542,7 +542,15 @@ async def lifespan(app: FastAPI):
                 if key_path.exists():
                     cred = credentials.Certificate(str(key_path))
                     firebase_app = firebase_admin.initialize_app(cred, {"storageBucket": fb_cfg.get("storage_bucket")})
-                    logger.info("Firebase initialized.")
+                    logger.info(
+                        f"Firebase initialized (project={fb_cfg.get('project_id')}, "
+                        f"key={key_path.name}). NOTE: this proves the credential "
+                        f"FILE loaded, not that token verification works -- that is "
+                        f"a network call per request. If authenticated routes start "
+                        f"returning 503, read the 'Firebase authentication "
+                        f"unavailable: <Type>: <detail>' warning in this log, which "
+                        f"names the real cause."
+                    )
                 elif fb_cfg.get("required", False):
                     raise FileNotFoundError(f"Required Firebase key missing: {key_path}")
                 else:

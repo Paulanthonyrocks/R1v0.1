@@ -75,11 +75,22 @@ export default function TrackingPage() {
     }, [token]);
 
     const fetchHistory = async (id: string) => {
+        // Guard: an empty id produced `/api/v1/vehicles/global//history`, which
+        // is not a route -- Starlette redirects it to `/history`, costing a
+        // 307 plus a full round trip through a 50-67ms tunnel, and the
+        // redirected request is a second chance to fail. Guarding here keeps
+        // the malformed URL from ever being constructed rather than relying on
+        // the backend to tolerate it.
+        if (!id) {
+            setHistory([]);
+            setHistoryLoading(false);
+            return;
+        }
         setHistoryLoading(true);
         setSelectedId(id);
         try {
             const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
-            const data = await apiClient.get<TrackPoint[]>(`/api/v1/vehicles/global/${id}/history`);
+            const data = await apiClient.get<TrackPoint[]>(`/api/v1/vehicles/global/${encodeURIComponent(id)}/history`);
             setHistory(data);
         } catch (error) {
             console.error("Failed to fetch history:", error);
