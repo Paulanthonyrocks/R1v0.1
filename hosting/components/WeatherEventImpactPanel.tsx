@@ -2,95 +2,50 @@
 import React, { useEffect, useState } from 'react';
 import { CloudSun, MapPin, Calendar, Wind, Droplets, Thermometer, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import {
+  environmentService,
+  type WeatherImpact,
+  type EventImpact,
+} from '@/lib/services/environmentService';
 
-interface WeatherData {
-  temperature: number;
-  conditions: string;
-  precipitation_chance: number;
-  wind_speed: number;
-}
-
-interface EventData {
-  type: string;
-  description: string;
-  severity: string;
-  location: string;
-  start_time: string;
-  end_time?: string;
-}
-
-interface WeatherEventImpact {
-  type: 'weather' | 'event';
-  description: string;
-  severity: string;
-  location: string;
-  startTime: string;
-  endTime?: string;
-  details?: WeatherData | EventData;
-}
+// The backend formats both lanes into the same impact-card shape
+// (weather.py /impact + events.py /impacts); severity is scored server-side.
+type ImpactItem = WeatherImpact | EventImpact;
 
 const WeatherEventImpactPanel: React.FC = () => {
-  const [impacts, setImpacts] = useState<WeatherEventImpact[]>([]);
+  const [impacts, setImpacts] = useState<ImpactItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const getSeverityFromWeather = (weather?: WeatherData | null): string => {
-    if (!weather) return 'Low';
-    const precip = weather.precipitation_chance ?? 0;
-    const wind = weather.wind_speed ?? 0;
-    if (precip > 70 || wind > 50) return 'High';
-    if (precip > 30 || wind > 30) return 'Medium';
-    return 'Low';
-  };
-
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        const defaultLat = 34.0522;
-        const defaultLon = -118.2437;
+      const defaultLat = 34.0522;
+      const defaultLon = -118.2437;
 
-        const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
-        const [weatherRes, eventsRes] = await Promise.allSettled([
-          apiClient.get<WeatherData>(`/api/v1/weather/current?lat=${defaultLat}&lon=${defaultLon}`),
-          apiClient.get<EventData[]>('/api/v1/events/current')
-        ]);
+      const [weatherRes, eventsRes] = await Promise.allSettled([
+        environmentService.getWeatherImpact(defaultLat, defaultLon),
+        environmentService.getEventImpacts(),
+      ]);
 
-        const nextImpacts: WeatherEventImpact[] = [];
+      const nextImpacts: ImpactItem[] = [];
+      let anySucceeded = false;
 
-        if (weatherRes.status === 'fulfilled' && weatherRes.value) {
-          const weatherData = weatherRes.value;
-          nextImpacts.push({
-            type: 'weather',
-            description: `${weatherData.conditions || 'Standard Conditions'} - ${weatherData.temperature ?? 0}°C`,
-            severity: getSeverityFromWeather(weatherData),
-            location: 'Regional Hub',
-            startTime: new Date().toISOString(),
-            details: weatherData
-          });
-        }
-
-        if (eventsRes.status === 'fulfilled' && Array.isArray(eventsRes.value)) {
-          const eventImpacts: WeatherEventImpact[] = eventsRes.value.map((event: EventData) => ({
-            type: 'event',
-            description: event?.description || 'Regional Event',
-            severity: event?.severity || 'Low',
-            location: event?.location || 'Regional Hub',
-            startTime: event?.start_time || new Date().toISOString(),
-            endTime: event?.end_time,
-            details: event
-          }));
-          nextImpacts.push(...eventImpacts);
-        }
-
-        setImpacts(nextImpacts);
-      } catch (err) {
-        setError('Failed to retrieve atmospheric and event telemetry');
-        console.error('Error fetching impacts:', err);
-      } finally {
-        setLoading(false);
+      if (weatherRes.status === 'fulfilled' && weatherRes.value) {
+        nextImpacts.push(weatherRes.value);
+        anySucceeded = true;
       }
+
+      if (eventsRes.status === 'fulfilled' && Array.isArray(eventsRes.value)) {
+        nextImpacts.push(...eventsRes.value);
+        anySucceeded = true;
+      }
+
+      if (anySucceeded) {
+        setImpacts(nextImpacts);
+      } else {
+        setError('Failed to retrieve environmental impact telemetry — weather and event links both down');
+      }
+      setLoading(false);
     };
 
     fetchData();
@@ -101,6 +56,12 @@ const WeatherEventImpactPanel: React.FC = () => {
       <div className="p-10 text-red-500 border-2 border-red-500 flex flex-col items-center gap-4">
           <Zap className="h-12 w-12" />
           <p className="font-bold uppercase tracking-widest text-center">{error}</p>
+      </div>
+  );
+  if (impacts.length === 0) return (
+      <div className="p-10 border-2 border-lcd-text/20 flex flex-col items-center gap-4 text-lcd-text/50">
+          <CloudSun className="h-12 w-12" />
+          <p className="font-bold uppercase tracking-widest text-center">No active weather or event impacts detected</p>
       </div>
   );
 
@@ -152,11 +113,11 @@ const WeatherEventImpactPanel: React.FC = () => {
                         </div>
                     </div>
 
-                    {impact.type === 'weather' && impact.details && (
+                    {impact.type === 'weather' && (
                         <div className="pt-4 border-t border-lcd-text/10 flex flex-wrap gap-6">
-                            <WeatherSubStat icon={<Wind size={14} />} label="Wind" value={`${Number((impact.details as WeatherData).wind_speed ?? 0).toFixed(1)} km/h`} />
-                            <WeatherSubStat icon={<Droplets size={14} />} label="Precip" value={`${(impact.details as WeatherData).precipitation_chance ?? 0}%`} />
-                            <WeatherSubStat icon={<Thermometer size={14} />} label="Temp" value={`${(impact.details as WeatherData).temperature ?? 0}°C`} />
+                            <WeatherSubStat icon={<Wind size={14} />} label="Wind" value={`${Number(impact.details.wind_speed ?? 0).toFixed(1)} km/h`} />
+                            <WeatherSubStat icon={<Droplets size={14} />} label="Precip" value={`${impact.details.precipitation_chance ?? 0}%`} />
+                            <WeatherSubStat icon={<Thermometer size={14} />} label="Temp" value={`${impact.details.temperature ?? 0}°C`} />
                         </div>
                     )}
                 </div>

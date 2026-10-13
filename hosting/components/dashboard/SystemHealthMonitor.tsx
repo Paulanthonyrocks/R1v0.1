@@ -6,9 +6,25 @@ import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { Activity, Cpu, Database, HardDrive, Server, ShieldAlert } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from '@/lib/utils';
+import { wsMonitoringService, type ConnectionStats } from '@/lib/services/wsMonitoringService';
 
 // Static display label, generated once: per-render regeneration flickered it.
 const HASH_LABEL = Math.random().toString(16).slice(2, 6).toUpperCase();
+
+// REST /websocket/health poll cadence. The WS system_health push covers
+// hardware; the connection-manager grid stats only exist via REST.
+const WS_HEALTH_POLL_MS = 15000;
+
+const WsGridStat = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex flex-col">
+        <span className="text-[8px] font-black uppercase opacity-40">{label}</span>
+        <span className="text-sm font-bold font-lcd tabular-nums tracking-tighter">{value}</span>
+    </div>
+);
+
+const WsGridChip = ({ text }: { text: string }) => (
+    <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 border border-lcd-text/20 bg-lcd-text/5">{text}</span>
+);
 
 interface HealthStats {
     system: {
@@ -27,6 +43,8 @@ interface HealthStats {
 
 export const SystemHealthMonitor: React.FC = () => {
     const [stats, setStats] = useState<HealthStats | null>(null);
+    const [wsHealth, setWsHealth] = useState<ConnectionStats | null>(null);
+    const [wsLinkUp, setWsLinkUp] = useState(true);
     const client = useWebSocket();
 
     useEffect(() => {
@@ -40,6 +58,28 @@ export const SystemHealthMonitor: React.FC = () => {
 
         return () => unsubscribe();
     }, [client]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const grid = await wsMonitoringService.getHealth();
+                if (!cancelled) {
+                    setWsHealth(grid);
+                    setWsLinkUp(true);
+                }
+            } catch {
+                // Degrade visually (LINK DOWN) instead of spamming toasts from a poller.
+                if (!cancelled) setWsLinkUp(false);
+            }
+        };
+        poll();
+        const timer = setInterval(poll, WS_HEALTH_POLL_MS);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, []);
 
     if (!stats) {
         return (
@@ -135,6 +175,50 @@ export const SystemHealthMonitor: React.FC = () => {
                             <span className="text-[9px] font-black uppercase opacity-40 mb-1">Disk Utilization</span>
                             <span className="text-xl font-bold font-lcd tabular-nums tracking-tighter">{stats.system.disk_percent}%</span>
                         </div>
+                    </div>
+
+                    {/* WS Grid Telemetry — REST /api/v1/websocket/health, 15s poll */}
+                    <div className="border-t-2 border-lcd-text/10 pt-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[9px] font-black uppercase opacity-60">WS Grid Telemetry</span>
+                            <div className="flex items-center gap-1.5">
+                                <div className={cn("h-1.5 w-1.5 rounded-full", wsLinkUp ? "bg-lcd-green animate-pulse" : "bg-red-500")} />
+                                <span className={cn("text-[8px] font-black uppercase tracking-tighter", wsLinkUp ? "text-lcd-green/70" : "text-red-500")}>
+                                    {wsLinkUp ? "LINK OK" : "LINK DOWN"}
+                                </span>
+                            </div>
+                        </div>
+                        {wsHealth ? (
+                            <>
+                                <div className="grid grid-cols-4 gap-3 text-left">
+                                    <WsGridStat label="Clients" value={String(wsHealth.total_connections)} />
+                                    <WsGridStat label="Topic Subs" value={String(wsHealth.total_subscriptions)} />
+                                    <WsGridStat label="Avg Queue" value={wsHealth.average_queue_size.toFixed(1)} />
+                                    <WsGridStat label="Max Queue" value={String(wsHealth.max_queue_size)} />
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {Object.entries(wsHealth.connections_by_role).map(([role, count]) => (
+                                        <WsGridChip key={`role-${role}`} text={`${role}: ${count}`} />
+                                    ))}
+                                    {Object.entries(wsHealth.feed_subscriptions).slice(0, 6).map(([feed, count]) => (
+                                        <WsGridChip key={`feed-${feed}`} text={`${feed}: ${count}c`} />
+                                    ))}
+                                    {Object.keys(wsHealth.feed_subscriptions).length > 6 && (
+                                        <WsGridChip text={`+${Object.keys(wsHealth.feed_subscriptions).length - 6} FEEDS`} />
+                                    )}
+                                    <WsGridChip text={(() => {
+                                        const rtt = Object.values(wsHealth.active_client_latencies || {});
+                                        if (rtt.length === 0) return 'NO RTT SAMPLES';
+                                        const avg = rtt.reduce((a, b) => a + b, 0) / rtt.length;
+                                        return `RTT Ø ${avg.toFixed(0)}MS / ${rtt.length} UPLINKS`;
+                                    })()} />
+                                </div>
+                            </>
+                        ) : (
+                            <div className="text-[9px] font-black uppercase opacity-40 animate-pulse">
+                                {wsLinkUp ? "POLLING WS GRID..." : "WS GRID TELEMETRY UNAVAILABLE"}
+                            </div>
+                        )}
                     </div>
 
                     <div className="pt-2 flex items-center justify-between">
