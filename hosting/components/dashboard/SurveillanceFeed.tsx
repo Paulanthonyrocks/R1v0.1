@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, forwardRef, memo } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Play, Square, Maximize } from 'lucide-react';
+import { Eye, AlertTriangle, Loader2, RotateCw, Settings, Play, Square, Maximize, Disc, Circle } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { formatFeedName, formatFeedSource } from "@/lib/formatters";
 import type { SurveillanceFeedProps } from '@/lib/types';
@@ -18,6 +18,8 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import IdentityGallery from '../feature/IdentityGallery';
+import { videoService } from '@/lib/services/videoService';
+import { errorNotifier } from '@/lib/utils/errorNotifier';
 
 const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(({ feed_id, minimalControls = false }, ref) => {
   const instanceId = useRef(Math.random().toString(36).substring(2, 9));
@@ -526,6 +528,32 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
         toggleTimeoutRef.current = setTimeout(() => setIsToggling(false), 5000);
     };
 
+    // Recording pipeline (REST /video/record/start|stop). stream_id is this
+    // feed's id; the backend sanitizes output_filename to a bare name itself.
+    const [isRecording, setIsRecording] = useState<boolean>(false);
+    const [isRecordBusy, setIsRecordBusy] = useState<boolean>(false);
+
+    const handleToggleRecording = async () => {
+        if (!feed_id || isRecordBusy) return;
+        setIsRecordBusy(true);
+        try {
+            if (isRecording) {
+                await videoService.stopRecording(feed_id);
+                setIsRecording(false);
+                errorNotifier.success('Recording stopped');
+            } else {
+                await videoService.startRecording(feed_id, undefined, 10.0);
+                setIsRecording(true);
+                errorNotifier.success('Recording started');
+            }
+        } catch (e) {
+            console.error('Recording toggle failed:', e);
+            errorNotifier.error('Recording control failed (is video_output enabled in config?)');
+        } finally {
+            setIsRecordBusy(false);
+        }
+    };
+
     const toggleFullScreen = () => {
         if (containerRef.current) {
             if (!document.fullscreenElement) {
@@ -722,6 +750,24 @@ const SurveillanceFeed = memo(forwardRef<HTMLDivElement, SurveillanceFeedProps>(
                                 className="p-1 hover:bg-white/10 rounded-sm text-zinc-300 hover:text-white transition-colors disabled:opacity-30"
                             >
                                 <Square className="h-3 w-3" />
+                            </button>
+                            <div className="w-px bg-white/10 mx-0.5 my-1" />
+                            <button
+                                onClick={(e) => { e.stopPropagation(); void handleToggleRecording(); }}
+                                disabled={isRecordBusy}
+                                title={isRecording ? 'Stop Recording' : 'Start Recording'}
+                                className={cn(
+                                    "p-1 hover:bg-white/10 rounded-sm transition-colors disabled:opacity-30",
+                                    isRecording ? "text-red-400" : "text-zinc-300 hover:text-white"
+                                )}
+                            >
+                                {isRecordBusy ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : isRecording ? (
+                                    <Circle className="h-3 w-3 fill-current" />
+                                ) : (
+                                    <Disc className="h-3 w-3" />
+                                )}
                             </button>
                         </div>
 

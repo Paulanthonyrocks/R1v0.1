@@ -146,3 +146,64 @@ export async function fetchPlateLists(): Promise<{ allow: string[]; block: strin
     return { allow: [], block: [] };
   }
 }
+
+// Wire contract (backend/app/routers/incidents.py, admin-only):
+// - POST-equivalent GET /incidents/{id}/evidence/export -> release copy report
+//   {incident_id, release_dir, privacy_enabled, snapshots_total, snapshots_masked,
+//    fully_masked, results, release_sealed, release_integrity, release_key_id,
+//    derived_from_bundle_digest}
+// - GET /incidents/{id}/evidence/verify -> {valid, sealed, reason?, incident_id, artefacts}
+// - GET /incidents/{id}/evidence/release/verify -> same verify shape for the MASKED release
+// All three are audit-logged server-side per invocation; failures return a
+// report (never raise), so null here means transport-level failure only.
+export interface EvidenceReleaseReport {
+  incident_id: string;
+  release_dir?: string;
+  privacy_enabled?: boolean;
+  snapshots_total?: number;
+  snapshots_masked?: number;
+  fully_masked?: boolean;
+  release_sealed?: boolean;
+  release_integrity?: string;
+  release_key_id?: string;
+  derived_from_bundle_digest?: string;
+  results?: unknown[];
+}
+
+export interface EvidenceVerifyReport {
+  valid: boolean;
+  sealed: boolean;
+  reason?: string;
+  incident_id?: string;
+  artefacts?: unknown[];
+}
+
+export async function exportEvidenceRelease(incidentId: string): Promise<EvidenceReleaseReport | null> {
+  try {
+    return await client().get<EvidenceReleaseReport>(
+      `/api/v1/incidents/${encodeURIComponent(incidentId)}/evidence/export`
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyEvidence(incidentId: string): Promise<EvidenceVerifyReport | null> {
+  try {
+    return await client().get<EvidenceVerifyReport>(
+      `/api/v1/incidents/${encodeURIComponent(incidentId)}/evidence/verify`
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyEvidenceRelease(incidentId: string): Promise<EvidenceVerifyReport | null> {
+  try {
+    return await client().get<EvidenceVerifyReport>(
+      `/api/v1/incidents/${encodeURIComponent(incidentId)}/evidence/release/verify`
+    );
+  } catch {
+    return null;
+  }
+}

@@ -18,7 +18,16 @@ behavior_analysis:
   # minute per feed; raising to -10.0 puts sample-loop noise below the
   # threshold while preserving real hard-brakes (a genuine panic stop is
   # typically -8 to -10 m/s², and a real accident-grade brake is -12 to -15).
-  accel_threshold_mps2: 10.0
+  # 12.0 (Oct-04): the sample_traffic_2 loop brake drifted UP and now computes
+  # -10.6 m/s², which pierced the -10.0 gate. The 300s per-feed cooldown then
+  # capped it to exactly one incident every ~301s on Feed_2 -- a metronomic
+  # replay of one clip scene, NOT real braking (5 incidents, all -10.6, deltas
+  # 301/301/301/301s). 12.0 clears the -10.6 artifact with margin and sits at
+  # the documented accident-grade floor, so only genuine -12..-15 m/s²
+  # collisions alert. A looping sample feed re-emits whatever its brake scene
+  # computes, so if this value drifts again, re-tune HERE rather than read the
+  # alert as real.
+  accel_threshold_mps2: 12.0
   # False-hard-braking guards (core_module.py computes acceleration). A raw
   # per-frame speed delta flags "sudden deceleration" from track-churn / slow-
   # crawl noise; these suppress it unless the vehicle was genuinely moving fast

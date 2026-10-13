@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { incidentService } from '@/lib/services/incidentService';
+import { exportEvidenceRelease, verifyEvidence, EvidenceReleaseReport, EvidenceVerifyReport } from '@/lib/safetyHub';
 import {
   EscalationInfo,
   EvidenceManifest,
@@ -53,6 +54,34 @@ export default function IncidentsPage() {
     const [evidenceMap, setEvidenceMap] = useState<Record<string, EvidenceManifest | null>>({});
     const [evidenceLoading, setEvidenceLoading] = useState<Record<string, boolean>>({});
     const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null);
+    // Evidence release export + seal verification (feature 3). Admin-only on the
+    // backend; every invocation is audit-logged there.
+    const [exportMap, setExportMap] = useState<Record<string, EvidenceReleaseReport | null>>({});
+    const [exportLoading, setExportLoading] = useState<Record<string, boolean>>({});
+    const [verifyMap, setVerifyMap] = useState<Record<string, EvidenceVerifyReport | null>>({});
+    const [verifyLoading, setVerifyLoading] = useState<Record<string, boolean>>({});
+
+    const handleExportRelease = async (id: string) => {
+        setExportLoading((prev) => ({ ...prev, [id]: true }));
+        try {
+            const report = await exportEvidenceRelease(id);
+            setExportMap((prev) => ({ ...prev, [id]: report }));
+            setExpandedEvidence(id);
+        } finally {
+            setExportLoading((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    const handleVerifyEvidence = async (id: string) => {
+        setVerifyLoading((prev) => ({ ...prev, [id]: true }));
+        try {
+            const report = await verifyEvidence(id);
+            setVerifyMap((prev) => ({ ...prev, [id]: report }));
+            setExpandedEvidence(id);
+        } finally {
+            setVerifyLoading((prev) => ({ ...prev, [id]: false }));
+        }
+    };
 
     const fetchEscalations = async (list: Incident[]) => {
         try {
@@ -368,6 +397,22 @@ export default function IncidentsPage() {
                                         >
                                             {expandedEvidence === incident.id ? "Hide Evidence" : "Evidence"}
                                         </Button>
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => void handleVerifyEvidence(incident.id)}
+                                            disabled={verifyLoading[incident.id]}
+                                            className="matrix-btn-sleek h-10 border-lcd-text/30 text-lcd-text/50 hover:text-lcd-text px-4"
+                                        >
+                                            {verifyLoading[incident.id] ? "Verifying..." : verifyMap[incident.id] === undefined ? "Verify" : verifyMap[incident.id]?.valid ? "Seal Valid" : "Seal FAILED"}
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => void handleExportRelease(incident.id)}
+                                            disabled={exportLoading[incident.id]}
+                                            className="matrix-btn-sleek h-10 border-lcd-text/30 text-lcd-text/50 hover:text-lcd-text px-4"
+                                        >
+                                            {exportLoading[incident.id] ? "Exporting..." : "Export Release"}
+                                        </Button>
                                     </div>
                                 </div>
                             </div>
@@ -382,6 +427,23 @@ export default function IncidentsPage() {
                                             <span className="opacity-60">Evidence endpoint unreachable // bundle not minted</span>
                                         )}
                                     </div>
+                                    {(verifyMap[incident.id] || exportMap[incident.id]) && (
+                                        <div className="p-4 mt-2 border-2 border-lcd-text/20 bg-black/10 text-[11px]">
+                                            {verifyMap[incident.id] && (
+                                                <div className="font-bold uppercase tracking-wider mb-1">
+                                                    Seal check: {verifyMap[incident.id]!.valid ? "VALID" : "FAILED"}
+                                                    {verifyMap[incident.id]!.reason ? <span className="opacity-60 normal-case font-normal"> — {verifyMap[incident.id]!.reason}</span> : null}
+                                                </div>
+                                            )}
+                                            {exportMap[incident.id] && (
+                                                <div className="font-bold uppercase tracking-wider">
+                                                    Release export: {exportMap[incident.id]!.snapshots_masked ?? 0}/{exportMap[incident.id]!.snapshots_total ?? 0} masked
+                                                    {exportMap[incident.id]!.fully_masked === false ? <span className="text-red-500"> (UNMASKED COPY — privacy control did not run)</span> : " — fully masked"}
+                                                    {exportMap[incident.id]!.release_sealed ? <span className="opacity-60 normal-case font-normal">{" // release sealed, integrity "}{exportMap[incident.id]!.release_integrity ?? "n/a"}</span> : <span className="opacity-60 normal-case font-normal">{" // release NOT sealed"}</span>}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

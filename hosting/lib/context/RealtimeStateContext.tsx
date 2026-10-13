@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { WebSocketClient, WebSocketMessageType } from '../websocket/WebSocketClient';
 import { useWebSocket } from '../websocket/WebSocketProvider';
 import { KpiData, AlertData, FeedStatusData, SeverityLevel } from '../types';
+import { errorNotifier } from '../utils/errorNotifier';
 
 interface RealtimeState {
     kpis: KpiData | null;
@@ -215,6 +216,18 @@ export const RealtimeStateProvider = ({ children }: RealtimeStateProviderProps) 
             }) 
             : null;
         if (unsubAlert) subscriptions.push(unsubAlert);
+
+        // Backend prediction_scheduler publishes prediction_alert envelopes. Surface
+        // them to the operator as a toast (no alert-list entry; it's advisory, not
+        // an incident). Routing the payload into a toast keeps the hot path
+        // reaction instant without polluting the anomaly store.
+        const unsubPrediction = typeof client?.subscribe === 'function'
+            ? client.subscribe(WebSocketMessageType.PREDICTION_ALERT, (data: any) => {
+                const summary = data?.prediction?.summary ?? data?.message ?? data?.risk_level ?? 'Predictive alert received';
+                errorNotifier.warning(`Predictive: ${summary}`);
+            })
+            : null;
+        if (unsubPrediction) subscriptions.push(unsubPrediction);
 
         const unsubGen = typeof client?.subscribe === 'function' 
             ? client.subscribe(WebSocketMessageType.GENERAL_NOTIFICATION, (data: any) => {

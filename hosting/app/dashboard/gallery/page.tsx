@@ -19,6 +19,7 @@ import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { vehicleService, IdentifiedVehicle } from '@/lib/services/vehicleService';
 
 const API_BASE_URL = getBackendBaseURL();
 
@@ -27,6 +28,18 @@ export default function GalleryPage() {
     const [loading, setLoading] = useState(true);
     const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
     const client = useWebSocket();
+    // Plate registry (vehicles REST browse).
+    const [vehicles, setVehicles] = useState<IdentifiedVehicle[]>([]);
+    const [vehiclesLoading, setVehiclesLoading] = useState(false);
+    const [plateDetail, setPlateDetail] = useState<IdentifiedVehicle | null>(null);
+    const [plateLoading, setPlateLoading] = useState<string | null>(null);
+
+    const handlePlateSelect = async (plate: string) => {
+        setPlateLoading(plate);
+        const detail = await vehicleService.getVehicle(plate);
+        setPlateDetail(detail);
+        setPlateLoading(null);
+    };
 
     const fetchIncidentsWithSnapshots = async () => {
         setLoading(true);
@@ -50,6 +63,20 @@ export default function GalleryPage() {
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- initial backend load on mount + WS subscription; the sanctioned effect use
         fetchIncidentsWithSnapshots();
+
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial backend load on mount; the sanctioned effect use
+        const loadPlates = async () => {
+            setVehiclesLoading(true);
+            try {
+                const list = await vehicleService.listIdentifiedVehicles({ limit: 100 });
+                setVehicles(list);
+            } catch (e) {
+                console.error('Failed to fetch identified vehicles:', e);
+            } finally {
+                setVehiclesLoading(false);
+            }
+        };
+        void loadPlates();
 
         if (!client) return;
 
@@ -91,6 +118,57 @@ export default function GalleryPage() {
                     <Button onClick={fetchIncidentsWithSnapshots} variant="outline" className="border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg font-lcd">
                         REFRESH RECAP
                     </Button>
+                </div>
+
+                {/* Plate registry browse (vehicles REST: GET /api/v1/vehicles/). */}
+                <div className="matrix-card p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-sm font-bold uppercase font-lcd tracking-wider text-lcd-text">Identified Plates</h2>
+                        <span className="text-[10px] opacity-50 font-lcd">{vehicles.length} registered</span>
+                    </div>
+                    {vehiclesLoading ? (
+                        <p className="text-[10px] opacity-50 font-lcd animate-pulse">SCANNING REGISTRY...</p>
+                    ) : vehicles.length === 0 ? (
+                        <p className="text-[10px] opacity-40 font-lcd py-2 border border-dashed border-lcd-text/20 text-center">No identified vehicles yet.</p>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {vehicles.slice(0, 24).map(v => (
+                                <button
+                                    key={v.license_plate}
+                                    onClick={() => void handlePlateSelect(v.license_plate)}
+                                    disabled={plateLoading !== null}
+                                    className={cn(
+                                        'px-2 py-1 border text-[10px] font-mono uppercase tracking-tight transition-all hover:scale-105',
+                                        plateDetail?.license_plate === v.license_plate
+                                            ? 'border-lcd-green text-lcd-green bg-lcd-green/10'
+                                            : 'border-lcd-text/30 text-lcd-text/70 hover:border-lcd-green hover:text-lcd-green'
+                                    )}
+                                >
+                                    {plateLoading === v.license_plate ? '...' : v.license_plate}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {plateDetail && (
+                        <div className="mt-3 p-3 border-2 border-lcd-text/20 bg-black/10 text-[11px] grid grid-cols-2 md:grid-cols-4 gap-3 font-lcd">
+                            <div>
+                                <label className="text-[9px] opacity-40 uppercase block">Type</label>
+                                <p>{plateDetail.vehicle_type || "unknown"}</p>
+                            </div>
+                            <div>
+                                <label className="text-[9px] opacity-40 uppercase block">Make / Model</label>
+                                <p>{[plateDetail.make, plateDetail.model].filter(Boolean).join(" ") || "—"}</p>
+                            </div>
+                            <div>
+                                <label className="text-[9px] opacity-40 uppercase block">Detections</label>
+                                <p>{plateDetail.total_detections}</p>
+                            </div>
+                            <div>
+                                <label className="text-[9px] opacity-40 uppercase block">Last Seen</label>
+                                <p>{new Date(plateDetail.last_seen * 1000).toLocaleString()}</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {loading && incidents.length === 0 ? (

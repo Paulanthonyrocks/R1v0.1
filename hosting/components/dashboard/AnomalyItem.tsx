@@ -1,9 +1,10 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { AnomalyItemProps, AlertData, SeverityLevel } from '@/lib/types';
-import { Bomb, XOctagon, AlertTriangle, Sigma, InfoIcon, ChevronRight, Activity } from 'lucide-react';
+import { Bomb, XOctagon, AlertTriangle, Sigma, InfoIcon, ChevronRight, Activity, Check, CheckCircle, Trash2 } from 'lucide-react';
+import { alertService } from '@/lib/services/alertService';
 
 interface SeverityConfigEntry {
   styleClass: string;
@@ -19,8 +20,10 @@ const severityConfig: Record<SeverityLevel, SeverityConfigEntry> = {
   INFO: { styleClass: 'text-blue-500 border-blue-500 bg-blue-500/10', text: 'INFO', icon: InfoIcon },
 };
 
-const AnomalyItem = React.memo((props: AnomalyItemProps) => {
-  const { id, timestamp, severity, feed_id, message, status, onSelect, ...rest } = props;
+const AnomalyItem = React.memo((props: AnomalyItemProps & { numericId?: number; onDeleted?: () => void }) => {
+  const { id, timestamp, severity, feed_id, message, status, onSelect, numericId, onDeleted, ...rest } = props;
+  const [acked, setAcked] = useState(false);
+  const [busy, setBusy] = useState(false);
   const config = severityConfig[severity] || severityConfig.Anomaly;
   const IconComponent = config.icon;
   const displayTime = new Date(timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -37,6 +40,28 @@ const AnomalyItem = React.memo((props: AnomalyItemProps) => {
       e.preventDefault();
       handleSelect();
     }
+  };
+
+  // REST actions (backend /api/v1/alerts/{id}/acknowledge + DELETE, admin-only).
+  // WS-persisted alerts carry string ids with no DB pk, so these buttons render
+  // only when the page passes numericId (REST-sourced alerts). stopPropagation
+  // keeps the row's onSelect from firing on an action click.
+  const handleAck = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!numericId || busy) return;
+    setBusy(true);
+    const updated = await alertService.acknowledgeAlert(numericId, true);
+    setBusy(false);
+    if (updated) setAcked(true);
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!numericId || busy) return;
+    setBusy(true);
+    const ok = await alertService.deleteAlert(numericId);
+    setBusy(false);
+    if (ok) onDeleted?.();
   };
 
   const statusColors: Record<string, string> = {
@@ -97,7 +122,34 @@ const AnomalyItem = React.memo((props: AnomalyItemProps) => {
           )}
         </div>
       </div>
-      
+
+      {/* REST actions: ack + delete (numericId present = REST-sourced alert) */}
+      {numericId !== undefined && (
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity self-center">
+          <button
+            onClick={handleAck}
+            disabled={busy || acked}
+            title={acked ? 'Acknowledged' : 'Acknowledge alert (admin)'}
+            className={cn(
+              'p-1.5 border transition-all hover:scale-105 active:scale-95 font-lcd',
+              acked
+                ? 'border-emerald-500 text-emerald-500 cursor-default'
+                : 'border-lcd-text/30 text-lcd-text/70 hover:border-emerald-500 hover:text-emerald-500'
+            )}
+          >
+            {acked ? <Check size={12} /> : <CheckCircle size={12} />}
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={busy}
+            title="Delete alert (admin)"
+            className="p-1.5 border border-lcd-text/30 text-lcd-text/70 hover:border-red-500 hover:text-red-500 transition-all hover:scale-105 active:scale-95"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+
       <ChevronRight className="h-4 w-4 opacity-30 group-hover:opacity-100 transition-opacity self-center text-lcd-green" />
     </div>
   );
