@@ -65,10 +65,11 @@ def _origin_of(scope) -> Optional[str]:
     return None
 
 
-# Same allowlist as app.main.setup_cors. Only used if that module cannot be
-# imported; it deliberately cannot widen the allowlist.
+# Same anchored allowlist as app.main.setup_cors (domain-boundary
+# (?:[^/]*\.)? prefix kept in sync so the fallback can never widen the
+# allowlist). Only used if that module cannot be imported.
 _FALLBACK_CORS_REGEX = re.compile(
-    r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt"
+    r"https?://(?:[^/]*\.)?(ngrok-free\.app|trycloudflare\.com|ngrok\.io|cloudworkstations\.dev|loca\.lt"
     r"|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
 )
 

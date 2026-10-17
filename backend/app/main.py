@@ -133,12 +133,21 @@ async def run_migrations():
 def setup_cors(app: FastAPI, config: dict):
     env = os.getenv("ENVIRONMENT", "development")
     
-    # Regex pattern allows dynamic tunnel URLs (ngrok, cloudworkstations, loca.lt).
-    # This is the ONLY matcher used in development so we never ship the
+    # Regex pattern allows dynamic tunnel URLs (ngrok, cloudflare quick tunnels,
+    # cloudworkstations, loca.lt). trycloudflare.com = cloudflared quick tunnels
+    # (the loca.lt replacement candidate: no edge interstitial). This is the
+    # ONLY matcher used in development so we never ship the
     # allow_origins=["*"] + allow_credentials=True combination, which Starlette
     # normally rejects and which otherwise lets ANY tunnel subdomain with a
     # token reach the API (crack #2).
-    allow_origin_regex = r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
+    #
+    # The (?:[^/]*\.)? prefix forces a REAL domain boundary before the
+    # allowlisted suffix. A plain [^/]* matched as substring, so
+    # https://eviltrycloudflare.com fullmatched (the group consumed
+    # "trycloudflare.com" off the end of a hostile host). localhost and
+    # 127.0.0.1 match through the empty-prefix branch, so plain loopback
+    # origins (and their optional :port) stay allowed.
+    allow_origin_regex = r"https?://(?:[^/]*\.)?(ngrok-free\.app|trycloudflare\.com|ngrok\.io|cloudworkstations\.dev|loca\.lt|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
 
     # The module-level _CORS_ALLOW_ORIGIN_REGEX above is the single source of
     # truth: the error handlers (_cors_headers_for) must apply the identical
@@ -751,8 +760,10 @@ app = FastAPI(
 # Defaults so the error handlers are safe even if setup_cors() never runs
 # (it is conditional on cfg_dict). Without these, an exception raised before
 # setup_cors would raise NameError inside the exception handler itself.
+# Same anchored pattern as setup_cors's allow_origin_regex (the domain-boundary
+# (?:[^/]*\.)? prefix is what blocks eviltrycloudflare.com-style suffix spoofs).
 _CORS_ALLOW_ORIGIN_REGEX = re.compile(
-    r"https?://[^/]*(ngrok-free\.app|ngrok\.io|cloudworkstations\.dev|loca\.lt"
+    r"https?://(?:[^/]*\.)?(ngrok-free\.app|trycloudflare\.com|ngrok\.io|cloudworkstations\.dev|loca\.lt"
     r"|githubdev\.dev|localhost|127\.0\.0\.1)(:\d+)?"
 )
 _ALLOWED_ORIGIN_LITERALS: set = set()
