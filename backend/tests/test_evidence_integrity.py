@@ -341,6 +341,92 @@ class SnapshotCompletionTests(TestCase):
         self.assertTrue(svc.verify_bundle('INC-0001')['valid'])
 
 
+class SidecarBundlingSeamTests(TestCase):
+    """The sidecar must sit beside the jpg INSIDE the evidence bundle.
+
+    The export router hands PrivacyService the BUNDLE copy of each snapshot
+    (incidents.py), and the service reads boxes from `<name>.boxes.json`
+    beside that path. The worker writes the sidecar in the staging
+    snapshots dir, so save_bundle/attach_snapshots are what carries it
+    across. If that copy is dropped, every export finds no boxes and
+    releases the image unmasked -- which is how this shipped until
+    2026-10-17.
+    """
+
+    def setUp(self):
+        os.environ['ROUTE_ONE_EVIDENCE_KEY'] = KEY.decode()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.snapdir = Path(self.tmp.name) / 'snapshots'
+        self.snapdir.mkdir()
+        self.name = 'feed_alapere_01_INC-0001.jpg'
+        self.boxes = [[248, 468, 318, 512]]
+
+    def tearDown(self):
+        os.environ.pop('ROUTE_ONE_EVIDENCE_KEY', None)
+        self.tmp.cleanup()
+
+    def _priv(self):
+        return evidence.privacy.PrivacyService(
+            config={'privacy': {'enabled': True, 'blur_kernel': 31}})
+
+    def _workers_leave(self):
+        """Reproduce what the ingestion + inference workers leave on disk."""
+        snap = self.snapdir / self.name
+        snap.write_bytes(b'jpeg bytes')
+        (self.snapdir / (self.name + '.boxes.json')).write_text(json.dumps({
+            'boxes': self.boxes,
+            'source': 'inference_worker.vehicle_data',
+            'frame_alignment': 'approximate',
+        }))
+        return snap
+
+    def test_bundle_contains_sidecar_next_to_snapshot(self):
+        svc = make_service(self.tmp.name)
+        svc.save_bundle(INCIDENT, [str(self._workers_leave())], None)
+        self.assertTrue(
+            (svc.bundle_path('INC-0001') / (self.name + '.boxes.json')).is_file(),
+            "the sidecar must be bundled next to the jpg")
+
+    def test_export_path_resolves_boxes_from_bundle_copy(self):
+        """Exactly what incidents.py's export passes: the BUNDLE copy."""
+        svc = make_service(self.tmp.name)
+        svc.save_bundle(INCIDENT, [str(self._workers_leave())], None)
+        src = svc.bundle_path('INC-0001') / self.name
+        boxes = self._priv()._boxes_from_sidecar(src)
+        self.assertEqual(boxes, [tuple(b) for b in self.boxes],
+                         "export must see the boxes the worker derived")
+
+    def test_late_snapshot_sidecar_is_bundled_too(self):
+        svc = make_service(self.tmp.name)
+        svc.save_bundle(INCIDENT, [], None)
+        svc.attach_snapshots(INCIDENT, [str(self._workers_leave())], None)
+        bundle_dir = svc.bundle_path('INC-0001')
+        self.assertTrue(
+            (bundle_dir / (self.name + '.boxes.json')).is_file())
+        boxes = self._priv()._boxes_from_sidecar(bundle_dir / self.name)
+        self.assertEqual(len(boxes), 1)
+
+    def test_no_sidecar_no_boxes_unmasked_honestly(self):
+        """No vehicles detected -> no sidecar -> export says so, no false claim."""
+        svc = make_service(self.tmp.name)
+        snap = self.snapdir / self.name
+        snap.write_bytes(b'jpeg bytes')
+        svc.save_bundle(INCIDENT, [str(snap)], None)
+        bundle_dir = svc.bundle_path('INC-0001')
+        self.assertFalse((bundle_dir / (self.name + '.boxes.json')).exists())
+        self.assertEqual(
+            self._priv()._boxes_from_sidecar(bundle_dir / self.name), [])
+
+    def test_bundle_still_verifies_with_sidecar_present(self):
+        """The sidecar rides inside the dir but OUTSIDE the sealed inventory."""
+        svc = make_service(self.tmp.name)
+        manifest = svc.save_bundle(INCIDENT, [str(self._workers_leave())], None)
+        names = [a['name'] for a in manifest['artefacts']]
+        self.assertNotIn(self.name + '.boxes.json', names,
+                         "masking metadata must not join the evidence inventory")
+        self.assertTrue(svc.verify_bundle('INC-0001')['valid'])
+
+
 class PrivacyMaskingTests(TestCase):
     """Masking must never claim to have run when it did not."""
 

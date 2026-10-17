@@ -1,9 +1,12 @@
 """Privacy masking on export (feature 3).
 
-Gaussian-blurs caller-supplied boxes (faces/plates). No detector model is
-bundled: callers pass boxes from their own detector, or the whole frame is
-left untouched and the response flags masked=false. Disabled by default
-means export paths keep serving the original until an operator opts in.
+Gaussian-blurs face/plate regions on evidence-export copies. The boxes are
+NOT caller-supplied: the inference worker derives them from live detector
+output (lower-centre band of each tracked vehicle box) and writes a
+`<snapshot>.boxes.json` sidecar, which evidence_service copies into the
+bundle beside the snapshot this service masks. With no sidecar there are no
+boxes, the frame is left untouched, and the response flags masked=false
+with the reason -- it never claims a control that did not run.
 """
 import json
 import logging

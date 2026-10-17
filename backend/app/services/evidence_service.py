@@ -104,6 +104,20 @@ class EvidenceService:
                     if p.exists() and p.is_file():
                         shutil.copy2(p, dest / p.name)
                         copied.append(p.name)
+                        # The privacy-mask sidecar must travel WITH the jpg.
+                        # The export path masks the BUNDLE copy, and
+                        # PrivacyService looks for `<name>.boxes.json`
+                        # beside the file it is handed. The inference worker
+                        # writes that sidecar in the staging snapshots dir;
+                        # if it is not copied in here, every export finds no
+                        # boxes and releases the image UNMASKED (reported
+                        # honestly, but unmasked) despite vehicles being
+                        # detected. Deliberately NOT added to `copied`/the
+                        # hashed inventory below: it is masking metadata,
+                        # not evidence, and must not sit inside the seal.
+                        sidecar = p.with_suffix(p.suffix + ".boxes.json")
+                        if sidecar.is_file():
+                            shutil.copy2(sidecar, dest / sidecar.name)
                 except Exception as e:
                     logger.warning(f"Evidence snapshot copy failed {src}: {e}")
             # snapshots are rewritten to bundle-relative names: an absolute
@@ -209,6 +223,13 @@ class EvidenceService:
                     continue
                 shutil.copy2(p, dest / p.name)
                 names.append(p.name)
+                # Copy the privacy-mask sidecar alongside the jpg -- same
+                # seam as save_bundle: the export masks the bundle copy, so
+                # a late snapshot whose sidecar stayed in the staging dir
+                # would export unmasked. Not added to the sealed inventory.
+                sidecar = p.with_suffix(p.suffix + ".boxes.json")
+                if sidecar.is_file():
+                    shutil.copy2(sidecar, dest / sidecar.name)
             if names == list(already) and not (already and clip_path):
                 return existing  # nothing new to attach
 
