@@ -178,9 +178,9 @@ export class APIClient {
             const method = (options.method ?? 'GET').toUpperCase();
             // AUDIT: retry transient 5xx only for safe (idempotent) methods — a
             // retried POST/PUT/PATCH/DELETE could duplicate a mutation.
-            if ((status === 502 || status === 503 || status === 504) && retryAttempt < 2
+            if ((status === 502 || status === 503 || status === 504 || status === 511) && retryAttempt < 4
                 && APIClient.RETRYABLE_METHODS.has(method)) {
-                await new Promise((resolve) => setTimeout(resolve, 400 * (retryAttempt + 1)));
+                await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, retryAttempt)));
                 return this.request<T>(path, options, retryAttempt + 1, authReplayed);
             }
             if (error instanceof Error && error.name === 'AbortError') {

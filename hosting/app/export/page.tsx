@@ -64,10 +64,20 @@ const ExportPage: React.FC = () => {
     setError(null);
     try {
       const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
-      const [inc, fd] = await Promise.all([
-        apiClient.get<unknown>("/api/v1/incidents"),
-        apiClient.get<unknown>("/api/v1/feeds/"),
-      ]);
+      // Fetch sequentially so a transient 502 on one endpoint doesn't fail
+      // the whole batch (Promise.all rejects on the first rejection).
+      let inc: unknown = null;
+      let fd: unknown = null;
+      try {
+        inc = await apiClient.get<unknown>("/api/v1/incidents");
+      } catch (e) {
+        console.error("Export: failed to fetch incidents:", e);
+      }
+      try {
+        fd = await apiClient.get<unknown>("/api/v1/feeds/");
+      } catch (e) {
+        console.error("Export: failed to fetch feeds:", e);
+      }
       const incRows = unwrap<Record<string, unknown>>(inc);
       const feedRows = unwrap<Record<string, unknown>>(fd);
       setIncidents(incRows);

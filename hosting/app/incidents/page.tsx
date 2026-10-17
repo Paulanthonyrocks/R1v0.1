@@ -84,18 +84,18 @@ export default function IncidentsPage() {
     };
 
     const fetchEscalations = async (list: Incident[]) => {
-        try {
-            const pairs = await Promise.all(
-                list.map(async (inc) => [inc.id, await fetchEscalation(inc.id)] as const)
-            );
-            const map: Record<string, EscalationInfo> = {};
-            for (const [id, esc] of pairs) {
-                if (esc) map[id] = esc;
+        const map: Record<string, EscalationInfo> = {};
+        // Fetch sequentially so a transient 502 on one escalation doesn't
+        // abort the rest (Promise.all rejects on the first rejection).
+        for (const inc of list) {
+            try {
+                const esc = await fetchEscalation(inc.id);
+                if (esc) map[inc.id] = esc;
+            } catch (e) {
+                console.error(`Failed to fetch escalation for ${inc.id}:`, e);
             }
-            setEscalations(map);
-        } catch (error) {
-            console.error("Failed to fetch escalation states:", error);
         }
+        setEscalations(map);
     };
 
     const fetchIncidents = async () => {
