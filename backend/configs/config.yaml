@@ -56,6 +56,14 @@ behavior_analysis:
   stopped_speed_threshold_kmh: 5
 calibration:
   drift_threshold_px: 3.0
+cors:
+  # Production CORS (setup_cors uses an explicit allow-list with no regex
+  # fallback when ENVIRONMENT != development). The analytics dashboard runs on
+  # Firebase App Hosting cloud workstations and its origin must be listed here,
+  # or preflight to /api/v1/analytics/* gets no Access-Control-Allow-Origin
+  # header and fails as an opaque CORS error (observed origin below).
+  allowed_origins:
+    - https://3000-firebase-r1v01-1774108349517.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev
 traffic_signal_controller:
   api_base_url: http://localhost:8082/mock/signals
   default_signals:
@@ -994,6 +1002,14 @@ privacy:
   # If no vehicle is in frame there are no boxes, so nothing is written and
   # the release honestly reports masked=false with a reason rather than
   # claiming a control that did not run.
+  #
+  # The sidecar must travel WITH the jpg into the evidence bundle:
+  # evidence_service.save_bundle / attach_snapshots copy
+  # `<snapshot>.boxes.json` next to the image because PrivacyService masks
+  # the BUNDLE copy. The worker writes it in data/snapshots; without that
+  # copy every export finds no boxes and releases unmasked -- which is
+  # exactly how this shipped broken until 2026-10-17. Do not "simplify"
+  # those copy loops away.
   enabled: true
   blur_kernel: 31
 camera_health:
