@@ -7,6 +7,7 @@ from app.dependency_injection import get_feed_manager, get_connection_manager, g
 from app.services.feed_manager import FeedManager
 from app.websocket.connection_manager import ConnectionManager, MessagePriority
 from app.utils.auth_utils import verify_firebase_token, get_server_role
+from app.utils.tunnel_auth import select_offered_subprotocol
 from app.dependency_injection import is_admin as is_admin_check
 from app.models.websocket import (
     WebSocketMessage,
@@ -534,7 +535,19 @@ async def websocket_endpoint(
             logger.warning(f"WebSocket origin rejected: {origin}")
             await websocket.close(code=1008, reason="Origin not allowed")
             return
-    await websocket.accept()
+    # Echo the client's tunnel-auth subprotocol. Browsers (WHATWG WebSocket
+    # API) fail the handshake outright when the client offered a subprotocol
+    # and the server's response selects none -- a bare accept() completed the
+    # handshake here while the browser tore the socket down, which surfaced
+    # server-side as "disconnected before authenticating" on every attempt
+    # (Oct-21). A client that offered nothing (legacy query-form build,
+    # non-browser tool) still gets a subprotocol-less accept, and the gate has
+    # already validated the token inside this header before the router ran.
+    await websocket.accept(
+        subprotocol=select_offered_subprotocol(
+            websocket.headers.get("sec-websocket-protocol")
+        )
+    )
 
     # Hold the *assigned* client_id (set by message_receiver after AUTH_SUCCESS)
     # in a mutable container so the finally block below can read it. Using the

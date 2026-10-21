@@ -486,5 +486,40 @@ class SubprotocolAuthTests(unittest.TestCase):
         self._assert_rejected(reached, sent)
 
 
+class SelectOfferedSubprotocolTests(unittest.TestCase):
+    """The WS endpoint must ECHO the offered tunnel-auth subprotocol.
+
+    Browsers (WHATWG WebSocket API) fail the handshake when the client offered
+    a subprotocol and the server's response selects none, so the gate passing
+    is not enough for a browser client (Oct-21: the gate accepted every
+    handshake, then every browser socket died client-side because ws.py
+    accepted bare -- the exact gap the contract tests could not see).
+    """
+
+    def test_echoes_our_prefixed_protocol(self):
+        offered = ta.SUBPROTOCOL_PREFIX + SECRET
+        self.assertEqual(ta.select_offered_subprotocol(offered), offered)
+
+    def test_picks_ours_from_a_comma_list(self):
+        offered = f'chat, , {ta.SUBPROTOCOL_PREFIX}{SECRET} , other-proto'
+        self.assertEqual(
+            ta.select_offered_subprotocol(offered),
+            ta.SUBPROTOCOL_PREFIX + SECRET,
+        )
+
+    def test_ignores_unprefixed_protocols(self):
+        self.assertIsNone(ta.select_offered_subprotocol('chat, other-proto'))
+
+    def test_none_empty_whitespace_header(self):
+        self.assertIsNone(ta.select_offered_subprotocol(None))
+        self.assertIsNone(ta.select_offered_subprotocol(''))
+        self.assertIsNone(ta.select_offered_subprotocol('   '))
+
+    def test_prefix_must_match_at_start(self):
+        # A name that merely CONTAINS the prefix text must not match.
+        self.assertIsNone(
+            ta.select_offered_subprotocol(f'nope-{ta.SUBPROTOCOL_PREFIX}{SECRET}'))
+
+
 if __name__ == '__main__':
     unittest.main()

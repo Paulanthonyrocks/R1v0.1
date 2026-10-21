@@ -20,10 +20,16 @@ SECRET HANDLING
   URL of every upgrade -- where browser-native failure messages print it
   verbatim ("WebSocket connection to '...?tunnel_token=...' failed", Oct-18:
   the full token landed in the forwarded console.log ~9 times). A subprotocol
-  name rides in a header and never appears in a URL. Per RFC 6455 the server
-  MAY decline offered subprotocols without failing the handshake, so offering
-  one is harmless to servers that ignore it. The query form is kept as a
-  fallback during migration; drop it once every client sends the subprotocol.
+  name rides in a header and never appears in a URL. NOTE (Oct-21 live run):
+  although RFC 6455 lets a server decline an offered subprotocol, BROWSERS do
+  not implement that latitude -- the WHATWG WebSocket API fails the handshake
+  outright unless the server's response selects one of the offered protocols.
+  The WS endpoint must therefore echo it back via select_offered_subprotocol()
+  + websocket.accept(subprotocol=...) (see routers/ws.py): a bare accept()
+  completed the handshake server-side while the browser tore the socket down,
+  surfacing as "disconnected before authenticating" on every attempt. The
+  query form is kept as a fallback during migration; drop it once every client
+  sends the subprotocol.
 - Compared with `hmac.compare_digest`, so a caller cannot learn the secret by
   timing the response.
 
@@ -65,6 +71,37 @@ OPEN_PATHS: Set[str] = {"/health", "/api/v1/health", "/docs", "/openapi.json", "
 
 # Prefixes that bypass the gate. Same rule: only add one with a reason.
 OPEN_PREFIXES: List[str] = ["/static"]
+
+
+def select_offered_subprotocol(
+    sec_websocket_protocol_header: Optional[str],
+) -> Optional[str]:
+    """Pick OUR subprotocol out of the client's `Sec-WebSocket-Protocol` header.
+
+    Returns the first offered name carrying our prefix, else None. The WS
+    endpoint MUST pass the result to `websocket.accept(subprotocol=...)`:
+
+    RFC 6455 lets a server decline an offered subprotocol while still
+    completing the handshake, but BROWSERS do not -- the WHATWG WebSocket API
+    fails the connection when the client offered a protocol and the server's
+    response selects none (Oct-21 live run: hosting's `r1-tunnel-auth.<token>`
+    offer + a bare `accept()` = every handshake died client-side as
+    "disconnected before authenticating" while the gate itself had already
+    passed the token). A client that offered nothing still gets a
+    subprotocol-less accept, so legacy query-form builds are unaffected.
+
+    Security: the middleware (outermost) has already validated the token that
+    rode inside this header before the router runs, and only names carrying
+    our own prefix are ever echoed back -- unknown client protocols are not
+    reflected, and echoing reveals nothing the client didn't send.
+    """
+    if not sec_websocket_protocol_header:
+        return None
+    for proto in sec_websocket_protocol_header.split(","):
+        proto = proto.strip()
+        if proto.startswith(SUBPROTOCOL_PREFIX):
+            return proto
+    return None
 
 
 class TunnelAuthError(Exception):
