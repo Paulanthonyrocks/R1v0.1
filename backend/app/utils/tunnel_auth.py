@@ -300,6 +300,32 @@ class TunnelAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # CORS preflights cannot carry the secret. A browser sends the OPTIONS
+        # preflight with ONLY the CORS headers: custom headers such as
+        # X-Tunnel-Auth are announced via Access-Control-Request-Headers but
+        # never actually sent. After the Oct-20 move of REST auth into that
+        # header, every preflight therefore looked unauthenticated here and
+        # was answered 401 -- and a preflight must have a 2xx status or the
+        # browser blocks the real request before it is ever attempted
+        # ("Response to preflight request doesn't pass access control check:
+        # It does not have HTTP ok status", Oct-21, vehicles/global/list from
+        # the cloudworkstations origin). Pass the preflight through to
+        # CORSMiddleware, which answers from the allowlist. This opens no
+        # data: a preflight grants nothing and returns nothing -- the real
+        # request behind it still requires the token. Requiring the
+        # Access-Control-Request-Method header keeps bare OPTIONS probes
+        # behind the gate.
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "OPTIONS"
+            and any(
+                k.lower() == b"access-control-request-method"
+                for k, _ in scope.get("headers", [])
+            )
+        ):
+            await self.app(scope, receive, send)
+            return
+
         if not _paths_match(path) and not self._authorised(scope):
             client = scope.get("client")
             who = client[0] if client else "unknown"

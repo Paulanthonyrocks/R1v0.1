@@ -67,10 +67,11 @@ class App:
 
 
 def make_scope(path='/api/v1/vehicles/global/list', headers=None, qs=b'',
-               stype='http'):
+               stype='http', method='GET'):
     return {
         'type': stype,
         'path': path,
+        'method': method,
         'query_string': qs,
         'headers': headers or [],
         'client': ('1.2.3.4', 5555),
@@ -150,6 +151,47 @@ class TunnelAuthContractTests(unittest.TestCase):
         status, _ = run(mw, make_scope(qs=qs))
         self.assertEqual(status, 200)
         self.assertEqual(inner.reached, 1)
+
+    def test_cors_preflight_passes_without_secret(self):
+        """Browsers never send X-Tunnel-Auth on an OPTIONS preflight -- only
+        the CORS headers. A 401 here is fatal to the preflight ("does not
+        have HTTP ok status") and blocks the real request before it is even
+        attempted (Oct-21, vehicles/global/list from cloudworkstations). The
+        preflight must reach CORSMiddleware; it grants nothing by itself."""
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+        status, _ = run(mw, make_scope(
+            method='OPTIONS',
+            headers=[
+                (b'origin', b'https://x.cluster.cloudworkstations.dev'),
+                (b'access-control-request-method', b'GET'),
+            ],
+        ))
+        # 200 = the inner stack (CORSMiddleware in production) answered the
+        # preflight, which is exactly the 2xx the browser requires.
+        self.assertEqual(status, 200, 'preflight must pass through, not 401')
+        self.assertEqual(inner.reached, 1)
+
+    def test_bare_options_still_requires_secret(self):
+        """A plain OPTIONS without the preflight marker stays behind the
+        gate, so the preflight pass-through cannot serve as a bypass."""
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+        status, _ = run(mw, make_scope(method='OPTIONS'))
+        self.assertEqual(status, 401)
+        self.assertEqual(inner.reached, 0)
+
+    def test_options_without_request_method_header_is_not_preflight(self):
+        """OPTIONS + Origin but no Access-Control-Request-Method is not a
+        browser preflight and must not pass."""
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+        status, _ = run(mw, make_scope(
+            method='OPTIONS',
+            headers=[(b'origin', b'https://x.cluster.cloudworkstations.dev')],
+        ))
+        self.assertEqual(status, 401)
+        self.assertEqual(inner.reached, 0)
 
     def test_fails_closed_when_no_token_configured(self):
         inner = App()
