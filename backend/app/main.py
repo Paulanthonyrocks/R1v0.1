@@ -189,7 +189,14 @@ def setup_cors(app: FastAPI, config: dict):
         allow_origin_regex=allow_origin_regex if env == "development" else "",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID", "X-Tunnel-Password"],
+        # X-Tunnel-Auth (Oct-20 REST secret) MUST be here: browsers announce it
+        # on CORS preflights via Access-Control-Request-Headers but never send
+        # it; a preflight asking for a non-allowlisted header is answered 400
+        # "Disallowed CORS headers", which fails the preflight ("does not have
+        # HTTP ok status") and blocks the real request -- observed live
+        # Oct-21 (vehicles/global/list from the cloudworkstations origin) with
+        # the 400 carrying otherwise-correct ACAO headers.
+        allow_headers=["Content-Type", "Authorization", "Bypass-Tunnel-Reminder", "ngrok-skip-browser-warning", "X-Requested-With", "X-User-ID", "X-Tunnel-Password", "X-Tunnel-Auth"],
         expose_headers=["*"],
     )
 

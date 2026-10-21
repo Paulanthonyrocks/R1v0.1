@@ -21,6 +21,7 @@ these assertions actually executed.
 import asyncio
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 import types
@@ -561,6 +562,28 @@ class SelectOfferedSubprotocolTests(unittest.TestCase):
         # A name that merely CONTAINS the prefix text must not match.
         self.assertIsNone(
             ta.select_offered_subprotocol(f'nope-{ta.SUBPROTOCOL_PREFIX}{SECRET}'))
+
+
+class CorsAllowHeadersPinTests(unittest.TestCase):
+    """The CORS allow_headers list must carry the tunnel-auth header.
+
+    Browsers announce X-Tunnel-Auth on preflights but never send it; if the
+    list lags the auth design, CORSMiddleware answers every preflight
+    400 "Disallowed CORS headers" and the browser blocks the request before
+    the gate is even consulted (Oct-21, live). Scanning the source keeps this
+    pin runnable without fastapi (deps live on Kaggle only).
+    """
+
+    def test_tunnel_auth_header_is_allowlisted(self):
+        source = (BACKEND / 'app/main.py').read_text(encoding='utf-8')
+        m = re.search(r'allow_headers=\[(?P<list>[^\]]*)\]', source)
+        self.assertIsNotNone(m, 'allow_headers list not found in app/main.py')
+        entries = re.findall(r'["\']([^"\']+)["\']', m.group('list'))
+        self.assertIn('X-Tunnel-Auth', entries,
+                      f'X-Tunnel-Auth missing from allow_headers: {entries}')
+        # The legacy loca.lt-era header stays until nothing sends it.
+        self.assertIn('X-Tunnel-Password', entries,
+                      f'X-Tunnel-Password missing from allow_headers: {entries}')
 
 
 if __name__ == '__main__':
