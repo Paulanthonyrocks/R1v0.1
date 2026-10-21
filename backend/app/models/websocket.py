@@ -221,11 +221,9 @@ class WebSocketMessageTypeEnum(str, enum.Enum):
     SUBSCRIBE = "subscribe"
     UNSUBSCRIBE = "unsubscribe"
     PING = "ping"
-    TOKEN_REFRESH_REQUEST = "token_refresh_request"
-    
+
     # Feed Control (Incoming to Backend)
     UPDATE_FEED_CONFIG = "update_feed_config"
-    REFRESH_FEED = "refresh_feed"
     RESTART_FEED = "restart_feed"
     START_FEED = "start_feed"
     STOP_FEED = "stop_feed"

@@ -223,7 +223,8 @@ class ServiceRegistry:
                 db_manager=db_manager,
                 connection_manager=connection_manager,
                 notification_service=self._notification_service,
-                v2x_service=self._v2x_service
+                v2x_service=self._v2x_service,
+                traffic_signal_service=self._traffic_signal_service
             )
             logger.info("IncidentManager initialized.")
 

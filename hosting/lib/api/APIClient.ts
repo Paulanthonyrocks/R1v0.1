@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
-import { getBackendBaseURL, withTunnelPassword, getTunnelPassword, withTunnelAuth } from './backendBaseUrl';
+import { getBackendBaseURL, withTunnelPassword, getTunnelPassword, getTunnelAuthToken } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -43,6 +43,13 @@ export class APIClient {
         };
         const tunnelPw = getTunnelPassword();
         if (tunnelPw) headers['X-Tunnel-Password'] = tunnelPw;
+        // The backend's TunnelAuthMiddleware prefers the X-Tunnel-Auth HEADER
+        // over the query param, so REST never puts the app secret in a URL:
+        // query-form auth leaked it into browser-native fetch error lines and
+        // access logs (same class as the WebSocket leak). Header-only here;
+        // WebSockets use the subprotocol form (see backendBaseUrl.ts).
+        const tunnelTok = getTunnelAuthToken();
+        if (tunnelTok) headers['X-Tunnel-Auth'] = tunnelTok;
         this.headers = headers;
         this.tokenManager = TokenManager.getInstance();
 
@@ -143,7 +150,7 @@ export class APIClient {
     }
 
     async request<T>(path: string, options: RequestInit & { timeout?: number } = {}, retryAttempt: number = 0, authReplayed = false): Promise<T> {
-        const url = withTunnelAuth(withTunnelPassword(new URL(path, this.baseURL).toString()));
+        const url = withTunnelPassword(new URL(path, this.baseURL).toString());
         // AUDIT (session/transport fix): Authorization is computed per request from
         // TokenManager instead of being cached on this.headers — a cached header went
         // stale after refresh/logout and replayed dead credentials.
@@ -246,7 +253,7 @@ export class APIClient {
      * tunnel-password handling with request(); errors are APIError like JSON paths.
      */
     async getBlob(path: string, options: RequestInit & { timeout?: number } = {}): Promise<Blob> {
-        const url = withTunnelAuth(withTunnelPassword(new URL(path, this.baseURL).toString()));
+        const url = withTunnelPassword(new URL(path, this.baseURL).toString());
         const token = this.tokenManager.getCurrentToken();
         const fetchOptions: RequestInit & { timeout?: number } = {
             ...options,

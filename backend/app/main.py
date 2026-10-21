@@ -172,6 +172,17 @@ def setup_cors(app: FastAPI, config: dict):
         allow_origins = specific_origins or []
         logger.info(f"CORS origins configured for production: {allow_origins}")
 
+    # Keep the error-handler allowlist (_cors_headers_for_origin) in sync with
+    # the middleware's explicit allow_origins. Starlette's ExceptionMiddleware
+    # sits INSIDE CORSMiddleware, so a 500/HTTPException response is never
+    # decorated by it -- the handlers add the headers themselves. Without this
+    # update, any production origin that does not also fullmatch the regex
+    # (e.g. a vanity domain) got clean CORS on 200s but NONE on errors, so the
+    # browser masked the real failure behind "No 'Access-Control-Allow-Origin'
+    # header". Update in place: no rebinding, and this can never widen the
+    # allowlist beyond what the operator configured.
+    _ALLOWED_ORIGIN_LITERALS.update(allow_origins)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,

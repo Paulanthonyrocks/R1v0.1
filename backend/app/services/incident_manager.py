@@ -43,12 +43,20 @@ class IncidentManager:
         connection_manager: ConnectionManager,
         notification_service: Optional[NotificationService] = None,
         v2x_service: Optional[V2XService] = None,
+        traffic_signal_service: Optional[Any] = None,
     ):
         self.config = config
         self._db_manager = db_manager
         self._connection_manager = connection_manager
         self._notification_service = notification_service
         self._v2x_service = v2x_service
+        # Shared singleton injected by ServiceContainer (services.py). Earlier
+        # this class built its own TrafficSignalService per incident inside
+        # create_incident(), which re-seeded the default signals on every
+        # incident (duplicate "Initialized N mock signals" log lines --
+        # Oct-18 run: one per CRITICAL incident) and left an httpx client per
+        # incident dangling. None keeps the adaptive-response step a no-op.
+        self._traffic_signal_service = traffic_signal_service
         self._feed_manager = None
         
         # Debouncing: { "feed_id_anomaly_details": timestamp }
@@ -292,17 +300,10 @@ class IncidentManager:
                         )
 
             # 6c. Traffic signal adaptive response (closes hub control loop).
-            try:
-                from app.services.traffic_signal_service import TrafficSignalService
-                ts_cfg = self.config.get("traffic_signal_controller", {})
-                if self._connection_manager and (not str(ts_cfg.get("api_base_url", "")).startswith("http://localhost:8082/mock/signals") or ts_cfg.get("default_signals")):
-                    ts_svc = TrafficSignalService(config=self.config, connection_manager=self._connection_manager)
-                    await ts_svc.suggest_signal_adjustment(
-                        incident_location={"latitude": location.get("latitude"), "longitude": location.get("longitude")},
-                        incident_severity=severity,
-                    )
-            except Exception as e:
-                logger.debug(f"Adaptive signal response skipped: {e}")
+            # Uses the shared singleton injected at construction -- the block
+            # used to build a fresh TrafficSignalService here per incident
+            # (duplicate mock-seed log lines + one httpx client per incident).
+            await self._adaptive_signal_response(location, severity)
 
             # 7. Request Snapshot (severity gate + per-vehicle dedup + rate cap)
             # The incident itself is rate-limited by (feed_id, subtype) upstream,
@@ -466,3 +467,32 @@ class IncidentManager:
             await asyncio.to_thread(self._db_manager._execute_write, sql, params)
         except Exception as e:
             logger.error(f"Failed to log audit event: {e}")
+
+    async def _adaptive_signal_response(
+        self, location: Dict[str, Any], severity: Any
+    ) -> None:
+        """Ask the SHARED TrafficSignalService for an adaptive signal response.
+
+        Uses the singleton injected at construction by ServiceContainer.
+        Before Oct-20 this block built a fresh TrafficSignalService per
+        incident inside create_incident(), which:
+          - re-seeded the default signals on every incident (duplicate
+            "Initialized N mock signals" log lines -- one per CRITICAL
+            incident in the Oct-18 live run, backend_services.log 128/334),
+          - opened (and abandoned) an httpx.AsyncClient per incident.
+        suggest_signal_adjustment applies its own config gating and location
+        validation, so the old outer ts_cfg condition is no longer needed.
+        Failures are swallowed to DEBUG exactly like the inline block: the
+        incident flow must never break on the signal-control side channel.
+        """
+        try:
+            if self._traffic_signal_service is not None:
+                await self._traffic_signal_service.suggest_signal_adjustment(
+                    incident_location={
+                        "latitude": location.get("latitude"),
+                        "longitude": location.get("longitude"),
+                    },
+                    incident_severity=severity,
+                )
+        except Exception as e:
+            logger.debug(f"Adaptive signal response skipped: {e}")

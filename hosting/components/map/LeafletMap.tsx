@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search } from 'lucide-react';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
+import { APIClient } from '@/lib/api/APIClient';
+import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
 
 // Fix for default marker icons in Leaflet with Next.js
 const fixLeafletIcons = () => {
@@ -67,7 +69,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
   const incidentMarkersRef = useRef<Record<string, L.Marker>>({});
   const signalMarkersRef = useRef<Record<string, L.Marker>>({});
 
-  const { feeds, nodeCongestionData, alerts, sendMessage } = useRealtimeUpdates();
+  const { feeds, nodeCongestionData, alerts } = useRealtimeUpdates();
   const router = useRouter();
 
   const [selectedNode, setSelectedNode] = useState<any>(null);
@@ -350,14 +352,28 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
     });
   }, [nodeCongestionData, signalStates]);
 
-  const handleSetPhase = (signalId: string, phase: string) => {
+  const handleSetPhase = async (signalId: string, phase: string) => {
     setIsChangingPhase(true);
-    sendMessage(WebSocketMessageType.SET_SIGNAL_PHASE, {
-      signal_id: signalId,
-      phase: phase,
-      duration_seconds: 30
-    });
-    setTimeout(() => setIsChangingPhase(false), 1000);
+    try {
+      // REST, not WebSocket: the backend WebSocketMessageTypeEnum has no
+      // set_signal_phase member, so the old WS send failed Pydantic validation
+      // and was dropped silently (ws.py logs "Invalid message format"). The
+      // REST endpoint carries the operator RBAC + per-signal scope check
+      // (signals.py get_current_operator), which the WS path never had.
+      // `duration_seconds` is not part of the REST contract -- send only phase.
+      const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+      await apiClient.post(`/api/v1/signals/${signalId}/set_phase`, {
+        phase: phase.toLowerCase(),
+      });
+    } catch (err: unknown) {
+      const detail =
+        (err as { data?: { detail?: string } })?.data?.detail ||
+        (err as Error)?.message ||
+        'Failed to set signal phase';
+      console.error(`[LeafletMap] set_phase failed for ${signalId}:`, detail);
+    } finally {
+      setIsChangingPhase(false);
+    }
   };
 
   const handleSearch = (query: string) => {

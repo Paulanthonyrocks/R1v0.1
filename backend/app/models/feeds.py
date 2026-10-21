@@ -21,7 +21,12 @@ class FeedDetails(FeedStatus):
 
 class FeedCreateRequest(BaseModel):
     source: str = Field(..., examples=["/path/to/video.mp4", "webcam:0"])
-    name_hint: Optional[str] = None
+    # The wire field is `name` -- that is what the dashboard's AddFeedDialog
+    # sends. It used to be named `name_hint` while routers/feeds.py read
+    # `request.name`, so EVERY POST /api/v1/feeds/ raised AttributeError
+    # (HTTP 500) on an otherwise valid payload. The feed manager's internal
+    # `name_hint` kwarg is unrelated and unchanged.
+    name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 

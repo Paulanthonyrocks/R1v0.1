@@ -22,6 +22,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -165,7 +166,10 @@ class TunnelAuthContractTests(unittest.TestCase):
 
     def test_token_read_from_file(self):
         """TUNNEL_AUTH_TOKEN_FILE is the durable form (2026-09-30)."""
-        tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+        # A temp path, NOT the live keys file: writing the real path would
+        # clobber the production token (and the finally-unlink would delete
+        # it), fail-closing the gate on the deploy host.
+        tok_file = Path(tempfile.mkdtemp()) / 'tunnel_auth.token'
         try:
             tok_file.parent.mkdir(parents=True, exist_ok=True)
             tok_file.write_text(SECRET + '\n')  # trailing newline on purpose
@@ -190,7 +194,10 @@ class TunnelAuthContractTests(unittest.TestCase):
 
     def test_inline_token_wins_over_file(self):
         """Precedence is inline first, so a pinned prod value is never shadowed."""
-        tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+        # A temp path, NOT the live keys file: writing the real path would
+        # clobber the production token (and the finally-unlink would delete
+        # it), fail-closing the gate on the deploy host.
+        tok_file = Path(tempfile.mkdtemp()) / 'tunnel_auth.token'
         try:
             tok_file.parent.mkdir(parents=True, exist_ok=True)
             tok_file.write_text('value-from-file')
@@ -227,7 +234,10 @@ class TunnelAuthContractTests(unittest.TestCase):
         wrong-path from unset-var from unreadable-file, which is what sent the
         debugging in circles. The detail string is the fix; this pins it.
         """
-        tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+        # A temp path, NOT the live keys file: writing the real path would
+        # clobber the production token (and the finally-unlink would delete
+        # it), fail-closing the gate on the deploy host.
+        tok_file = Path(tempfile.mkdtemp()) / 'tunnel_auth.token'
         try:
             tok_file.parent.mkdir(parents=True, exist_ok=True)
             tok_file.write_text(SECRET)
@@ -262,7 +272,10 @@ class TunnelAuthContractTests(unittest.TestCase):
 
     def test_empty_token_file_fails_closed(self):
         """An empty file is a silent misconfiguration, not an open door."""
-        tok_file = BACKEND / 'keys' / 'tunnel_auth.token'
+        # A temp path, NOT the live keys file: writing the real path would
+        # clobber the production token (and the finally-unlink would delete
+        # it), fail-closing the gate on the deploy host.
+        tok_file = Path(tempfile.mkdtemp()) / 'tunnel_auth.token'
         try:
             tok_file.parent.mkdir(parents=True, exist_ok=True)
             tok_file.write_text('   \n')
@@ -375,6 +388,102 @@ class TunnelAuthContractTests(unittest.TestCase):
             'access-control-allow-credentials', hdrs,
             'must not offer credentialed access to a disallowed origin',
         )
+
+
+class SubprotocolAuthTests(unittest.TestCase):
+    """Sec-WebSocket-Protocol as the URL-free WS credential (Oct-18).
+
+    The query-param form succeeded as auth but put the secret in the URL of
+    every WS upgrade, where Chrome's native "connection failed" message prints
+    it verbatim into any captured console log. These pin the subprotocol form
+    that keeps the secret in a handshake header instead, alongside the query
+    form staying accepted for older builds during the rollout.
+    """
+
+    def _ws(self, second_headers=None, qs=b''):
+        """Drive a WS scope; returns (inner_app_reached_count, sent_messages).
+
+        WS outcomes have no HTTP status -- the middleware either lets the
+        inner app answer (accept) or sends websocket.close, so the assertion
+        target is `reached`/the close frame, exactly like the existing WS
+        tests above.
+        """
+        inner = App()
+        mw = ta.TunnelAuthMiddleware(inner, token=SECRET)
+        _, sent = run(mw, make_scope(
+            path='/api/v1/ws/abc', stype='websocket',
+            headers=[(ta.SUBPROTOCOL_HEADER,
+                      (ta.SUBPROTOCOL_PREFIX + SECRET).encode())]
+            if second_headers is None else second_headers,
+            qs=qs,
+        ))
+        return inner.reached, sent
+
+    def _assert_allowed(self, reached, sent):
+        self.assertEqual(reached, 1, 'authorized WS must reach the handler')
+        self.assertFalse(
+            any(m.get('type') == 'websocket.close' for m in sent),
+            'an authorized WS must not be closed',
+        )
+
+    def _assert_rejected(self, reached, sent):
+        self.assertEqual(reached, 0, 'unauthorized WS must not reach the handler')
+        self.assertTrue(
+            any(m.get('type') == 'websocket.close' for m in sent),
+            'WS must be actively closed, not left pending',
+        )
+
+    def test_accepts_via_subprotocol(self):
+        reached, sent = self._ws()
+        self._assert_allowed(reached, sent)
+
+    def test_rejects_wrong_secret_in_subprotocol(self):
+        reached, sent = self._ws(second_headers=[
+            (ta.SUBPROTOCOL_HEADER,
+             (ta.SUBPROTOCOL_PREFIX + 'not-the-secret').encode()),
+        ])
+        self._assert_rejected(reached, sent)
+
+    def test_wrong_prefix_is_not_ours(self):
+        """Only names carrying our exact prefix are trusted."""
+        reached, sent = self._ws(second_headers=[
+            (ta.SUBPROTOCOL_HEADER, b'other-tunnel-auth.' + SECRET.encode()),
+        ])
+        self._assert_rejected(reached, sent)
+
+    def test_secret_among_multiple_protocols(self):
+        """Browsers send a comma-separated list; ours must be found."""
+        offered = b'chat, , r1-tunnel-auth.' + SECRET.encode()
+        reached, sent = self._ws(second_headers=[(ta.SUBPROTOCOL_HEADER, offered)])
+        self._assert_allowed(reached, sent)
+
+    def test_header_takes_precedence_over_subprotocol(self):
+        """A valid X-Tunnel-Auth header must work even with a bogus protocol
+        list; a wrong header must not fall through to a valid subprotocol."""
+        reached, sent = self._ws(second_headers=[
+            (ta.HEADER, SECRET.encode()),
+            (ta.SUBPROTOCOL_HEADER, b'r1-tunnel-auth.garbage'),
+        ])
+        self._assert_allowed(reached, sent)
+
+        reached2, sent2 = self._ws(second_headers=[
+            # the leakable loca.lt IP password -- must NOT pass as the secret
+            (ta.HEADER, b'34.48.223.113'),
+            (ta.SUBPROTOCOL_HEADER, (ta.SUBPROTOCOL_PREFIX + SECRET).encode()),
+        ])
+        self._assert_rejected(reached2, sent2)
+
+    def test_query_form_still_accepted(self):
+        """Migration safety: older builds send the query param only."""
+        reached, sent = self._ws(
+            second_headers=[], qs=f'tunnel_token={SECRET}'.encode())
+        self._assert_allowed(reached, sent)
+
+    def test_prefix_without_secret_rejected(self):
+        """A bare `r1-tunnel-auth.` name must not pass as an empty secret."""
+        reached, sent = self._ws(
+            second_headers=[(ta.SUBPROTOCOL_HEADER, ta.SUBPROTOCOL_PREFIX.encode())])
+        self._assert_rejected(reached, sent)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import { errorNotifier } from '../utils/errorNotifier';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
-import { appendTunnelPassword, appendTunnelAuth, sanitizeTunnelUrl } from '../api/backendBaseUrl';
+import { appendTunnelPassword, sanitizeTunnelUrl, tunnelAuthProtocols } from '../api/backendBaseUrl';
 import { resetFeedSubscriptionState } from './feedSubscriptionState';
 
 interface WebSocketErrorEvent extends Event {
@@ -38,7 +38,6 @@ export enum WebSocketMessageType {
     SIGNAL_UPDATE = 'signal_update',
     VIDEO_FRAME = 'video_frame',
     VIDEO_METADATA = 'video_metadata', // Local decoded metadata; never sent to the backend.
-    VIDEO_UPDATE = 'video_update',
     FEED_STATUS_UPDATE = 'feed_status_update',
     GENERAL_NOTIFICATION = 'general_notification',
     ERROR_NOTIFICATION = 'error_notification',
@@ -63,10 +62,7 @@ export enum WebSocketMessageType {
     STOP_FEED = 'stop_feed',
     RESTART_FEED = 'restart_feed',
     SNAPSHOT_READY = 'snapshot_ready',
-    SET_SIGNAL_PHASE = 'set_signal_phase',
-    INTERNAL_PONG = '__internal_pong',
-    GET_USER_ROLE = 'get_user_role',
-    USER_ROLE = 'user_role'
+    INTERNAL_PONG = '__internal_pong'
 }
 
 export enum MessagePriority {
@@ -461,17 +457,15 @@ export class WebSocketClient implements IWebSocketClient {
     }
 
     /**
-     * Append the backend's own auth token so the WebSocket upgrade passes the
-     * application's TunnelAuthMiddleware. Query param rather than header
-     * because the browser WS API cannot set headers on a handshake.
-     *
-     * Independent of the loca.lt password above: that one is the runner's
-     * public IP and is readable from any tunnel URL, so the backend enforces a
-     * second secret that is not. Both are applied; neither replaces the other.
+     * The loca.lt password above is the runner's public IP and is readable
+     * from any tunnel URL, so the backend enforces a second secret that is
+     * not. The browser WS API cannot set handshake headers, so that secret
+     * rides in a `Sec-WebSocket-Protocol` subprotocol NAME (see
+     * tunnelAuthProtocols) — NOT in the URL query string, where Chrome's
+     * native "WebSocket connection to '<url>' failed" message would print
+     * it verbatim into any captured console log. Both mechanisms are applied;
+     * neither replaces the other.
      */
-    private appendTunnelAuthToken(url: URL): void {
-        appendTunnelAuth(url);
-    }
 
     private performConnection(token: string | null): Promise<void> {
         token = token || this.currentToken || this.tokenManager.getCurrentToken();
@@ -490,9 +484,8 @@ export class WebSocketClient implements IWebSocketClient {
             const url = new URL(this.url);
             if (this.clientId) url.pathname = `/api/v1/ws/${this.clientId}`;
             this.appendTunnelPassword(url);
-            this.appendTunnelAuthToken(url);
             console.debug('[WebSocketClient] Connecting:', sanitizeTunnelUrl(url.toString()));
-            const socket = new WebSocket(url.toString());
+            const socket = new WebSocket(url.toString(), tunnelAuthProtocols());
             this.ws = socket;
             socket.binaryType = 'arraybuffer';
             // Socket identity is the generation guard: retired events cannot touch
@@ -555,7 +548,12 @@ export class WebSocketClient implements IWebSocketClient {
         const jitter = 0.8 + Math.random() * 0.4;
         this.reconnectDelay = Math.min(this.reconnectDelay * 2 * jitter, 5000);
 
-        if (this.reconnectAttempts < 3) { console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`); }
+        // Log the first three attempts, then every 5th: the tail of a long
+        // storm used to be invisible (Oct-18: reconnect attempts after #2 were
+        // silent, which hid how long the page hammered a dead backend).
+        if (this.reconnectAttempts < 3 || this.reconnectAttempts % 5 === 0) {
+            console.log(`[WebSocketClient ${this.instanceId}] Reconnect attempt ${this.reconnectAttempts} in ${Math.round(this.reconnectDelay)}ms. Reason: ${reason}`);
+        }
 
         this.setState(ConnectionState.RECONNECTING, `Connection lost (${reason}). Attempting to reconnect...`); // Suppress console spam: reconnect expected when server is down
         // Notify once per outage: every attempt spams the notification

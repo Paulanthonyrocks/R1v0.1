@@ -141,31 +141,27 @@ export function getTunnelAuthToken(): string | null {
   return _cachedAuthToken;
 }
 
-/** REST helper: append `?tunnel_token=`. Idempotent. */
-export function withTunnelAuth(url: string): string {
-  const tok = getTunnelAuthToken();
-  if (!tok) return url;
-  try {
-    const urlObj = new URL(url);
-    if (!urlObj.searchParams.has('tunnel_token')) {
-      urlObj.searchParams.set('tunnel_token', tok);
-    }
-    return urlObj.toString();
-  } catch {
-    return url;
-  }
-}
+// The backend gate (TunnelAuthMiddleware in app/utils/tunnel_auth.py) prefers
+// the X-Tunnel-Auth HEADER over the query param, so REST needs no query form at
+// all: APIClient sets the header once and no URL carries the app secret.
+//
+// WebSocket upgrades are the one channel where the browser API cannot set
+// headers, so the token rides in a subprotocol NAME on
+// `Sec-WebSocket-Protocol` instead of `?tunnel_token=`: the handshake carries
+// it as a header and the upgrade URL stays clean, so Chrome's native
+// "WebSocket connection to '<url>' failed" message can no longer print the
+// secret (Oct-18: query-form auth leaked the full token ~9x into the
+// forwarded console.log). MUST stay in sync with SUBPROTOCOL_PREFIX in
+// backend/app/utils/tunnel_auth.py. RFC 6455 subprotocol tokens allow only
+// [a-zA-Z0-9-._], hence the dot separator and the ASCII-hyphenated prefix.
 
-/** WebSocket helper: append `?tunnel_token=`. Idempotent.
- *
- * The query form is the ONLY option for WebSockets -- the browser WS API
- * accepts no custom headers on the handshake. */
-export function appendTunnelAuth(url: URL): void {
+export const TUNNEL_AUTH_SUBPROTOCOL_PREFIX = 'r1-tunnel-auth.';
+
+/** WebSocket helper: subprotocol list carrying the tunnel auth token. */
+export function tunnelAuthProtocols(): string[] {
   const tok = getTunnelAuthToken();
-  if (!tok) return;
-  if (!url.searchParams.has('tunnel_token')) {
-    url.searchParams.set('tunnel_token', tok);
-  }
+  if (!tok) return [];
+  return [TUNNEL_AUTH_SUBPROTOCOL_PREFIX + tok];
 }
 
 /** Redact BOTH tunnel secrets for logging. */

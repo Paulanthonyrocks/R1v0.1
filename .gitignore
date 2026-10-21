@@ -78,6 +78,18 @@ backend/tests/*
 # Tunnel-auth gate: a leaked loca.lt password (the runner's public IP) must
 # NOT be sufficient, and an unset token must reject rather than open.
 !backend/tests/test_tunnel_auth.py
+# Oct-20: the adaptive-signal step must reuse the shared TrafficSignalService
+# (per-incident construction re-seeded mocks + leaked an httpx client each time).
+!backend/tests/test_incident_signal_service_reuse.py
+# Oct-20: POST /api/v1/feeds/ crashed 500 on `request.name` (model declared
+# name_hint while the router and the dashboard both used `name`).
+!backend/tests/test_feed_create_name_contract.py
+# Oct-20: ConnectionManager.connect() must report rejection (shut down /
+# pool saturated) instead of returning None like the success path.
+!backend/tests/test_ws_connect_verdict.py
+# Oct-20: incident acknowledge/resolve must attribute to the authenticated
+# admin, not the literal "operator" audit default.
+!backend/tests/test_incident_attribution.py
 backend/app/tests/
 hosting/__tests__/
 # One-off manual probe scripts (verified: empty / hello-world debug scratch)

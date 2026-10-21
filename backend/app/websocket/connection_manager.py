@@ -81,28 +81,6 @@ class ConnectionManager:
         self._last_frame_ts: Dict[Tuple[str, str], float] = {}
         self._throttled_skips: Dict[Tuple[str, str], int] = {}
 
-        # Per-feed "first frames" tracking (LEGACY -- no longer used).
-        #
-        # The old behaviour boosted frames 0-9 per feed to HIGH priority so the
-        # UI transitioned 'starting' -> 'running' quickly. Combined with the
-        # latency-aware adaptive broadcast (per-client RTT decides full vs
-        # small payload), that produced a visible resolution flip on high-RTT
-        # tunnel clients: frames 0-9 sent full-res via the unbounded HIGH
-        # priority queue (default 50ms RTT falls under any reasonable
-        # threshold), then everything from frame 10 forward on a high-RTT link
-        # dropped to the small payload. The HIGH path also bypasses the
-        # bounded-deque backpressure safety net, so the first burst could
-        # stall the sender and trigger visible "hang" periods on the frontend
-        # while bytes kept flowing.
-        #
-        # We now keep everything on LOW priority; the bounded deque enforces
-        # consistent backpressure for every frame, and the per-RTT payload
-        # selection in broadcast_to_feed_realtime_bytes_adaptive is the only
-        # authority on which payload size ships. The "starting -> running"
-        # status transition on the frontend is driven by KPI/first-frame
-        # reception over a short window, not by priority routing.
-        self._sent_first_frames: set = set()  # retained for backward-compat reads (always empty)
-
         # Per-client locked payload-size decision ('full' or 'small') used by
         # broadcast_to_feed_realtime_bytes_adaptive. Once the first PONG samples
         # RTT, the choice is frozen so subsequent frames cannot flip size
@@ -197,7 +175,14 @@ class ConnectionManager:
             self._client_locks[client_id] = asyncio.Lock()
         return self._client_locks[client_id]
 
-    async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user"):
+    async def connect(self, websocket: WebSocket, client_id: str, user_id: str, user_role: str = "user") -> bool:
+        """Register a client. Returns True on success, False when the socket
+        was rejected (closed here, not registered). The caller MUST check the
+        return: previously both rejection paths returned None -- the same as
+        falling off the end of the success path -- so ws.py sent AUTH_SUCCESS
+        and started the expiry watcher + receive loop on a socket that
+        connect() had already closed (shutdown -> 1001, pool saturated -> 4000).
+        """
         async with await self._get_client_lock(client_id):
             # No await between admission and registration. Shutdown closes this
             # gate before its first await; never acquire its lifecycle lock here
@@ -206,13 +191,13 @@ class ConnectionManager:
                 await asyncio.wait_for(
                     websocket.close(code=1001, reason="Server shutting down"), timeout=5.0
                 )
-                return
+                return False
             if len(self.active_connections) >= self.max_connections:
                 logger.warning(
                     f"Connection limit exceeded. Cannot accept new connection for client {client_id}."
                 )
                 await websocket.close(code=4000, reason="Connection limit exceeded")
-                return
+                return False
 
             # Handle reconnection: Close existing connection if present
             old_ws = None
@@ -268,6 +253,7 @@ class ConnectionManager:
                 f"New authenticated WebSocket connection: client_id={client_id}, user_id={user_id}. "
                 f"Total connections: {len(self.active_connections)}"
             )
+            return True
 
     async def disconnect(self, client_id: str, websocket: Optional[WebSocket] = None, reason: str = "unspecified"):
         async with await self._get_client_lock(client_id):
@@ -935,7 +921,6 @@ class ConnectionManager:
         how the frame is sized. The frontend's 'starting'/'running' status is
         driven by feed-status messages, NOT by per-frame priority routing.
         """
-        # NOTE: ``_sent_first_frames`` is intentionally left empty/no-op now.
         return MessagePriority.LOW
 
     async def broadcast_to_feed_realtime_bytes(self, feed_id: str, data: bytes, frame_index: int = 0):
@@ -1288,5 +1273,4 @@ class ConnectionManager:
         ):
             mapping.clear()
         self._sampled_rtt_clients.clear()
-        self._sent_first_frames.clear()
         logger.info("All WebSocket connections closed.")

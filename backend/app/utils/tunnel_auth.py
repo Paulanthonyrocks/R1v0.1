@@ -13,9 +13,17 @@ replacement -- keep both.
 
 SECRET HANDLING
 - `TUNNEL_AUTH_TOKEN` (env). A 32+ character random string.
-- Presented as `X-Tunnel-Auth` header, or `?tunnel_token=` query param.
-  The query form exists ONLY because browsers cannot attach headers to a
-  WebSocket handshake, and the tunnel redaction already scrubs `token` in logs.
+- Presented as `X-Tunnel-Auth` header (REST), or `?tunnel_token=` query param.
+- WebSocket alternative: the `Sec-WebSocket-Protocol` handshake header carrying
+  `r1-tunnel-auth.<secret>` (see `_from_subprotocol`). Browsers cannot attach
+  arbitrary headers to a WS upgrade, and the query form put the secret in the
+  URL of every upgrade -- where browser-native failure messages print it
+  verbatim ("WebSocket connection to '...?tunnel_token=...' failed", Oct-18:
+  the full token landed in the forwarded console.log ~9 times). A subprotocol
+  name rides in a header and never appears in a URL. Per RFC 6455 the server
+  MAY decline offered subprotocols without failing the handshake, so offering
+  one is harmless to servers that ignore it. The query form is kept as a
+  fallback during migration; drop it once every client sends the subprotocol.
 - Compared with `hmac.compare_digest`, so a caller cannot learn the secret by
   timing the response.
 
@@ -43,6 +51,13 @@ logger = logging.getLogger("app.tunnel_auth")
 
 HEADER = b"x-tunnel-auth"
 QUERY_KEY = "tunnel_token"
+
+# WebSocket handshake alternative: the secret rides in a subprotocol NAME on
+# the Sec-WebSocket-Protocol handshake header instead of the URL query string.
+# Charset must be valid RFC 6455 token chars (the browser rejects a handshake
+# otherwise), so: letters/digits/hyphen then a dot separator + the raw secret.
+SUBPROTOCOL_HEADER = b"sec-websocket-protocol"
+SUBPROTOCOL_PREFIX = "r1-tunnel-auth."
 
 # Paths that stay reachable without the secret. Keep this list minimal and
 # justified -- each entry is a hole in the gate.
@@ -182,13 +197,39 @@ class TunnelAuthMiddleware:
 
     @staticmethod
     def _presented(scope: Scope) -> Optional[bytes]:
+        # Precedence: explicit header (REST), then the WS subprotocol handshake
+        # form, then the query param (legacy WS form, still accepted so an
+        # older frontend build keeps working while hosts roll out).
         for k, v in scope.get("headers", []):
-            if k == HEADER:
+            if k.lower() == HEADER:
                 return v
+        from_subproto = TunnelAuthMiddleware._from_subprotocol(scope)
+        if from_subproto is not None:
+            return from_subproto
         qs = scope.get("query_string", b"").decode("latin-1")
         for part in qs.split("&"):
             if part.startswith(QUERY_KEY + "="):
                 return part.split("=", 1)[1].encode("latin-1")
+        return None
+
+    @staticmethod
+    def _from_subprotocol(scope: Scope) -> Optional[bytes]:
+        """Extract the secret from a `Sec-WebSocket-Protocol` name.
+
+        The browser offers this as a header on the WS upgrade, so the token
+        never enters the URL -- which is the whole point: Chrome's native
+        "WebSocket connection to '<url>' failed" message prints the URL, and
+        with query-param auth that message put the secret in every forwarded
+        log. Accepts a list of protocols ("chat, r1-tunnel-auth.<secret>"),
+        skips blank entries, and only trusts names carrying our exact prefix.
+        """
+        for k, v in scope.get("headers", []):
+            if k.lower() != SUBPROTOCOL_HEADER:
+                continue
+            for proto in v.decode("latin-1").split(","):
+                proto = proto.strip()
+                if proto.startswith(SUBPROTOCOL_PREFIX):
+                    return proto[len(SUBPROTOCOL_PREFIX):].encode("latin-1")
         return None
 
     def _authorised(self, scope: Scope) -> bool:

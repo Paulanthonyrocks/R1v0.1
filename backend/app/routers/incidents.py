@@ -54,13 +54,19 @@ async def create_new_incident(
 @router.post("/{incident_id}/acknowledge", response_model=Incident)
 async def acknowledge_incident(
     incident_id: str,
-    user_id: str = Query("operator", alias="user_id"),
+    user_id: Optional[str] = Query(None, alias="user_id"),
     manager: IncidentManager = Depends(get_incident_manager),
     current_user: User = Depends(get_current_admin),
 ):
-    """Acknowledge an incident."""
+    """Acknowledge an incident.
+
+    Attribution defaults to the AUTHENTICATED admin's username. The old
+    default was the literal string "operator", so every acknowledge/resolve
+    the dashboard sent without an explicit user_id was written to the audit
+    log as the fictional "operator" instead of the real account.
+    """
     success = await manager.update_status(
-        incident_id, IncidentStatus.ACKNOWLEDGED, user_id=user_id
+        incident_id, IncidentStatus.ACKNOWLEDGED, user_id=user_id or current_user.username
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to acknowledge incident")
@@ -70,13 +76,14 @@ async def acknowledge_incident(
 async def resolve_incident(
     incident_id: str,
     notes: Optional[str] = Query(None),
-    user_id: str = Query("operator", alias="user_id"),
+    user_id: Optional[str] = Query(None, alias="user_id"),
     manager: IncidentManager = Depends(get_incident_manager),
     current_user: User = Depends(get_current_admin),
 ):
-    """Resolve an incident."""
+    """Resolve an incident. Attribution defaults to the authenticated admin
+    (see acknowledge_incident for why the literal "operator" was wrong)."""
     success = await manager.update_status(
-        incident_id, IncidentStatus.RESOLVED, user_id=user_id, notes=notes
+        incident_id, IncidentStatus.RESOLVED, user_id=user_id or current_user.username, notes=notes
     )
     if not success:
         raise HTTPException(status_code=400, detail="Failed to resolve incident")

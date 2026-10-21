@@ -141,7 +141,16 @@ async def message_receiver(
             
             # If we had a temporary ID, we should ensure it's not used as the primary key in the manager
             # though ConnectionManager.connect usually just adds/replaces.
-            await connection_manager.connect(websocket, assigned_id, user.username, user.role)
+            registered = await connection_manager.connect(websocket, assigned_id, user.username, user.role)
+            if not registered:
+                # connect() already CLOSED the socket (server shutting down ->
+                # 1001, or the connection pool is saturated -> 4000) and did
+                # NOT register the client. Continuing here used to send
+                # AUTH_SUCCESS over a dead socket and start the expiry watcher
+                # (a task sleeping up to 1h) plus the receive loop against a
+                # connection that would never open.
+                _set_exit_reason("connection-rejected-at-connect")
+                return
             client_id = assigned_id
             # Publish the assigned id to the outer websocket_endpoint so its
             # finally block can call ConnectionManager.disconnect with the
