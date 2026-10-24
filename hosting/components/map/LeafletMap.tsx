@@ -10,7 +10,7 @@ import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
 // Fix for default marker icons in Leaflet with Next.js
 const fixLeafletIcons = () => {
@@ -361,7 +361,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers }: {
       // REST endpoint carries the operator RBAC + per-signal scope check
       // (signals.py get_current_operator), which the WS path never had.
       // `duration_seconds` is not part of the REST contract -- send only phase.
-      const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+      const apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
       await apiClient.post(`/api/v1/signals/${signalId}/set_phase`, {
         phase: phase.toLowerCase(),
       });

@@ -18,9 +18,9 @@ import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 interface GlobalVehicle {
     global_vehicle_id: string;

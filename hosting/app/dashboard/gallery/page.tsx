@@ -18,10 +18,10 @@ import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 import { vehicleService, IdentifiedVehicle } from '@/lib/services/vehicleService';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 export default function GalleryPage() {
     const [incidents, setIncidents] = useState<Incident[]>([]);

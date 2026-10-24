@@ -1,5 +1,5 @@
 import { APIClient } from '../api/APIClient';
-import { getBackendBaseURL } from '../api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '../api/backendBaseUrl';
 
 // Wire contract (backend/app/routers/video.py):
 // - GET  /api/v1/video/processed-videos?stream_id=&limit=&offset= -> ProcessedVideo[]
@@ -33,7 +33,7 @@ export class VideoService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+        this.apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     }
 
     public static getInstance(): VideoService {

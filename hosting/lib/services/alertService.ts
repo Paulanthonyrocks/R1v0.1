@@ -1,5 +1,5 @@
 import { APIClient } from '../api/APIClient';
-import { getBackendBaseURL } from '../api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '../api/backendBaseUrl';
 import { errorNotifier } from '../utils/errorNotifier';
 
 // Wire contract (backend/app/routers/alerts.py + app/models/alerts.py):
@@ -37,7 +37,7 @@ export class AlertService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+        this.apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     }
 
     public static getInstance(): AlertService {

@@ -11,10 +11,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 import { computeVarianceStats } from '@/lib/predictive/varianceStats';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 export default function PredictivePage() {
     const { feeds } = useRealtimeUpdates();

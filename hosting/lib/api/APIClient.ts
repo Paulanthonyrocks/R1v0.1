@@ -1,7 +1,7 @@
 import { TokenManager } from '../auth/TokenManager';
 import * as auth from 'firebase/auth';
 import { errorNotifier } from '../utils/errorNotifier';
-import { getBackendBaseURL, withTunnelPassword, getTunnelPassword, getTunnelAuthToken } from './backendBaseUrl';
+import { getApiBrowserBaseURL, withTunnelPassword, getTunnelPassword, getTunnelAuthToken } from './backendBaseUrl';
 
 export interface APIOptions {
     baseURL: string;
@@ -27,9 +27,12 @@ export class APIClient {
 
     private constructor(options: APIOptions) {
         // Always connect to the backend directly. Base URL resolution
-        // (env var, same-origin, dev default) is centralized in
-        // lib/api/backendBaseUrl.ts.
-        this.baseURL = options.baseURL || getBackendBaseURL();
+        // (env var, same-origin via getApiBrowserBaseURL, dev default) is
+        // centralized in lib/api/backendBaseUrl.ts. In the browser we use the
+        // same origin so requests go through Next.js rewrites (same-origin,
+        // no CORS preflight) and are proxied to the tunnel server-side with
+        // the loca.lt password appended by next.config.ts rewrites.
+        this.baseURL = options.baseURL || getApiBrowserBaseURL();
         this.timeout = options.timeout || 30000;
         // `X-Tunnel-Password` header carries the tunnel secret for direct
         // (non-tunnel) backends so it never appears in the URL / access logs /

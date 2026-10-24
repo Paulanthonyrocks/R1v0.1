@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
 const AddFeedForm = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
     const [loading, setLoading] = useState(false);
@@ -45,7 +45,7 @@ const AddFeedForm = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
             if (formData.latitude) body.latitude = parseFloat(formData.latitude);
             if (formData.longitude) body.longitude = parseFloat(formData.longitude);
 
-            const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+            const apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
             try {
                 await apiClient.post('/api/v1/feeds/', body);
             } catch (err: any) {

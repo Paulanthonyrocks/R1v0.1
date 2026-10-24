@@ -1,5 +1,5 @@
 import { APIClient } from '../api/APIClient';
-import { getBackendBaseURL } from '../api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '../api/backendBaseUrl';
 
 // Wire contract (backend/app/routers/ws_monitoring.py):
 // - GET /api/v1/websocket/health -> ConnectionStats (direct JSON, no APIResponse
@@ -24,7 +24,7 @@ export class WsMonitoringService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+        this.apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     }
 
     public static getInstance(): WsMonitoringService {

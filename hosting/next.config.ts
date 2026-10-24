@@ -1,5 +1,5 @@
 import type { NextConfig } from 'next';
-import { getBackendBaseURL } from './lib/api/backendBaseUrl';
+import { getBackendBaseURL, getTunnelPassword } from './lib/api/backendBaseUrl';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
@@ -8,10 +8,12 @@ const nextConfig: NextConfig = {
     '3000-firebase-r1v01-1774108349517.cluster-lu4mup47g5gm4rtyvhzpwbfadi.cloudworkstations.dev',
   ],
   async rewrites() {
+    const tunnelPassword = getTunnelPassword();
+    const passwordSuffix = tunnelPassword ? `?password=${tunnelPassword}` : '';
     return [
       {
         source: '/api/v1/:path*',
-        destination: `${getBackendBaseURL()}/api/v1/:path*`,
+        destination: `${getBackendBaseURL()}/api/v1/:path*${passwordSuffix}`,
       },
     ];
   },

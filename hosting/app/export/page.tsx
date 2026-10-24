@@ -8,9 +8,9 @@ import MatrixButton from "@/components/MatrixButton";
 import { UserRole } from "@/lib/auth/roles";
 import { cn } from "@/lib/utils";
 import { APIClient } from "@/lib/api/APIClient";
-import { getBackendBaseURL } from "@/lib/api/backendBaseUrl";
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 type Format = "CSV" | "JSON";
 type DataSet = "Incidents" | "Feed Statuses";

@@ -17,14 +17,14 @@ import {
 } from "@/components/ui/select";
 import { Label } from '@/components/ui/label';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 import { WorkZone, fetchWorkZones } from '@/lib/safetyHub';
 
 interface Signal {
   id: string;
 }
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 const SignalsPage = () => {
   const [signals, setSignals] = useState<Signal[]>([]);

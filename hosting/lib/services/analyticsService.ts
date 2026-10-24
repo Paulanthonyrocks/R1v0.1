@@ -1,5 +1,5 @@
 import { APIClient } from '../api/APIClient';
-import { getBackendBaseURL } from '../api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '../api/backendBaseUrl';
 
 export interface HistoryStats {
     timestamp: string;
@@ -11,7 +11,7 @@ export interface HistoryStats {
 export const analyticsService = {
     getFeedHistory: async (feedId: string, hours: number = 24): Promise<HistoryStats[]> => {
         // Determine API URL based on environment or default to current origin
-        const baseURL = getBackendBaseURL();
+        const baseURL = getApiBrowserBaseURL();
         const client = APIClient.getInstance({ baseURL });
 
         // Analytics warms up slower than APIClient's ~1.2s retry window

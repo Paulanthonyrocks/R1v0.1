@@ -4,9 +4,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 interface HeatmapProps {
     feed_id?: string;

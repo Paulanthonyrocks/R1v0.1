@@ -202,6 +202,22 @@ export function getBackendBaseURL(): string {
 }
 
 /**
+ * Browser-side REST base URL. Returns `window.location.origin` so that
+ * APIClient builds same-origin URLs (e.g. `https://<cw>/api/v1/...`) which
+ * Next.js rewrites proxy to the tunnel server-side — avoiding CORS preflights
+ * that loca.lt intercepts at the edge and never forwards to the backend.
+ *
+ * Falls back to `getBackendBaseURL()` during SSR (no `window`) so snapshots
+ * and server-side fetches still resolve to the tunnel URL.
+ */
+export function getApiBrowserBaseURL(): string {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return getBackendBaseURL();
+}
+
+/**
  * WS URL for a given path. Mirrors the logic previously embedded in
  * WebSocketProvider.getWsUrl().
  *

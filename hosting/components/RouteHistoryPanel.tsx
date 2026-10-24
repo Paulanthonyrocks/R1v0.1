@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, History, XOctagon } from 'lucide-react';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface RouteAnalytics {
   most_common_routes: { start: string; end: string; count: number }[];
@@ -21,7 +21,7 @@ const RouteHistoryPanel: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    const client = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+    const client = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     client.get<RouteHistoryResponse>('/api/v1/routes/history/analytics', { limit: '20' })
       .then(data => { if (active) setHistoryData(data); })
       .catch(() => { if (active) setError('Failed to load route history archives'); })

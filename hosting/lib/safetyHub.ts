@@ -1,5 +1,5 @@
 import { APIClient } from './api/APIClient';
-import { getBackendBaseURL } from './api/backendBaseUrl';
+import { getApiBrowserBaseURL } from './api/backendBaseUrl';
 
 // Client for the safety-hub feature APIs (backend features 1,2,5,7,8,9).
 // All fetches tolerate backend-disabled states: callers get null/[],
@@ -85,7 +85,7 @@ export function cleanFilters(f: ForensicFilters): Record<string, string> {
 }
 
 function client(): APIClient {
-  return APIClient.getInstance({ baseURL: getBackendBaseURL() });
+  return APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
 }
 
 export async function fetchEscalation(incidentId: string): Promise<EscalationInfo | null> {

@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Fingerprint, Clock, Tag, Database } from 'lucide-react';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface IdentityGalleryProps {
     globalId: string;
@@ -29,7 +29,7 @@ const IdentityGallery: React.FC<IdentityGalleryProps> = ({ globalId, onClose }) 
         const fetchGallery = async () => {
             setLoading(true);
             try {
-                const apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+                const apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
                 const result = await apiClient.get<GalleryData>(
                     `/api/v1/vehicles/global/${globalId}/gallery`
                 );

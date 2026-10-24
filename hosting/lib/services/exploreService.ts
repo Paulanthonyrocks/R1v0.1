@@ -1,5 +1,5 @@
 import { APIClient } from '../api/APIClient';
-import { getBackendBaseURL } from '../api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '../api/backendBaseUrl';
 
 // Wire contract (backend/app/routers/analysis.py + app/models/{analysis,traffic}.py):
 // - GET  /api/v1/analytics/trends?region_id=&start_date=&end_date= -> AggregatedTrafficTrend
@@ -61,7 +61,7 @@ export class ExploreService {
     private apiClient: APIClient;
 
     private constructor() {
-        this.apiClient = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+        this.apiClient = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     }
 
     public static getInstance(): ExploreService {

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
 interface AuthenticatedImageProps {
   path: string;
@@ -18,7 +18,7 @@ export default function AuthenticatedImage({ path, alt, className }: Authenticat
     let active = true;
     let objectURL: string | undefined;
     const controller = new AbortController();
-    const client = APIClient.getInstance({ baseURL: getBackendBaseURL() });
+    const client = APIClient.getInstance({ baseURL: getApiBrowserBaseURL() });
     client.getBlob(path, { signal: controller.signal })
       .then(blob => {
         if (!active) return;

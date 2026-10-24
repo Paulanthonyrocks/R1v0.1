@@ -36,9 +36,9 @@ import {
 } from '@/lib/safetyHub';
 import AuthGuard from '@/components/auth/AuthGuard';
 import { APIClient } from '@/lib/api/APIClient';
-import { getBackendBaseURL } from '@/lib/api/backendBaseUrl';
+import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 
-const API_BASE_URL = getBackendBaseURL();
+const API_BASE_URL = getApiBrowserBaseURL();
 
 export default function IncidentsPage() {
     const router = useRouter();
