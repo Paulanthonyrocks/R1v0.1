@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional, Dict, Any
 from app.database import get_database_manager
-from app.dependency_injection import get_current_active_user
+
 from app.utils.database import DatabaseManager
 from pydantic import BaseModel
 from datetime import datetime
@@ -47,7 +47,7 @@ async def list_identified_vehicles(
     make: Optional[str] = None,
     model: Optional[str] = None,
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
     """
     Returns a list of identified vehicles (by license plate) with optional filtering.
@@ -73,7 +73,7 @@ async def list_vehicle_tracks(
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
     """
     Returns raw vehicle tracking data for historical analysis.
@@ -97,7 +97,7 @@ async def get_vehicle(
     license_plate: str,
 
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
 
     """
@@ -120,7 +120,7 @@ async def get_vehicle(
 async def list_global_vehicles(
     limit: int = Query(100, ge=1, le=1000),
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
     """
     Returns a list of recently seen unique global vehicle IDs.
@@ -134,7 +134,7 @@ async def get_vehicle_global_history(
     global_id: str,
 
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
 
     """
@@ -165,7 +165,7 @@ class ReIDGalleryResponse(BaseModel):
 async def get_vehicle_reid_gallery(
     global_id: str,
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
     """
     Returns the collection of appearance embeddings for a vehicle.
@@ -204,7 +204,7 @@ async def get_vehicle_reid_gallery(
 @router.get("/plates/check", summary="ANPR allow/block check (feature 8)")
 async def check_plate(
     plate: str = Query(...),
-    current_user: dict = Depends(get_current_active_user),
+
 ):
     """Static allow/block lookup. unconfigured=true when ANPR disabled."""
     from app.services.anpr_service import ANPRService
@@ -215,7 +215,7 @@ async def check_plate(
 
 
 @router.get("/plates/lists", summary="ANPR lists (feature 8)")
-async def plate_lists(current_user: dict = Depends(get_current_active_user)):
+async def plate_lists():
     """[] when ANPR disabled (honest empty)."""
     from app.services.anpr_service import ANPRService
     from app.config import get_current_config
