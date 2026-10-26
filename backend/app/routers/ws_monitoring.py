@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.websocket.connection_manager import ConnectionManager
-from app.dependency_injection import get_connection_manager, get_current_active_user
+from app.dependency_injection import get_connection_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -20,7 +20,6 @@ class ConnectionStats(BaseModel):
 @router.get("/health", response_model=ConnectionStats)
 async def get_websocket_health(
     connection_manager: ConnectionManager = Depends(get_connection_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """
     Get real-time WebSocket connection statistics and health metrics.

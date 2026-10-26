@@ -8,7 +8,7 @@ from pydantic import BaseModel, field_validator
 import logging
 
 from app.config import get_current_config
-from app.dependency_injection import get_current_active_user, get_feed_manager, get_video_manager
+from app.dependency_injection import get_feed_manager, get_video_manager
 from app.services.video_processor import VideoManager
 from app.database import get_database_manager
 
@@ -62,16 +62,12 @@ def convert_datetime_to_iso(obj):
 
 
 @router.get("/stream/{stream_id:path}")
-async def stream_video(stream_id: str, current_user: dict = Depends(get_current_active_user)):
+async def stream_video(stream_id: str):
     """
     DEPRECATED. Live frames are delivered via the WebSocket VIDEO_FRAME
     subscription. The legacy MJPEG generator now returns 501 so any stale
     clients fail fast instead of silently hanging on an unreachable queue.
     """
-    logger.info(
-        f"GET /video/stream/{stream_id} endpoint called by user: {current_user.email} "
-        f"(deprecated path)"
-    )
     raise HTTPException(
         status_code=501,
         detail=(
@@ -86,7 +82,6 @@ async def start_video_recording(
     request: StartRecordingRequest,
     video_manager: VideoManager = Depends(get_video_manager),
     feed_manager=Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """
     Start a recording for the given stream.
@@ -128,7 +123,6 @@ async def start_video_recording(
 async def stop_video_recording(
     stream_id: str, video_manager: VideoManager = Depends(get_video_manager),
     feed_manager=Depends(get_feed_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     config = get_current_config()
     if not config.get("video_output", {}).get("enabled", False):
@@ -151,7 +145,6 @@ async def get_processed_videos_metadata(
     limit: int = 100,
     offset: int = 0,
     db_manager=Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     videos = await db_manager.get_processed_videos(stream_id, limit, offset)
     return videos
@@ -161,7 +154,6 @@ async def get_processed_videos_metadata(
 async def download_processed_video(
     video_id: int,
     db_manager=Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     video_entry = await db_manager.get_processed_video_by_id(video_id)
     if not video_entry:

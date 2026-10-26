@@ -20,13 +20,12 @@ async def list_incidents(
     offset: int = Query(0, ge=0),
     status: Optional[IncidentStatus] = None,
     db = Depends(get_database_manager),
-    current_user: User = Depends(get_current_active_user),
 ):
     """List recent incidents with optional filtering."""
     filters = {}
     if status:
         filters["status"] = status.value
-        
+    
     incidents = await db.get_incidents(limit=limit, offset=offset, filters=filters)
     return incidents
 
@@ -125,7 +124,6 @@ async def search_incidents(
     q: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     db = Depends(get_database_manager),
-    current_user: User = Depends(get_current_active_user),
 ):
     """Attribute filter over incidents. Empty list when forensic disabled."""
     from app.services.forensic_service import ForensicService, filter_incidents
@@ -346,7 +344,6 @@ async def verify_incident_release(
 async def get_incident_escalation(
     incident_id: str,
     db = Depends(get_database_manager),
-    current_user: User = Depends(get_current_active_user),
 ):
     """OK/DUE/OVERDUE/ACKED computed from created/ack timestamps + config."""
     import time

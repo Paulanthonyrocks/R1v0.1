@@ -1,7 +1,7 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict
 from fastapi import APIRouter, HTTPException, Depends
-from app.dependency_injection import get_current_active_user, get_current_operator, get_traffic_signal_service
+from app.dependency_injection import get_current_operator, get_traffic_signal_service
 from app.services.traffic_signal_service import TrafficSignalService, TrafficSignalControlError
 from app.models.signals import SignalControlStatusEnum
 from app.models.user import User, UserRole
@@ -16,7 +16,6 @@ class SignalPhaseRequest(BaseModel):
 
 @router.get("/")
 async def get_signals(
-    current_user: User = Depends(get_current_active_user),
     tss: TrafficSignalService = Depends(get_traffic_signal_service),
 ):
     try:

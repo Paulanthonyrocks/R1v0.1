@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 import asyncio
 from app.database import get_database_manager
 from app.utils import DatabaseManager
-from app.dependency_injection import get_current_active_user
+
 import json
 from datetime import datetime, timezone
 
@@ -22,7 +22,6 @@ async def get_system_logs(
     limit: int = 100, 
     offset: int = 0, 
     db: DatabaseManager = Depends(get_database_manager),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """
     Fetch system audit logs for the telemetry page.

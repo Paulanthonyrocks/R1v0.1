@@ -8,8 +8,6 @@ from app.dependency_injection import (
     get_db,
     get_db_manager,
     get_current_admin,
-    get_current_active_user,
-    get_current_viewer,
     get_connection_manager,
 )
 from app.utils import DatabaseManager  # Use re-exported DatabaseManager
@@ -62,7 +60,6 @@ async def get_alerts(
     ),
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of alerts per page"),
-    current_user: User = Depends(get_current_viewer), # Secure this endpoint for viewers and admins
     db: DatabaseManager = Depends(get_db_manager),
 ) -> AlertsResponse:
     logger.info("GET /alerts endpoint called")

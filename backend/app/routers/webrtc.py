@@ -2,7 +2,6 @@ import json
 import logging
 import asyncio
 from fastapi import APIRouter, HTTPException, Depends
-from app.dependency_injection import get_current_active_user
 from pydantic import BaseModel
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from ..websocket.webrtc_track import FeedStreamTrack
@@ -19,7 +18,7 @@ class WebRTCOffer(BaseModel):
     type: str
 
 @router.post("/offer/{feed_id}")
-async def webrtc_offer(feed_id: str, offer: WebRTCOffer, current_user: dict = Depends(get_current_active_user)):
+async def webrtc_offer(feed_id: str, offer: WebRTCOffer):
     """
     Receives an SDP offer from a WebRTC client, registers a 
     FeedStreamTrack for the specified feed_id, and returns an SDP answer.

@@ -238,9 +238,7 @@ async def optimize_route(
     optimization_service: RouteOptimizationService = Depends(
         get_route_optimization_service
     ),
-    current_user: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
-    logger.info(f"POST /optimize endpoint called by user: {current_user.username}")
     """Get an optimized route with traffic predictions"""
     # Honest refusal: the engine underneath runs on a fake 5x5 grid with
     # dummy sensor inputs (route_optimizer.py) and no road network. Serving
@@ -258,7 +256,6 @@ async def optimize_route(
     description="Get areas where route optimization is available",
 )
 async def get_supported_areas(
-    _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """Get areas where route optimization is available"""
     # Honest emptiness: the previous hardcoded "Downtown Area" bounds were not
@@ -276,7 +273,6 @@ async def get_supported_areas(
 )
 async def get_work_zones(
     feed_id: Optional[str] = None,
-    _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     from app.services.workzone_service import WorkZoneService
     from app.config import get_current_config

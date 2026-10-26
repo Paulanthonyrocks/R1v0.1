@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from typing import List, Dict, Any
 import logging
 from app.services.event_service import EventService
-from app.dependency_injection import get_event_service_api, get_current_active_user
+from app.dependency_injection import get_event_service_api
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -15,12 +15,8 @@ logger = logging.getLogger(__name__)
     description="Get current events like roadwork, accidents, or other incidents that may impact routing",
 )
 async def get_current_events(
-    current_user: dict = Depends(get_current_active_user),
     event_service: EventService = Depends(get_event_service_api),
 ):
-    logger.info(
-        f"GET /events/current endpoint called by user: {current_user.email}"
-    )
     try:
         return await event_service.get_events()
     except Exception as e:
@@ -37,12 +33,8 @@ async def get_current_events(
     description="Get formatted impact assessments of current events for route planning",
 )
 async def get_event_impacts(
-    current_user: dict = Depends(get_current_active_user),
     event_service: EventService = Depends(get_event_service_api),
 ):
-    logger.info(
-        f"GET /events/impacts endpoint called by user: {current_user.email}"
-    )
     try:
         return await event_service.get_event_impacts()
     except Exception as e:

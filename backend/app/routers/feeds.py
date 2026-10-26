@@ -8,7 +8,6 @@ from app.dependency_injection import (
     get_current_active_user,
     get_current_active_user_optional,
     get_current_admin,
-    get_current_viewer,
 )
 from app.services.feed_manager import (
     FeedManager,
@@ -70,18 +69,11 @@ async def update_feed_config(
 )
 async def get_all_feeds_status(
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[List[FeedStatusData]]:
     """
     Endpoint to get the status of all registered feeds.
     """
     logger.info("Received request for get_all_feeds_status")
-    if current_user:
-        logger.info(
-            f"User {current_user.username} requested status of all feeds."
-        )
-    else:
-        logger.info("Anonymous user requested status of all feeds.")
     try:
         statuses = await fm.get_all_statuses()
         return APIResponse.success(
@@ -179,17 +171,12 @@ async def add_and_start_feed(
 async def start_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatusData]:
-    logger.info(
-        f"POST /feeds/{feed_id}/start endpoint called by user: {current_user.username}"
-    )
+    logger.info(f"POST /feeds/{feed_id}/start endpoint called")
     """
-    Endpoint to start a feed that is currently stopped. Requires authentication.
+    Endpoint to start a feed that is currently stopped.
     """
-    logger.info(
-        f"User {current_user.username} attempting to start feed: {feed_id}"
-    )
+    logger.info(f"Starting feed: {feed_id}")
     try:
         await fm.start_feed(feed_id)
         
@@ -222,17 +209,12 @@ async def start_feed(
 async def stop_feed(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatusData]:
-    logger.info(
-        f"POST /feeds/{feed_id}/stop endpoint called by user: {current_user.username}"
-    )
+    logger.info(f"POST /feeds/{feed_id}/stop endpoint called")
     """
-    Endpoint to stop a feed that is currently running or starting. Requires authentication.
+    Endpoint to stop a feed that is currently running or starting.
     """
-    logger.info(
-        f"User {current_user.username} attempting to stop feed: {feed_id}"
-    )
+    logger.info(f"Stopping feed: {feed_id}")
     try:
         await fm.stop_feed(feed_id)
         
@@ -382,15 +364,9 @@ async def delete_feed(
 async def get_specific_feed_status(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_active_user),
 ) -> APIResponse[FeedStatusData]:
     """Endpoint to get the current status of a specific feed."""
-    if current_user:
-        logger.info(
-            f"User {current_user.username} requesting status for feed {feed_id}"
-        )
-    else:
-        logger.info(f"Anonymous user requesting status for feed {feed_id}")
+    logger.info(f"Requesting status for feed {feed_id}")
 
     entry = fm.process_registry.get(feed_id)
     if not entry:
@@ -407,15 +383,12 @@ async def get_feed_metrics_history(
     feed_id: str,
     limit: int = 300,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_viewer),
 ):
     """Return the in-memory metrics history (1 sample/sec, bounded deque).
 
     Backs trend sparklines without touching the DB. Data lives only for the
     current backend process lifetime and is capped by MAX_METRICS_HISTORY_LENGTH.
     """
-    if current_user:
-        logger.info(f"User {current_user.username} requesting metrics history for feed {feed_id}")
     entry = fm.process_registry.get(feed_id)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Feed with ID '{feed_id}' not found.")
@@ -431,15 +404,8 @@ async def get_feed_metrics_history(
 async def get_feed_kpis(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    current_user: User = Depends(get_current_viewer),
 ):
     """Get the latest KPIs/metrics for a specific feed (including sample video)."""
-    if current_user:
-        logger.info(
-            f"User {current_user.username} requesting KPIs for feed {feed_id}"
-        )
-    else:
-        logger.info(f"Anonymous user requesting KPIs for feed {feed_id}")
     feed_status = await fm.get_feed_status(feed_id)
     if not feed_status:
         raise HTTPException(

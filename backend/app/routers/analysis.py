@@ -9,7 +9,6 @@ import time
 from app.dependency_injection import (
     get_analytics_service,
     get_advanced_analytics_service,
-    get_current_active_user,
     get_db,
     get_db_manager,
 )
@@ -87,7 +86,6 @@ class RollingAveragesResponse(BaseModel):
     "/trends",
     response_model=traffic.AggregatedTrafficTrend,
     summary="Get Historical Trend Data or Generate Summary",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_analysis_trends(
     region_id: str = Query(..., description="Region ID for trend summary generation"),
@@ -118,7 +116,6 @@ async def get_analysis_trends(
     response_model=List[traffic.IncidentReport],
     summary="Detect Traffic Anomalies",
     description="Processes a list of traffic data points to detect anomalies and potential incidents.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def detect_anomalies(
     request_data: AnomalyDetectionRequest = Body(...),
@@ -138,7 +135,6 @@ async def detect_anomalies(
     response_model=Dict[str, Any],
     summary="Predict Incident Likelihood",
     description="Predicts the likelihood of an incident at a given location and time.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def predict_incident_likelihood_endpoint(
     request_data: IncidentPredictionRequest = Body(...),
@@ -158,7 +154,6 @@ async def predict_incident_likelihood_endpoint(
     response_model=PredictionResponse,
     summary="Get Detailed Traffic Predictions",
     description="Get detailed traffic predictions for a specific location, including historical context and recommendations.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_location_predictions(
     request: LocationPredictionRequest,
@@ -184,26 +179,17 @@ async def get_location_predictions(
     description="Returns a list of all monitored locations/nodes with their latest congestion data, including vehicle count, average speed, and congestion score.",
 )
 async def get_all_nodes_congestion_data(
-    current_user: dict = Depends(
-        get_current_active_user
-    ),
     analytics_service: AnalyticsService = Depends(
         get_analytics_service
     ),
 ) -> APIResponse[AllNodesCongestionResponse]:
-    logger.info(
-        f"GET /analytics/nodes/congestion endpoint called by user: {current_user.email}"
-    )
+    logger.info("GET /analytics/nodes/congestion endpoint called")
     """
     Retrieves the latest congestion data for all monitored nodes.
     Each node's data includes its ID, name, coordinates, congestion score,
     vehicle count, average speed, and the timestamp of the latest data.
-    Requires authentication.
     """
     try:
-        logger.info(
-            f"User {current_user.email} requesting all nodes congestion data."
-        )
         node_data_list = await analytics_service.get_all_location_congestion_data()
         logger.debug(f"Retrieved node data list: {node_data_list}")
         if not node_data_list:
@@ -226,7 +212,6 @@ async def get_all_nodes_congestion_data(
     response_model=APIResponse[AverageTrafficResponse],
     summary="Get Average Traffic Data",
     description="Calculates average vehicle count and speed for specified sensors within a time range.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_average_traffic(
     request_data: GetAverageTrafficRequest = Body(...),
@@ -254,7 +239,6 @@ async def get_average_traffic(
     response_model=APIResponse[TrafficPatternResponse],
     summary="Identify Traffic Pattern",
     description="Identifies traffic pattern based on historical data for a given sensor and time range.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def identify_traffic_pattern_endpoint(
     request_data: IdentifyTrafficPatternRequest = Body(...),
@@ -280,7 +264,6 @@ async def identify_traffic_pattern_endpoint(
     response_model=APIResponse[SimpleAnomalyDetectionResponse],
     summary="Detect Simple Anomaly",
     description="Detects a simple anomaly by comparing current data to historical patterns.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def detect_simple_anomaly_endpoint(
     request_data: SimpleAnomalyDetectionRequest = Body(...),
@@ -338,7 +321,6 @@ async def detect_simple_anomaly_endpoint(
     response_model=APIResponse[TimeSeriesDataResponse],
     summary="Get Time Series Traffic Data",
     description="Retrieves time series traffic data for specified sensors within a time range.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_time_series_traffic_data(
     request_data: GetTimeSeriesRequest = Body(...),
@@ -379,7 +361,6 @@ async def get_time_series_traffic_data(
     response_model=APIResponse[RollingAveragesResponse],
     summary="Calculate Rolling Averages",
     description="Calculates rolling averages for vehicle count and average speed on provided time series data.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def calculate_rolling_averages_endpoint(
     request_data: CalculateRollingAveragesRequest = Body(...)
@@ -404,7 +385,6 @@ async def calculate_rolling_averages_endpoint(
     "/od-matrix",
     summary="Get Origin-Destination Matrix",
     description="Calculates O-D matrix based on vehicles tracked across multiple feeds.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_od_matrix(
     hours: int = Query(1, ge=1, le=24),
@@ -418,7 +398,6 @@ async def get_od_matrix(
     "/travel-times",
     summary="Get Average Travel Times",
     description="Calculates average travel time between feed pairs.",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_travel_times(
     hours: int = Query(1, ge=1, le=24),
@@ -436,7 +415,6 @@ async def get_travel_times(
 
     description="Returns raw points for heatmap generation.",
 
-    dependencies=[Depends(get_current_active_user)],
 
 )
 
@@ -464,7 +442,6 @@ async def get_heatmap(
 
     description="Returns time-series data comparing past predictions with actual outcomes.",
 
-    dependencies=[Depends(get_current_active_user)],
 
 )
 
@@ -487,7 +464,6 @@ async def get_forecast_vs_actual(
     "/history/{feed_id}",
     summary="Get Simple History Stats",
     description="Get aggregated vehicle counts and speeds for a specific feed (for Dashboard charts).",
-    dependencies=[Depends(get_current_active_user)],
 )
 async def get_feed_history_endpoint(
     feed_id: str,

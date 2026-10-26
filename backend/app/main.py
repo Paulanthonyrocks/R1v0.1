@@ -36,7 +36,7 @@ from app.services.health_service import SystemHealthService
 from app.websocket.connection_manager import ConnectionManager
 from app.utils.file_watcher import FileSystemWatcher
 from app.core.feature_flags import FeatureFlags
-from app.dependency_injection import get_container, get_current_active_user
+from app.dependency_injection import get_container
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitConfig
 from app.middleware.security_middleware import SecurityHeadersMiddleware
@@ -942,7 +942,6 @@ app.include_router(webrtc.router, prefix="/api/v1/webrtc", tags=["WebRTC"])
 @app.get(
     "/api/v1/snapshots/{file_path:path}",
     tags=["Snapshots"],
-    dependencies=[Depends(get_current_active_user)],
 )
 async def serve_snapshot(file_path: str):
     safe_path = (SNAPSHOT_DIR / file_path).resolve()

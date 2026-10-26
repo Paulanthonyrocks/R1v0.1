@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, Depends
 from typing import Dict, Any
 import logging
 from app.services.weather_service import WeatherService # noqa F401
-from app.dependency_injection import get_weather_service_api, get_current_active_user
+from app.dependency_injection import get_weather_service_api
 from app.exceptions import OperationFailed
 
 router = APIRouter()
@@ -18,10 +18,9 @@ async def get_current_weather(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
     weather_service: WeatherService = Depends(get_weather_service_api),
-    current_user: dict = Depends(get_current_active_user),
 ):
     logger.info(
-        f"GET /weather/current endpoint called by user: {current_user.email} for lat: {lat}, lon: {lon}"
+        f"GET /weather/current endpoint called for lat: {lat}, lon: {lon}"
     )
     try:
         return await weather_service.get_current_weather(lat=lat, lon=lon)
@@ -38,7 +37,6 @@ async def get_weather_impact(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
     weather_service: WeatherService = Depends(get_weather_service_api),
-    current_user: dict = Depends(get_current_active_user),
 ):
     """Get weather impact assessment"""
     try:
