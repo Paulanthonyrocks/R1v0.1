@@ -122,6 +122,17 @@ class ConnectionManager:
         self.SEND_TIMEOUT_RTT_MULTIPLE = 2.0
         self.SEND_TIMEOUT_CEILING_S = 180.0
         self.MAX_CONSECUTIVE_SEND_FAILURES = 10
+        # Reap-deadline policy (2026-10-31). See _pong_deadline_for.
+        #   _ping_single_client used a FLAT ping_interval + pong_timeout
+        #   (125s) reap deadline. Over a 50-80s-RTT tunnel one PING/PONG
+        #   round trip eats most of that budget, and head-of-line blocking
+        #   behind a saturated low-priority deque can push the next PONG
+        #   past it -- so healthy-but-slow clients were reaped ("no PONG in
+        #   125s", last pong 125-129s ago; 8x in the 2026-10-31 run).
+        #   MULTIPLE scales the pong half of the deadline with the measured
+        #   RTT once a real PONG sample exists. Unsampled clients keep the
+        #   flat deadline (fail-safe for genuinely silent peers).
+        self.PONG_TIMEOUT_RTT_MULTIPLE = 2.0
 
         self.max_connections = max_connections
         self.token_refresh_interval = token_refresh_interval
@@ -626,12 +637,18 @@ class ConnectionManager:
           rate divided by the number of active feeds, defaulting to 2fps
           per feed (interval = 500ms).
         * Tunnel (>250ms): sender drains ~3-4fps over a slow tunnel. We cap
-          at 2fps per feed (interval = 500ms). Three feeds * 2fps = 6fps,
-          which the sender can keep up with over a 250ms-RTT link; the
-          deque then holds at most ~1 frame per feed, so catch-up bursts
-          stay short. (Was 1000ms/1fps; raised after the 2026-08-16 run
+          at 4fps per feed (interval = 250ms). Three feeds * 4fps = 12fps
+          aggregate. (Was 1000ms/1fps; raised after the 2026-08-16 run
           showed steady 0.8-1.0 fps delivery with stalls up to ~9.5s while
           the wire had headroom.)
+        * Extreme tunnel (>5s effective RTT, 2026-10-31): measured 50-80s
+          RTT on tunnel links, where the 12fps aggregate cap outran the
+          sender and the bounded deque saturated (180/180, 360/360, 500
+          drops). Halve the per-feed rate to 2fps (interval = 500ms) so the
+          sender can drain between bursts; the deque drop path remains the
+          valve above this. Note the measured RTT is partly self-inflicted
+          (queue backup inflates the PING/PONG sample), so this tier can
+          oscillate -- the deque bound keeps that bounded.
 
         The cap is ALWAYS PER-FEED: a high-latency client still gets the
         latest frame from each feed at its tier rate, just not every frame.
@@ -655,6 +672,11 @@ class ConnectionManager:
             return 0.0  # LAN: pass through every frame
         if latency_ms < 250:
             return 0.5  # Mixed: 2 fps per feed (3 feeds = 6 fps aggregate)
+        if latency_ms > 5000:
+            # Extreme tunnel (2026-10-31): 50-80s effective RTT saturated the
+            # deque at the 12fps aggregate cap. Halve the per-feed rate so
+            # ingest cannot outrun the sender; drop-oldest remains the valve.
+            return 0.5   # Extreme: 2 fps per feed (3 feeds = 6 fps aggregate)
         # Tunnel (>250ms): raised 0.5 -> 0.25 (2026-09-24). The tunnel tier was
         # sized for ~250ms links; the live loca.lt link is 50-67s RTT and
         # delivered only 1.42fps/feed (5100 frames / 3598s) — 71% of the 2fps
@@ -725,6 +747,26 @@ class ConnectionManager:
             return self.SEND_TIMEOUT_FLOOR_S
         adaptive = (latency_ms / 1000.0) * self.SEND_TIMEOUT_RTT_MULTIPLE
         return min(max(adaptive, self.SEND_TIMEOUT_FLOOR_S), self.SEND_TIMEOUT_CEILING_S)
+
+    def _pong_deadline_for(self, client_id: str) -> float:
+        """Reap deadline (seconds since last PONG) for this client (2026-10-31).
+
+        Flat ``ping_interval + pong_timeout`` until a real PONG-derived RTT
+        sample exists, then the pong half is scaled with the measured RTT:
+        ``ping_interval + max(pong_timeout, PONG_TIMEOUT_RTT_MULTIPLE * rtt)``.
+        At 80s RTT that is 25 + 160 = 185s instead of the flat 125s, so a
+        slow-but-alive tunnel client is not reaped while its PONG is still
+        legitimately in flight (or stuck behind a saturated frame queue).
+        A genuinely silent peer has no sample and still gets the flat
+        deadline, so fail-safe behavior is unchanged.
+        """
+        deadline = self.ping_interval + self.pong_timeout
+        latency_ms = self.client_latencies.get(client_id)
+        if client_id in self._sampled_rtt_clients and latency_ms and latency_ms > 0:
+            deadline = self.ping_interval + max(
+                self.pong_timeout, (latency_ms / 1000.0) * self.PONG_TIMEOUT_RTT_MULTIPLE
+            )
+        return deadline
 
     def update_client_latency(self, client_id: str, rtt_ms: float):
         """Update tracked latency for adaptive behavior."""
@@ -1150,22 +1192,28 @@ class ConnectionManager:
         
         # Check if PONG was received within timeout
         last_pong_time = self.last_pong_received_time.get(client_id, 0)
-        if current_time - last_pong_time > self.pong_timeout + self.ping_interval:
+        # RTT-scaled reap deadline (2026-10-31): flat ping+pong until a real
+        # PONG sample lands, then scaled by measured RTT -- see
+        # _pong_deadline_for. The flat 125s deadline reaped healthy clients
+        # on 50-80s-RTT tunnels whose PONG was still in flight.
+        deadline = self._pong_deadline_for(client_id)
+        if current_time - last_pong_time > deadline:
             # Reap attribution: this disconnects the client WITHOUT a
             # WebSocketDisconnect in the receiver loop (the receiver task is
             # cancelled here), so the close-code attribution in
             # routers/ws.py never fires. Without this line the reap is
             # invisible — sessions vanished with no cause logged (2026-09-24:
             # every teardown showed only "Disconnecting client", never why).
-            # The deadline is ping_interval+pong_timeout (125s) and is checked
-            # BEFORE the ping is sent, so a client that never pongs at all is
-            # only reaped here -- but note this cannot explain the Sep-28
-            # connect+40s deaths, which are far below this window. The reason
-            # string keeps the two classes distinguishable in the log.
+            # The deadline is _pong_deadline_for(client_id) (flat
+            # ping_interval+pong_timeout until the first RTT sample, then
+            # RTT-scaled) and is checked BEFORE the ping is sent, so a client
+            # that never pongs at all is only reaped here. The reason string
+            # keeps the two classes distinguishable in the log.
             last_pong_age = current_time - last_pong_time
             logger.warning(
-                f"Client {client_id} timed out (no PONG received in "
-                f"{self.pong_timeout + self.ping_interval}s; last pong "
+                f"Client {client_id} timed out (no PONG within {deadline:.0f}s deadline "
+                f"[flat={self.ping_interval + self.pong_timeout}s, rtt="
+                f"{self.client_latencies.get(client_id)}ms]; last pong "
                 f"{last_pong_age:.0f}s ago). Reaping connection."
             )
             return client_id, websocket, "no-pong-timeout"
