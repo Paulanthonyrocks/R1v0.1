@@ -15,6 +15,7 @@ from app.dependency_injection import (
 from app.exceptions import OperationFailed
 from app.models.alerts import Alert, AlertSeverityEnum # Import Alert and AlertSeverityEnum
 from app.services.analytics_service_pro import AdvancedAnalyticsService
+from app.utils.json_sanitize import to_jsonable
 from app.models.analysis import (
  AnomalyDetectionRequest,
  AllNodesCongestionResponse,
@@ -349,7 +350,7 @@ async def get_time_series_traffic_data(
         )
 
         # Convert DataFrame to a list of dictionaries for JSON response
-        time_series_data = dataframe.reset_index().to_dict('records')
+        time_series_data = to_jsonable(dataframe.reset_index().to_dict('records'))
 
         return APIResponse.success(data=TimeSeriesDataResponse(data=time_series_data), message="Time series data retrieved successfully.")
     except Exception as e:
@@ -372,7 +373,7 @@ async def calculate_rolling_averages_endpoint(
         dataframe.index = pd.to_datetime(dataframe.index) # Ensure index is datetime objects
 
         df_with_rolling_averages = traffic_analyzer.calculate_rolling_averages(dataframe, request_data.window_size)
-        rolling_averages_data = df_with_rolling_averages.reset_index().to_dict('records')
+        rolling_averages_data = to_jsonable(df_with_rolling_averages.reset_index().to_dict('records'))
 
         return APIResponse.success(data=RollingAveragesResponse(data=rolling_averages_data), message="Rolling averages calculated successfully.")
     except Exception as e:

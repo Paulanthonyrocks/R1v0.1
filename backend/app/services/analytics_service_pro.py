@@ -5,6 +5,7 @@ import pandas as pd
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 from app.utils.database import DatabaseManager
+from app.utils.json_sanitize import to_jsonable
 from sqlalchemy import text
 
 logger = logging.getLogger("app.services.analytics_pro")
@@ -48,7 +49,7 @@ class AdvancedAnalyticsService:
             matrix = pd.crosstab(transitions['feed_id'], transitions['next_feed'])
             
             return {
-                "matrix": matrix.to_dict(),
+                "matrix": to_jsonable(matrix.to_dict()),
                 "metadata": {
                     "total_tracked_vehicles": int(df["global_vehicle_id"].nunique()),
                     "total_transitions": len(transitions),
@@ -100,7 +101,7 @@ class AdvancedAnalyticsService:
             ).reset_index()
 
             # Rename columns to match expected output
-            return summary.rename(columns={'feed_id': 'from', 'next_feed': 'to'}).to_dict("records")
+            return to_jsonable(summary.rename(columns={'feed_id': 'from', 'next_feed': 'to'}).to_dict("records"))
 
         except Exception as e:
             logger.error(f"Error calculating travel times: {e}", exc_info=True)
