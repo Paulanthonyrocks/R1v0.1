@@ -3,6 +3,8 @@ import logging
 from starlette.requests import Request
 from starlette.types import ASGIApp, Scope, Receive, Send
 
+from app.utils.client_ip import resolve_client_ip
+
 logger = logging.getLogger("app.middleware")
 
 
@@ -20,9 +22,10 @@ class LoggingMiddleware:
         request = Request(scope, receive)
         request_id = request.headers.get("x-request-id", "N/A")
 
-        # Log request details
+        # Log request details (real client IP when behind a tunnel/proxy,
+        # not the edge IP every request would otherwise share)
         logger.info(
-            f"Request: {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'} [ReqID: {request_id}]"
+            f"Request: {request.method} {request.url.path} from {resolve_client_ip(request)} [ReqID: {request_id}]"
         )
 
         # Capture the response status

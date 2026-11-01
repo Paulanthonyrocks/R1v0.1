@@ -42,6 +42,7 @@ from app.middleware.rate_limit_middleware import RateLimitMiddleware, RateLimitC
 from app.middleware.security_middleware import SecurityHeadersMiddleware
 from app.services.audit_logger import AuditLogger
 from app.utils.tunnel_auth import install_tunnel_auth
+from app.utils.client_ip import resolve_client_ip
 
 # --- Routers ---
 from app.routers import (
@@ -908,7 +909,7 @@ async def audit_middleware(request: Request, call_next):
                     action=f"{request.method} {request.url.path}",
                     resource_type=resource_type,
                     resource_id=resource_id,
-                    ip_address=request.client.host if request.client else "unknown"
+                    ip_address=resolve_client_ip(request)
                 ),
                 name=f"audit-{request.method}-{resource_type}-{resource_id}"
             )

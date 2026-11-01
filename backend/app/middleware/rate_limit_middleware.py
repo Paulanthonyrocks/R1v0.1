@@ -6,6 +6,8 @@ from starlette.types import ASGIApp, Scope, Receive, Send
 import logging
 from pydantic import BaseModel
 
+from app.utils.client_ip import resolve_client_ip
+
 logger = logging.getLogger("app.middleware.rate_limit")
 
 class RateLimitConfig(BaseModel):
@@ -165,8 +167,10 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Identify user: Use client IP as the primary identifier.
-        user_id = request.client.host if request.client else "unknown"
+        # Identify user. Behind a tunnel the TCP peer is the proxy/edge IP
+        # (every browser shares it), which collapses all users into one
+        # rate-limit bucket — resolve the real client IP from proxy headers.
+        user_id = resolve_client_ip(request)
         user_tier = await self._resolve_tier(request)
 
         # Determine limits based on tier or path-specific config
