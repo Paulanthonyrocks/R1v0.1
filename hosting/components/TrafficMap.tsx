@@ -17,8 +17,9 @@ const TrafficMap = forwardRef<any, {
   activeLayer: 'satellite' | 'vector' | 'thermal';
   activeLayers: Record<string, boolean>;
   showAllUnits: boolean;
-}>(({ activeLayer, activeLayers, showAllUnits }, ref) => {
-  const { vehicles, mergeVehicleUpdates, getVehicles } = useVehicleTracking();
+  calibrating?: boolean;
+}>(({ activeLayer, activeLayers, showAllUnits, calibrating = false }, ref) => {
+  const { vehicles, version: vehiclesVersion, mergeVehicleUpdates, getVehicles } = useVehicleTracking();
   const { selectedGlobalId, setSelectedGlobalId } = useVehicleSelection();
   const client = useWebSocket();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -260,7 +261,14 @@ const TrafficMap = forwardRef<any, {
       <div className="absolute inset-0 pointer-events-none z-[1001] opacity-10 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,var(--lcd-green)_2px,var(--lcd-green)_4px)]" />
 
       {/* Background Map */}
-      <LeafletMap ref={leafletMapRef} activeLayer={activeLayer} activeLayers={activeLayers} />
+      <LeafletMap
+        ref={leafletMapRef}
+        activeLayer={activeLayer}
+        activeLayers={activeLayers}
+        vehicles={vehicles}
+        vehiclesVersion={vehiclesVersion}
+        calibrating={calibrating}
+      />
 
       {/* THREE.js overlay will be appended here */}
 

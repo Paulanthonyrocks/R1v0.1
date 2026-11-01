@@ -68,6 +68,10 @@ export interface VehicleData {
     status?: string;
     is_occluded?: boolean;
     lane?: number;
+    // Geo projection of the bbox bottom-center (present when the feed has
+    // geo_calibration configured; backend homography, see geo_calibration.py)
+    latitude?: number;
+    longitude?: number;
 }
 
 export interface WebSocketVideoFrame {

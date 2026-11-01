@@ -88,6 +88,10 @@ class FeedRegistry:
                         "config_info": config_info,
                         "last_broadcast_time": 0.0,
                     }
+                    # Rebuild the pixel->lat/lng homography from any persisted
+                    # geo_calibration so WS vehicles carry geo on first frame.
+                    from app.utils.geo_calibration import attach_geo_homography
+                    attach_geo_homography(self.process_registry[feed_id])
                     loaded_ids.append(feed_id)
 
                     parts = feed_id.split('_')

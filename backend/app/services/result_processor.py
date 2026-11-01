@@ -24,6 +24,7 @@ logger = logging.getLogger("app.services.result_processor")
 _WIRE_VEHICLE_KEYS = (
     "vehicle_id", "global_vehicle_id", "bbox", "speed",
     "license_plate", "class_name", "is_wrong_way", "is_stopped", "status",
+    "latitude", "longitude",
 )
 
 def _to_native(o: Any) -> Any:
@@ -55,11 +56,32 @@ def _convert_metrics(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {k: _to_native(v) for k, v in metrics.items()}
 
 
-def _wire_vehicles(vehicles: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Project each vehicle down to the subset the frontend renders on a frame."""
+def _wire_vehicles(
+    vehicles: Optional[List[Dict[str, Any]]],
+    geo_homography: Optional[list] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Project each vehicle down to the subset the frontend renders on a frame.
+
+    When the feed has a geo homography (config `geo_calibration`, see
+    app/utils/geo_calibration.py), each vehicle's bbox bottom-center is
+    projected to WGS84 and sent as `latitude`/`longitude` so the map page can
+    place live units in geo space. Costs one 3x3 multiply per vehicle per
+    frame; None homography = zero work, keys stay absent.
+    """
     if not vehicles:
         return []
-    return [{k: _to_native(v.get(k)) for k in _WIRE_VEHICLE_KEYS} for v in vehicles]
+    from app.utils.geo_calibration import bbox_to_geo
+
+    out = []
+    for v in vehicles:
+        d = {k: _to_native(v.get(k)) for k in _WIRE_VEHICLE_KEYS if k not in ("latitude", "longitude")}
+        if geo_homography is not None:
+            geo = bbox_to_geo(geo_homography, v.get("bbox"))
+            if geo is not None:
+                d["latitude"], d["longitude"] = geo
+        out.append(d)
+    return out
 
 
 def _deep_copy_for_ema(obj: Any) -> Any:
@@ -555,12 +577,23 @@ class ResultProcessor:
             small_bg = extra.get("bg") if (extra and isinstance(extra, dict)) else None
             lanes_payload = extra.get("ln") if (extra and isinstance(extra, dict)) else None
 
+            # Geo projection for the map page: pull this feed's pixel->lat/lng
+            # homography off the registry entry (rebuilt on geo_calibration
+            # config updates by FeedManager.update_feed_config).
+            geo_H = None
+            try:
+                entry = self.registry.process_registry.get(feed_id) if self.registry else None
+                if entry:
+                    geo_H = entry.get("geo_homography")
+            except Exception:
+                geo_H = None
+
             compact_full = {
                 "t": WebSocketMessageTypeEnum.VIDEO_FRAME.value,
                 "f": feed_id,
                 "i": frame_idx,
                 "ts": time.time() * 1000,
-                "v": _wire_vehicles(vehicles),
+                "v": _wire_vehicles(vehicles, geo_H),
                 "m": _convert_metrics(metrics),
                 "bg": frame_bytes,  # full-res; recording pump also uses this
                 "ln": lanes_payload,  # normalized lane lines/bounds for lane-flow overlay

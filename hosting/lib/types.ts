@@ -28,6 +28,9 @@ export interface FeedStatusData {
     show_bounding_boxes?: boolean;
     show_vehicle_details?: boolean;
     show_trajectories?: boolean;
+    // >=4 normalized-image -> WGS84 correspondences; backend turns these into
+    // the homography that stamps latitude/longitude onto WS vehicles.
+    geo_calibration?: { u: number; v: number; lat: number; lng: number }[];
   };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;

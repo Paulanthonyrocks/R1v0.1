@@ -42,6 +42,7 @@ __pycache__/
 colab/r1v0.1.ipynb
 gha-creds-*.json
 
+investor-outreach
 backend/configs/firrebase/service-account-key.json
 memory.md
 IMPROVEMENTS.md

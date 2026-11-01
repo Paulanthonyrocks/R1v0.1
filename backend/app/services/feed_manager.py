@@ -1144,6 +1144,17 @@ class FeedManager:
                             )
 
                 entry["config_info"] = current_config.model_copy(update=update_data)
+                # If geo_calibration changed, rebuild the pixel->lat/lng
+                # homography now so the very next WS frame carries geo.
+                if "geo_calibration" in update_data:
+                    from app.utils.geo_calibration import (
+                        attach_geo_homography,
+                        validate_geo_points,
+                    )
+                    err = validate_geo_points(update_data["geo_calibration"])
+                    if err:
+                        raise ValueError(f"Invalid geo_calibration: {err}")
+                    attach_geo_homography(entry)
                 self._save_persisted_feeds()
 
                 if entry["status"] in [
@@ -1222,6 +1233,9 @@ class FeedManager:
                     "config_info": feed_config,
                     "last_broadcast_time": 0.0,
                 }
+
+                from app.utils.geo_calibration import attach_geo_homography
+                attach_geo_homography(self.process_registry[feed_id])
 
                 if is_sample_feed and feed_id not in self._sample_feed_ids:
                     self._sample_feed_ids.append(feed_id)

@@ -3,9 +3,10 @@
 import React, { useState, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize, Check } from 'lucide-react';
+import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize, Check, Crosshair, Target } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import DashboardHeader from '@/components/dashboard/DashboardHeader';
 
 // Dynamically import TrafficMap to avoid SSR issues with THREE.js and Leaflet
@@ -23,16 +24,20 @@ const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
 
 const LiveMapPage: React.FC = () => {
   const { vehicles, version: vehicleVersion } = useVehicleTracking();
+  const { kpis, feeds: rtFeeds } = useRealtimeUpdates();
+  const runningFeeds = (rtFeeds || []).filter(f => f.status === 'running').length;
   const mapRef = useRef<any>(null);
   const [activeLayer, setActiveLayer] = useState<'satellite' | 'vector' | 'thermal'>('satellite');
   const [showLayerControl, setShowLayerControl] = useState(false);
   const [showAllUnits, setShowAllUnits] = useState(false);
+  const [calibrating, setCalibrating] = useState(false);
   const [activeLayers, setActiveLayers] = useState({
     feeds: true,
     congestion: true,
     incidents: true,
     roads: true,
-    signals: true
+    signals: true,
+    vehicles: true
   });
 
   return (
@@ -46,6 +51,17 @@ const LiveMapPage: React.FC = () => {
           .leaflet-marker-shadow {
             background-image: url('https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png') !important;
           }
+          @keyframes alertPulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 62, 62, 0.7); }
+            70% { box-shadow: 0 0 0 14px rgba(255, 62, 62, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 62, 62, 0); }
+          }
+          .alert-pulse { animation: alertPulse 1.6s infinite; }
+          @keyframes ringPulse {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 0.45; }
+          }
+          .feed-ring { animation: ringPulse 2.4s infinite; }
         `}</style>
         {/* TOP HUD: Title and Global Status */}
         <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none px-6 py-4 flex items-center justify-between">
@@ -58,6 +74,36 @@ const LiveMapPage: React.FC = () => {
               </span>
            </div>
            <div className="flex items-center gap-4">
+              {/* LIVE KPI STRIP: global aggregates pushed over WS, so the map
+                  page gives operators the big picture without leaving it. */}
+              <div className="hidden lg:flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-lcd-green">
+                <div className="bg-industrial-panel/80 border border-lcd-green/30 px-2 py-1 backdrop-blur-sm shadow-lg" title="Global congestion index (0-100)">
+                  <span className="opacity-50">Congestion</span>{' '}
+                  <span className={cn('font-bold', (kpis?.congestion_index ?? 0) > 70 ? 'text-[#ff3e3e]' : (kpis?.congestion_index ?? 0) > 40 ? 'text-[#facc15]' : 'text-lcd-green')}>
+                    {kpis?.congestion_index != null ? kpis.congestion_index.toFixed(0) : '—'}%
+                  </span>
+                </div>
+                <div className="bg-industrial-panel/80 border border-lcd-green/30 px-2 py-1 backdrop-blur-sm shadow-lg" title="Average speed across all feeds">
+                  <span className="opacity-50">Avg Speed</span>{' '}
+                  <span className="font-bold">{kpis?.average_speed_kmh != null ? `${kpis.average_speed_kmh.toFixed(1)} km/h` : '—'}</span>
+                </div>
+                <div className="bg-industrial-panel/80 border border-lcd-green/30 px-2 py-1 backdrop-blur-sm shadow-lg" title="Active incidents">
+                  <span className="opacity-50">Incidents</span>{' '}
+                  <span className={cn('font-bold', (kpis?.active_incidents_count ?? 0) > 0 ? 'text-[#ff3e3e]' : 'text-lcd-green')}>
+                    {kpis?.active_incidents_count ?? '—'}
+                  </span>
+                </div>
+                <div className="bg-industrial-panel/80 border border-lcd-green/30 px-2 py-1 backdrop-blur-sm shadow-lg" title="Global network health score (0-100)">
+                  <span className="opacity-50">Health</span>{' '}
+                  <span className={cn('font-bold', (kpis?.global_health_score ?? 100) < 50 ? 'text-[#ff3e3e]' : (kpis?.global_health_score ?? 100) < 75 ? 'text-[#facc15]' : 'text-lcd-green')}>
+                    {kpis?.global_health_score != null ? kpis.global_health_score.toFixed(0) : '—'}%
+                  </span>
+                </div>
+                <div className="bg-industrial-panel/80 border border-lcd-green/30 px-2 py-1 backdrop-blur-sm shadow-lg" title="Running feeds / total">
+                  <span className="opacity-50">Feeds</span>{' '}
+                  <span className="font-bold">{runningFeeds}/{rtFeeds?.length ?? 0}</span>
+                </div>
+              </div>
               <div className="bg-industrial-panel/80 border border-lcd-green/30 px-3 py-1 flex items-center gap-3 text-lcd-green text-[10px] uppercase tracking-tighter backdrop-blur-sm shadow-lg">
                  <div className="flex items-center gap-2">
                    <Activity className="h-3 w-3 animate-pulse" />
@@ -71,6 +117,18 @@ const LiveMapPage: React.FC = () => {
               </div>
               
               {/* Layer Control Toggle */}
+              <button
+                onClick={() => setCalibrating(c => !c)}
+                title="Geo-calibrate a feed: click map points + enter image coords"
+                className={cn(
+                  "border p-2 transition-all backdrop-blur-sm shadow-lg pointer-events-auto",
+                  calibrating
+                    ? "bg-[#facc15] text-industrial-bg border-[#facc15]"
+                    : "bg-industrial-panel/80 border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg"
+                )}
+              >
+                <Target size={16} />
+              </button>
               <button 
                 onClick={() => setShowLayerControl(!showLayerControl)}
                 className="bg-industrial-panel/80 border border-lcd-green/30 p-2 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg transition-all backdrop-blur-sm shadow-lg pointer-events-auto"
@@ -111,7 +169,8 @@ const LiveMapPage: React.FC = () => {
               { id: 'congestion', icon: Activity, label: 'Congestion Heat' },
               { id: 'roads', icon: MapIcon, label: 'Network Topology' },
               { id: 'signals', icon: Zap, label: 'Signal Controllers' },
-              { id: 'incidents', icon: AlertTriangle, label: 'Incident Events' }
+              { id: 'incidents', icon: AlertTriangle, label: 'Incident Events' },
+              { id: 'vehicles', icon: Crosshair, label: 'Live Vehicles (geo)' }
             ].map((layer) => (
               <label key={layer.id} className="flex items-center gap-3 cursor-pointer group">
                 <input 
@@ -224,7 +283,7 @@ const LiveMapPage: React.FC = () => {
           </button>
         </div>
 
-        <DynamicTrafficMap ref={mapRef} activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} />
+        <DynamicTrafficMap ref={mapRef} activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} calibrating={calibrating} />
       </div>
     </div>
   );

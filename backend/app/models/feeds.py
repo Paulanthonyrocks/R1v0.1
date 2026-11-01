@@ -53,6 +53,11 @@ class FeedConfigInfo(BaseModel):
     exclusion_zones: Optional[List[List[Dict[str, float]]]] = None
     static_object_filter_enabled: Optional[bool] = False
     static_object_timeout: Optional[float] = 300.0
+    # Geo calibration: >=4 correspondences from NORMALIZED image coords
+    # (u, v in [0,1], same space as wire bboxes) to WGS84. Computed into a
+    # homography (entry["geo_homography"]) so WS vehicles can carry
+    # latitude/longitude for map projection. See app/utils/geo_calibration.py.
+    geo_calibration: Optional[List[Dict[str, float]]] = None
 
 
 class FeedOperationalStatusEnum(str, Enum):
@@ -82,3 +87,4 @@ class FeedConfigRequest(BaseModel):
     exclusion_zones: Optional[List[List[Dict[str, float]]]] = None
     static_object_filter_enabled: Optional[bool] = None
     static_object_timeout: Optional[float] = None
+    geo_calibration: Optional[List[Dict[str, float]]] = None
