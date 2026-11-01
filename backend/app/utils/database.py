@@ -1391,6 +1391,17 @@ class DatabaseManager:
              placeholders = ','.join('?' * len(filters["severity_in"]))
              conds.append(f"severity IN ({placeholders})")
              params.extend(filters["severity_in"])
+        # The alerts router passes severity / feed_id / search — honor them
+        # (they were silently ignored, so the list endpoint never filtered).
+        if filters.get("severity"):
+            conds.append("severity = ?")
+            params.append(filters["severity"])
+        if filters.get("feed_id") is not None:
+            conds.append("feed_id = ?")
+            params.append(filters["feed_id"])
+        if filters.get("search") and isinstance(filters["search"], str) and filters["search"].strip():
+            conds.append("message LIKE ?")
+            params.append(f"%{filters['search'].strip()}%")
 
         if filters.get("latitude") is not None and filters.get("longitude") is not None and filters.get("radius_km") is not None:
              # This is a very simplified bounding box approach; not a true radius
@@ -1412,6 +1423,60 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
+
+    def _execute_count_alerts_filtered(self, filters: Dict) -> int:
+        # Restored method: the alerts router (GET /api/v1/alerts) and the
+        # analytics KPI badge both call count_alerts_filtered; it was lost in
+        # a refactor, so every call raised AttributeError and the router
+        # turned it into a 500 ("Failed to retrieve alerts").
+        # Column names come only from this fixed allowlist; all values are
+        # parameterized.
+        base_q = "SELECT COUNT(*) FROM alerts WHERE 1=1"
+        params = []
+        conds = []
+        allowed_exact_match = {"feed_id"}
+        if filters.get("acknowledged") is not None:
+            conds.append("acknowledged = ?")
+            params.append(1 if filters["acknowledged"] else 0)
+        if filters.get("severity"):
+            conds.append("severity = ?")
+            params.append(filters["severity"])
+        if filters.get("severity_in") and isinstance(filters["severity_in"], list) and len(filters["severity_in"]) > 0:
+            placeholders = ", ".join("?" for _ in filters["severity_in"])
+            conds.append(f"severity IN ({placeholders})")
+            params.extend(filters["severity_in"])
+        for k, v in filters.items():
+            if k in allowed_exact_match and v is not None:
+                conds.append(f"{k} = ?")
+                params.append(v)
+            elif k == "search" and isinstance(v, str) and v.strip():
+                conds.append("message LIKE ?")
+                params.append(f"%{v.strip()}%")
+            elif k == "start_time" and isinstance(v, (int, float)):
+                conds.append("timestamp >= ?")
+                params.append(v)
+            elif k == "end_time" and isinstance(v, (int, float)):
+                conds.append("timestamp <= ?")
+                params.append(v)
+        if conds:
+            base_q += " AND " + " AND ".join(conds)
+        with self._get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(base_q, params)
+            row = cursor.fetchone()
+            return row[0] if row else 0
+
+    async def count_alerts_filtered(self, filters: Dict) -> int:
+        # Counts feed pagination totals and KPI badges — a DB error here
+        # must degrade to 0, never raise into a 500.
+        try:
+            return await asyncio.to_thread(self._execute_count_alerts_filtered, filters)
+        except sqlite3.Error as e:
+            logger.error(f"DB error count_alerts_filtered: {e}", exc_info=True)
+            return 0
+        except Exception as e:
+            logger.error(f"Unexpected error in count_alerts_filtered via thread: {e}", exc_info=True)
+            return 0
 
     def _execute_save_alert(self, sql: str, params: tuple):
         """Synchronous execution of saving an alert."""

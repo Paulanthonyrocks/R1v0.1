@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import enum
+import json
 
 
 class AlertSeverityEnum(str, enum.Enum):
@@ -58,6 +59,20 @@ class Alert(BaseModel):
     acknowledged_at: Optional[datetime] = Field(
         None, description="Timestamp of when the alert was acknowledged (UTC)"
     )
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _parse_details(cls, v):
+        # The alerts.details column is TEXT holding JSON; rows arrive here as
+        # str, and pydantic v2 does NOT coerce str -> dict in lax mode, so
+        # without this every Alert(**row) with a non-null details raised
+        # ValidationError (surfaced as a 500 on GET /api/v1/alerts).
+        if isinstance(v, str) and v.strip():
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return {"raw": v}
+        return v
     source_component: Optional[str] = Field(
         None,
         example="anomaly_detection_service",
