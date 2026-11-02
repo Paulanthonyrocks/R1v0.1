@@ -1254,6 +1254,11 @@ class FeedManager:
                         logger.info(
                             f"Updated coordinates for {target_feed_id} to ({latitude}, {longitude})"
                         )
+                        # Persist + notify so the map marker moves even when the
+                        # feed was reused from persistence (no broadcast fires
+                        # on the reuse path otherwise).
+                        self._save_persisted_feeds()
+                        await self._broadcast_feed_update(target_feed_id)
 
                 if is_sample_feed:
                     self.process_registry[target_feed_id]["is_sample_feed"] = True

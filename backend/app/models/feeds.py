@@ -88,3 +88,8 @@ class FeedConfigRequest(BaseModel):
     static_object_filter_enabled: Optional[bool] = None
     static_object_timeout: Optional[float] = None
     geo_calibration: Optional[List[Dict[str, float]]] = None
+    # Camera location for the map marker, settable from the map page's
+    # location search. update_feed_config persists + broadcasts these, so
+    # the Leaflet feed marker moves on the next WS feed_update.
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)

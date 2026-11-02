@@ -60,6 +60,14 @@ const config = {
                 },
                 'lcd-bg': 'rgb(var(--lcd-bg-rgb) / <alpha-value>)',
                 'lcd-text': 'rgb(var(--lcd-text-rgb) / <alpha-value>)',
+                // These were only defined as raw CSS vars in globals.css, so
+                // classes like bg-industrial-panel/80 or text-lcd-green were
+                // silently dropped by Tailwind (transparent panels -> HUD
+                // buttons invisible on the light vector basemap).
+                'industrial-bg': 'hsl(var(--industrial-bg) / <alpha-value>)',
+                'industrial-panel': 'hsl(var(--industrial-panel) / <alpha-value>)',
+                'lcd-green': 'hsl(var(--lcd-green) / <alpha-value>)',
+                'lcd-green-dim': 'hsl(var(--lcd-green-dim) / <alpha-value>)',
                 warning: { // New semantic color
                   DEFAULT: "hsl(var(--warning))",
                   foreground: "hsl(var(--warning-foreground))",

@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize, Check, Crosshair, Target } from 'lucide-react';
+import { Activity, Layers, Video, Map as MapIcon, Zap, AlertTriangle, X, ZoomIn, ZoomOut, Navigation, Maximize, Check, Crosshair, Target, MapPin, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useVehicleTracking } from '@/lib/hooks/useVehicleTracking';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { feedService } from '@/lib/services/feedService';
+import { geocodeService, GeocodeResult } from '@/lib/services/geocodeService';
 import DashboardHeader from '@/components/dashboard/DashboardHeader';
 
 // Dynamically import TrafficMap to avoid SSR issues with THREE.js and Leaflet
@@ -31,6 +33,49 @@ const LiveMapPage: React.FC = () => {
   const [showLayerControl, setShowLayerControl] = useState(false);
   const [showAllUnits, setShowAllUnits] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
+  const [showLocPanel, setShowLocPanel] = useState(false);
+  const [locFeedId, setLocFeedId] = useState('');
+  const [locQuery, setLocQuery] = useState('');
+  const [locResults, setLocResults] = useState<GeocodeResult[]>([]);
+  const [locSearching, setLocSearching] = useState(false);
+  const [locStatus, setLocStatus] = useState<string | null>(null);
+
+  const locFeeds = rtFeeds || [];
+  const locFeed = locFeeds.find(f => f.feed_id === (locFeedId || locFeeds[0]?.feed_id)) || locFeeds[0];
+  const locFeedKey = locFeed?.feed_id || '';
+
+  // Debounced address search via the same-origin /api/geocode proxy
+  // (server-side Photon/Nominatim, no API key, no browser CORS).
+  useEffect(() => {
+    if (!showLocPanel) return;
+    const q = locQuery.trim();
+    const t = setTimeout(async () => {
+      if (q.length < 3) { setLocResults([]); return; }
+      setLocSearching(true);
+      try {
+        setLocResults(await geocodeService.search(q));
+        setLocStatus(null);
+      } catch (e: any) {
+        setLocResults([]);
+        setLocStatus(e?.message || 'search failed');
+      } finally {
+        setLocSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [locQuery, showLocPanel]);
+
+  const applyLocation = async (r: GeocodeResult) => {
+    if (!locFeedKey) return;
+    setLocStatus('saving…');
+    try {
+      await feedService.updateFeedConfig(locFeedKey, { latitude: r.lat, longitude: r.lon });
+      // Marker moves on the next WS feed_update broadcast (LeafletMap).
+      setLocStatus(`Set ${locFeedKey} → ${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}`);
+    } catch (e: any) {
+      setLocStatus(`save failed: ${e?.message || e}`);
+    }
+  };
   const [activeLayers, setActiveLayers] = useState({
     feeds: true,
     congestion: true,
@@ -65,7 +110,7 @@ const LiveMapPage: React.FC = () => {
         `}</style>
         {/* TOP HUD: Title and Global Status */}
         <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none px-6 py-4 flex items-center justify-between">
-           <div className="flex flex-col">
+           <div className="flex flex-col bg-industrial-bg/70 backdrop-blur-sm px-3 py-2 border border-lcd-green/30 shadow-lg">
               <h1 className="text-2xl font-bold uppercase tracking-[0.4em] text-lcd-green drop-shadow-[0_0_10px_rgba(182,255,176,0.5)] font-lcd">
                 Surveillance Grid
               </h1>
@@ -128,6 +173,18 @@ const LiveMapPage: React.FC = () => {
                 )}
               >
                 <Target size={16} />
+              </button>
+              <button
+                onClick={() => setShowLocPanel(v => !v)}
+                title="Set feed location via address search"
+                className={cn(
+                  "border p-2 transition-all backdrop-blur-sm shadow-lg pointer-events-auto",
+                  showLocPanel
+                    ? "bg-[#facc15] text-industrial-bg border-[#facc15]"
+                    : "bg-industrial-panel/80 border-lcd-green/30 text-lcd-green hover:bg-lcd-green hover:text-industrial-bg"
+                )}
+              >
+                <MapPin size={16} />
               </button>
               <button 
                 onClick={() => setShowLayerControl(!showLayerControl)}
@@ -242,6 +299,58 @@ const LiveMapPage: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Location Search Panel: set a feed's map-marker location by address */}
+        {showLocPanel && (
+          <div className="absolute top-20 left-6 z-30 bg-industrial-panel/90 border border-lcd-green/30 p-4 w-80 font-mono text-xs text-lcd-green flex flex-col gap-3 shadow-2xl backdrop-blur-md pointer-events-auto">
+            <div className="flex justify-between items-center mb-1 pb-1 border-b border-lcd-green/20">
+              <span className="font-bold uppercase tracking-widest">Set Feed Location</span>
+              <X size={14} className="cursor-pointer hover:text-white" onClick={() => setShowLocPanel(false)} />
+            </div>
+            <select
+              value={locFeedKey}
+              onChange={e => { setLocFeedId(e.target.value); setLocStatus(null); }}
+              className="bg-industrial-bg border border-lcd-green/30 px-2 py-1 text-[10px] uppercase tracking-widest outline-none"
+            >
+              {locFeeds.map(f => (
+                <option key={f.feed_id} value={f.feed_id}>{f.config?.name || f.feed_id}</option>
+              ))}
+            </select>
+            <div className="text-[10px] opacity-60">
+              Current: {locFeed?.config?.latitude != null && locFeed?.config?.longitude != null
+                ? `${locFeed.config.latitude.toFixed(5)}, ${locFeed.config.longitude.toFixed(5)}`
+                : 'not set'}
+            </div>
+            <div className="flex items-center gap-2 border border-lcd-green/30 bg-industrial-bg px-2 py-1">
+              <Search size={12} className="opacity-60 shrink-0" />
+              <input
+                value={locQuery}
+                onChange={e => setLocQuery(e.target.value)}
+                placeholder="Search address / place…"
+                className="bg-transparent outline-none w-full text-[11px] placeholder:text-lcd-green/30"
+              />
+            </div>
+            {locSearching && <div className="text-[10px] opacity-60 animate-pulse">searching…</div>}
+            <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+              {locResults.map((r, i) => (
+                <button
+                  key={`${r.provider}-${r.lat}-${r.lon}-${i}`}
+                  onClick={() => applyLocation(r)}
+                  className="text-left px-2 py-1 border border-lcd-green/20 hover:bg-lcd-green hover:text-industrial-bg transition-all"
+                  title={`${r.lat}, ${r.lon} (${r.provider})`}
+                >
+                  {r.label}
+                </button>
+              ))}
+              {!locSearching && locQuery.trim().length >= 3 && locResults.length === 0 && (
+                <div className="text-[10px] opacity-60 px-1">no results</div>
+              )}
+            </div>
+            {locStatus && (
+              <div className="text-[10px] text-[#facc15] border-t border-lcd-green/20 pt-2 break-all">{locStatus}</div>
+            )}
           </div>
         )}
 
