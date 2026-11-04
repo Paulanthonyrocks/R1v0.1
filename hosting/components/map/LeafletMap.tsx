@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search, Bell, Navigation, Crosshair } from 'lucide-react';
+import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search, Bell, Navigation, Crosshair, Pencil, Trash2 } from 'lucide-react';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { APIClient } from '@/lib/api/APIClient';
@@ -15,7 +15,7 @@ import { alertService } from '@/lib/services/alertService';
 import { feedService, GeoCalibrationPoint } from '@/lib/services/feedService';
 import { roadsService } from '@/lib/services/roadsService';
 import { Road, RoadAssetsResponse } from '@/lib/types/api';
-import { headingConeLatLngs } from '@/lib/utils/geo';
+import { headingConeLatLngs, destinationPoint } from '@/lib/utils/geo';
 import { pointAlongPolyline } from '@/lib/utils/coverage';
 import { parseFeedQuery, matchesFeed, matchesNodeQuery } from '@/lib/utils/feedSearch';
 import { allCoverageGaps, COVERAGE_RADIUS_M } from '@/lib/utils/coverage';
@@ -101,6 +101,9 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   const congestionLayer = useRef<L.LayerGroup>(L.layerGroup());
   const incidentsLayer = useRef<L.LayerGroup>(L.layerGroup());
   const roadNetworkLayer = useRef<L.LayerGroup>(L.layerGroup());
+  // Registered-road polylines (the roads registry), drawn under the
+  // "Network Topology" toggle alongside the congestion graph.
+  const roadPolylinesLayer = useRef<L.LayerGroup>(L.layerGroup());
   const signalsLayer = useRef<L.LayerGroup>(L.layerGroup());
   const vehiclesLayer = useRef<L.LayerGroup>(L.layerGroup());
   const calibLayer = useRef<L.LayerGroup>(L.layerGroup());
@@ -136,7 +139,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   const [placingFeedId, setPlacingFeedId] = useState<string>('');
   const [placement, setPlacement] = useState<{
     lat: number; lng: number; roadId: string; heading: number | ''; fov: number;
-    snapBearing: number | null; snapDist: number | null;
+    mountHeight: number | ''; snapBearing: number | null; snapDist: number | null;
   } | null>(null);
   const [roads, setRoads] = useState<Road[]>([]);
   const roadHighlightRef = useRef<L.Polyline | null>(null);
@@ -149,6 +152,8 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   const [selectedRoadId, setSelectedRoadId] = useState('');
   const [corridorPlaying, setCorridorPlaying] = useState(false);
   const [corridorIdx, setCorridorIdx] = useState(0);
+  const [roadBusy, setRoadBusy] = useState(false);
+  const [roadMsg, setRoadMsg] = useState('');
 
   // Road registry powers search filters (road:, dir:with-road) and the
   // placement panel dropdown; load once on mount.
@@ -157,6 +162,10 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   }, []);
   const [placingSaving, setPlacingSaving] = useState(false);
   const [placingMsg, setPlacingMsg] = useState<string>('');
+  // Register-road mini-form in the placement panel (dead-end case: no road
+  // within snap range of the clicked point).
+  const [newRoadName, setNewRoadName] = useState('');
+  const [registeringRoad, setRegisteringRoad] = useState(false);
 
   const { feeds, nodeCongestionData, alerts, subscribeToFeed } = useRealtimeUpdates();
 
@@ -175,6 +184,50 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
     const t = setTimeout(() => setCorridorIdx(i => (i + 1) % corridor.length), 2500);
     return () => clearTimeout(t);
   }, [corridorPlaying, corridorIdx, corridor]);
+
+  // Road registry admin from the corridor panel: rename (PATCH) and delete
+  // (DELETE, after checking assigned feeds via GET /roads/{id}/feeds).
+  const handleRenameRoad = async () => {
+    const road = roads.find(r => r.id === selectedRoadId);
+    if (!road || roadBusy) return;
+    const name = window.prompt('Rename road', road.name);
+    if (!name || !name.trim() || name.trim() === road.name) return;
+    setRoadBusy(true);
+    setRoadMsg('');
+    try {
+      const updated = await roadsService.updateRoad(road.id, { name: name.trim() });
+      setRoads(prev => prev.map(r => (r.id === road.id ? updated : r)));
+      setRoadMsg(`RENAMED → ${updated.name.toUpperCase()}`);
+    } catch (e) {
+      setRoadMsg(`RENAME FAILED: ${(e as Error)?.message || e}`);
+    } finally {
+      setRoadBusy(false);
+    }
+  };
+
+  const handleDeleteRoad = async () => {
+    const road = roads.find(r => r.id === selectedRoadId);
+    if (!road || roadBusy) return;
+    let assigned = 0;
+    try { assigned = (await roadsService.feedsOnRoad(road.id)).length; } catch { /* count is advisory only */ }
+    const ok = window.confirm(
+      `Delete road '${road.name}' (${road.id})?` +
+      (assigned ? `\n${assigned} feed(s) are assigned to it — their road_id stays set but the road will be gone from the registry.` : ''),
+    );
+    if (!ok) return;
+    setRoadBusy(true);
+    setRoadMsg('');
+    try {
+      await roadsService.deleteRoad(road.id);
+      setRoads(prev => prev.filter(r => r.id !== road.id));
+      setSelectedRoadId('');
+      setCorridorPlaying(false);
+    } catch (e) {
+      setRoadMsg(`DELETE FAILED: ${(e as Error)?.message || e}`);
+    } finally {
+      setRoadBusy(false);
+    }
+  };
 
   const router = useRouter();
   // Mirror of feeds for the imperative center() handle (fitBounds needs the
@@ -347,6 +400,28 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
     activeLayers.vehicles ? vehiclesLayer.current.addTo(leafletMap.current) : vehiclesLayer.current.remove();
     if (calibrating) calibLayer.current.addTo(leafletMap.current);
   }, [activeLayers, calibrating]);
+
+  // Registered-road polylines: redraw whenever the registry changes (e.g. a
+  // road registered from the placement panel) and honour the Network
+  // Topology toggle.
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    roadPolylinesLayer.current.clearLayers();
+    for (const r of roads) {
+      if (!r.polyline || r.polyline.length < 2) continue;
+      L.polyline(r.polyline.map(p => [p.lat, p.lng] as [number, number]), {
+        color: '#22d3ee', weight: 3, opacity: 0.8, dashArray: '6 4',
+      })
+        .bindTooltip(
+          `${r.name} (${r.id})${r.one_way_bearing_deg != null ? ` — one-way ${Math.round(r.one_way_bearing_deg)}°` : ''}`,
+          { sticky: true },
+        )
+        .addTo(roadPolylinesLayer.current);
+    }
+    if (activeLayers.roads) roadPolylinesLayer.current.addTo(map);
+    else roadPolylinesLayer.current.remove();
+  }, [roads, activeLayers.roads]);
 
   useEffect(() => {
     if (!leafletMap.current || !feeds) return;
@@ -711,13 +786,14 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
         roadId: snap?.found ? (snap.road_id ?? '') : (feed?.config?.road_id ?? ''),
         heading: typeof prevHeading === 'number' ? prevHeading : (snap?.segment_bearing_deg ?? ''),
         fov: feed?.config?.fov_deg ?? 60,
+        mountHeight: typeof feed?.config?.mount_height_m === 'number' ? feed.config.mount_height_m : '',
         snapBearing: snap?.segment_bearing_deg ?? null,
         snapDist: snap?.distance_m ?? null,
       });
       setPlacingMsg(
         snap?.found
           ? `SNAPPED TO ${snap.road_name} — ${snap.distance_m} m OFF LINE, ROAD BEARING ${snap.segment_bearing_deg}\u00B0`
-          : 'NO REGISTERED ROAD WITHIN 150 m — ASSIGN MANUALLY BELOW',
+          : 'NO REGISTERED ROAD WITHIN 150 m — REGISTER ONE BELOW',
       );
     };
     map.on('click', handler);
@@ -759,12 +835,52 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       if (typeof placement.heading === 'number' && Number.isFinite(placement.heading)) {
         updates.heading_deg = ((placement.heading % 360) + 360) % 360;
       }
+      if (typeof placement.mountHeight === 'number' && Number.isFinite(placement.mountHeight)) {
+        updates.mount_height_m = placement.mountHeight;
+      }
       await feedService.updateFeedConfig(placingFeedId, updates);
       setPlacingMsg('SAVED — NEXT WS FEED_UPDATE MOVES MARKER + CONE');
     } catch (err) {
       setPlacingMsg(`SAVE FAILED: ${(err as Error)?.message || err}`);
     } finally {
       setPlacingSaving(false);
+    }
+  };
+
+  // Register a new road through the clicked placement point: a 500 m polyline
+  // centered on the camera, running along the current facing heading (falls
+  // back to the snapped road bearing, then north). The feed is auto-assigned
+  // to the new road so Save placement wires road_id in one flow.
+  const handleRegisterRoad = async () => {
+    if (!placement) return;
+    const heading =
+      typeof placement.heading === 'number' && Number.isFinite(placement.heading)
+        ? ((placement.heading % 360) + 360) % 360
+        : (placement.snapBearing ?? 0);
+    const half = 250; // m each way -> 500 m road through the camera point
+    const back = destinationPoint(placement.lat, placement.lng, (heading + 180) % 360, half);
+    const fwd = destinationPoint(placement.lat, placement.lng, heading, half);
+    const name = newRoadName.trim() || `Road ${roads.length + 1}`;
+    setRegisteringRoad(true);
+    setPlacingMsg('');
+    try {
+      const road = await roadsService.createRoad({
+        name,
+        polyline: [
+          { lat: back[0], lng: back[1] },
+          { lat: placement.lat, lng: placement.lng },
+          { lat: fwd[0], lng: fwd[1] },
+        ],
+        one_way_bearing_deg: heading,
+      });
+      setRoads(prev => [...prev, road]);
+      setPlacement(p => p && { ...p, roadId: road.id, snapBearing: heading, snapDist: 0 });
+      setNewRoadName('');
+      setPlacingMsg(`ROAD '${road.name}' REGISTERED THROUGH THIS POINT (${Math.round(heading)}°) — FEED ASSIGNED`);
+    } catch (err) {
+      setPlacingMsg(`REGISTER FAILED: ${(err as Error)?.message || err}`);
+    } finally {
+      setRegisteringRoad(false);
     }
   };
 
@@ -1414,13 +1530,30 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
                 {corridorPlaying ? 'Stop' : '▶ Drive'}
               </button>
               <button
-                onClick={() => { setSelectedRoadId(''); setCorridorPlaying(false); }}
+                onClick={handleRenameRoad}
+                disabled={roadBusy}
+                title="Rename road (PATCH /api/v1/roads/{id})"
+                className="text-[9px] px-1.5 py-0.5 border border-[#facc15]/60 text-[#facc15] font-bold uppercase hover:bg-[#facc15] hover:text-black transition-all disabled:opacity-40"
+              >
+                <Pencil size={10} />
+              </button>
+              <button
+                onClick={handleDeleteRoad}
+                disabled={roadBusy}
+                title="Delete road (DELETE /api/v1/roads/{id}) — checks assigned feeds first"
+                className="text-[9px] px-1.5 py-0.5 border border-[#ff3e3e]/60 text-[#ff3e3e] font-bold uppercase hover:bg-[#ff3e3e] hover:text-black transition-all disabled:opacity-40"
+              >
+                <Trash2 size={10} />
+              </button>
+              <button
+                onClick={() => { setSelectedRoadId(''); setCorridorPlaying(false); setRoadMsg(''); }}
                 className="text-[9px] px-1.5 py-0.5 border border-[#ff3e3e]/60 text-[#ff3e3e] font-bold uppercase hover:bg-[#ff3e3e] hover:text-black transition-all"
               >
                 ✕
               </button>
             </div>
           </div>
+          {roadMsg && <div className="text-[9px] uppercase text-[#facc15] mb-1">{roadMsg}</div>}
           {corridor.length === 0 ? (
             <div className="text-[9px] text-[#22d3ee]/50 italic p-1">No cameras on this road — use search (road:…) or PLACE/ORIENT to assign one.</div>
           ) : (
@@ -1523,7 +1656,41 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
                     className="w-full bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] px-1.5 py-1"
                   />
                 </div>
+                <div className="w-16">
+                  <label className="block text-[9px] uppercase text-[#22d3ee]/60">H m</label>
+                  <input
+                    type="number" min="0" step="0.5"
+                    value={placement.mountHeight}
+                    onChange={e => setPlacement(p => p && { ...p, mountHeight: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                    title="Mount height (mount_height_m) — persisted on the feed config"
+                    className="w-full bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] px-1.5 py-1"
+                  />
+                </div>
               </div>
+              {placement.snapDist == null && (
+                <div className="border border-[#facc15]/40 bg-[#facc15]/5 p-1.5">
+                  <div className="text-[9px] uppercase text-[#facc15]/80 mb-1">
+                    No road within 150 m — register one through this point (500 m along facing heading):
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      value={newRoadName}
+                      onChange={e => setNewRoadName(e.target.value)}
+                      placeholder={`Road ${roads.length + 1}`}
+                      className="flex-1 bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] px-1.5 py-1 outline-none placeholder:text-[#22d3ee]/30"
+                    />
+                    <button
+                      disabled={registeringRoad}
+                      onClick={handleRegisterRoad}
+                      className="text-[9px] py-1 px-2 border border-[#facc15]/60 text-[#facc15] uppercase font-bold hover:bg-[#facc15] hover:text-black transition-all disabled:opacity-50 whitespace-nowrap"
+                      title="POST /api/v1/roads/ — polyline through the clicked point, auto-assigns this feed"
+                    >
+                      <MapIcon size={10} className="inline mr-1" />
+                      {registeringRoad ? 'Registering…' : 'Register road'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

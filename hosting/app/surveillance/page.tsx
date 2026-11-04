@@ -8,7 +8,7 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import SurveillanceMatrix from '@/components/dashboard/SurveillanceMatrix';
 import SurveillanceSummary from '@/components/dashboard/SurveillanceSummary';
 import { FeedStatusData } from '@/lib/types';
-import { Search, Play, Square, RefreshCw, Bookmark, BookmarkCheck, X } from 'lucide-react';
+import { Search, Play, Square, RefreshCw, Bookmark, BookmarkCheck, X, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import AddFeedDialog from '@/components/dashboard/AddFeedDialog';
@@ -25,6 +25,7 @@ const SurveillancePage = () => {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [presetName, setPresetName] = useState('');
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [presetFeedsInfo, setPresetFeedsInfo] = useState('');
 
   React.useEffect(() => {
     roadsService.listRoads().then(setRoads).catch(() => setRoads([]));
@@ -57,6 +58,33 @@ const SurveillancePage = () => {
       if (activePresetId === id) setActivePresetId(null);
     } catch (e) {
       console.error('[Surveillance] Delete preset failed:', e);
+    }
+  };
+
+  // Apply/clear a preset chip; on apply, resolve its feeds through the API
+  // (GET /presets/{id}/feeds) so the chip bar shows the server's view.
+  const handleApplyPreset = async (p: Preset) => {
+    const next = activePresetId === p.id ? null : p.id;
+    setActivePresetId(next);
+    if (!next) { setPresetFeedsInfo(''); return; }
+    try {
+      const fs = await presetService.presetFeeds(p.id);
+      setPresetFeedsInfo(
+        `${p.name.toUpperCase()}: ${fs.length} FEED(S) VIA API — ${fs.map(f => f.config?.name || f.feed_id).join(', ')}`,
+      );
+    } catch {
+      setPresetFeedsInfo('');
+    }
+  };
+
+  const handleRenamePreset = async (p: Preset) => {
+    const name = window.prompt('Rename preset', p.name);
+    if (!name || !name.trim() || name.trim() === p.name) return;
+    try {
+      const updated = await presetService.updatePreset(p.id, { name: name.trim() });
+      setPresets(prev => prev.map(x => (x.id === p.id ? updated : x)).sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (e) {
+      console.error('[Surveillance] Rename preset failed:', e);
     }
   };
   // ANPR allow/block check (feature 8). Honest empty until backend enabled.
@@ -196,14 +224,18 @@ const SurveillancePage = () => {
                       <div className="flex flex-wrap gap-2">
                           {presets.map(p => (
                               <div key={p.id} className={`flex items-center gap-1 border px-3 py-1.5 text-[10px] font-lcd uppercase tracking-widest ${activePresetId === p.id ? 'border-lcd-green text-lcd-green bg-lcd-green/10' : 'border-lcd-text/30 text-lcd-text/70'}`}>
-                                  <button onClick={() => setActivePresetId(activePresetId === p.id ? null : p.id)} className="flex items-center gap-1.5 hover:opacity-80" title={`${p.feed_ids.length} feeds${p.road_id ? ` · ${p.road_id}` : ''}`}>
+                                  <button onClick={() => void handleApplyPreset(p)} className="flex items-center gap-1.5 hover:opacity-80" title={`${p.feed_ids.length} feeds${p.road_id ? ` · ${p.road_id}` : ''}`}>
                                       {activePresetId === p.id ? <BookmarkCheck size={12} /> : <Bookmark size={12} />}
                                       {p.name} ({p.feed_ids.length})
                                   </button>
+                                  <button onClick={() => void handleRenamePreset(p)} className="opacity-50 hover:opacity-100 hover:text-lcd-green" title="Rename preset (PATCH /api/v1/presets/{id})"><Pencil size={11} /></button>
                                   <button onClick={() => void handleDeletePreset(p.id)} className="opacity-50 hover:opacity-100 hover:text-red-500"><X size={11} /></button>
                               </div>
                           ))}
                       </div>
+                  )}
+                  {presetFeedsInfo && (
+                      <div className="text-[10px] font-lcd uppercase tracking-widest text-lcd-green/70 truncate">{presetFeedsInfo}</div>
                   )}
               </div>
           </div>
