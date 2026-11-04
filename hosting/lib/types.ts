@@ -31,6 +31,15 @@ export interface FeedStatusData {
     // >=4 normalized-image -> WGS84 correspondences; backend turns these into
     // the homography that stamps latitude/longitude onto WS vehicles.
     geo_calibration?: { u: number; v: number; lat: number; lng: number }[];
+    // Placement metadata: road/corridor the camera watches + camera facing.
+    // heading_source: 'manual' (operator-set, wins) or 'derived' (computed
+    // from geo_calibration by the backend).
+    road_id?: string;
+    heading_deg?: number;
+    heading_source?: string;
+    fov_deg?: number;
+    mount_height_m?: number;
+    intersection_id?: string;
   };
   latest_metrics?: { // Added latest_metrics with a more specific structure
     average_speed_kmh?: number | null;
@@ -42,6 +51,9 @@ export interface FeedStatusData {
     [key: string]: unknown; // Allow for other potential metrics
   } | null;
   latest_vehicles?: any[]; // Array of vehicle data
+  // Per-lane compass flow bearings (deg) from the backend: {"0": 42.5, ...}.
+  // Undefined when the feed has no geo_calibration.
+  lane_bearings?: Record<string, number> | null;
 }
 
 export type IncidentStatus = 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'FALSE_POSITIVE';

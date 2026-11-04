@@ -143,6 +143,11 @@ async def add_and_start_feed(
             longitude=request.longitude,
             name_hint=request.name,
             is_looped=True,  # Assuming new feeds are looped by default, adjust if needed
+            road_id=request.road_id,
+            heading_deg=request.heading_deg,
+            fov_deg=request.fov_deg,
+            mount_height_m=request.mount_height_m,
+            intersection_id=request.intersection_id,
         )
 
         response_data = FeedCreateResponse(

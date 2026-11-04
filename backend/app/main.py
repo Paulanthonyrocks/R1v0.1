@@ -48,7 +48,7 @@ from app.utils.client_ip import resolve_client_ip
 from app.routers import (
     feeds, config as config_router, analysis, alerts, video,
     incidents, routing, weather,
-    events, ws, vehicles, signals, ws_monitoring, logs, webrtc
+    events, ws, vehicles, signals, ws_monitoring, logs, webrtc, roads, presets
 )
 
 # --- Constants & Setup ---
@@ -922,6 +922,8 @@ async def audit_middleware(request: Request, call_next):
 
 # --- Routers Inclusion ---
 app.include_router(feeds.router, prefix="/api/v1/feeds", tags=["Feeds"])
+app.include_router(roads.router, prefix="/api/v1/roads", tags=["Roads"])
+app.include_router(presets.router, prefix="/api/v1/presets", tags=["Presets"])
 app.include_router(config_router.router, prefix="/api/v1/config", tags=["Configuration"])
 app.include_router(analysis.router, prefix="/api/v1/analytics", tags=["Analytics"])
 app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["Alerts"])

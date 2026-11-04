@@ -817,6 +817,11 @@ prediction_scheduler:
     name: Atlanta Centennial Park
   prediction_interval_minutes: 15
 queue_log_interval: 120.0
+# Road/corridor registry persistence (RoadService). CWD-relative, same
+# convention as feed_manager's feeds_config_path.
+roads_config_path: backend/data/roads.json
+# Warden presets (named camera groups), persisted as JSON (PresetService).
+presets_config_path: backend/data/presets.json
 redis:
   db: 0
   enabled: true

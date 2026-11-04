@@ -395,6 +395,37 @@ async def get_od_matrix(
     start_time = end_time - (hours * 3600)
     return await aas.get_origin_destination_matrix(start_time, end_time)
 
+
+@router.get(
+    "/od-matrix-roads",
+    summary="Get road-keyed Origin-Destination Matrix",
+    description="OD matrix keyed by road corridor position ('main-st@400m' -> "
+                "'main-st@900m') using feed placement; unplaced feeds keep 'feed:<id>' keys.",
+)
+async def get_od_matrix_roads(
+    hours: int = Query(1, ge=1, le=24),
+    bucket_m: float = Query(100.0, gt=0, le=5000),
+    aas: AdvancedAnalyticsService = Depends(get_advanced_analytics_service)
+):
+    end_time = time.time()
+    start_time = end_time - (hours * 3600)
+    return await aas.get_road_od_matrix(start_time, end_time, bucket_m)
+
+
+@router.get(
+    "/heatmap-roads",
+    summary="Get Heatmap Data keyed to roads",
+    description="Heatmap points projected to WGS84 via each feed's geo homography, "
+                "then snapped to the road registry (road_id, chainage_m per point).",
+)
+async def get_heatmap_roads(
+    feed_id: Optional[str] = Query(None),
+    hours: int = Query(1, ge=1, le=24),
+    max_points: int = Query(5000, ge=1, le=50000),
+    aas: AdvancedAnalyticsService = Depends(get_advanced_analytics_service)
+):
+    return await aas.get_heatmap_road_data(feed_id, hours, max_points)
+
 @router.get(
     "/travel-times",
     summary="Get Average Travel Times",

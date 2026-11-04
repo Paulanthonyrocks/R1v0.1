@@ -180,8 +180,100 @@ def bbox_to_geo(H: Optional[HMatrix], bbox) -> Optional[Tuple[float, float]]:
     return project_geo(H, (x1 + x2) / 2.0, y2)
 
 
+def bearing_deg(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Initial compass bearing from point 1 to point 2, degrees [0, 360)."""
+    if not all(_finite(x) for x in (lat1, lng1, lat2, lng2)):
+        raise ValueError("bearing_deg needs finite coordinates")
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dl = math.radians(lng2 - lng1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def _roi_edges(roi) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """(near, far) normalized image points from an ROI polygon [{'x','y'}...].
+
+    near = bottom-center of the ROI bbox (closest to the camera), far =
+    top-center (where the camera looks). None when the polygon is unusable.
+    """
+    if not roi or not isinstance(roi, (list, tuple)):
+        return None
+    xs, ys = [], []
+    for p in roi:
+        if isinstance(p, dict) and "x" in p and "y" in p:
+            if _finite(p["x"]) and _finite(p["y"]):
+                xs.append(float(p["x"]))
+                ys.append(float(p["y"]))
+        elif isinstance(p, (list, tuple)) and len(p) == 2:
+            if _finite(p[0]) and _finite(p[1]):
+                xs.append(float(p[0]))
+                ys.append(float(p[1]))
+    if len(xs) < 3:
+        return None
+    u_mid = (min(xs) + max(xs)) / 2.0
+    v_near, v_far = max(ys), min(ys)
+    if v_near - v_far < 1e-6:  # degenerate (flat) ROI: no facing direction
+        return None
+    return (u_mid, v_near), (u_mid, v_far)
+
+
+def derive_heading_deg(H: Optional[HMatrix], roi=None) -> Optional[float]:
+    """
+    Compass heading the camera faces, derived from the homography: project the
+    near edge of the ROI (bottom of frame) and the far edge (top of frame) to
+    WGS84 and take the bearing near -> far. Falls back to the full frame when
+    no ROI is set. Returns None when uncalibrated or the projection fails.
+    """
+    if H is None:
+        return None
+    edges = _roi_edges(roi)
+    near, far = edges if edges else ((0.5, 1.0), (0.5, 0.0))
+    p_near = project_geo(H, near[0], near[1])
+    p_far = project_geo(H, far[0], far[1])
+    if p_near is None or p_far is None:
+        return None
+    return bearing_deg(p_near[0], p_near[1], p_far[0], p_far[1])
+
+
+def pixel_vector_to_bearing(H: Optional[HMatrix], u: float, v: float, vec, step: float = 0.05) -> Optional[float]:
+    """
+    Compass bearing of a normalized pixel-space vector (vx, vy) at image point
+    (u, v): project the point and a short step along the vector to WGS84 and
+    take the bearing between them. Used to turn learned lane flow vectors into
+    compass directions. None when uncalibrated or the projection fails.
+    """
+    if H is None or not vec:
+        return None
+    try:
+        vx, vy = float(vec[0]), float(vec[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    mag = math.hypot(vx, vy)
+    if mag < 1e-9:
+        return None
+    p1 = project_geo(H, u, v)
+    p2 = project_geo(H, u + step * vx / mag, v + step * vy / mag)
+    if p1 is None or p2 is None:
+        return None
+    return bearing_deg(p1[0], p1[1], p2[0], p2[1])
+
+
 def attach_geo_homography(entry: Dict) -> None:
-    """Recompute entry['geo_homography'] from entry['config_info'].geo_calibration."""
+    """
+    Recompute entry['geo_homography'] from entry['config_info'].geo_calibration,
+    and refresh the derived camera heading: entry['derived_heading_deg'] plus
+    config_info.heading_deg/heading_source. A manual heading (heading_source
+    == 'manual') always wins; otherwise the derived value is applied.
+    """
     cfg = entry.get("config_info") if entry else None
     points = getattr(cfg, "geo_calibration", None) if cfg is not None else None
-    entry["geo_homography"] = compute_geo_homography(points) if points else None
+    H = compute_geo_homography(points) if points else None
+    entry["geo_homography"] = H
+    roi = getattr(cfg, "roi", None) if cfg is not None else None
+    derived = derive_heading_deg(H, roi)
+    entry["derived_heading_deg"] = derived
+    if cfg is not None and getattr(cfg, "heading_source", None) != "manual":
+        cfg.heading_deg = derived
+        cfg.heading_source = "derived" if derived is not None else None

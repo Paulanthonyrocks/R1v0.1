@@ -13,6 +13,131 @@ logger = logging.getLogger("app.services.analytics_pro")
 class AdvancedAnalyticsService:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+        # Placement wiring for road-keyed OD/heatmap (set by ServiceContainer;
+        # None keeps those endpoints falling back to feed-id keys).
+        self._feed_manager = None
+        self._road_service = None
+
+    def set_feed_manager(self, feed_manager):
+        self._feed_manager = feed_manager
+
+    def set_road_service(self, road_service):
+        self._road_service = road_service
+
+    def _feed_geo_snaps(self) -> Dict[str, Optional[Dict[str, Any]]]:
+        """{feed_id: describe_snap(...)} for every placed feed (sync, cheap:
+        one snap per feed, not per track)."""
+        out: Dict[str, Optional[Dict[str, Any]]] = {}
+        if not (self._feed_manager and self._road_service):
+            return out
+        for fid, entry in (self._feed_manager.process_registry or {}).items():
+            cfg = entry.get("config_info") if isinstance(entry, dict) else None
+            if cfg is None or getattr(cfg, "latitude", None) is None:
+                continue
+            try:
+                out[fid] = self._road_service.describe_snap(
+                    float(cfg.latitude), float(cfg.longitude),
+                    road_id=getattr(cfg, "road_id", None),
+                )
+            except Exception:
+                out[fid] = None
+        return out
+
+    async def get_road_od_matrix(
+        self, start_time: float, end_time: float, bucket_m: float = 100.0
+    ) -> Dict[str, Any]:
+        """
+        OD matrix keyed by road corridor position ("main-st@400m" ->
+        "main-st@900m") instead of raw feed ids. Same vehicle_tracks query as
+        get_origin_destination_matrix; plain-python aggregation (no pandas) so
+        it also runs where pandas is absent. Feeds without placement keep
+        "feed:<id>" keys.
+        """
+        from app.utils.road_od import build_road_od_matrix
+        sql = """
+        SELECT global_vehicle_id, feed_id, MIN(timestamp) as entry_time
+        FROM vehicle_tracks
+        WHERE timestamp BETWEEN ? AND ? AND global_vehicle_id IS NOT NULL
+        GROUP BY global_vehicle_id, feed_id
+        ORDER BY global_vehicle_id, entry_time
+        """
+        try:
+            rows = await asyncio.to_thread(self.db._execute_query, sql, (start_time, end_time))
+            transitions = []
+            last_by_vehicle: Dict[str, str] = {}
+            vehicles = set()
+            for row in rows or []:
+                gid = row["global_vehicle_id"] if isinstance(row, dict) else row[0]
+                fid = row["feed_id"] if isinstance(row, dict) else row[1]
+                vehicles.add(gid)
+                prev = last_by_vehicle.get(gid)
+                if prev is not None and prev != fid:
+                    transitions.append((prev, fid))
+                last_by_vehicle[gid] = fid
+            result = build_road_od_matrix(transitions, self._feed_geo_snaps(), bucket_m)
+            result["metadata"].update({
+                "total_tracked_vehicles": len(vehicles),
+                "start_time": datetime.fromtimestamp(start_time, timezone.utc).isoformat(),
+                "end_time": datetime.fromtimestamp(end_time, timezone.utc).isoformat(),
+            })
+            return result
+        except Exception as e:
+            logger.error(f"Error calculating road OD matrix: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    async def get_heatmap_road_data(
+        self,
+        feed_id: Optional[str] = None,
+        hours: int = 1,
+        max_points: int = 5000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Heatmap points (pixel centers from vehicle_tracks) projected to WGS84
+        through each feed's geo homography, then snapped to the road registry:
+        each point gains road_id/road_name/chainage_m/road_bearing_deg (None
+        when unplaced). Capped at max_points (evenly strided).
+        """
+        from app.utils.road_od import annotate_heatmap_point
+        if not (self._feed_manager and self._road_service):
+            return []
+        try:
+            start_ts = time.time() - hours * 3600
+            sql = (
+                "SELECT feed_id, center_x, center_y FROM vehicle_tracks "
+                "WHERE timestamp > ?"
+            )
+            params = (start_ts,)
+            if feed_id:
+                sql += " AND feed_id = ?"
+                params = (start_ts, feed_id)
+            rows = await asyncio.to_thread(self.db._execute_query, sql, params)
+            rows = rows or []
+            if len(rows) > max_points:
+                stride = len(rows) / max_points
+                rows = [rows[int(i * stride)] for i in range(max_points)]
+            out: List[Dict[str, Any]] = []
+            for row in rows:
+                fid = row["feed_id"] if isinstance(row, dict) else row[0]
+                cx = row["center_x"] if isinstance(row, dict) else row[1]
+                cy = row["center_y"] if isinstance(row, dict) else row[2]
+                if cx is None or cy is None:
+                    continue
+                entry = (self._feed_manager.process_registry or {}).get(fid) or {}
+                H = entry.get("geo_homography") if isinstance(entry, dict) else None
+                geo = None
+                if H is not None:
+                    from app.utils.geo_calibration import project_geo
+                    geo = project_geo(H, float(cx), float(cy))
+                if geo is None:
+                    continue  # uncalibrated feed: no WGS84 point to key
+                lat, lng = geo
+                pt = {"feed_id": fid, "latitude": lat, "longitude": lng}
+                pt.update(annotate_heatmap_point(lat, lng, self._road_service))
+                out.append(pt)
+            return out
+        except Exception as e:
+            logger.error(f"Error getting road heatmap data: {e}", exc_info=True)
+            return []
 
     async def get_origin_destination_matrix(self, start_time: float, end_time: float) -> Dict[str, Any]:
         """

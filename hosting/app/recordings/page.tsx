@@ -5,14 +5,30 @@ import AuthGuard from '@/components/auth/AuthGuard';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import { UserRole } from '@/lib/auth/roles';
 import { videoService, ProcessedVideo } from '@/lib/services/videoService';
+import { roadsService } from '@/lib/services/roadsService';
+import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { parseFeedQuery } from '@/lib/utils/feedSearch';
+import { streamMatchesQuery, streamPlacementBadge } from '@/lib/utils/recordingSearch';
+import { Road } from '@/lib/types/api';
 import { errorNotifier } from '@/lib/utils/errorNotifier';
-import { Video, Download, Clock, RefreshCw, Film } from 'lucide-react';
+import { Video, Download, Clock, RefreshCw, Film, Search, MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const RecordingsPage = () => {
     const [videos, setVideos] = useState<ProcessedVideo[]>([]);
     const [loading, setLoading] = useState(true);
     const [downloading, setDownloading] = useState<number | null>(null);
+    const [query, setQuery] = useState('');
+    const { feeds } = useRealtimeUpdates();
+    const [roads, setRoads] = useState<Road[]>([]);
+
+    useEffect(() => {
+        roadsService.listRoads().then(setRoads).catch(() => setRoads([]));
+    }, []);
+
+    // Recordings inherit their camera's placement: filter by road:/dir: like
+    // the live map search, and badge each row with road + facing direction.
+    const visibleVideos = videos.filter(v => streamMatchesQuery(v, parseFeedQuery(query), feeds, roads));
 
     const fetchVideos = useCallback(async () => {
         setLoading(true);
@@ -64,18 +80,30 @@ const RecordingsPage = () => {
         <AuthGuard requiredRole={UserRole.VIEWER}>
             <DashboardShell>
                 <div className="flex flex-col space-y-6">
-                    <div className="flex justify-between items-center">
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                         <div>
                             <h1 className="text-3xl font-bold font-lcd matrix-glow tracking-wider text-lcd-text uppercase">Recordings</h1>
                             <p className="text-lcd-text/60 font-lcd italic">Processed video archive from the recording pipeline</p>
                         </div>
-                        <button
-                            onClick={fetchVideos}
-                            disabled={loading}
-                            className="flex items-center gap-2 px-4 py-2 border-2 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg font-lcd uppercase text-xs tracking-widest transition-all disabled:opacity-50"
-                        >
-                            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
-                        </button>
+                        <div className="flex items-center gap-3 w-full sm:w-auto">
+                            <div className="relative flex-1 sm:w-72 font-bold group">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40 group-focus-within:opacity-100 transition-opacity" size={14} />
+                                <input
+                                    type="text"
+                                    placeholder='FILTER road:"Main St" dir:NE ...'
+                                    className="bg-lcd-text/5 border-2 border-lcd-text/30 text-lcd-text rounded-none p-3 pl-9 w-full focus:outline-none focus:border-lcd-text tracking-[0.15em] placeholder:text-lcd-text/20 font-black uppercase text-[10px]"
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                />
+                            </div>
+                            <button
+                                onClick={fetchVideos}
+                                disabled={loading}
+                                className="flex items-center gap-2 px-4 py-2 border-2 border-lcd-text text-lcd-text hover:bg-lcd-text hover:text-lcd-bg font-lcd uppercase text-xs tracking-widest transition-all disabled:opacity-50"
+                            >
+                                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
+                            </button>
+                        </div>
                     </div>
 
                     {loading && videos.length === 0 ? (
@@ -92,10 +120,11 @@ const RecordingsPage = () => {
                     ) : (
                         <div className="matrix-card overflow-hidden">
                             <div className="matrix-card-header bg-lcd-text/10 px-4 py-2 text-[10px] font-bold uppercase tracking-widest">
-                                {videos.length} Recording{videos.length === 1 ? '' : 's'}
+                                {visibleVideos.length} Recording{visibleVideos.length === 1 ? '' : 's'}
+                                {query.trim() && <span className="opacity-50">{' // filtered by "' + query + '"'}</span>}
                             </div>
                             <div className="divide-y divide-lcd-text/10">
-                                {videos.map((video) => (
+                                {visibleVideos.map((video) => (
                                     <div key={video.id} className="flex items-center gap-4 px-4 py-3 hover:bg-lcd-text/5 transition-colors">
                                         <div className="p-2 border border-lcd-text/30 text-lcd-text/70">
                                             <Video size={16} />
@@ -106,6 +135,11 @@ const RecordingsPage = () => {
                                             </p>
                                             <div className="flex items-center gap-3 text-[10px] opacity-50 font-lcd mt-0.5">
                                                 <span className="uppercase tracking-tight">{video.stream_id}</span>
+                                                {streamPlacementBadge(video, feeds, roads) && (
+                                                    <span className="flex items-center gap-1 text-lcd-green/80">
+                                                        <MapPin size={9} /> {streamPlacementBadge(video, feeds, roads)}
+                                                    </span>
+                                                )}
                                                 <span className="flex items-center gap-1">
                                                     <Clock size={9} /> {formatDuration(video.duration)}
                                                 </span>

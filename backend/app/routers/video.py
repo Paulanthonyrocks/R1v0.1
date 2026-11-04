@@ -8,8 +8,10 @@ from pydantic import BaseModel, field_validator
 import logging
 
 from app.config import get_current_config
-from app.dependency_injection import get_feed_manager, get_video_manager
+from app.dependency_injection import get_feed_manager, get_video_manager, get_road_service
 from app.services.video_processor import VideoManager
+from app.services.road_service import RoadService
+from app.utils.placement_query import feed_matches_placement
 from app.database import get_database_manager
 
 router = APIRouter()
@@ -144,9 +146,28 @@ async def get_processed_videos_metadata(
     stream_id: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    road_id: Optional[str] = None,
+    dir: Optional[str] = None,
     db_manager=Depends(get_database_manager),
+    feed_manager=Depends(get_feed_manager),
+    road_service: RoadService = Depends(get_road_service),
 ):
     videos = await db_manager.get_processed_videos(stream_id, limit, offset)
+    # Placement tagging: road_id/dir filter recordings by the camera's
+    # assigned road and facing direction (same query language as the map
+    # search), resolved from the feed registry.
+    if road_id or dir:
+        roads = await road_service.list_roads()
+        placement = {}
+        for fid, proc in feed_manager.process_registry.items():
+            cfg = proc.get("config_info")
+            if cfg is not None:
+                placement[fid] = cfg.model_dump() if hasattr(cfg, "model_dump") else dict(cfg)
+        videos = [
+            v for v in videos
+            if v.stream_id in placement
+            and feed_matches_placement(placement[v.stream_id], road_id, dir, roads)
+        ]
     return videos
 
 

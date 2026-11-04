@@ -29,6 +29,12 @@ class FeedCreateRequest(BaseModel):
     name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # Placement metadata (optional; PATCH /{feed_id}/config can set these later).
+    road_id: Optional[str] = None
+    heading_deg: Optional[float] = Field(None, ge=0.0, le=360.0)
+    fov_deg: Optional[float] = Field(None, gt=0.0, le=360.0)
+    mount_height_m: Optional[float] = Field(None, ge=0.0)
+    intersection_id: Optional[str] = None
 
 
 class FeedCreateResponse(BaseModel):
@@ -58,6 +64,20 @@ class FeedConfigInfo(BaseModel):
     # homography (entry["geo_homography"]) so WS vehicles can carry
     # latitude/longitude for map projection. See app/utils/geo_calibration.py.
     geo_calibration: Optional[List[Dict[str, float]]] = None
+    # --- Placement metadata: which road/corridor the camera watches and which
+    # way it faces. Persisted with the feed (FeedRegistry.save_persistence
+    # dumps the whole model) and broadcast on every feed_update, so the
+    # map/search can query feeds by them.
+    road_id: Optional[str] = None
+    # Compass bearing (deg, 0=N..360) the camera lens faces. heading_source
+    # records provenance: "manual" (operator-set via PATCH, always wins) or
+    # "derived" (computed from geo_calibration by attach_geo_homography).
+    heading_deg: Optional[float] = Field(None, ge=0.0, le=360.0)
+    heading_source: Optional[str] = None
+    fov_deg: Optional[float] = Field(None, gt=0.0, le=360.0)
+    mount_height_m: Optional[float] = Field(None, ge=0.0)
+    # Intersection node id ("lat,lng") this camera overlooks, if any.
+    intersection_id: Optional[str] = None
 
 
 class FeedOperationalStatusEnum(str, Enum):
@@ -76,6 +96,11 @@ class FeedStatusData(BaseModel):
     current_fps: Optional[float] = None
     last_error: Optional[str] = None
     latest_metrics: Optional[Dict[str, Any]] = None
+    # Per-lane compass flow bearings (deg) derived from the learned lane flow
+    # vectors through the feed's geo homography: {"0": 42.5, "3": 222.1}.
+    # None when the feed is uncalibrated. Populated by
+    # FeedManager._entry_to_status_data from the SafetyMonitor's LaneCalibrator.
+    lane_bearings: Optional[Dict[str, float]] = None
 
 
 class FeedStatusUpdate(BaseModel):
@@ -93,3 +118,9 @@ class FeedConfigRequest(BaseModel):
     # the Leaflet feed marker moves on the next WS feed_update.
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
+    # Placement metadata (optional, same semantics as FeedConfigInfo).
+    road_id: Optional[str] = None
+    heading_deg: Optional[float] = Field(None, ge=0.0, le=360.0)
+    fov_deg: Optional[float] = Field(None, gt=0.0, le=360.0)
+    mount_height_m: Optional[float] = Field(None, ge=0.0)
+    intersection_id: Optional[str] = None

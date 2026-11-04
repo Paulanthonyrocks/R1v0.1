@@ -178,6 +178,17 @@ async def get_video_manager() -> VideoManager:
 def get_config() -> Dict[str, Any]:
     return copy.deepcopy(container._config)
 
+
+def get_road_service(config: Dict[str, Any] = Depends(get_config)):
+    """Road/corridor registry singleton (lazy; persists to roads_config_path)."""
+    from app.services.road_service import get_road_service as _get_road_service
+    return _get_road_service(config)
+
+def get_preset_service(config: Dict[str, Any] = Depends(get_config)):
+    """Warden preset singleton (lazy; persists to presets_config_path)."""
+    from app.services.preset_service import get_preset_service as _get_preset_service
+    return _get_preset_service(config)
+
 def is_admin(user: User) -> bool:
     return user.role == UserRole.ADMIN
 

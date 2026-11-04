@@ -20,13 +20,17 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
     const api = useAPI();
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [byRoad, setByRoad] = useState(false);
     const [hoveredCell, setHoveredCell] = useState<{o: string, d: string} | null>(null);
 
     const fetchData = useCallback(async () => {
         if (!token) return;
         setLoading(true);
         try {
-            const response = await api.get<any>(`/api/v1/analytics/od-matrix?hours=${hours}`, undefined, {
+            const endpoint = byRoad
+                ? `/api/v1/analytics/od-matrix-roads?hours=${hours}`
+                : `/api/v1/analytics/od-matrix?hours=${hours}`;
+            const response = await api.get<any>(endpoint, undefined, {
                 headers: {
                     'Bypass-Tunnel-Reminder': 'true'
                 }
@@ -37,7 +41,7 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
         } finally {
             setLoading(false);
         }
-    }, [api, hours, token]);
+    }, [api, hours, token, byRoad]);
 
     useEffect(() => {
         if (token) {
@@ -52,13 +56,14 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
         return () => clearInterval(interval);
     }, [token, fetchData]);
 
-    // Helper to get feed name from ID
+    // Helper to get feed name from ID (or road-corridor label in by-road mode)
     const getFeedName = useCallback((id: string) => {
+        if (byRoad && data?.labels?.[id]?.label) return data.labels[id].label;
         const feed = feeds.find(f => f.feed_id === id);
         if (feed) return feed.name;
         // Fallback to pretty ID
         return formatFeedName(id);
-    }, [feeds]);
+    }, [feeds, byRoad, data]);
 
     const matrixData = useMemo(() => {
         if (!data || !data.matrix) return null;
@@ -115,7 +120,21 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
                             <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                            <span className="text-[10px] font-black uppercase tracking-widest opacity-60">Transition Density Matrix</span>
+                            <span className="text-[10px] font-black uppercase tracking-widest opacity-60">
+                                Transition Density Matrix{byRoad ? ' — BY ROAD' : ''}
+                            </span>
+                            <button
+                                onClick={() => setByRoad(v => !v)}
+                                className={cn(
+                                    'text-[8px] font-black uppercase tracking-widest border px-1.5 py-0.5 transition-all',
+                                    byRoad
+                                        ? 'bg-lcd-text text-black border-lcd-text'
+                                        : 'text-lcd-text/60 border-lcd-text/30 hover:bg-lcd-text/10'
+                                )}
+                                title="Key transitions by road corridor position (Main St @ 400m) using feed placement"
+                            >
+                                {byRoad ? 'Road keys: on' : 'Road keys: off'}
+                            </button>
                         </div>
                         <div className="flex items-center gap-3">
                              <div className="flex items-center gap-1">

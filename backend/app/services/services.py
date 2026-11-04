@@ -258,6 +258,12 @@ class ServiceRegistry:
             
             # Link Feed Manager to Incident Manager
             self._incident_manager.set_feed_manager(self._feed_manager)
+            # Road registry powers direction-aware incident language
+            # ("traveling SW on NE-bound Main St, ...").
+            from app.services.road_service import RoadService
+            self._incident_manager.set_road_service(
+                RoadService(persistence_path=config.get("roads_config_path", "backend/data/roads.json"))
+            )
             logger.info("FeedManager initialized and linked to IncidentManager.")
 
             # Video Manager (manages per-stream VideoProcessors for recording)
@@ -338,6 +344,12 @@ class ServiceRegistry:
         # Advanced Analytics Service
         self._advanced_analytics_service = AdvancedAnalyticsService(
             db_manager=db_manager
+        )
+        # Placement wiring for road-keyed OD matrix / road heatmap.
+        self._advanced_analytics_service.set_feed_manager(self._feed_manager)
+        from app.services.road_service import RoadService
+        self._advanced_analytics_service.set_road_service(
+            RoadService(persistence_path=config.get("roads_config_path", "backend/data/roads.json"))
         )
         logger.info("AdvancedAnalyticsService initialized.")
 

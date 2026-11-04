@@ -8,15 +8,57 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import SurveillanceMatrix from '@/components/dashboard/SurveillanceMatrix';
 import SurveillanceSummary from '@/components/dashboard/SurveillanceSummary';
 import { FeedStatusData } from '@/lib/types';
-import { Search, Play, Square, RefreshCw } from 'lucide-react';
+import { Search, Play, Square, RefreshCw, Bookmark, BookmarkCheck, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import DashboardShell from '@/components/dashboard/DashboardShell';
 import AddFeedDialog from '@/components/dashboard/AddFeedDialog';
 import { PlateCheck, checkPlate, fetchPlateLists } from '@/lib/safetyHub';
+import { roadsService } from '@/lib/services/roadsService';
+import { presetService } from '@/lib/services/presetService';
+import { parseFeedQuery, matchesFeed, resolveRoad } from '@/lib/utils/feedSearch';
+import { Road, Preset } from '@/lib/types/api';
 
 const SurveillancePage = () => {
   const { feeds, isConnected, isReady, startFeed, stopFeed } = useRealtimeUpdates();
   const [searchQuery, setSearchQuery] = useState('');
+  const [roads, setRoads] = useState<Road[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [presetName, setPresetName] = useState('');
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    roadsService.listRoads().then(setRoads).catch(() => setRoads([]));
+    presetService.listPresets().then(setPresets).catch(() => setPresets([]));
+  }, []);
+
+  // Save the CURRENT filter result as a named warden preset (one-click layout).
+  const handleSavePreset = async () => {
+    const name = presetName.trim();
+    if (!name || filteredFeeds.length === 0) return;
+    const road = resolveRoad(parseFeedQuery(searchQuery).road, roads);
+    try {
+      const p = await presetService.createPreset({
+        name,
+        feed_ids: filteredFeeds.map(f => f.feed_id),
+        road_id: road?.id ?? null,
+      });
+      setPresets(prev => [...prev.filter(x => x.id !== p.id), p].sort((a, b) => a.name.localeCompare(b.name)));
+      setActivePresetId(p.id);
+      setPresetName('');
+    } catch (e) {
+      console.error('[Surveillance] Save preset failed:', e);
+    }
+  };
+
+  const handleDeletePreset = async (id: string) => {
+    try {
+      await presetService.deletePreset(id);
+      setPresets(prev => prev.filter(p => p.id !== id));
+      if (activePresetId === id) setActivePresetId(null);
+    } catch (e) {
+      console.error('[Surveillance] Delete preset failed:', e);
+    }
+  };
   // ANPR allow/block check (feature 8). Honest empty until backend enabled.
   const [plate, setPlate] = useState('');
   const [plateResult, setPlateResult] = useState<PlateCheck | null>(null);
@@ -38,12 +80,18 @@ const SurveillancePage = () => {
     }
   };
 
-  const filteredFeeds = useMemo(() => {
-    return feeds.filter(feed => 
-      (feed.name || feed.feed_id).toLowerCase().includes(searchQuery.toLowerCase()) ||
-      feed.source.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [feeds, searchQuery]);
+  const queryFeeds = useMemo(() => {
+    if (!searchQuery.trim()) return feeds;
+    // Placement-aware query: free text plus road:/dir:/status: tokens.
+    const q = parseFeedQuery(searchQuery);
+    return feeds.filter(feed => matchesFeed(feed, q, roads));
+  }, [feeds, searchQuery, roads]);
+
+  // An applied warden preset wins: one click restores its exact camera group.
+  const activePreset = presets.find(p => p.id === activePresetId);
+  const filteredFeeds = activePreset
+    ? feeds.filter(f => activePreset.feed_ids.includes(f.feed_id))
+    : queryFeeds;
 
   const handleStartAll = () => {
     const eligible = feeds.filter(f => f.status === 'stopped' || f.status === 'error');
@@ -100,7 +148,7 @@ const SurveillancePage = () => {
                           <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-40 group-focus-within:opacity-100 transition-opacity" size={18} />
                           <input
                             type="text"
-                            placeholder="SEARCH NODE REGISTRY..."
+                            placeholder='SEARCH FEEDS... road:"Main St" dir:NE status:running'
                             className="bg-lcd-text/5 border-2 border-lcd-text/30 text-lcd-text rounded-none p-4 pl-12 w-full focus:outline-none focus:border-lcd-text focus:bg-lcd-text/10 tracking-[0.2em] placeholder:text-lcd-text/20 font-black uppercase transition-all"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
@@ -122,6 +170,41 @@ const SurveillancePage = () => {
                           </Button>
                       </div>
                   </div>
+              </div>
+          </div>
+
+          <div className="matrix-card p-0 overflow-hidden mt-4">
+              <div className="matrix-card-header bg-lcd-text/10 flex items-center gap-2">
+                  <Bookmark size={14} />
+                  <span>Warden Presets // one-click camera groups</span>
+              </div>
+              <div className="p-4 bg-lcd-text/5 flex flex-col gap-3">
+                  <div className="flex gap-3">
+                      <input
+                        type="text"
+                        placeholder="PRESET NAME (saves current filter: N feeds)..."
+                        className="bg-lcd-text/5 border-2 border-lcd-text/30 text-lcd-text rounded-none p-3 flex-1 focus:outline-none focus:border-lcd-text tracking-[0.2em] placeholder:text-lcd-text/20 font-black uppercase text-xs"
+                        value={presetName}
+                        onChange={(e) => setPresetName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void handleSavePreset(); }}
+                      />
+                      <Button onClick={() => void handleSavePreset()} disabled={!presetName.trim() || filteredFeeds.length === 0} className="matrix-btn-sleek px-6">
+                          SAVE {filteredFeeds.length} FEEDS
+                      </Button>
+                  </div>
+                  {presets.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                          {presets.map(p => (
+                              <div key={p.id} className={`flex items-center gap-1 border px-3 py-1.5 text-[10px] font-lcd uppercase tracking-widest ${activePresetId === p.id ? 'border-lcd-green text-lcd-green bg-lcd-green/10' : 'border-lcd-text/30 text-lcd-text/70'}`}>
+                                  <button onClick={() => setActivePresetId(activePresetId === p.id ? null : p.id)} className="flex items-center gap-1.5 hover:opacity-80" title={`${p.feed_ids.length} feeds${p.road_id ? ` · ${p.road_id}` : ''}`}>
+                                      {activePresetId === p.id ? <BookmarkCheck size={12} /> : <Bookmark size={12} />}
+                                      {p.name} ({p.feed_ids.length})
+                                  </button>
+                                  <button onClick={() => void handleDeletePreset(p.id)} className="opacity-50 hover:opacity-100 hover:text-red-500"><X size={11} /></button>
+                              </div>
+                          ))}
+                      </div>
+                  )}
               </div>
           </div>
 

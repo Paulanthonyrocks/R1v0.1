@@ -58,6 +58,7 @@ class IncidentManager:
         # incident dangling. None keeps the adaptive-response step a no-op.
         self._traffic_signal_service = traffic_signal_service
         self._feed_manager = None
+        self._road_service = None
         
         # Debouncing: { "feed_id_anomaly_details": timestamp }
         self._active_alerts = {}
@@ -104,6 +105,11 @@ class IncidentManager:
         """Sets the feed manager to avoid circular imports."""
         self._feed_manager = feed_manager
         logger.info("FeedManager set in IncidentManager.")
+
+    def set_road_service(self, road_service):
+        """Sets the road registry for direction-aware incident language."""
+        self._road_service = road_service
+        logger.info("RoadService set in IncidentManager.")
 
     async def _request_snapshot_gated(self, feed_id: str, incident_id: str) -> bool:
         """Request a snapshot subject to the per-feed rate cap.
@@ -210,6 +216,80 @@ class IncidentManager:
                 
                 self._active_alerts[debounce_key] = now
 
+            # 1b. Direction-aware language: when the source feed is placed on
+            # a registered road, append corridor context to the description
+            # ("traveling SW on NE-bound Main St, 300 m along, 80 m from
+            # intersection ...") and store structured geo_context in details.
+            # Debounce key above already used the raw description, so this
+            # never destabilizes dedup. Never fails the incident.
+            details = dict(details) if details else {}
+            geo_context = None
+            if source_feed_id and self._feed_manager and self._road_service:
+                try:
+                    entry = self._feed_manager.process_registry.get(source_feed_id) or {}
+                    cfg = entry.get("config_info")
+                    lat = location.get("latitude")
+                    lng = location.get("longitude")
+                    if (lat is None or lng is None) and cfg is not None:
+                        lat = getattr(cfg, "latitude", None)
+                        lng = getattr(cfg, "longitude", None)
+                    if lat is not None and lng is not None:
+                        road_id = getattr(cfg, "road_id", None) if cfg is not None else None
+                        snap = self._road_service.describe_snap(
+                            float(lat), float(lng), road_id=road_id
+                        )
+                        motion_bearing = None
+                        vel = details.get("velocity")
+                        H = entry.get("geo_homography")
+                        if vel and H is not None:
+                            try:
+                                from app.utils.geo_calibration import pixel_vector_to_bearing
+                                motion_bearing = pixel_vector_to_bearing(
+                                    H, 0.5, 0.9, (float(vel[0]), float(vel[1]))
+                                )
+                            except Exception:
+                                motion_bearing = None
+                        from app.utils.incident_language import describe_geo_context
+                        geo_context = describe_geo_context(snap, motion_bearing)
+                        if geo_context is not None:
+                            # Cross-camera handoff: other placed cameras on the
+                            # same road, ranked by distance ahead in the
+                            # vehicle's direction of travel.
+                            try:
+                                from app.utils.handoff import handoff_candidates
+                                cams = []
+                                for fid, e2 in (self._feed_manager.process_registry or {}).items():
+                                    c2 = e2.get("config_info") if isinstance(e2, dict) else None
+                                    if c2 is None:
+                                        continue
+                                    cams.append({
+                                        "feed_id": fid,
+                                        "name": getattr(c2, "name", None) or fid,
+                                        "latitude": getattr(c2, "latitude", None),
+                                        "longitude": getattr(c2, "longitude", None),
+                                        "heading_deg": getattr(c2, "heading_deg", None),
+                                        "road_id": getattr(c2, "road_id", None),
+                                    })
+                                road_obj = self._road_service._roads.get(snap.get("road_id") or "")
+                                if road_obj is not None:
+                                    geo_context["handoff"] = handoff_candidates(
+                                        road_obj, source_feed_id, motion_bearing, cams
+                                    )
+                            except Exception:
+                                geo_context["handoff"] = []
+                except Exception as e_geo:
+                    logger.debug(f"[incident] geo-context enrichment failed: {e_geo}")
+            if geo_context:
+                details["geo_context"] = geo_context
+                phrase = geo_context["phrase"]
+                _ho = geo_context.get("handoff") or []
+                if _ho:
+                    phrase += (
+                        f"; hand off to {_ho[0]['name']} "
+                        f"{int(round(_ho[0]['distance_ahead_m']))} m ahead"
+                    )
+                description = f"{description} — {phrase}"
+
             # 2. Construct Incident Data
             incident_id = str(uuid.uuid4())
             now_dt = datetime.now(timezone.utc)
@@ -228,7 +308,8 @@ class IncidentManager:
                 "longitude": location.get("longitude"),
                 "snapshot_path": (details.get("snapshot_path") if details else None) or (details.get("meta", {}).get("snapshot_path") if details else None),
                 "assigned_to": None,
-                "resolution_notes": None
+                "resolution_notes": None,
+                "details": details or None,
             }
 
             # 3. Persist to DB

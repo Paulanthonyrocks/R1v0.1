@@ -1,18 +1,25 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search, Bell } from 'lucide-react';
+import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search, Bell, Navigation, Crosshair } from 'lucide-react';
 import { WebSocketMessageType } from '@/lib/websocket/WebSocketClient';
 import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { APIClient } from '@/lib/api/APIClient';
 import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
 import { alertService } from '@/lib/services/alertService';
 import { feedService, GeoCalibrationPoint } from '@/lib/services/feedService';
+import { roadsService } from '@/lib/services/roadsService';
+import { Road, RoadAssetsResponse } from '@/lib/types/api';
+import { headingConeLatLngs } from '@/lib/utils/geo';
+import { pointAlongPolyline } from '@/lib/utils/coverage';
+import { parseFeedQuery, matchesFeed, matchesNodeQuery } from '@/lib/utils/feedSearch';
+import { allCoverageGaps, COVERAGE_RADIUS_M } from '@/lib/utils/coverage';
+import { corridorCameras, CorridorCamera } from '@/lib/utils/corridor';
 
 // Fix for default marker icons in Leaflet with Next.js
 const fixLeafletIcons = () => {
@@ -119,7 +126,56 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   const [calibSaving, setCalibSaving] = useState(false);
   const [calibMsg, setCalibMsg] = useState<string>('');
 
+  // Camera placement mode: open from a feed popup's PLACE/ORIENT button, click
+  // the map to drop the camera, snap to the nearest registered road, set the
+  // facing heading, save via PATCH /api/v1/feeds/{id}/config. The backend
+  // broadcasts the new config on the next WS feed_update (marker + cone move).
+  const CONE_RADIUS_M = 150;
+  const feedConesRef = useRef<Record<string, L.Polygon>>({});
+  const placeLayer = useRef<L.LayerGroup>(L.layerGroup());
+  const [placingFeedId, setPlacingFeedId] = useState<string>('');
+  const [placement, setPlacement] = useState<{
+    lat: number; lng: number; roadId: string; heading: number | ''; fov: number;
+    snapBearing: number | null; snapDist: number | null;
+  } | null>(null);
+  const [roads, setRoads] = useState<Road[]>([]);
+  const roadHighlightRef = useRef<L.Polyline | null>(null);
+  const [showCoverage, setShowCoverage] = useState(false);
+  const coverageLayerRef = useRef<L.LayerGroup>(L.layerGroup());
+  const [coverageSummary, setCoverageSummary] = useState('');
+  const [showAssets, setShowAssets] = useState(false);
+  const assetsLayerRef = useRef<L.LayerGroup>(L.layerGroup());
+  const [assets, setAssets] = useState<RoadAssetsResponse | null>(null);
+  const [selectedRoadId, setSelectedRoadId] = useState('');
+  const [corridorPlaying, setCorridorPlaying] = useState(false);
+  const [corridorIdx, setCorridorIdx] = useState(0);
+
+  // Road registry powers search filters (road:, dir:with-road) and the
+  // placement panel dropdown; load once on mount.
+  useEffect(() => {
+    roadsService.listRoads().then(setRoads).catch(() => setRoads([]));
+  }, []);
+  const [placingSaving, setPlacingSaving] = useState(false);
+  const [placingMsg, setPlacingMsg] = useState<string>('');
+
   const { feeds, nodeCongestionData, alerts, subscribeToFeed } = useRealtimeUpdates();
+
+  const corridor: CorridorCamera[] = useMemo(() => {
+    const road = roads.find(r => r.id === selectedRoadId);
+    return road ? corridorCameras(road, feeds || []) : [];
+  }, [roads, feeds, selectedRoadId]);
+
+  // Drive-through: while playing, fly to each corridor camera in chainage order.
+  useEffect(() => {
+    if (!corridorPlaying || corridor.length === 0 || !leafletMap.current) return;
+    const cam = corridor[corridorIdx % corridor.length];
+    const lat = cam.feed.config?.latitude ?? cam.feed.latitude;
+    const lng = cam.feed.config?.longitude ?? cam.feed.longitude;
+    if (lat && lng) leafletMap.current.flyTo([lat, lng], 18, { duration: 1.2 });
+    const t = setTimeout(() => setCorridorIdx(i => (i + 1) % corridor.length), 2500);
+    return () => clearTimeout(t);
+  }, [corridorPlaying, corridorIdx, corridor]);
+
   const router = useRouter();
   // Mirror of feeds for the imperative center() handle (fitBounds needs the
   // latest positions without re-creating the handle every render).
@@ -184,6 +240,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       signalsLayer.current.addTo(map);
       vehiclesLayer.current.addTo(map);
       calibLayer.current.addTo(map);
+      placeLayer.current.addTo(map);
 
       leafletMap.current = map;
 
@@ -338,6 +395,8 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
             <div style="font-weight: bold; border-bottom: 1px solid #333; margin-bottom: 5px;">${feed.name || feed.feed_id}</div>
             <div style="font-size: 10px; opacity: 0.8;">${feed.source}</div>
             <div style="font-size: 10px; margin-top: 5px;">STATUS: <span style="color: ${statusColor}">${feed.status.toUpperCase()}</span></div>
+            ${feed.config?.road_id ? `<div style="font-size: 10px; margin-top: 3px;">ROAD: <b>${feed.config.road_id}</b></div>` : ''}
+            ${feed.config?.heading_deg != null ? `<div style="font-size: 10px; margin-top: 3px;">FACING: <b>${Math.round(feed.config.heading_deg)}&deg;</b> <span style="opacity:0.6">${feed.config.heading_source === 'derived' ? '(derived)' : '(manual)'}</span></div>` : ''}
             <div style="font-size: 10px; margin-top: 6px; border-top: 1px dashed #333; padding-top: 5px;">
               AVG SPEED: <b style="color: ${speedColor(avgSpeed)}">${avgSpeed != null ? avgSpeed.toFixed(1) + ' km/h' : 'N/A'}</b><br/>
               VEHICLES NOW: <b>${liveCount}</b> &nbsp; CUMULATIVE: <b>${m.total_vehicles_cumulative ?? 0}</b><br/>
@@ -347,6 +406,10 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
             <button onclick="window.__openFeed && window.__openFeed('${id}')"
               style="margin-top: 6px; width: 100%; background: #00ff41; color: #000; border: 0; padding: 4px; font-family: monospace; font-weight: bold; font-size: 10px; cursor: pointer;">
               OPEN FEED &gt;
+            </button>
+            <button onclick="window.__placeFeed && window.__placeFeed('${id}')"
+              style="margin-top: 4px; width: 100%; background: transparent; color: #22d3ee; border: 1px solid #22d3ee; padding: 4px; font-family: monospace; font-weight: bold; font-size: 10px; cursor: pointer;">
+              PLACE / ORIENT &gt;
             </button>
           </div>
         `;
@@ -395,6 +458,150 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
         delete feedRingsRef.current[id];
       }
     }
+  }, [feeds]);
+
+  // --- Coverage gaps -------------------------------------------------------------
+  // Toggle: paint every uncovered stretch of every registered road red.
+  // Coverage = point lies inside some feed's cone (heading/fov/radius).
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    coverageLayerRef.current.clearLayers();
+    if (!showCoverage) {
+      if (map.hasLayer(coverageLayerRef.current)) map.removeLayer(coverageLayerRef.current);
+      setCoverageSummary('');
+      return;
+    }
+    const gaps = allCoverageGaps(roads, feeds || [], { radiusM: CONE_RADIUS_M });
+    let gapM = 0;
+    for (const g of gaps) {
+      gapM += g.lengthM;
+      L.polyline([g.from, g.to], {
+        color: '#ff3e3e', weight: 6, opacity: 0.9,
+      })
+        .bindTooltip(`${g.roadName}: ${Math.round(g.lengthM)} m UNCOVERED`, { sticky: true })
+        .addTo(coverageLayerRef.current);
+    }
+    coverageLayerRef.current.addTo(map);
+    const totalM = gaps.length >= 0
+      ? roads.reduce((s, r) => {
+          let len = 0;
+          for (let i = 0; i < r.polyline.length - 1; i++) {
+            const a = r.polyline[i];
+            const b = r.polyline[i + 1];
+            len += Math.hypot((b.lat - a.lat) * 111320, (b.lng - a.lng) * 111320 * Math.cos(a.lat * Math.PI / 180));
+          }
+          return s + len;
+        }, 0)
+      : 0;
+    setCoverageSummary(
+      gaps.length === 0
+        ? 'ALL ROADS COVERED'
+        : `${gaps.length} GAP SEGMENTS — ${Math.round(gapM)} m OF ${Math.round(totalM)} m UNCOVERED`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCoverage, roads, feeds]);
+
+  // --- Signals + work-zones on the road graph ------------------------------------
+  // Poll GET /api/v1/roads/assets every 15 s (signal phases change); render
+  // phase-colored markers at signals and orange segments for work-zones.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => roadsService.getAssets().then(a => { if (!cancelled) setAssets(a); }).catch(() => {});
+    load();
+    const t = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    assetsLayerRef.current.clearLayers();
+    if (!showAssets || !assets) {
+      if (map.hasLayer(assetsLayerRef.current)) map.removeLayer(assetsLayerRef.current);
+      return;
+    }
+    const PHASE_COLOR: Record<string, string> = {
+      GREEN: '#00ff41', YELLOW: '#facc15', RED: '#ff3e3e', RED_ALL: '#ff3e3e',
+    };
+    for (const [roadId, roadAssets] of Object.entries(assets.roads || {})) {
+      const road = roads.find(r => r.id === roadId);
+      const poly = road?.polyline.map(p => [p.lat, p.lng] as [number, number]);
+      for (const s of roadAssets.signals || []) {
+        const color = PHASE_COLOR[(s.phase || '').toUpperCase()] || '#9ca3af';
+        L.circleMarker([s.latitude, s.longitude], {
+          radius: 7, color, fillColor: color, fillOpacity: 0.9, weight: 2,
+        })
+          .bindTooltip(
+            `${s.signal_id}: ${(s.phase || '?').toUpperCase()} @ ${roadAssets.road_name}` +
+            (s.chainage_m != null ? ` ${Math.round(s.chainage_m)} m` : '') +
+            (s.intersection_id ? ` · node ${s.intersection_id}` : ''),
+            { sticky: true },
+          )
+          .addTo(assetsLayerRef.current);
+      }
+      for (const wz of roadAssets.work_zones || []) {
+        if (!poly || wz.chainage_m == null) continue;
+        // Work-zones are feed/lane-scoped; draw a +/-150 m segment around the
+        // zone's chainage on the road.
+        const total = poly.reduce((acc, p, i) => {
+          if (i === 0) return 0;
+          const a = poly[i - 1];
+          return acc + Math.hypot((p[0] - a[0]) * 111320, (p[1] - a[1]) * 111320 * Math.cos(a[0] * Math.PI / 180));
+        }, 0);
+        const from = pointAlongPolyline(poly, Math.max(0, wz.chainage_m - 150));
+        const to = pointAlongPolyline(poly, Math.min(total, wz.chainage_m + 150));
+        if (from && to) {
+          L.polyline([from, to], { color: '#fb923c', weight: 8, opacity: 0.85, dashArray: '10 6' })
+            .bindTooltip(
+              `WORK ZONE ${wz.id || ''} ${roadAssets.road_name} @ ${Math.round(wz.chainage_m)} m` +
+              (wz.speed_limit != null ? ` · limit ${wz.speed_limit}` : '') +
+              (wz.feed_id ? ` · via ${wz.feed_id}` : ''),
+              { sticky: true },
+            )
+            .addTo(assetsLayerRef.current);
+        }
+      }
+    }
+    assetsLayerRef.current.addTo(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAssets, assets, roads]);
+
+  // --- Camera heading cones -----------------------------------------------------
+  // Each feed with a heading (manual or derived from geo_calibration) gets a
+  // coverage wedge on the map: apex at the camera, facing heading_deg, spread
+  // fov_deg. The wedge appears/updates automatically on the next WS
+  // feed_update once the backend has derived or received a heading.
+  useEffect(() => {
+    if (!leafletMap.current || !feeds) return;
+    const live = new Set<string>();
+    for (const feed of feeds) {
+      const lat = feed.config?.latitude || feed.latitude;
+      const lng = feed.config?.longitude || feed.longitude;
+      const heading = feed.config?.heading_deg;
+      const id = feed.feed_id;
+      if (!lat || !lng || heading == null) continue;
+      live.add(id);
+      const fov = feed.config?.fov_deg ?? 60;
+      const pts = headingConeLatLngs(lat, lng, heading, fov, CONE_RADIUS_M);
+      const color = feed.status === 'running' ? '#00ff41' : feed.status === 'error' ? '#ff3e3e' : '#facc15';
+      if (feedConesRef.current[id]) {
+        feedConesRef.current[id].setLatLngs(pts);
+        feedConesRef.current[id].setStyle({ color, fillColor: color });
+      } else {
+        feedConesRef.current[id] = L.polygon(pts, {
+          color, fillColor: color, fillOpacity: 0.10, weight: 1, dashArray: '4 4',
+          className: 'feed-cone',
+        }).addTo(feedsLayer.current);
+      }
+    }
+    for (const id of Object.keys(feedConesRef.current)) {
+      if (!live.has(id)) {
+        feedsLayer.current.removeLayer(feedConesRef.current[id]);
+        delete feedConesRef.current[id];
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feeds]);
 
   // Incident/alert markers (the "Incident Events" layer was a dead toggle —
@@ -471,6 +678,95 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
     };
     return () => { delete (window as any).__openFeed; };
   }, [router, subscribeToFeed]);
+
+  // --- Camera placement mode ------------------------------------------------------
+  // Feed popup "PLACE / ORIENT" calls this via inline onclick.
+  useEffect(() => {
+    (window as any).__placeFeed = (id: string) => {
+      setPlacingFeedId(id);
+      setPlacement(null);
+      setPlacingMsg('CLICK THE MAP TO DROP THIS CAMERA');
+      roadsService.listRoads()
+        .then(setRoads)
+        .catch(() => { setRoads([]); });
+    };
+    return () => { delete (window as any).__placeFeed; };
+  }, []);
+
+  // While placing, a map click drops the camera there and snaps to the nearest
+  // registered road (POST /api/v1/roads/snap) to prefill road + road bearing.
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map || !placingFeedId) return;
+    const handler = async (e: L.LeafletMouseEvent) => {
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      const feed = feedsRef.current.find(f => f.feed_id === placingFeedId);
+      let snap = null;
+      try { snap = await roadsService.snap(lat, lng, 150); } catch { snap = null; }
+      const prevHeading = feed?.config?.heading_deg;
+      setPlacement({
+        lat,
+        lng,
+        roadId: snap?.found ? (snap.road_id ?? '') : (feed?.config?.road_id ?? ''),
+        heading: typeof prevHeading === 'number' ? prevHeading : (snap?.segment_bearing_deg ?? ''),
+        fov: feed?.config?.fov_deg ?? 60,
+        snapBearing: snap?.segment_bearing_deg ?? null,
+        snapDist: snap?.distance_m ?? null,
+      });
+      setPlacingMsg(
+        snap?.found
+          ? `SNAPPED TO ${snap.road_name} — ${snap.distance_m} m OFF LINE, ROAD BEARING ${snap.segment_bearing_deg}\u00B0`
+          : 'NO REGISTERED ROAD WITHIN 150 m — ASSIGN MANUALLY BELOW',
+      );
+    };
+    map.on('click', handler);
+    return () => { map.off('click', handler); };
+  }, [placingFeedId, leafletMap.current]);
+
+  // Live preview: cone + marker at the draft position while the panel is open.
+  useEffect(() => {
+    if (!leafletMap.current) return;
+    placeLayer.current.clearLayers();
+    if (placingFeedId && placement && typeof placement.heading === 'number' && Number.isFinite(placement.heading)) {
+      const pts = headingConeLatLngs(placement.lat, placement.lng, placement.heading, placement.fov, CONE_RADIUS_M);
+      L.polygon(pts, {
+        color: '#22d3ee', fillColor: '#22d3ee', fillOpacity: 0.15, weight: 1,
+      }).addTo(placeLayer.current);
+      L.circleMarker([placement.lat, placement.lng], {
+        radius: 6, color: '#22d3ee', fillColor: '#22d3ee', fillOpacity: 0.9, weight: 1,
+      }).addTo(placeLayer.current);
+    } else if (placingFeedId && placement) {
+      L.circleMarker([placement.lat, placement.lng], {
+        radius: 6, color: '#22d3ee', fillColor: '#22d3ee', fillOpacity: 0.9, weight: 1,
+      }).addTo(placeLayer.current);
+    }
+  }, [placement, placingFeedId]);
+
+  const handleSavePlacement = async () => {
+    if (!placingFeedId || !placement) return;
+    setPlacingSaving(true);
+    setPlacingMsg('');
+    try {
+      const updates: Record<string, unknown> = {
+        latitude: placement.lat,
+        longitude: placement.lng,
+        road_id: placement.roadId || null,
+        fov_deg: placement.fov,
+      };
+      // Sending a heading marks it manual server-side (heading_source); the
+      // derived-from-geo_calibration value is used when this is omitted.
+      if (typeof placement.heading === 'number' && Number.isFinite(placement.heading)) {
+        updates.heading_deg = ((placement.heading % 360) + 360) % 360;
+      }
+      await feedService.updateFeedConfig(placingFeedId, updates);
+      setPlacingMsg('SAVED — NEXT WS FEED_UPDATE MOVES MARKER + CONE');
+    } catch (err) {
+      setPlacingMsg(`SAVE FAILED: ${(err as Error)?.message || err}`);
+    } finally {
+      setPlacingSaving(false);
+    }
+  };
 
   const focusAlert = (alert: any, idx: number) => {
     const key = String(alert.id ?? `noid-${idx}`);
@@ -719,15 +1015,13 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
       return;
     }
 
-    const lowerQuery = query.toLowerCase();
+    // Placement-aware query language: free text + road:/dir:/status: tokens.
+    const q = parseFeedQuery(query);
     const results: SearchResult[] = [];
 
     if (feeds) {
       feeds.forEach(feed => {
-        if (
-          (feed.name || feed.feed_id).toLowerCase().includes(lowerQuery) ||
-          feed.source.toLowerCase().includes(lowerQuery)
-        ) {
+        if (matchesFeed(feed, q, roads)) {
           results.push({ type: 'feed', data: feed, label: feed.name || feed.feed_id });
         }
       });
@@ -735,10 +1029,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
 
     if (nodeCongestionData) {
       nodeCongestionData.forEach(node => {
-        if (
-          node.id.toLowerCase().includes(lowerQuery) ||
-          node.name?.toLowerCase().includes(lowerQuery)
-        ) {
+        if (matchesNodeQuery(node, q, roads)) {
           results.push({ type: 'node', data: node, label: `NODE: ${node.id}` });
         }
       });
@@ -751,27 +1042,78 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
     setSearchQuery(result.label);
     setSearchResults([]);
 
-    let lat, lng;
-    if (result.type === 'feed') {
-      lat = result.data.config?.latitude || result.data.latitude;
-      lng = result.data.config?.longitude || result.data.longitude;
-    } else if (result.type === 'node') {
-      lat = result.data.latitude;
-      lng = result.data.longitude;
-      setSelectedNode(result.data);
+    // Highlight the assigned road when a feed result is selected.
+    if (roadHighlightRef.current && leafletMap.current) {
+      leafletMap.current.removeLayer(roadHighlightRef.current);
+      roadHighlightRef.current = null;
     }
-
-    if (lat && lng && leafletMap.current) {
-      leafletMap.current.flyTo([lat, lng], 18, { duration: 1.5 });
+    if (result.type === 'feed') {
+      const roadId = result.data.config?.road_id;
+      const road = roadId ? roads.find(r => r.id === roadId) : undefined;
+      const lat = result.data.config?.latitude || result.data.latitude;
+      const lng = result.data.config?.longitude || result.data.longitude;
+      if (road && leafletMap.current) {
+        roadHighlightRef.current = L.polyline(
+          road.polyline.map(p => [p.lat, p.lng] as [number, number]),
+          { color: '#22d3ee', weight: 5, opacity: 0.8, dashArray: '8 6' },
+        ).addTo(leafletMap.current);
+      }
+      if (lat && lng && leafletMap.current) {
+        leafletMap.current.flyTo([lat, lng], 18, { duration: 1.5 });
+      }
+    } else if (result.type === 'node') {
+      const lat = result.data.latitude;
+      const lng = result.data.longitude;
+      setSelectedNode(result.data);
+      if (lat && lng && leafletMap.current) {
+        leafletMap.current.flyTo([lat, lng], 18, { duration: 1.5 });
+      }
     }
   };
 
   return (
-    <div className={cn("relative w-full h-full bg-[#0a0a0a] overflow-hidden", (isSettingCenter || calibrating) && "cursor-crosshair")}>
+    <div className={cn("relative w-full h-full bg-[#0a0a0a] overflow-hidden", (isSettingCenter || calibrating || placingFeedId) && "cursor-crosshair")}>
       <div ref={mapRef} className="absolute inset-0 z-0" />
 
       {/* Search Bar */}
       <div className="absolute top-20 left-4 z-[1002] w-72 font-mono">
+        <div className="flex gap-1 mb-1">
+          <button
+            onClick={() => setShowCoverage(v => !v)}
+            className={cn(
+              'text-[9px] px-2 py-1 border font-bold uppercase tracking-wider transition-all',
+              showCoverage
+                ? 'bg-[#ff3e3e] text-black border-[#ff3e3e]'
+                : 'bg-black/80 text-[#ff3e3e] border-[#ff3e3e]/50 hover:bg-[#ff3e3e]/20',
+            )}
+          >
+            {showCoverage ? 'GAPS: ON' : 'GAPS: OFF'}
+          </button>
+          <button
+            onClick={() => setShowAssets(v => !v)}
+            className={cn(
+              'text-[9px] px-2 py-1 border font-bold uppercase tracking-wider transition-all',
+              showAssets
+                ? 'bg-[#facc15] text-black border-[#facc15]'
+                : 'bg-black/80 text-[#facc15] border-[#facc15]/50 hover:bg-[#facc15]/20',
+            )}
+            title="Traffic signals (phase-colored) and active work-zones on registered roads"
+          >
+            {showAssets ? 'ASSETS: ON' : 'ASSETS: OFF'}
+          </button>
+          {coverageSummary && (
+            <span className="text-[9px] text-[#ff3e3e] self-center truncate">{coverageSummary}</span>
+          )}
+          <select
+            value={selectedRoadId}
+            onChange={(e) => { setSelectedRoadId(e.target.value); setCorridorPlaying(false); setCorridorIdx(0); }}
+            className="ml-auto text-[9px] bg-black/80 border border-[#22d3ee]/50 text-[#22d3ee] uppercase font-bold px-1 py-1 max-w-[7rem]"
+            title="Corridor drive-through: cameras on this road in chainage order"
+          >
+            <option value="">CORRIDOR…</option>
+            {roads.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </div>
         <div className="relative group">
           <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
             <Search className="w-4 h-4 text-[#00ff41]/50 group-focus-within:text-[#00ff41]" />
@@ -779,7 +1121,7 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
           <input
             type="text"
             className="block w-full p-2 pl-10 text-xs text-[#00ff41] bg-black/80 border border-[#00ff41]/30 focus:ring-1 focus:ring-[#00ff41] focus:border-[#00ff41] placeholder-[#00ff41]/30 backdrop-blur-sm"
-            placeholder="QUERY FEED OR NODE ID..."
+            placeholder='QUERY FEED OR NODE...  e.g. road:"Main St" dir:NE status:running'
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
             onFocus={() => setIsSearching(true)}
@@ -795,11 +1137,22 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
                 className="w-full text-left px-4 py-2 text-xs text-[#00ff41] hover:bg-[#00ff41]/20 flex items-center justify-between group border-b border-[#00ff41]/10 last:border-0"
                 onClick={() => selectResult(result)}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   {result.type === 'feed' ? <Video size={12} /> : <Activity size={12} />}
                   <span className="truncate">{result.label}</span>
                 </div>
-                <ChevronRight size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                {result.type === 'feed' && (
+                  <div className="flex items-center gap-1.5 shrink-0 text-[9px] text-[#22d3ee]">
+                    {result.data.config?.road_id && <span className="border border-[#22d3ee]/40 px-1 uppercase">{result.data.config.road_id}</span>}
+                    {result.data.config?.heading_deg != null && (
+                      <span className="border border-[#22d3ee]/40 px-1 flex items-center gap-0.5">
+                        <Navigation size={8} style={{ transform: `rotate(${result.data.config.heading_deg}deg)` }} />
+                        {Math.round(result.data.config.heading_deg)}°
+                      </span>
+                    )}
+                  </div>
+                )}
+                <ChevronRight size={10} className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
               </button>
             ))}
           </div>
@@ -1043,6 +1396,153 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
             </button>
           </div>
           {calibMsg && <div className="mt-1.5 text-[9px] uppercase text-[#00ff41]">{calibMsg}</div>}
+        </div>
+      )}
+
+      {/* Corridor drive-through panel: cameras on the selected road in chainage order */}
+      {selectedRoadId && (
+        <div className="absolute bottom-4 left-4 z-[1002] w-64 font-mono bg-black/95 border border-[#22d3ee]/50 p-2 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[#22d3ee]">
+              Corridor: {roads.find(r => r.id === selectedRoadId)?.name || selectedRoadId}
+            </span>
+            <div className="flex gap-1">
+              <button
+                onClick={() => { setCorridorPlaying(p => !p); setCorridorIdx(0); }}
+                className="text-[9px] px-1.5 py-0.5 border border-[#00ff41]/60 text-[#00ff41] font-bold uppercase hover:bg-[#00ff41] hover:text-black transition-all"
+              >
+                {corridorPlaying ? 'Stop' : '▶ Drive'}
+              </button>
+              <button
+                onClick={() => { setSelectedRoadId(''); setCorridorPlaying(false); }}
+                className="text-[9px] px-1.5 py-0.5 border border-[#ff3e3e]/60 text-[#ff3e3e] font-bold uppercase hover:bg-[#ff3e3e] hover:text-black transition-all"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+          {corridor.length === 0 ? (
+            <div className="text-[9px] text-[#22d3ee]/50 italic p-1">No cameras on this road — use search (road:…) or PLACE/ORIENT to assign one.</div>
+          ) : (
+            <div className="max-h-44 overflow-y-auto">
+              {corridor.map((c, i) => {
+                const lat = c.feed.config?.latitude ?? c.feed.latitude;
+                const lng = c.feed.config?.longitude ?? c.feed.longitude;
+                const active = corridorPlaying && i === corridorIdx % corridor.length;
+                return (
+                  <button
+                    key={c.feed.feed_id}
+                    onClick={() => {
+                      setCorridorIdx(i);
+                      setCorridorPlaying(false);
+                      if (lat && lng && leafletMap.current) leafletMap.current.flyTo([lat, lng], 18, { duration: 1.2 });
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 text-left px-1.5 py-1 text-[10px] border-b border-[#22d3ee]/10 last:border-0 hover:bg-[#22d3ee]/10',
+                      active && 'bg-[#22d3ee]/20',
+                    )}
+                  >
+                    <span className="text-[#22d3ee]/60 w-12 shrink-0">{Math.round(c.distanceAlongM)} m</span>
+                    <span className="truncate flex-1 text-[#00ff41]">{c.feed.name || c.feed.feed_id}</span>
+                    <span className="text-[#22d3ee] shrink-0" title={`road bearing ${Math.round(c.segmentBearingDeg)}°`}>
+                      {c.relation === 'with' ? '→' : c.relation === 'against' ? '←' : '·'}
+                      {c.headingDeg != null ? ` ${Math.round(c.headingDeg)}°` : ''}
+                    </span>
+                    <span className={cn('shrink-0', c.feed.status === 'running' ? 'text-[#00ff41]' : 'text-[#ff3e3e]')}>
+                      {c.feed.status === 'running' ? '●' : '○'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Camera Placement Panel: opened from a feed popup's PLACE/ORIENT button.
+          Click the map to drop the camera (snaps to nearest road), pick road +
+          facing heading, save via PATCH /api/v1/feeds/{id}/config. */}
+      {placingFeedId && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1002] w-[26rem] font-mono bg-black/95 border border-[#22d3ee]/50 p-3 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[#22d3ee] flex items-center gap-1">
+              <Crosshair size={12} /> Camera Placement
+            </span>
+            <span className="text-[9px] text-[#22d3ee]/60 uppercase">
+              {(feeds || []).find(f => f.feed_id === placingFeedId)?.name || placingFeedId}
+            </span>
+          </div>
+
+          {!placement && (
+            <div className="text-[9px] text-[#22d3ee]/60 italic p-1 mb-2">Click the map where this camera stands…</div>
+          )}
+
+          {placement && (
+            <div className="space-y-2 mb-2">
+              <div className="text-[9px] text-[#00ff41]/70">
+                POS: {placement.lat.toFixed(5)}, {placement.lng.toFixed(5)}
+                {placement.snapDist != null && <> &nbsp;·&nbsp; {placement.snapDist} m off road line</>}
+              </div>
+              <label className="block text-[9px] uppercase text-[#22d3ee]/60">Road / corridor</label>
+              <select
+                value={placement.roadId}
+                onChange={e => setPlacement(p => p && { ...p, roadId: e.target.value })}
+                className="w-full bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] p-1.5 uppercase"
+              >
+                <option value="">(none)</option>
+                {roads.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                {placement.roadId && !roads.some(r => r.id === placement.roadId) && (
+                  <option value={placement.roadId}>{placement.roadId} (current)</option>
+                )}
+              </select>
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="block text-[9px] uppercase text-[#22d3ee]/60">Facing heading (deg, 0=N)</label>
+                  <input
+                    type="number" min="0" max="360" step="1"
+                    value={placement.heading}
+                    onChange={e => setPlacement(p => p && { ...p, heading: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                    className="w-full bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] px-1.5 py-1"
+                  />
+                </div>
+                <button
+                  disabled={placement.snapBearing == null}
+                  onClick={() => setPlacement(p => p && { ...p, heading: p.snapBearing ?? p.heading })}
+                  className="text-[9px] py-1 px-2 border border-[#22d3ee]/60 text-[#22d3ee] uppercase font-bold hover:bg-[#22d3ee] hover:text-black transition-all disabled:opacity-40"
+                  title="Use the snapped road segment's direction of travel"
+                >
+                  <Navigation size={10} className="inline mr-1" />
+                  {placement.snapBearing != null ? `${Math.round(placement.snapBearing)}° road` : 'no road'}
+                </button>
+                <div className="w-20">
+                  <label className="block text-[9px] uppercase text-[#22d3ee]/60">FOV°</label>
+                  <input
+                    type="number" min="5" max="360" step="5"
+                    value={placement.fov}
+                    onChange={e => setPlacement(p => p && { ...p, fov: parseFloat(e.target.value) || 60 })}
+                    className="w-full bg-black border border-[#22d3ee]/40 text-[#22d3ee] text-[10px] px-1.5 py-1"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              disabled={placingSaving || !placement}
+              onClick={handleSavePlacement}
+              className="flex-1 text-[10px] py-1.5 border border-[#22d3ee] text-[#22d3ee] font-bold uppercase hover:bg-[#22d3ee] hover:text-black transition-all disabled:opacity-50"
+            >
+              {placingSaving ? 'Saving…' : 'Save placement'}
+            </button>
+            <button
+              onClick={() => { setPlacingFeedId(''); setPlacement(null); setPlacingMsg(''); placeLayer.current.clearLayers(); }}
+              className="text-[10px] py-1.5 px-2 border border-[#ff3e3e]/60 text-[#ff3e3e] uppercase font-bold hover:bg-[#ff3e3e] hover:text-black transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+          {placingMsg && <div className="mt-1.5 text-[9px] uppercase text-[#00ff41]">{placingMsg}</div>}
         </div>
       )}
 

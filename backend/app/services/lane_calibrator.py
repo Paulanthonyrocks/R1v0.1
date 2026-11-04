@@ -191,7 +191,7 @@ class LaneCalibrator:
         """Returns a summary of calibration status for a feed."""
         if feed_id not in self.lane_data:
             return {}
-            
+
         return {
             lane_id: {
                 "calibrated": data["confidence"] >= self.confidence_threshold,
@@ -203,3 +203,25 @@ class LaneCalibrator:
             }
             for lane_id, data in self.lane_data[feed_id].items()
         }
+
+    def get_all_flow_bearings(self, feed_id: str, H=None) -> Dict[str, float]:
+        """
+        Compass bearing (deg) of each lane's learned consensus flow vector,
+        {"0": 42.5, ...}. The pixel vector is projected through the feed's
+        geo homography H (see app/utils/geo_calibration.pixel_vector_to_bearing)
+        at a near-ground image point, so the direction becomes a compass
+        heading usable by search/incidents. Lanes without a consensus, or all
+        lanes when H is None, are omitted.
+        """
+        if H is None:
+            return {}
+        from app.utils.geo_calibration import pixel_vector_to_bearing
+        out: Dict[str, float] = {}
+        for lane_id, data in self.lane_data.get(feed_id, {}).items():
+            consensus = data.get("consensus")
+            if not consensus:
+                continue
+            b = pixel_vector_to_bearing(H, 0.5, 0.9, consensus)
+            if b is not None:
+                out[str(lane_id)] = round(b, 1)
+        return out

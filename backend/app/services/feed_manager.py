@@ -721,6 +721,21 @@ class FeedManager:
         config = entry.get("config_info") or FeedConfigInfo(
             name="Unknown", source_type="unknown", source_identifier=entry["source"]
         )
+        # Per-lane compass flow bearings from the learned lane consensus,
+        # projected through this feed's geo homography. Read-only walk of the
+        # calibrator's dict; any failure just omits the field.
+        lane_bearings = None
+        try:
+            H = entry.get("geo_homography")
+            calibrator = getattr(
+                getattr(self._analytics_service, "_safety_monitor", None),
+                "lane_calibrator",
+                None,
+            )
+            if H is not None and calibrator is not None:
+                lane_bearings = calibrator.get_all_flow_bearings(feed_id, H) or None
+        except Exception:
+            lane_bearings = None
         return FeedStatusData(
             feed_id=feed_id,
             config=config,
@@ -729,6 +744,7 @@ class FeedManager:
             current_fps=entry["timer"].get_fps("loop_total") if entry.get("timer") else None,
             last_error=entry.get("error_message"),
             latest_metrics=entry.get("latest_metrics"),
+            lane_bearings=lane_bearings,
         )
 
     def _any_real_feeds_active_unsafe(self) -> bool:
@@ -1143,17 +1159,26 @@ class FeedManager:
                                 "{'x': float, 'y': float} points."
                             )
 
+                # A manual heading (heading_deg set to a number) wins over the
+                # derived one; clearing it (explicit null) falls back to derived.
+                if "heading_deg" in update_data:
+                    update_data["heading_source"] = (
+                        "manual" if update_data["heading_deg"] is not None else None
+                    )
                 entry["config_info"] = current_config.model_copy(update=update_data)
                 # If geo_calibration changed, rebuild the pixel->lat/lng
-                # homography now so the very next WS frame carries geo.
-                if "geo_calibration" in update_data:
+                # homography (and re-derive the camera heading) now so the very
+                # next WS frame carries geo. Re-derive on heading_deg changes too,
+                # so a cleared manual heading falls back to the derived value.
+                if "geo_calibration" in update_data or "heading_deg" in update_data:
                     from app.utils.geo_calibration import (
                         attach_geo_homography,
                         validate_geo_points,
                     )
-                    err = validate_geo_points(update_data["geo_calibration"])
-                    if err:
-                        raise ValueError(f"Invalid geo_calibration: {err}")
+                    if "geo_calibration" in update_data:
+                        err = validate_geo_points(update_data["geo_calibration"])
+                        if err:
+                            raise ValueError(f"Invalid geo_calibration: {err}")
                     attach_geo_homography(entry)
                 self._save_persisted_feeds()
 
@@ -1193,6 +1218,11 @@ class FeedManager:
         is_looped: bool = True,
         is_sample_feed: bool = False,
         start: bool = True,
+        road_id: Optional[str] = None,
+        heading_deg: Optional[float] = None,
+        fov_deg: Optional[float] = None,
+        mount_height_m: Optional[float] = None,
+        intersection_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         existing_feed_id = None
 
@@ -1214,6 +1244,15 @@ class FeedManager:
                     source_identifier=source,
                     latitude=latitude,
                     longitude=longitude,
+                    road_id=road_id,
+                    # A heading given at create time is an operator override:
+                    # attach_geo_homography (called right below) must not
+                    # replace it with the derived value.
+                    heading_deg=heading_deg,
+                    heading_source="manual" if heading_deg is not None else None,
+                    fov_deg=fov_deg,
+                    mount_height_m=mount_height_m,
+                    intersection_id=intersection_id,
                 )
 
                 self.process_registry[feed_id] = {
@@ -1324,6 +1363,12 @@ class FeedManager:
                     "longitude": feed_config.get("longitude"),
                     "name_hint": feed_config.get("name") or feed_config.get("name_hint"),
                     "is_looped": feed_config.get("is_looped", True),
+                    # Placement metadata, optional per sample-feed entry.
+                    "road_id": feed_config.get("road_id"),
+                    "heading_deg": feed_config.get("heading_deg"),
+                    "fov_deg": feed_config.get("fov_deg"),
+                    "mount_height_m": feed_config.get("mount_height_m"),
+                    "intersection_id": feed_config.get("intersection_id"),
                 }
 
                 feed_result = await self.add_and_start_feed(**kwargs)
