@@ -175,12 +175,16 @@ class RateLimitMiddleware:
 
         # Determine limits based on tier or path-specific config
         pattern, config = self._get_config_for_path(path)
-        
-        # If path specific is default, use tier limits logic
+
+        # Tier multipliers (anonymous 1x, authenticated 2x, premium 5x) apply to
+        # path-specific limits too — previously only the "default" bucket was
+        # tier-scaled, so premium users were still hard-capped at 10 req/min on
+        # /api/v1/analytics and the dashboard's polling tripped 429s.
+        tier_multiplier = {"anonymous": 1, "authenticated": 2, "premium": 5}.get(user_tier, 1)
         if pattern == "default":
             limit, window = self.tier_limits.get(user_tier, self.tier_limits["anonymous"])
         else:
-            limit, window = config.limit, config.window
+            limit, window = config.limit * tier_multiplier, config.window
 
         key = (user_id, pattern)
         now = time.monotonic()

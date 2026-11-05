@@ -82,8 +82,7 @@ export default function GalleryPage() {
 
         // Listen for new snapshots
         const unsubscribe = client.subscribe(WebSocketMessageType.SNAPSHOT_READY, (data: any) => {
-            console.log("New snapshot ready received in gallery:", data);
-            // Re-fetch to get full incident details
+                        // Re-fetch to get full incident details
             fetchIncidentsWithSnapshots();
         });
 

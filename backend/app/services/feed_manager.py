@@ -40,6 +40,7 @@ from app.models.websocket import (
 from app.core.ingestion_worker import ingestion_worker
 from app.core.inference_worker import inference_worker
 from app.utils.monitoring import FrameTimer, check_system_resources
+from app.utils.planning_metrics import build_feed_metrics_record
 from app.utils.distributed_queue import RedisQueue, RedisStreamQueue, RedisEvent, RedisValue
 from app.utils.redis_client import get_redis_client
 from app.utils.shared_frame_buffer import SharedFrameBuffer
@@ -1949,9 +1950,14 @@ class FeedManager:
                     try:
                         # Expected format: (feed_id, feed_metrics, vehicles, lanes, lines)
                         feed_id, feed_metrics, vehicles, lanes, lines = item
+                        # Shape the live per-frame metrics into the feed_metrics
+                        # DB record: fixed columns from the metric names, and the
+                        # planning breakdowns (per-lane / per-class / occupancy /
+                        # queues / VRU / speed-calibration confidence) into the
+                        # JSON `extra` column so they are actually retained.
                         self._db_queue.put_nowait({
                             "type": "feed_metrics",
-                            "data": feed_metrics
+                            "data": build_feed_metrics_record(feed_id, feed_metrics),
                         })
                     except Exception as e:
                         self.logger.warning(f"Failed to parse analytics output item: {e}")

@@ -8,7 +8,6 @@ from typing import List, Dict, Any, Optional
 import os
 from datetime import datetime, timezone
 
-from .reporting.report_generator import generate_analysis_report
 from ...models.pavement import PavementAnalysisResponse, PavementDistress, DistressType
 from .utils.camera_calibration import (
     load_calibration_params,
@@ -23,6 +22,10 @@ from .analysis_modules import (
     measure_pothole_contour,
     analyze_rutting_bbox,
 )
+# NOTE: report_generator (matplotlib) is imported lazily inside
+# analyze_pavement_image so this module loads on boxes where matplotlib is
+# not installed; analysis then returns without report files instead of
+# failing the whole import.
 
 # Initialize logging
 logger = logging.getLogger(__name__)
@@ -33,6 +36,49 @@ thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
 # --- Configuration ---
 CALIBRATION_FILE_PATH = "./calibration_params.npz"
 # -------------------
+
+
+def _project_root() -> Optional[Path]:
+    try:
+        from app.config import get_current_config
+        return Path(get_current_config().project_root_dir)
+    except Exception:
+        return None
+
+
+def _backend_path(p) -> Path:
+    """Resolve a config-relative path, preferring <root>/backend/<p> when the
+    backend dir exists (shipped paths like data/... live under backend/)."""
+    p = Path(p)
+    if p.is_absolute():
+        return p
+    root = _project_root()
+    if root is not None:
+        if (root / "backend").is_dir():
+            return root / "backend" / p
+        return root / p
+    return p
+
+
+def _calibration_file() -> str:
+    """Calibration npz path: pavement_analysis.camera_calibration.calibration_file
+    from config when set, resolved backend-aware; first existing candidate wins."""
+    rel = "calibration_params.npz"
+    try:
+        from app.config import get_current_config
+        rel = ((get_current_config().pavement_analysis or {})
+               .get("camera_calibration", {}) or {}).get("calibration_file", rel)
+    except Exception:
+        pass
+    p = Path(rel)
+    if p.is_absolute():
+        return str(p) if p.exists() else str(p)
+    root = _project_root()
+    candidates = ([root / "backend" / p, root / p] if root is not None else []) + [p]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return str(candidates[-1]) if candidates else str(p)
 
 # Module-level variables to hold loaded models and parameters
 _ml_model = None
@@ -48,21 +94,22 @@ def get_ml_model():
 def get_calibration_params():
     global _calibration_params, _params_initialized
     if not _params_initialized:
-        if os.path.exists(CALIBRATION_FILE_PATH):
+        calib_path = _calibration_file()
+        if os.path.exists(calib_path):
             try:
-                _calibration_params = load_calibration_params(CALIBRATION_FILE_PATH)
+                _calibration_params = load_calibration_params(calib_path)
                 logger.info(
-                    f"Successfully loaded camera calibration parameters from {CALIBRATION_FILE_PATH}"
+                    f"Successfully loaded camera calibration parameters from {calib_path}"
                 )
             except Exception as e:
                 logger.error(
-                    f"Failed to load camera calibration parameters from {CALIBRATION_FILE_PATH}: {e}",
+                    f"Failed to load camera calibration parameters from {calib_path}: {e}",
                     exc_info=True,
                 )
                 _calibration_params = None
         else:
             logger.warning(
-                f"Camera calibration file not found at {CALIBRATION_FILE_PATH}. Proceeding without specific calibration."
+                f"Camera calibration file not found at {calib_path}. Proceeding without specific calibration."
             )
         _params_initialized = True
     return _calibration_params
@@ -102,10 +149,18 @@ async def analyze_pavement_image(
         calibration_params = get_calibration_params()
         ml_model = get_ml_model()
 
-        # Define storage paths
+        # Define storage paths (config storage.image_output_dir /
+        # report_output_dir, resolved backend-aware; fall back to the
+        # historical ./data/... defaults)
+        storage_cfg = {}
+        try:
+            from app.config import get_current_config
+            storage_cfg = get_current_config().storage or {}
+        except Exception:
+            pass
         config = {
-            "image_output_dir": "./data/pavement_images/analyzed",
-            "report_output_dir": "./data/pavement_reports",
+            "image_output_dir": str(_backend_path(Path(storage_cfg.get("image_output_dir", "data/pavement_images")) / "analyzed")),
+            "report_output_dir": str(_backend_path(storage_cfg.get("report_output_dir", "data/pavement_reports"))),
         }
         image_output_dir = Path(config["image_output_dir"])
         report_output_dir = Path(config["report_output_dir"])
@@ -311,8 +366,8 @@ async def analyze_pavement_image(
         distress_data_for_pci = [
             {
                 "type": d.type.value,
-                "measurements": d.measurements,
-                "severity": d.measurements.get("severity", "LOW"),
+                "measurements": d.measurements.model_dump(),
+                "severity": d.measurements.model_dump().get("severity", "LOW"),
             }
             for d in processed_distresses
         ]
@@ -326,16 +381,26 @@ async def analyze_pavement_image(
         cv2.imwrite(str(final_image_for_report_path), undistorted_image)
         logger.info(f"Base image for report saved to: {final_image_for_report_path}")
 
-        # 7. Generate report (JSON and visualizations)
-        report_files_dict = await _run_in_executor(
-            generate_analysis_report,
-            image_path=str(final_image_for_report_path),
-            distresses=[dist.model_dump() for dist in processed_distresses],
-            pci_score=pci_score,
-            output_dir=str(report_output_dir),
-            base_filename=base_filename,
-        )
-        logger.info(f"Analysis report generated: {report_files_dict.get('report')}")
+        # 7. Generate report (JSON and visualizations). report_generator needs
+        # matplotlib, which is an optional install -- degrade to "no report
+        # files" instead of failing the whole analysis.
+        try:
+            from .reporting.report_generator import generate_analysis_report as report_fn
+        except Exception as e:
+            logger.warning(f"Report generator unavailable ({e}); analysis result returned without report files.")
+            report_fn = None
+        if report_fn is not None:
+            report_files_dict = await _run_in_executor(
+                report_fn,
+                image_path=str(final_image_for_report_path),
+                distresses=[dist.model_dump() for dist in processed_distresses],
+                pci_score=pci_score,
+                output_dir=str(report_output_dir),
+                base_filename=base_filename,
+            )
+            logger.info(f"Analysis report generated: {report_files_dict.get('report')}")
+        else:
+            report_files_dict = {}
 
         # Construct response
         static_image_path_prefix = (

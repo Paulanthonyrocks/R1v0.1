@@ -50,6 +50,9 @@ export const OriginDestinationMatrix: React.FC<ODMatrixProps> = ({ hours = 1 }) 
         }
         
         const interval = setInterval(() => {
+            // Skip background-tab polls: they only burn the /api/v1/analytics
+            // rate-limit budget (10/min base) without anyone watching.
+            if (document.hidden) return;
             if (token) fetchData();
         }, 30000);
         

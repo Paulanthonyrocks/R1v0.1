@@ -12,6 +12,7 @@ export interface APIError extends Error {
     status?: number;
     statusText?: string;
     data?: unknown;
+    retryAfter?: number;
 }
 
 export class APIClient {
@@ -142,6 +143,8 @@ export class APIClient {
         const error = new Error(`API Error: ${response.status} ${response.statusText}`) as APIError;
         error.status = response.status;
         error.statusText = response.statusText;
+        const retryAfter = Number(response.headers.get('retry-after'));
+        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfter = retryAfter;
         const text = await response.text();
         try {
             error.data = JSON.parse(text);
@@ -191,6 +194,13 @@ export class APIClient {
             if ((status === 502 || status === 503 || status === 504 || status === 511) && retryAttempt < 4
                 && APIClient.RETRYABLE_METHODS.has(method)) {
                 await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, retryAttempt)));
+                return this.request<T>(path, options, retryAttempt + 1, authReplayed);
+            }
+            // 429: honor the backend's retry-after (capped at 60s), bounded retries,
+            // idempotent methods only — polling widgets must not hard-fail on rate limits.
+            if (status === 429 && retryAttempt < 2 && APIClient.RETRYABLE_METHODS.has(method)) {
+                const retryAfterSec = Math.min((error as APIError).retryAfter ?? 5, 60);
+                await new Promise((resolve) => setTimeout(resolve, retryAfterSec * 1000 * (retryAttempt + 1)));
                 return this.request<T>(path, options, retryAttempt + 1, authReplayed);
             }
             if (error instanceof Error && error.name === 'AbortError') {

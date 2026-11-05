@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState, useMemo, useImperativeHandle, forwa
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Layers, Activity, AlertTriangle, Video, Map as MapIcon, ChevronRight, X, Zap, Loader2, Search, Bell, Navigation, Crosshair, Pencil, Trash2 } from 'lucide-react';
@@ -156,10 +157,14 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   const [roadMsg, setRoadMsg] = useState('');
 
   // Road registry powers search filters (road:, dir:with-road) and the
-  // placement panel dropdown; load once on mount.
+  // placement panel dropdown. Gated on token: firing before auth resolves made
+  // the request go out without Authorization -> 401, and the [] deps meant the
+  // registry stayed empty for the whole session.
+  const { token } = useAuth();
   useEffect(() => {
+    if (!token) return;
     roadsService.listRoads().then(setRoads).catch(() => setRoads([]));
-  }, []);
+  }, [token]);
   const [placingSaving, setPlacingSaving] = useState(false);
   const [placingMsg, setPlacingMsg] = useState<string>('');
   // Register-road mini-form in the placement panel (dead-end case: no road
@@ -582,11 +587,15 @@ const LeafletMap = forwardRef(({ activeLayer, activeLayers, vehicles, vehiclesVe
   // phase-colored markers at signals and orange segments for work-zones.
   useEffect(() => {
     let cancelled = false;
-    const load = () => roadsService.getAssets().then(a => { if (!cancelled) setAssets(a); }).catch(() => {});
-    load();
+    const load = () => {
+      // Hidden tab: skip the poll, it only burns rate-limit budget.
+      if (document.hidden) return;
+      roadsService.getAssets().then(a => { if (!cancelled) setAssets(a); }).catch(() => {});
+    };
+    if (token) load();
     const t = setInterval(load, 15000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     const map = leafletMap.current;

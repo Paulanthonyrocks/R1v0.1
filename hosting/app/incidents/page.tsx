@@ -136,8 +136,8 @@ export default function IncidentsPage() {
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- initial backend load on mount + 30s polling subscription; the sanctioned effect use
         fetchIncidents();
-        // Refresh every 30s
-        const interval = setInterval(fetchIncidents, 30000);
+        // Refresh every 30s (skip while the tab is hidden — saves rate-limit budget)
+        const interval = setInterval(() => { if (!document.hidden) fetchIncidents(); }, 30000);
         return () => clearInterval(interval);
         // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchIncidents reads live filter state per poll; deps below re-arm the timer
     }, [statusFilter, severityFilter, typeFilter]);

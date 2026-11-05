@@ -41,8 +41,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children, requiredRole }) => {
 
     if (!user) {
       // User is not authenticated, redirect to login
-      console.log('AuthGuard: User not authenticated, redirecting to login.');
-      const currentPath = pathname ?? '/';
+            const currentPath = pathname ?? '/';
       sessionStorage.setItem('redirectPath', currentPath);
       router.push('/login');
       return;

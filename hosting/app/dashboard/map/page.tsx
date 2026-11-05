@@ -10,6 +10,8 @@ import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
 import { feedService } from '@/lib/services/feedService';
 import { geocodeService, GeocodeResult } from '@/lib/services/geocodeService';
 import DashboardHeader from '@/components/dashboard/DashboardHeader';
+import AuthGuard from '@/components/auth/AuthGuard';
+import { UserRole } from '@/lib/auth/roles';
 
 // Dynamically import TrafficMap to avoid SSR issues with THREE.js and Leaflet
 const DynamicTrafficMap = dynamic(() => import('@/components/TrafficMap'), {
@@ -86,6 +88,7 @@ const LiveMapPage: React.FC = () => {
   });
 
   return (
+    <AuthGuard requiredRole={UserRole.VIEWER}>
     <div className="flex flex-col h-screen bg-industrial-bg overflow-hidden">
       <DashboardHeader />
       <div className="relative flex-1 bg-industrial-bg overflow-hidden">
@@ -395,6 +398,7 @@ const LiveMapPage: React.FC = () => {
         <DynamicTrafficMap ref={mapRef} activeLayer={activeLayer} activeLayers={activeLayers} showAllUnits={showAllUnits} calibrating={calibrating} />
       </div>
     </div>
+    </AuthGuard>
   );
 };
 

@@ -401,6 +401,23 @@ class TrafficMonitor:
 
         session_avg_congestion_score = self.session_metrics["congestion_score_sum"] / self.session_metrics["congestion_score_samples"] if self.session_metrics["congestion_score_samples"] > 0 else 0.0
 
+        # Speed-calibration confidence (planning provenance): tracks carry
+        # speed_calibrated from core_module._pixel_based_speed (True only when
+        # a homography is available). When uncalibrated, speeds are pixel-space
+        # approximations on a flat pixels-per-meter scale -- publish them with
+        # confidence="low", never as ground truth. None when no speed samples.
+        cal_flags = [
+            bool(d.get("speed_calibrated"))
+            for d in self.tracked_vehicles.values()
+            if d.get("speed") is not None
+        ]
+        if cal_flags:
+            speed_calibrated = all(cal_flags)
+            speed_confidence = "high" if speed_calibrated else "low"
+        else:
+            speed_calibrated = None
+            speed_confidence = "unknown"
+
         lane_occupancy: Dict[int, float] = {}
         lane_queues: Dict[int, float] = {}
         
@@ -445,5 +462,7 @@ class TrafficMonitor:
             "vehicle_type_counts": vehicle_type_counts,
             "lane_occupancy": lane_occupancy,
             "queue_lengths": lane_queues,
-            "anomalies": self.anomalies[-5:]
+            "anomalies": self.anomalies[-5:],
+            "speed_calibrated": speed_calibrated,
+            "speed_confidence": speed_confidence,
         }

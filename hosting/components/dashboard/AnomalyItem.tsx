@@ -27,6 +27,9 @@ const AnomalyItem = React.memo((props: AnomalyItemProps & { numericId?: number; 
   const config = severityConfig[severity] || severityConfig.Anomaly;
   const IconComponent = config.icon;
   const displayTime = new Date(timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  // Wrong-way safety alerts (backend safety_monitor subtype "wrong_way") get a
+  // dedicated badge so they stand out from generic criticals in the feed.
+  const isWrongWay = /wrong.?way/i.test(message || '') || /wrong.?way/i.test((rest as { description?: string }).description || '');
 
   const handleSelect = () => {
     if (onSelect) {
@@ -100,7 +103,13 @@ const AnomalyItem = React.memo((props: AnomalyItemProps & { numericId?: number; 
           <p className="text-sm font-medium truncate tracking-wide font-lcd group-hover:text-lcd-green transition-colors" title={message}>
             {message}
           </p>
-          {status && (
+          <div className="flex items-center gap-1 shrink-0">
+            {isWrongWay && (
+              <span className="text-[8px] px-1 border border-fuchsia-500/60 text-fuchsia-400 bg-fuchsia-500/10 font-mono uppercase animate-pulse">
+                Wrong way
+              </span>
+            )}
+            {status && (
             <span className={cn(
                 "text-[8px] px-1 border font-mono uppercase transition-colors", 
                 statusColors[status] || statusColors.REPORTED
@@ -108,6 +117,7 @@ const AnomalyItem = React.memo((props: AnomalyItemProps & { numericId?: number; 
               {status}
             </span>
           )}
+          </div>
         </div>
         <div className="flex items-center gap-3 text-[10px] opacity-50 group-hover:opacity-90 mt-1 tracking-widest font-lcd">
           <span className="flex items-center gap-1">

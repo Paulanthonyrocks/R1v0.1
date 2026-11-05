@@ -25,7 +25,8 @@ from app.models.analysis import (
 )
 from app.models.common import APIResponse
 from app.utils.database import DatabaseManager
-from app.ml import traffic_analyzer # Import the traffic_analyzer module
+from app.utils.planning_metrics import summarize_series_rows
+from app.ml import traffic_analyzer # calculate_rolling_averages / detect_simple_anomaly (pure pandas, still used)
 from app.services.analytics_service import AnalyticsService # Ensure AnalyticsService is imported
 from datetime import datetime, timedelta, timezone # Import datetime, timedelta, timezone
 
@@ -41,16 +42,18 @@ class GetAverageTrafficRequest(BaseModel):
  end_time: datetime
 
 class AverageTrafficResponse(BaseModel):
- average_vehicle_count: float
- average_speed: float
+    average_vehicle_count: Optional[float] = None
+    average_speed: Optional[float] = None
+    speed_confidence: Optional[str] = None  # "high"|"low"|"unknown" from feed_metrics extra
 
 class IdentifyTrafficPatternRequest(BaseModel):
- sensor_id: str
- time_range: str # e.g., 'rush_hour', 'midnight'
+    sensor_id: str
+    time_range: str # e.g., 'rush_hour', 'midnight'
 
 class TrafficPatternResponse(BaseModel):
- average_vehicle_count: float
- average_speed: float
+    average_vehicle_count: Optional[float] = None
+    average_speed: Optional[float] = None
+    speed_confidence: Optional[str] = None
 
 class SimpleAnomalyDetectionRequest(BaseModel):
  current_data: Dict[str, float] = Field(..., description="Current traffic data with keys like 'vehicle_count' and 'average_speed'")
@@ -207,6 +210,42 @@ async def get_all_nodes_congestion_data(
         raise OperationFailed(detail="Failed to retrieve node congestion data.")
 
 # --- New Traffic Analysis Endpoints ---
+#
+# Rewired 2026-11: these previously called db.get_collection('processed_traffic_data')
+# -- a MongoDB-only method the active DatabaseManager does not implement, so every
+# call raised and returned 500 (MongoDB is disabled in config). They now read the
+# persisted feed_metrics table via DatabaseManager.get_feed_metrics_range, which is
+# where the pipeline actually writes (per-frame counts/speeds + planning extras).
+
+async def _fetch_metrics_series(
+    db: DatabaseManager,
+    sensor_ids: List[str],
+    start_time: datetime,
+    end_time: datetime,
+) -> List[Dict[str, Any]]:
+    """feed_metrics rows for the given sensors over [start_time, end_time]."""
+    rows: List[Dict[str, Any]] = []
+    for sid in sensor_ids:
+        try:
+            fetched = await db.get_feed_metrics_range(
+                sid, start_time.timestamp(), end_time.timestamp()
+            )
+        except Exception as e:
+            logger.warning(f"feed_metrics fetch failed for sensor {sid}: {e}")
+            continue
+        for row in fetched:
+            row["sensor_id"] = sid
+            rows.append(row)
+
+    def _ts_key(r):
+        ts = r.get("timestamp")
+        if hasattr(ts, "timestamp"):
+            return ts.timestamp()
+        return ts or 0
+
+    rows.sort(key=_ts_key)
+    return rows
+
 
 @router.post(
     "/analyze/average_traffic",
@@ -216,24 +255,26 @@ async def get_all_nodes_congestion_data(
 )
 async def get_average_traffic(
     request_data: GetAverageTrafficRequest = Body(...),
-    db: DatabaseManager = Depends(get_db_manager) # Assuming get_db provides DatabaseManager
+    db: DatabaseManager = Depends(get_db_manager)
 ) -> APIResponse[AverageTrafficResponse]:
     logger.info(f"POST /analyze/average_traffic endpoint called with sensor_ids: {request_data.sensor_ids}, time range: {request_data.start_time} to {request_data.end_time}")
     try:
-        # Assuming processed data is stored in a collection accessible via db.processed_data_collection
-        # You might need to adjust this based on your DatabaseManager implementation
-        processed_collection = db.get_collection('processed_traffic_data') # Example collection access
-        
-        avg_data = await traffic_analyzer.get_average_traffic_data(
-            processed_collection,
-            request_data.sensor_ids,
-            request_data.start_time,
-            request_data.end_time
+        rows = await _fetch_metrics_series(
+            db, request_data.sensor_ids, request_data.start_time, request_data.end_time
         )
-        return APIResponse.success(data=AverageTrafficResponse(**avg_data), message="Average traffic data retrieved successfully.")
+        summary = summarize_series_rows(rows)
+        return APIResponse.success(
+            data=AverageTrafficResponse(
+                average_vehicle_count=summary["average_vehicle_count"],
+                average_speed=summary["average_speed"],
+                speed_confidence=summary["speed_confidence"],
+            ),
+            message="Average traffic data retrieved successfully.",
+        )
     except Exception as e:
         logger.error(f"Error getting average traffic data: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get average traffic data: {e}")
+
 
 @router.post(
     "/analyze/pattern",
@@ -243,22 +284,51 @@ async def get_average_traffic(
 )
 async def identify_traffic_pattern_endpoint(
     request_data: IdentifyTrafficPatternRequest = Body(...),
-    db: DatabaseManager = Depends(get_db_manager) # Assuming get_db provides DatabaseManager
+    db: DatabaseManager = Depends(get_db_manager)
 ) -> APIResponse[TrafficPatternResponse]:
     logger.info(f"POST /analyze/pattern endpoint called for sensor_id: {request_data.sensor_id}, time_range: {request_data.time_range}")
     try:
-         # Assuming processed data is stored in a collection accessible via db.processed_data_collection
-        processed_collection = db.get_collection('processed_traffic_data') # Example collection access
+        # Historical windows for the requested pattern (same windows the old
+        # Mongo implementation used): rush_hour = 7-9am and 4-6pm on the past
+        # 5 weekdays; midnight = 0-1am on the past 7 days.
+        now = datetime.now(timezone.utc)
+        windows: List = []
+        if request_data.time_range == "rush_hour":
+            for i in range(1, 6):
+                past_day = now - timedelta(days=i)
+                if past_day.weekday() < 5:
+                    windows.append((past_day.replace(hour=7, minute=0, second=0, microsecond=0),
+                                    past_day.replace(hour=9, minute=0, second=0, microsecond=0)))
+                    windows.append((past_day.replace(hour=16, minute=0, second=0, microsecond=0),
+                                    past_day.replace(hour=18, minute=0, second=0, microsecond=0)))
+        elif request_data.time_range == "midnight":
+            for i in range(1, 8):
+                past_day = now - timedelta(days=i)
+                windows.append((past_day.replace(hour=0, minute=0, second=0, microsecond=0),
+                                past_day.replace(hour=1, minute=0, second=0, microsecond=0)))
+        else:
+            logger.warning(f"Unknown time_range pattern: {request_data.time_range}. Cannot identify pattern.")
+            return APIResponse.success(
+                data=TrafficPatternResponse(average_vehicle_count=None, average_speed=None),
+                message=f"Unknown time_range pattern: {request_data.time_range}",
+            )
 
-        pattern_data = await traffic_analyzer.identify_traffic_pattern(
-            processed_collection,
-            request_data.sensor_id,
-            request_data.time_range
+        rows: List[Dict[str, Any]] = []
+        for start_t, end_t in windows:
+            rows.extend(await _fetch_metrics_series(db, [request_data.sensor_id], start_t, end_t))
+        summary = summarize_series_rows(rows)
+        return APIResponse.success(
+            data=TrafficPatternResponse(
+                average_vehicle_count=summary["average_vehicle_count"],
+                average_speed=summary["average_speed"],
+                speed_confidence=summary["speed_confidence"],
+            ),
+            message="Traffic pattern identified successfully.",
         )
-        return APIResponse.success(data=TrafficPatternResponse(**pattern_data), message="Traffic pattern identified successfully.")
     except Exception as e:
         logger.error(f"Error identifying traffic pattern: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to identify traffic pattern: {e}")
+
 
 @router.post(
     "/analyze/anomaly",
@@ -268,31 +338,45 @@ async def identify_traffic_pattern_endpoint(
 )
 async def detect_simple_anomaly_endpoint(
     request_data: SimpleAnomalyDetectionRequest = Body(...),
- analytics_service: AnalyticsService = Depends(get_analytics_service), # Add AnalyticsService dependency
- db: DatabaseManager = Depends(get_db_manager) # Add DatabaseManager dependency
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+    db: DatabaseManager = Depends(get_db_manager)
 ) -> APIResponse[SimpleAnomalyDetectionResponse]:
     logger.info(f"POST /analyze/anomaly endpoint called with threshold: {request_data.threshold}")
 
-    # --- Fetch historical time series data ---
+    # --- Fetch historical time series data (last hour, persisted feed_metrics) ---
     end_time = datetime.now(timezone.utc)
-    start_time = end_time - timedelta(hours=1) # Fetch data for the last 1 hour
-    window_size = '10min' # Define rolling window size
+    start_time = end_time - timedelta(hours=1)
+    window_size = '10min'
 
     logger.info(f"Fetching historical time series data for sensor {request_data.sensor_id} from {start_time} to {end_time}")
-    processed_collection = db.get_collection('processed_traffic_data') # Example collection access
-    history_data_df = traffic_analyzer.get_time_series_data(
-        processed_collection,
-        request_data.sensor_id,
-        start_time,
-        end_time
-    )
+    rows = await _fetch_metrics_series(db, [request_data.sensor_id], start_time, end_time)
 
-    logger.info(f"Calculating rolling averages with window size: {window_size}")
-    history_data_df = traffic_analyzer.calculate_rolling_averages(history_data_df, window_size)
+    if rows:
+        df = pd.DataFrame([
+            {
+                "timestamp": r.get("timestamp"),
+                "vehicle_count": r.get("vehicle_count") or 0,
+                "average_speed": r.get("average_speed") or 0.0,
+            }
+            for r in rows
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.set_index("timestamp").sort_index()
+        logger.info(f"Calculating rolling averages with window size: {window_size}")
+        df = traffic_analyzer.calculate_rolling_averages(df, window_size)
+        # Historical pattern = mean of the fetched window (the old code passed
+        # the rolling DataFrame itself to detect_simple_anomaly, whose .get()
+        # on a DataFrame always returned None -> is_anomaly was always False).
+        historical_pattern = {
+            "average_vehicle_count": float(df["vehicle_count"].mean()),
+            "average_speed": float(df["average_speed"].mean()),
+        }
+    else:
+        logger.warning(f"No historical feed_metrics for sensor {request_data.sensor_id} in the last hour.")
+        historical_pattern = {"average_vehicle_count": None, "average_speed": None}
 
-    # --- Detect simple anomaly using current data and historical time series with rolling averages ---
     is_anomaly = traffic_analyzer.detect_simple_anomaly(
- request_data.current_data, history_data_df, request_data.threshold
+        request_data.current_data, historical_pattern, request_data.threshold
     )
 
     if is_anomaly:
@@ -315,6 +399,7 @@ async def detect_simple_anomaly_endpoint(
 
     return APIResponse.success(data=SimpleAnomalyDetectionResponse(is_anomaly=is_anomaly), message="Anomaly detection performed successfully.")
 
+
 # --- New Time Series Analysis Endpoints ---
 
 @router.post(
@@ -331,26 +416,20 @@ async def get_time_series_traffic_data(
     if not request_data.sensor_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one sensor_id must be provided.")
 
-    # traffic_analyzer.get_time_series_data expects a single sensor_id
-    # For multiple sensor_ids, we'll process the first one for now or you can modify
-    # the analyzer function to handle multiple sensors and potentially return a concatenated or grouped DataFrame.
-    # For this implementation, we'll process the first sensor and log a warning if multiple are provided.
-    sensor_id_to_process = request_data.sensor_ids[0]
-    if len(request_data.sensor_ids) > 1:
-        logger.warning(f"Multiple sensor_ids provided, processing only the first one: {sensor_id_to_process}")
-
     try:
-        processed_collection = db.get_collection('processed_traffic_data')
-
-        dataframe = traffic_analyzer.get_time_series_data(
-            processed_collection,
-            sensor_id_to_process,
-            request_data.start_time,
-            request_data.end_time
+        rows = await _fetch_metrics_series(
+            db, request_data.sensor_ids, request_data.start_time, request_data.end_time
         )
-
-        # Convert DataFrame to a list of dictionaries for JSON response
-        time_series_data = to_jsonable(dataframe.reset_index().to_dict('records'))
+        time_series_data = []
+        for r in rows:
+            ts = r.get("timestamp")
+            time_series_data.append(to_jsonable({
+                "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+                "sensor_id": r.get("sensor_id"),
+                "vehicle_count": r.get("vehicle_count"),
+                "average_speed": r.get("average_speed"),
+                "congestion_score": r.get("congestion_score"),
+            }))
 
         return APIResponse.success(data=TimeSeriesDataResponse(data=time_series_data), message="Time series data retrieved successfully.")
     except Exception as e:

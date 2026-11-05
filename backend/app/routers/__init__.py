@@ -4,6 +4,7 @@ from . import config
 from . import events
 from . import feeds
 from . import incidents
+from . import pavement
 from . import routing
 from . import signals
 from . import video
@@ -20,6 +21,7 @@ __all__ = [
     "events",
     "feeds",
     "incidents",
+    "pavement",
     "routing",
     "signals",
     "video",

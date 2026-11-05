@@ -32,8 +32,7 @@ const AddFeedForm = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        console.log("[AddFeedDialog] Submitting form...");
-        setLoading(true);
+                setLoading(true);
         setError(null);
 
         try {
@@ -53,8 +52,7 @@ const AddFeedForm = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
                 throw new Error(typeof detail === 'string' ? detail : 'Failed to add feed');
             }
 
-            console.log("[AddFeedDialog] Success, closing dialog");
-            setOpen(false);
+                        setOpen(false);
         } catch (err: any) {
             console.error("[AddFeedDialog] Error:", err.message);
             setError(err.message);

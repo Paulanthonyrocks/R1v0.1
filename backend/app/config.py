@@ -154,6 +154,7 @@ class AppConfig(BaseSettings):
     vehicle_detection: Dict[str, Any] = {}
     video_processing: Dict[str, Any] = {}
     vis_options_default: List[str] = []
+    vru_analysis: Dict[str, Any] = {}
     weather_service: Dict[str, Any] = {}
     
     model_config = SettingsConfigDict(

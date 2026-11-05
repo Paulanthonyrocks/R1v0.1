@@ -13,11 +13,27 @@ import DashboardShell from '@/components/dashboard/DashboardShell';
 import { OriginDestinationMatrix } from '@/components/dashboard/OriginDestinationMatrix';
 import { TrafficHeatmap } from '@/components/dashboard/TrafficHeatmap';
 import { SystemHealthMonitor } from '@/components/dashboard/SystemHealthMonitor';
+import AIInsightsPanel from '@/components/dashboard/AIInsightsPanel';
+import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 
 const AnalyticsPage = () => {
   const { kpis, feeds, isConnected, isReady } = useRealtimeUpdates();
+  const wsClient = useWebSocket();
   const [kpiHistory, setKpiHistory] = useState<TrendDataPoint[]>([]);
   const [timeRange, setTimeRange] = useState<'day' | 'week' | 'month'>('day');
+  // Re-render every 5s so the latency readout tracks the WS ping average.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick(x => x + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const latencyMs = Math.round(wsClient?.getConnectionQuality?.().averageLatency ?? 0);
+  const runningFeeds = (feeds || []).filter(f => f.status === 'running').length;
+  // Live metrics for the insights panel (was hardcoded text before).
+  const insightMetrics = useMemo(() => kpis ? {
+    average_speed_kmh: kpis.average_speed_kmh ?? 0,
+    total_vehicles: kpis.total_flow ?? 0,
+  } : null, [kpis]);
 
   useEffect(() => {
     if (kpis) {
@@ -202,20 +218,10 @@ const AnalyticsPage = () => {
                       <span>Neural Insights</span>
                   </div>
                   <div className="p-6">
-                    <ul className="space-y-6 text-xs font-bold uppercase tracking-tight">
-                        <li className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
-                            <TrendingUp className="text-yellow-600 shrink-0" size={18} />
-                            <span>Rush hour saturation expected in +42m based on ingress acceleration.</span>
-                        </li>
-                        <li className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10">
-                            <Activity className="text-green-600 shrink-0" size={18} />
-                            <span>100% Signal integrity maintained across all edge nodes.</span>
-                        </li>
-                        <li className="flex gap-4 p-3 bg-lcd-text/5 border border-lcd-text/10 text-red-700">
-                            <TrendingDown className="text-red-600 shrink-0" size={18} />
-                            <span>Corridor B-14 reporting sub-optimal velocity (12km/h).</span>
-                        </li>
-                    </ul>
+                    <AIInsightsPanel
+                      metrics={insightMetrics}
+                      feedName={feeds[0]?.name || feeds[0]?.feed_id || 'ALL FEEDS'}
+                    />
                   </div>
               </div>
               
@@ -226,25 +232,25 @@ const AnalyticsPage = () => {
                   <div className="p-6 space-y-6">
                       <div className="space-y-2">
                           <div className="flex justify-between items-center text-[10px] font-black uppercase">
-                              <span className="opacity-60">AI Confidence Index</span>
-                              <span>94.2%</span>
+                              <span className="opacity-60">Active Feeds</span>
+                              <span>{runningFeeds}/{(feeds || []).length}</span>
                           </div>
                           <div className="w-full bg-lcd-text/10 h-3 border-2 border-lcd-text/20 overflow-hidden">
-                              <div className="bg-primary h-full shadow-[0_0_10px_var(--lcd-text)]" style={{ width: '94.2%' }}></div>
+                              <div className="bg-primary h-full shadow-[0_0_10px_var(--lcd-text)]" style={{ width: `${(feeds || []).length ? Math.round(100 * runningFeeds / feeds.length) : 0}%` }}></div>
                           </div>
                       </div>
                       <div className="space-y-2">
                           <div className="flex justify-between items-center text-[10px] font-black uppercase">
                               <span className="opacity-60">Network Latency (Avg)</span>
-                              <span>142ms</span>
+                              <span>{latencyMs > 0 ? `${latencyMs}ms` : '—'}</span>
                           </div>
                           <div className="w-full bg-lcd-text/10 h-3 border-2 border-lcd-text/20 overflow-hidden">
-                              <div className="bg-primary h-full shadow-[0_0_10px_var(--lcd-text)]" style={{ width: '15%' }}></div>
+                              <div className="bg-primary h-full shadow-[0_0_10px_var(--lcd-text)]" style={{ width: `${Math.min(100, latencyMs / 5)}%` }}></div>
                           </div>
                       </div>
                       <div className="pt-2 flex items-center gap-2 text-[8px] font-black uppercase opacity-40">
-                          <div className="h-1.5 w-1.5 rounded-full bg-green-600 animate-pulse" />
-                          Data Validation Success // checksum: 0xFD21
+                          <div className={cn("h-1.5 w-1.5 rounded-full animate-pulse", isConnected ? "bg-green-600" : "bg-red-600")} />
+                          {isConnected ? 'WS LINK ACTIVE' : 'WS OFFLINE — live data paused'}
                       </div>
                   </div>
               </div>

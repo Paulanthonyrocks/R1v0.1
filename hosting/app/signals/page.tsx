@@ -18,6 +18,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { APIClient } from '@/lib/api/APIClient';
 import { getApiBrowserBaseURL } from '@/lib/api/backendBaseUrl';
+import { errorNotifier } from '@/lib/utils/errorNotifier';
 import { WorkZone, fetchWorkZones } from '@/lib/safetyHub';
 
 interface Signal {
@@ -80,10 +81,10 @@ const SignalsPage = () => {
     try {
       const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
       await apiClient.post(`/api/v1/signals/${selectedSignal}/set_phase`, { phase });
-      alert('Signal phase updated successfully');
+      errorNotifier.success('Signal phase updated successfully');
     } catch (error) {
       console.error('Error updating signal phase:', error);
-      alert('Network error while updating signal phase');
+      errorNotifier.error('Network error while updating signal phase');
     } finally {
       setLoading(false);
     }

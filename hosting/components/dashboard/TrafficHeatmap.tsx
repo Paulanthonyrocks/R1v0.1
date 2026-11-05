@@ -19,11 +19,12 @@ interface HeatmapProps {
 export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hours = 1, width = 640, height = 480 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [loading, setLoading] = useState(true);
+    const [rateLimited, setRateLimited] = useState(false);
     const { token } = useAuth();
 
     useEffect(() => {
         const fetchData = async () => {
-            if (!token) return;
+            if (!token || document.hidden) return;
             setLoading(true);
             try {
                 const apiClient = APIClient.getInstance({ baseURL: API_BASE_URL });
@@ -33,9 +34,12 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
                 const points = await apiClient.get<{center_x: number, center_y: number}[]>(
                     '/api/v1/analytics/heatmap', params
                 );
+                setRateLimited(false);
                 drawHeatmap(points);
             } catch (e) {
-                if (!String(e).includes("Failed to fetch")) console.error("Heatmap fetch failed:", e);
+                if ((e as { status?: number })?.status === 429) {
+                    setRateLimited(true); // APIClient already retried with retry-after; keep stale canvas
+                } else if (!String(e).includes("Failed to fetch")) console.error("Heatmap fetch failed:", e);
             } finally {
                 setLoading(false);
             }
@@ -85,7 +89,7 @@ export const TrafficHeatmap: React.FC<HeatmapProps> = ({ feed_id, global_id, hou
 
     return (
         <div className="relative matrix-card overflow-hidden bg-black aspect-video flex items-center justify-center">
-            {loading && <div className="absolute inset-0 z-10 flex items-center justify-center font-lcd text-xs animate-pulse bg-black/50">GENERATING HEATMAP...</div>}
+            {loading && <div className="absolute inset-0 z-10 flex items-center justify-center font-lcd text-xs animate-pulse bg-black/50">{rateLimited ? 'RATE LIMITED — RETRYING' : 'GENERATING HEATMAP...'}</div>}
             <canvas 
                 ref={canvasRef} 
                 width={width} 

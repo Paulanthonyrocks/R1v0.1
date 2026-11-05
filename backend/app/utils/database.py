@@ -17,11 +17,18 @@ from tenacity import (
 )
 from contextlib import asynccontextmanager, contextmanager
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 # Removed pymongo top-level imports
 from app.models.alerts import Alert  # Import the Alert model
+from app.models.base import Base
+# Import ORM models so their tables register on Base.metadata; create_all in
+# _initialize_sqlite_database creates the ones the raw schema doesn't cover.
+from app.models.analytics import PredictionLogModel  # noqa: F401
+from app.models.user_profile import UserProfileModel  # noqa: F401
+from app.models.route_history import RouteHistoryModel  # noqa: F401
+from app.models.proactive_suggestion_feedback_log import ProactiveSuggestionFeedbackLog  # noqa: F401
 import json  # Import json for serializing details
 import math
 
@@ -31,6 +38,19 @@ import math
 from app.utils.config import ConfigError
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_json_extra(raw: Any) -> Optional[Dict[str, Any]]:
+    """Parse a feed_metrics `extra` column (JSON TEXT) back to a dict."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (str, bytes)) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except (ValueError, TypeError):
+            return None
+    return None
 
 # Register SQLite adapters for numpy types to prevent them from being stored as blobs
 def _register_sqlite_adapters():
@@ -299,9 +319,33 @@ class DatabaseManager:
                 try:
                     await conn.execute(text("SELECT create_hypertable('location_metrics', 'timestamp', if_not_exists => TRUE);"))
                     logger.info("TimescaleDB 'location_metrics' hypertable verified/created.")
-                except Exception as e:
+                except Exception:
                     pass
-                    
+
+                # 5. Create feed_metrics table (dual-written by
+                # save_feed_metrics_batch -- previously missing here, so the
+                # Timescale branch of every feed_metrics write failed silently
+                # and only SQLite ever held the rows).
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS feed_metrics (
+                        feed_id TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        vehicles_count INTEGER,
+                        lanes_count INTEGER,
+                        avg_speed FLOAT,
+                        congestion_level FLOAT,
+                        latitude FLOAT,
+                        longitude FLOAT,
+                        anomalies TEXT,
+                        extra TEXT
+                    );
+                """))
+                try:
+                    await conn.execute(text("SELECT create_hypertable('feed_metrics', 'timestamp', if_not_exists => TRUE);"))
+                    logger.info("TimescaleDB 'feed_metrics' hypertable verified/created.")
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"Error creating TimescaleDB hypertables: {e}")
 
@@ -334,6 +378,16 @@ class DatabaseManager:
                 self._create_sqlite_tables(cursor)
                 self._migrate_sqlite_database(cursor)
                 conn.commit()
+            # Create ORM-model tables (user_profiles, route_history,
+            # proactive_suggestion_feedback_log, prediction_logs) that the raw
+            # statements above don't cover. create_all is checkfirst, so
+            # existing tables (e.g. a narrow prediction_logs) are left alone;
+            # _migrate_sqlite_database backfills their columns.
+            orm_engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
+            try:
+                Base.metadata.create_all(orm_engine)
+            finally:
+                orm_engine.dispose()
             logger.info("SQLite DB schema initialization check complete.")
             
             # Auto-prune on startup
@@ -387,6 +441,25 @@ class DatabaseManager:
                 except sqlite3.Error as e:
                     logger.error(f"Failed to add column {col_name}: {e}")
 
+        # prediction_logs shipped without the outcome-verification columns
+        # while PredictionLogModel and update_prediction_log read/write them.
+        cursor.execute("PRAGMA table_info(prediction_logs)")
+        pl_columns = [row[1] for row in cursor.fetchall()]
+
+        required_pl_columns = [
+            ("actual_outcome_type", "TEXT"),
+            ("actual_outcome_details", "TEXT"),
+            ("verified_at", "TEXT"),
+        ]
+
+        for col_name, col_type in required_pl_columns:
+            if col_name not in pl_columns:
+                logger.info(f"Adding missing column '{col_name}' to prediction_logs table.")
+                try:
+                    cursor.execute(f"ALTER TABLE prediction_logs ADD COLUMN {col_name} {col_type}")
+                except sqlite3.Error as e:
+                    logger.error(f"Failed to add column {col_name}: {e}")
+
     def _create_sqlite_tables(self, cursor: sqlite3.Cursor):
         # ... (This method remains unchanged)
         cursor.execute("""CREATE TABLE IF NOT EXISTS vehicle_tracks (
@@ -435,7 +508,10 @@ class DatabaseManager:
                 prediction_type TEXT,
                 predicted_value TEXT,
                 source_of_prediction TEXT,
-                outcome_verified INTEGER DEFAULT 0)"""
+                outcome_verified INTEGER DEFAULT 0,
+                actual_outcome_type TEXT,
+                actual_outcome_details TEXT,
+                verified_at TEXT)"""
         )
         cursor.execute("""CREATE TABLE IF NOT EXISTS processed_videos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -919,6 +995,69 @@ class DatabaseManager:
             return results
         except Exception as e:
             logger.error(f"SQLite aggregation failed: {e}")
+            return []
+
+    async def get_feed_metrics_range(self, feed_id: str, start_ts: float, end_ts: float) -> List[Dict]:
+        """
+        Per-frame feed_metrics rows for a feed within [start_ts, end_ts] (epoch
+        seconds). Powers the /analyze/* endpoints. TimescaleDB first (if
+        configured), SQLite fallback. Rows: {timestamp(datetime), vehicle_count,
+        average_speed, congestion_score, extra(dict|None)}.
+        """
+        if self.timescale_engine and self.timescale_session_factory:
+            try:
+                async with self.timescale_session_factory() as session:
+                    res = await session.execute(text("""
+                        SELECT timestamp, vehicles_count, avg_speed, congestion_level, extra
+                        FROM feed_metrics
+                        WHERE feed_id = :feed_id
+                          AND timestamp >= to_timestamp(:start_ts)
+                          AND timestamp <= to_timestamp(:end_ts)
+                        ORDER BY timestamp ASC
+                    """), {"feed_id": feed_id, "start_ts": start_ts, "end_ts": end_ts})
+                    rows = [dict(r._mapping) for r in res.fetchall()]
+                if rows:
+                    return [
+                        {
+                            "timestamp": r.get("timestamp"),
+                            "vehicle_count": r.get("vehicles_count"),
+                            "average_speed": r.get("avg_speed"),
+                            "congestion_score": r.get("congestion_level"),
+                            "extra": _parse_json_extra(r.get("extra")),
+                        }
+                        for r in rows
+                    ]
+            except Exception as e:
+                logger.warning(f"TimescaleDB feed_metrics range fetch failed, falling back to SQLite: {e}")
+
+        if not self.sqlite_db_path:
+            return []
+
+        sql = """
+            SELECT timestamp, vehicles_count, avg_speed, congestion_level, extra
+            FROM feed_metrics
+            WHERE feed_id = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
+        """
+        try:
+            results = []
+            with self.lock:
+                with self._get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(sql, (feed_id, start_ts, end_ts))
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        ts = row[0]
+                        results.append({
+                            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc) if isinstance(ts, (int, float)) else ts,
+                            "vehicle_count": row[1],
+                            "average_speed": row[2],
+                            "congestion_score": row[3],
+                            "extra": _parse_json_extra(row[4]),
+                        })
+            return results
+        except Exception as e:
+            logger.error(f"SQLite feed_metrics range failed: {e}")
             return []
 
     @db_write_retry_decorator

@@ -20,9 +20,13 @@ from app.utils.process import start_parent_monitor
 from .worker_utils import WorkerMetrics, serialize_tracked_vehicles, postprocess_detections
 # VRU protection (#7): vulnerable-user predicates available to pipeline.
 try:
-    from app.services.vru_service import vru_event, is_vru
+    from app.services.vru_service import (
+        vru_event, is_vru, frame_stats as vru_frame_stats,
+        VRU_CLASS_IDS as _VRU_CLASS_IDS,
+    )
 except Exception:
-    pass
+    _VRU_CLASS_IDS = {0: "person", 1: "bicycle"}
+    vru_event = is_vru = vru_frame_stats = None
 
 logger = logging.getLogger("Inference")
 
@@ -250,6 +254,10 @@ _TRACK_IDS_BY_FEED: Dict[str, set] = {}
 # the exit" diagnostic): vanish at frame center == detection stops mid-frame;
 # vanish at the edge == association/timing, not detectability.
 _TRACK_CENTERS_BY_FEED: Dict[str, Dict[str, tuple]] = {}
+# Per-feed VRU near-miss emission state: cumulative pair count + last fire
+# time (per-feed cooldown, see vru_analysis.feed_cooldown_seconds).
+_VRU_NM_TOTAL_BY_FEED: Dict[str, int] = {}
+_VRU_NM_LAST_FIRE_BY_FEED: Dict[str, float] = {}
 
 
 def _forward_frame(central_output_queue, meta: Dict, metrics_obj, worker_id: int) -> None:
@@ -538,8 +546,13 @@ def inference_worker(
     # TrackingManager alone decides which high-confidence boxes may spawn;
     # confidence-sorted caps below bound work and prioritize those boxes.
     vehicle_class_ids = set(vehicle_det_cfg.get("vehicle_class_ids", [2, 3, 5, 7]))
-# VRU wiring (#7): add 0 (person), 1 (bicycle) to detect pipeline when
-# vulnerable-user protection is enabled; vru_service predicates ready.
+# VRU wiring (#7): COCO classes 0 (person) / 1 (bicycle) are DETECTED alongside
+# vehicles but kept OUT of the vehicle tracker -- they must not inflate vehicle
+# counts, consume ReID budget, or trigger wrong-way/hard-braking logic. The
+# worker runs vru_service.frame_stats on them separately (near-miss pairs).
+    vru_class_ids = {c for c in vehicle_class_ids if c in _VRU_CLASS_IDS}
+    vru_cfg = config.get("vru_analysis", {}) or {}
+    vru_enabled = bool(vru_cfg.get("enabled", True)) and vru_frame_stats is not None and bool(vru_class_ids)
     display_conf_floor = float(vehicle_det_cfg.get("confidence_threshold", 0.25))
     low_conf_floor = float(vehicle_det_cfg.get("low_confidence_threshold", 0.1))
     batch_conf_floor = min(display_conf_floor, low_conf_floor)
@@ -1214,6 +1227,8 @@ def inference_worker(
 
                 # Batch inference
                 batch_detections_map: Dict[int, List] = {}
+                # VRU detections (person/bicycle) split out of the vehicle stream
+                batch_vru_map: Dict[int, List] = {}
                 # Flagged True if the batched model call itself raises (CUDA
                 # OOM, malformed batch, driver hiccup). In that case downstream
                 # frames fall back to CoreModule's own detector instead of being
@@ -1333,9 +1348,11 @@ def inference_worker(
                                     f"xmax={_xmax:.2f} "
                                     f"capped={_n_capped} postproc={len(formatted_dets)} cap={max_detections_per_frame}"
                                 )
-                            batch_detections_map[meta_idx] = formatted_dets
-                            # VRU activation (#7): full pipeline integration — class IDs 0/1
-                            # included in config; vru_service predicates available at module level.
+                            batch_detections_map[meta_idx] = [d for d in formatted_dets if int(d[1]) not in vru_class_ids]
+                            batch_vru_map[meta_idx] = [d for d in formatted_dets if int(d[1]) in vru_class_ids] if vru_enabled else []
+                            # VRU activation (#7): class IDs 0/1 detected via the
+                            # config class list; vru_service.frame_stats consumes the
+                            # split-out VRU dets after tracking (see below).
                     except Exception as e:
                         batch_inference_failed = True
                         logger.error(f"[Worker {worker_id}] Batch inference failed: {e}")
@@ -1517,11 +1534,51 @@ def inference_worker(
 
                         monitor.update_vehicles(vis_tracks)
 
+                        # VRU analysis (#7): per-frame counts + near-miss pairs
+                        # between VRU detections and tracked vehicles. Emitted
+                        # as a vru_near_miss anomaly at most once per feed per
+                        # cooldown window so the incident path cannot storm.
+                        vru_frame = None
+                        if vru_enabled and meta["should_detect"] and not batch_inference_failed:
+                            _vru_dets = batch_vru_map.get(i, [])
+                            if _vru_dets:
+                                vru_frame = vru_frame_stats(
+                                    _vru_dets, vis_tracks,
+                                    ttc_thresh=float(vru_cfg.get("near_miss_ttc_threshold_sec", 2.0)),
+                                    dist_thresh_px=float(vru_cfg.get("near_miss_dist_threshold_px", 60.0)),
+                                )
+                                _fkey = meta["feed_id"]
+                                if vru_frame["near_miss"]:
+                                    _VRU_NM_TOTAL_BY_FEED[_fkey] = _VRU_NM_TOTAL_BY_FEED.get(_fkey, 0) + vru_frame["near_miss"]
+                                    _now = time.time()
+                                    if _now - _VRU_NM_LAST_FIRE_BY_FEED.get(_fkey, 0.0) >= float(vru_cfg.get("feed_cooldown_seconds", 30.0)):
+                                        _VRU_NM_LAST_FIRE_BY_FEED[_fkey] = _now
+                                        _ev0 = vru_frame["events"][0] if vru_frame["events"] else {}
+                                        monitor.anomalies.append({
+                                            "type": "vru_near_miss",
+                                            "vehicle_id": _ev0.get("vehicle_id"),
+                                            "timestamp": _now,
+                                            "severity": "Warning",
+                                            "details": (
+                                                f"Near-miss: {_ev0.get('vru_class', 'vru')} vs vehicle "
+                                                f"{_ev0.get('vehicle_id')} ttc={_ev0.get('ttc_sec')}s "
+                                                f"dist={_ev0.get('min_dist_px')}px"
+                                            ),
+                                            "location": None,
+                                        })
+
                         # Merge operational metrics with traffic analytics
                         _stage_totals["reid"] += time.perf_counter() - _t_reid
                         _t_fwd = time.perf_counter()
                         combined_metrics = metrics_obj.to_dict()
                         combined_metrics.update(monitor.get_metrics())
+                        if vru_enabled:
+                            _fkey = meta["feed_id"]
+                            combined_metrics["vru"] = {
+                                "counts": vru_frame["counts"] if vru_frame else {},
+                                "near_miss_frame": vru_frame["near_miss"] if vru_frame else 0,
+                                "near_miss_total": _VRU_NM_TOTAL_BY_FEED.get(_fkey, 0),
+                            }
 
                         metrics_obj.mark_frame()  # increments frames_processed AND records rolling fps
 

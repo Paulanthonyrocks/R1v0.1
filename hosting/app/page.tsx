@@ -18,7 +18,7 @@ import {
 import { getAuth, signOut } from 'firebase/auth';
 import RetroModal from '@/components/ui/RetroModal';
 
-// Mock data for menu items
+// Main menu items
 const menuItems = [
   { href: '/dashboard', label: 'DASHBOARD', icon: <LayoutDashboard size={48} /> },
   { href: '/dashboard/map', label: 'LIVE MAP', icon: <Map size={48} /> },

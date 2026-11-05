@@ -907,6 +907,17 @@ safety_analytics:
   two_way_opposed_fraction: 0.20
   two_way_min_samples: 40
   two_way_sustain_calls: 400
+# Vulnerable road user analysis (person/bicycle detections from the shared
+# YOLO class list, wired in inference_worker via vru_service.frame_stats).
+# VRU detections are kept OUT of the vehicle tracker; near-miss pairs are
+# computed per frame in pixel space (TTC + min distance) and emitted as
+# anomalies at most once per feed per cooldown window.
+vru_analysis:
+  enabled: true
+  near_miss_ttc_threshold_sec: 2.0
+  near_miss_dist_threshold_px: 60.0
+  # Per-feed cooldown (seconds) between emitted vru_near_miss anomalies.
+  feed_cooldown_seconds: 30.0
 speed_limit: 60
 stopped_speed_threshold_kmh: 5
 storage:

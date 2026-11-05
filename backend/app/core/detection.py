@@ -227,13 +227,18 @@ class DetectionEngine:
         
         v_cfg = self.config.get("vehicle_detection", {})
         vehicle_class_ids = v_cfg.get("vehicle_class_ids", [2, 3, 5, 7])
+        # VRU classes (COCO 0/1) are detected by the batch path for separate
+        # VRU analysis; the fallback detector feeds the VEHICLE tracker only,
+        # so exclude them here (parity with inference_worker's split).
+        vru_ids = {0, 1} & set(vehicle_class_ids)
+        track_class_ids = [c for c in vehicle_class_ids if c not in vru_ids] or list(vehicle_class_ids)
         max_detections = max(1, int(v_cfg.get("max_detections_per_frame", 100)))
         # Bound recovery candidates at the model and again before quadratic
         # postprocessing, prioritizing high-confidence detections in both paths.
         try:
             results = self.model(
                 frame, conf=confidence_threshold, imgsz=self.imgsz,
-                classes=vehicle_class_ids, max_det=max_detections, verbose=False,
+                classes=track_class_ids, max_det=max_detections, verbose=False,
             )
         except Exception as e:
             logger.warning(f"Model inference failed: {e}")
@@ -249,7 +254,7 @@ class DetectionEngine:
                 
                 # Fix: Only include vehicle classes (car, motorcycle, bus, truck, etc.)
                 # Read from config to allow adaptation without code changes
-                if cls in vehicle_class_ids and conf >= confidence_threshold:
+                if cls in track_class_ids and conf >= confidence_threshold:
                     # Use original bbox for the result
                     orig_bbox = (b[0], b[1], b[2], b[3])
                     

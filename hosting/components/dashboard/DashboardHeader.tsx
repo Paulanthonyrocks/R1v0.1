@@ -6,31 +6,34 @@ import { usePathname } from 'next/navigation';
 import { Signal, BatteryFull, Map as MapIcon, BarChart3, LayoutGrid, Home, AlertTriangle, Camera, Navigation, TrendingUp, Terminal, Zap, CloudSun, ShieldCheck, Cpu, Activity, Radio } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useRealtimeUpdates } from '@/lib/hook/useRealtimeUpdates';
+import { useWebSocket } from '@/lib/websocket/WebSocketProvider';
 import { cn } from '@/lib/utils';
 
 const DashboardHeader: React.FC = () => {
     const pathname = usePathname();
-    const { isConnected } = useRealtimeUpdates();
-    const [time, setTime] = useState("");
-    const [coords, setCoords] = useState({ x: "00.00", y: "00.00" });
+    const { isConnected, feeds } = useRealtimeUpdates();
+    const wsClient = useWebSocket();
+    const [wsState, setWsState] = useState<string>(() => wsClient?.getConnectionState?.() ?? 'disconnected');
 
     useEffect(() => {
-        const updateTime = () => setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+        const unsub = wsClient?.onStatusChange?.((s) => setWsState(s));
+        return () => { unsub?.(); };
+    }, [wsClient]);
+
+    const [time, setTime] = useState("");
+    const [latency, setLatency] = useState<number | null>(null);
+
+    useEffect(() => {
+        const updateTime = () => {
+            setTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+            // Real uplink RTT from the WS client's ping tracking — not a constant.
+            const q = wsClient?.getConnectionQuality?.();
+            if (q) setLatency(Math.round(q.averageLatency));
+        };
         updateTime();
         const interval = setInterval(updateTime, 1000);
-        
-        const coordInterval = setInterval(() => {
-            setCoords({
-                x: (Math.random() * 100).toFixed(2).padStart(5, '0'),
-                y: (Math.random() * 100).toFixed(2).padStart(5, '0')
-            });
-        }, 3000);
-
-        return () => {
-            clearInterval(interval);
-            clearInterval(coordInterval);
-        };
-    }, []);
+        return () => clearInterval(interval);
+    }, [wsClient]);
 
     const allNavItems = [
         { href: '/dashboard', label: 'DASHBOARD', icon: Home },
@@ -70,7 +73,7 @@ const DashboardHeader: React.FC = () => {
                     </div>
                     <div className="hidden lg:flex items-center gap-2 whitespace-nowrap opacity-70">
                         <Activity size={10} />
-                        <span>LATENCY: <span className="text-industrial-bg/80">12ms</span></span>
+                        <span>LATENCY: <span className="text-industrial-bg/80">{latency != null ? `${latency}ms` : '—'}</span></span>
                     </div>
                 </div>
                 <div className="flex items-center gap-4 whitespace-nowrap">
@@ -148,15 +151,17 @@ const DashboardHeader: React.FC = () => {
                         <div className="absolute -bottom-px -left-px w-1.5 h-1.5 border-b-2 border-l-2 border-lcd-green/30" />
                         <div className="absolute -bottom-px -right-px w-1.5 h-1.5 border-b-2 border-r-2 border-lcd-green/30" />
 
-                        <div className="flex items-center gap-2" title={isConnected ? "WebSocket Connected" : "WebSocket Disconnected"}>
-                            <div className={cn("w-1.5 h-1.5", isConnected ? "bg-emerald-500 animate-pulse shadow-[0_0_5px_rgba(16,185,129,1)]" : "bg-red-500 shadow-[0_0_5px_rgba(239,68,68,1)]")}></div>
-                            <span className="font-bold uppercase tracking-tighter opacity-80">Uplink: {isConnected ? 'OK' : 'Offline'}</span>
+                        <div className="flex items-center gap-2" title={`WebSocket: ${wsState}`}>
+                            <div className={cn("w-1.5 h-1.5", isConnected ? "bg-emerald-500 animate-pulse shadow-[0_0_5px_rgba(16,185,129,1)]" : wsState === 'reconnecting' ? "bg-yellow-500 animate-pulse shadow-[0_0_5px_rgba(234,179,8,1)]" : "bg-red-500 shadow-[0_0_5px_rgba(239,68,68,1)]")}></div>
+                            <span className="font-bold uppercase tracking-tighter opacity-80">
+                                Uplink: {isConnected ? 'OK' : wsState === 'reconnecting' ? 'RE-LINK' : wsState === 'connecting' ? 'LINKING' : 'Offline'}
+                            </span>
                         </div>
                         <div className="h-3 w-px bg-lcd-green/30" />
                         <div className="flex items-center gap-4 opacity-60">
                             <div className="flex flex-col leading-none">
-                                <span className="text-[7px] opacity-50 uppercase">Coord</span>
-                                <span className="font-bold">{coords.x}, {coords.y}</span>
+                                <span className="text-[7px] opacity-50 uppercase">Nodes</span>
+                                <span className="font-bold">{feeds?.length ?? 0} ACTIVE</span>
                             </div>
                             <div className="flex flex-col leading-none text-right">
                                 <span className="text-[7px] opacity-50 uppercase">Epoch</span>
