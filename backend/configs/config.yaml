@@ -51,8 +51,6 @@ behavior_analysis:
   # distinct times -- is unaffected.
   hard_braking_feed_cooldown_seconds: 300
   ewma_alpha: 0.2
-  lane_change_buffer: 20
-  speed_limit: 60
   stopped_speed_threshold_kmh: 5
 calibration:
   drift_threshold_px: 3.0
@@ -187,7 +185,6 @@ lane_detection:
   hough_rho: 2
   hough_theta_divisor: 180
   hough_threshold: 15
-  lane_change_buffer: 10
   lane_width: 120
   model_type: mobilenet_v3_small
   num_lanes: 6
@@ -1045,10 +1042,6 @@ work_zones:
   zones: []
 vehicle_detection:
   bbox_expansion_factor: 0.05
-  car_classification_enabled: false
-  car_classification_interval_frames: 60
-  car_classifier_labels_path: models/car_labels.txt
-  car_classifier_model_path: models/Car_Make_Model.tflite
   confidence_threshold: 0.3
   enabled: true
   yolo_imgsz: 640

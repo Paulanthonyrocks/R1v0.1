@@ -117,7 +117,6 @@ class AppConfig(BaseSettings):
     # New settings for dynamic paths
     feeds_config_path: str = "backend/data/feeds_config.json"
     snapshots_dir: str = "backend/data/snapshots"
-    accel_threshold_mps2: float = 0.5
     advanced_analytics: Dict[str, Any] = {}
     analytics_service: Dict[str, Any] = {}
     anomaly_detection: Dict[str, Any] = {}
