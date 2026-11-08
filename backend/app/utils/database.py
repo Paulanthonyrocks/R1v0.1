@@ -367,10 +367,51 @@ class DatabaseManager:
             )
             raise DatabaseError(f"DB connect fail: {e}") from e
 
+    def _quarantine_corrupt_db(self):
+        """If the SQLite file exists but is not a healthy database, move it
+        aside so schema init recreates a fresh one.
+
+        Kaggle's /kaggle/working persists between sessions and vehicle.db is
+        NOT in git (gitignored), so a run SIGKILLed mid-write leaves a corrupt
+        file behind and every later run fails every write with 'file is not a
+        database' / 'database disk image is malformed' (~30k ERROR lines per
+        run, all ReID/incident/metrics persistence lost). quick_check catches
+        both; the corrupt file and its -wal/-shm sidecars are quarantined,
+        not deleted.
+        """
+        path = Path(self.sqlite_db_path)
+        if not path.exists():
+            return
+        try:
+            conn = sqlite3.connect(str(path), timeout=5.0)
+            try:
+                row = conn.execute("PRAGMA quick_check;").fetchone()
+                if row and row[0] == "ok":
+                    return
+                raise sqlite3.DatabaseError(f"quick_check reported: {row[0] if row else 'no rows'}")
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError as e:
+            stamp = int(time.time())
+            quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+            try:
+                path.rename(quarantine)
+                for suffix in ("-wal", "-shm"):
+                    side = path.with_name(path.name + suffix)
+                    if side.exists():
+                        side.rename(side.with_name(side.name + f".corrupt-{stamp}"))
+                logger.error(
+                    f"SQLite DB {path} failed integrity check ({e}); quarantined to "
+                    f"{quarantine.name} -- a fresh database will be created."
+                )
+            except OSError as qe:
+                logger.error(f"Could not quarantine corrupt DB {path}: {qe}")
+
     def _initialize_sqlite_database(self):
         if not self.sqlite_db_path:
             logger.error("Cannot initialize SQLite DB: path not set.")
             return
+        self._quarantine_corrupt_db()
         logger.info(f"Initializing SQLite DB schema at {self.sqlite_db_path}...")
         try:
             with self._get_sqlite_connection() as conn:
