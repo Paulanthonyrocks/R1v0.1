@@ -57,6 +57,21 @@ def database_writer_process(
     except Exception as e:
         logger.warning(f"Could not clear stop event at boot: {e}")
 
+    def _stop_requested() -> bool:
+        """True when the stop event is set OR Redis is unreachable.
+
+        RedisEvent.is_set() raises ConnectionError once the Redis server is
+        gone (notebook teardown kills redis before this process exits). The
+        loop condition must treat that as 'stop' so the finally-block drain
+        still runs, instead of escaping to the outer handler as
+        'Fatal error in database writer process' with a full traceback.
+        """
+        try:
+            return stop_event.is_set()
+        except Exception as e:
+            logger.warning(f"Stop-event check failed (Redis unreachable: {e}); treating as stop and draining queue.")
+            return True
+
     db_manager = None
     consecutive_failures = 0
     circuit_trip_count = 0
@@ -79,13 +94,13 @@ def database_writer_process(
     def prune_worker():
         """Background thread to prune old data without blocking the main loop."""
         last_prune = 0.0
-        while not stop_event.is_set():
+        while not _stop_requested():
             try:
                 # Check every 10 seconds to remain responsive to stop_event
                 time.sleep(10)
                 now = time.time()
                 if now - last_prune >= 3600:
-                    if stop_event.is_set():
+                    if _stop_requested():
                         break
                     # AUDIT FIX (2026-08-24): `with DatabaseManager(config)` raised
                     # AttributeError (no context-manager protocol), caught by the
@@ -118,7 +133,7 @@ def database_writer_process(
     prune_thread.start()
 
     try:
-        while not stop_event.is_set():
+        while not _stop_requested():
             try:
                 if heartbeat:
                     heartbeat.value = (time.time(), os.getpid())

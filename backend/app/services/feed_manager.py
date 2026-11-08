@@ -1947,6 +1947,15 @@ class FeedManager:
                 
                 # Forward feed_metrics to db_queue for persistence
                 for item in items:
+                    # Skip sentinel/empty items before unpacking: the analytics
+                    # worker emits None/"" sentinels and unpacking them raises a
+                    # ValueError with an EMPTY message -- 4,987 identical
+                    # "Failed to parse analytics output item: " warnings in one
+                    # run. Genuinely malformed non-empty items still get a log.
+                    if not isinstance(item, (tuple, list)) or len(item) != 5:
+                        if item not in (None, "", b""):
+                            self.logger.debug(f"Skipping malformed analytics output item: {item!r}")
+                        continue
                     try:
                         # Expected format: (feed_id, feed_metrics, vehicles, lanes, lines)
                         feed_id, feed_metrics, vehicles, lanes, lines = item

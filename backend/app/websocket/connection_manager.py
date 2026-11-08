@@ -406,6 +406,7 @@ class ConnectionManager:
         msg_count = 0
         last_diag_time = time.time()
         high_msg_streak = 0
+        dropped_in_streak = 0  # msgs dropped since last successful send
 
         try:
             while True:
@@ -464,6 +465,13 @@ class ConnectionManager:
                                     await asyncio.wait_for(websocket.send_text(message), timeout=send_timeout)
                                 high_priority_queue.task_done()
                                 # Successful send — reset the consecutive-failure counter.
+                                prev_failures = self._csf.get(client_id, 0)
+                                if prev_failures:
+                                    logger.info(
+                                        f"[Sender {client_id}] Send recovered after {prev_failures} "
+                                        f"consecutive failure(s); {dropped_in_streak} msg(s) dropped in that streak."
+                                    )
+                                    dropped_in_streak = 0
                                 self._csf[client_id] = 0
                             except asyncio.QueueEmpty:
                                 pass
@@ -492,17 +500,28 @@ class ConnectionManager:
                                 if self._csf[client_id] >= self.MAX_CONSECUTIVE_SEND_FAILURES or websocket.client_state != WebSocketState.CONNECTED:
                                     logger.warning(
                                         f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
-                                        f"(state={websocket.client_state}); forcing close."
+                                        f"(state={websocket.client_state}); forcing close. "
+                                        f"{dropped_in_streak} msg(s) dropped in this streak."
                                     )
+                                    dropped_in_streak = 0
                                     try:
                                         await websocket.close(code=1011, reason="Send timeout")
                                     except Exception:
                                         pass
                                     return
-                                logger.warning(
-                                    f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. "
-                                    f"Dropping message. ({self._csf[client_id]} consecutive)"
-                                )
+                                dropped_in_streak += 1
+                                if self._csf[client_id] == 1:
+                                    # First drop of a streak at WARNING; the rest at
+                                    # DEBUG so a slow client does not spam one
+                                    # WARNING per dropped frame (70 in one run).
+                                    logger.warning(
+                                        f"[Sender {client_id}] Timeout or error sending high-priority msg: {repr(e)}. "
+                                        f"Dropping message (further drops in this streak logged at debug)."
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"[Sender {client_id}] Dropping high-priority msg ({self._csf[client_id]} consecutive): {repr(e)}"
+                                    )
                                 try:
                                     high_priority_queue.task_done()
                                 except ValueError:
@@ -534,6 +553,13 @@ class ConnectionManager:
                                     await asyncio.wait_for(websocket.send_bytes(message), timeout=send_timeout)
                                 else:
                                     await asyncio.wait_for(websocket.send_text(message), timeout=send_timeout)
+                                prev_failures = self._csf.get(client_id, 0)
+                                if prev_failures:
+                                    logger.info(
+                                        f"[Sender {client_id}] Send recovered after {prev_failures} "
+                                        f"consecutive failure(s); {dropped_in_streak} msg(s) dropped in that streak."
+                                    )
+                                    dropped_in_streak = 0
                                 self._csf[client_id] = 0
                             except IndexError:
                                 break
@@ -552,17 +578,25 @@ class ConnectionManager:
                                 if self._csf[client_id] >= self.MAX_CONSECUTIVE_SEND_FAILURES or websocket.client_state != WebSocketState.CONNECTED:
                                     logger.warning(
                                         f"[Sender {client_id}] {self._csf[client_id]} consecutive send failures "
-                                        f"(state={websocket.client_state}); forcing close."
+                                        f"(state={websocket.client_state}); forcing close. "
+                                        f"{dropped_in_streak} msg(s) dropped in this streak."
                                     )
+                                    dropped_in_streak = 0
                                     try:
                                         await websocket.close(code=1011, reason="Send timeout")
                                     except Exception:
                                         pass
                                     return
-                                logger.warning(
-                                    f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. "
-                                    f"Dropping message. ({self._csf[client_id]} consecutive)"
-                                )
+                                dropped_in_streak += 1
+                                if self._csf[client_id] == 1:
+                                    logger.warning(
+                                        f"[Sender {client_id}] Timeout or error sending low-priority msg: {repr(e)}. "
+                                        f"Dropping message (further drops in this streak logged at debug)."
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"[Sender {client_id}] Dropping low-priority msg ({self._csf[client_id]} consecutive): {repr(e)}"
+                                    )
                         # One low-priority batch counts as one interleave slot:
                         # reset the streak so the NEXT iteration's high-priority
                         # check runs first (same post-frame semantics as before).
