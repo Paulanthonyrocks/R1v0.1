@@ -385,6 +385,46 @@ class DatabaseManager:
         if magic != b"SQLite format 3\x00":
             raise sqlite3.DatabaseError("file is not a database")
 
+    @staticmethod
+    def _force_rollback_journal(path: Path) -> bool:
+        """Flip a WAL-mode db header to rollback-journal (DELETE) mode in place.
+
+        On mounts that can't serve the WAL -shm mmap (Kaggle's
+        /kaggle/working returns 'disk I/O error'), every open of a WAL-flagged
+        file fails -- even reads, and even PRAGMA journal_mode=DELETE can't
+        switch because the switch itself needs the sidecars. The journal mode
+        lives in header bytes 18-19 (2 = WAL, 1 = rollback). Setting them to 1
+        and removing -wal/-shm makes the file usable in DELETE mode, which
+        needs no mmap (snapshots write fine on the same mount). Any hot-WAL
+        frames are discarded, which is fine: the file was unreadable anyway.
+        """
+        try:
+            if path.stat().st_size < 100:
+                return False
+            with open(path, "r+b") as f:
+                header = f.read(100)
+                if len(header) < 100 or header[:16] != b"SQLite format 3\x00":
+                    return False
+                if header[18] != 2 and header[19] != 2:
+                    return False  # not WAL-flagged; nothing to do
+                f.seek(18)
+                f.write(bytes([1, 1]))
+                f.flush()
+                os.fsync(f.fileno())
+            for suffix in ("-wal", "-shm"):
+                side = path.with_name(path.name + suffix)
+                try:
+                    side.unlink()
+                except OSError:
+                    pass
+            logger.error(
+                f"Flipped {path.name} header from WAL to rollback-journal (DELETE) "
+                "and removed -wal/-shm: mount cannot serve the WAL shared-memory file."
+            )
+            return True
+        except OSError:
+            return False
+
     def _get_sqlite_connection(self) -> sqlite3.Connection:
         if not self.sqlite_db_path:
             raise DatabaseError("SQLite database path not configured.")
@@ -448,6 +488,16 @@ class DatabaseManager:
                                 pass
                         else:
                             raise DatabaseError(f"DB corrupt and recovery failed: {e}") from e
+                    elif (
+                        isinstance(e, sqlite3.OperationalError)
+                        and "disk i/o" in str(e).lower()
+                        and not getattr(self, "_journal_forced", False)
+                        and self._force_rollback_journal(path)
+                    ):
+                        # mount can't serve the WAL -shm: header flipped to
+                        # rollback-journal, sidecars removed -- retry now
+                        self._journal_forced = True
+                        continue
                     elif isinstance(e, sqlite3.OperationalError) and attempt < 2:
                         time.sleep(0.25 * (attempt + 1))
                         continue
